@@ -122,6 +122,7 @@ set( QA_PCBNEW_SRCS
     pcb_io/pads/test_pads_part_structures.cpp
     pcb_io/pads/test_pads_keepout.cpp
     pcb_io/geda/test_geda_pcb_import.cpp
+    pcb_io/sprint_layout/test_sprint_layout_import.cpp
 
     pcb_io/kicad_sexpr/test_kicad_sexpr.cpp
 
