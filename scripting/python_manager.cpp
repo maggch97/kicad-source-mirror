@@ -126,32 +126,59 @@ long PYTHON_MANAGER::Execute( const std::vector<wxString>& aArgs,
 
     args.emplace_back( nullptr );
 
-    wxLogTrace( traceApi, wxString::Format( "Execute: %s %s", m_interpreterPath, argsStr ) );
-    long pid = wxExecute( args.data(), wxEXEC_ASYNC, process, aEnv );
+    int flags = wxTheApp->UsesEventLoop() ? wxEXEC_ASYNC : wxEXEC_BLOCK;
 
-    if( pid == 0 )
+    if( flags & wxEXEC_ASYNC )
     {
-        delete process;
-        aCallback( -1, wxEmptyString, _( "Process could not be created" ) );
+        wxLogTrace( traceApi, wxString::Format( "Execute async: %s %s", m_interpreterPath, argsStr ) );
+        long pid = wxExecute( args.data(), flags, process, aEnv );
+
+        if( pid == 0 )
+        {
+            wxLogTrace( traceApi, wxString::Format( "Execute error: process could not be created" ) );
+            delete process;
+            aCallback( -1, wxEmptyString, _( "Process could not be created" ) );
+        }
+        else
+        {
+            wxLogTrace( traceApi, wxString::Format( "Execute: pid %ld", pid ) );
+
+            // On Windows, if there is a lot of stdout written by the process, this can
+            // hang up the wxProcess such that it will never call OnTerminate.  To work
+            // around this, we use this monitor thread to just dump the stdout to the
+            // trace log, which prevents the hangup.  This flag is provided to keep the
+            // old behavior for commands where we need to read the output directly,
+            // which is currently only used for detecting the interpreter version.
+            // If we need to use the async monitor thread approach and preserve the stdout
+            // contents in the future, a more complicated hack might be necessary.
+            if( !aSaveOutput )
+            {
+                thread_pool& tp = GetKiCadThreadPool();
+                auto ret = tp.submit_task( [monitor, process] { monitor( process ); } );
+            }
+        }
+
+        return pid;
     }
     else
     {
-        // On Windows, if there is a lot of stdout written by the process, this can
-        // hang up the wxProcess such that it will never call OnTerminate.  To work
-        // around this, we use this monitor thread to just dump the stdout to the
-        // trace log, which prevents the hangup.  This flag is provided to keep the
-        // old behavior for commands where we need to read the output directly,
-        // which is currently only used for detecting the interpreter version.
-        // If we need to use the async monitor thread approach and preserve the stdout
-        // contents in the future, a more complicated hack might be necessary.
-        if( !aSaveOutput )
-        {
-            thread_pool& tp = GetKiCadThreadPool();
-            auto ret = tp.submit_task( [monitor, process] { monitor( process ); } );
-        }
-    }
+        wxLogTrace( traceApi, wxString::Format( "Execute sync: %s %s", m_interpreterPath, argsStr ) );
+        wxArrayString out, err;
+        wxString cmd = wxString::Format( "%s %s", m_interpreterPath, argsStr );
+        long ret = wxExecute( cmd, out, err, flags, aEnv );
 
-    return pid;
+        wxString strOut, strErr;
+
+        for( const wxString& line : out )
+            strOut << line << "\n";
+
+        for( const wxString& line : err )
+            strErr << line << "\n";
+
+        aCallback( ret, strOut, strErr );
+
+        return ret;
+    }
 }
 
 
