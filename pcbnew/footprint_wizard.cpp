@@ -19,12 +19,21 @@
  */
 
 #include <api/api_plugin_manager.h>
-#include <api/common/types/wizards.pb.h>
+#include <api/api_utils.h>
+#include <footprint.h>
 #include <pgm_base.h>
+#include <wx/log.h>
 
 #include <google/protobuf/util/json_util.h>
 
 #include "footprint_wizard.h"
+
+
+void FOOTPRINT_WIZARD::ResetParameters()
+{
+    for( const std::unique_ptr<WIZARD_PARAMETER>& param : m_info.parameters )
+        param->Reset();
+}
 
 
 void FOOTPRINT_WIZARD_MANAGER::ReloadWizards()
@@ -99,6 +108,54 @@ bool FOOTPRINT_WIZARD_MANAGER::RefreshInfo( FOOTPRINT_WIZARD* aWizard )
 }
 
 
+tl::expected<FOOTPRINT*, wxString> FOOTPRINT_WIZARD_MANAGER::Generate( FOOTPRINT_WIZARD* aWizard )
+{
+    wxCHECK( aWizard, tl::unexpected( _( "Unexpected error with footprint wizard" ) ) );
+    API_PLUGIN_MANAGER& manager = Pgm().GetPluginManager();
+
+    std::vector<wxString> args = { wxS( "--generate" ), wxS( "--params" ) };
+
+    kiapi::common::types::WizardParameterList params;
+
+    for( const std::unique_ptr<WIZARD_PARAMETER>& param : aWizard->Info().parameters )
+        params.mutable_parameters()->Add( param->Pack() );
+
+    std::string paramsJson;
+
+    if( !google::protobuf::util::MessageToJsonString( params, &paramsJson ).ok() )
+        return tl::unexpected( _( "Unexpected error with footprint wizard" ) );
+
+    args.emplace_back( wxString::Format( wxS( "'%s'" ), paramsJson ) );
+
+    wxString out, err;
+    int ret = manager.InvokeActionSync( aWizard->Identifier(), args, &out, &err );
+
+    if( ret != 0 )
+        return tl::unexpected( wxString::Format( _( "Could not launch footprint wizard '%s'" ), aWizard->Info().meta.name ) );
+
+    kiapi::common::types::WizardGeneratedContent response;
+
+    google::protobuf::util::JsonParseOptions options;
+    options.ignore_unknown_fields = true;
+
+    if( !google::protobuf::util::JsonStringToMessage( out.ToStdString(), &response, options ).ok() )
+    {
+        wxLogTrace( traceApi, wxString::Format( "Could not decode response:\n%s", out ) );
+        return tl::unexpected( _( "Unexpected response from footprint wizard" ) );
+    }
+
+    if( response.status() != kiapi::common::types::WGS_OK )
+        return tl::unexpected( wxString::Format( _( "Footprint wizard error: %s" ), response.error_message() ) );
+
+    std::unique_ptr<FOOTPRINT> fp = std::make_unique<FOOTPRINT>( nullptr );
+
+    if( !fp->Deserialize( response.content() ) )
+        return tl::unexpected( _( "Unexpected response from footprint wizard" ) );
+
+    return fp.release();
+}
+
+
 void WIZARD_META_INFO::FromProto( const kiapi::common::types::WizardMetaInfo& aProto )
 {
     identifier = wxString::FromUTF8( aProto.identifier() );
@@ -162,6 +219,95 @@ std::unique_ptr<WIZARD_PARAMETER> WIZARD_PARAMETER::Create( const kiapi::common:
     p->type = aProto.type();
 
     return p;
+}
+
+
+kiapi::common::types::WizardParameter WIZARD_PARAMETER::Pack( bool aCompact )
+{
+    kiapi::common::types::WizardParameter packed;
+
+    packed.set_identifier( identifier.ToUTF8() );
+
+    if( !aCompact )
+    {
+        packed.set_name( name.ToUTF8() );
+        packed.set_description( description.ToUTF8() );
+        packed.set_category( category );
+        packed.set_type( type );
+    }
+
+    return packed;
+}
+
+
+kiapi::common::types::WizardParameter WIZARD_INT_PARAMETER::Pack( bool aCompact )
+{
+    kiapi::common::types::WizardParameter packed = WIZARD_PARAMETER::Pack();
+
+    packed.mutable_int_()->set_value( value );
+
+    if( !aCompact )
+    {
+        packed.mutable_int_()->set_default_( default_value );
+
+        if( min )
+            packed.mutable_int_()->set_min( *min );
+
+        if( max )
+            packed.mutable_int_()->set_max( *max );
+
+        if( multiple )
+            packed.mutable_int_()->set_multiple( *multiple );
+    }
+
+    return packed;
+}
+
+
+kiapi::common::types::WizardParameter WIZARD_REAL_PARAMETER::Pack( bool aCompact )
+{
+    kiapi::common::types::WizardParameter packed = WIZARD_PARAMETER::Pack();
+
+    packed.mutable_real()->set_value( value );
+
+    if( !aCompact )
+    {
+        packed.mutable_real()->set_default_( default_value );
+
+        if( min )
+            packed.mutable_real()->set_min( *min );
+
+        if( max )
+            packed.mutable_real()->set_max( *max );
+    }
+
+    return packed;
+}
+
+
+kiapi::common::types::WizardParameter WIZARD_BOOL_PARAMETER::Pack( bool aCompact )
+{
+    kiapi::common::types::WizardParameter packed = WIZARD_PARAMETER::Pack();
+
+    packed.mutable_bool_()->set_value( value );
+
+    if( !aCompact )
+        packed.mutable_bool_()->set_default_( default_value );
+
+    return packed;
+}
+
+
+kiapi::common::types::WizardParameter WIZARD_STRING_PARAMETER::Pack( bool aCompact )
+{
+    kiapi::common::types::WizardParameter packed = WIZARD_PARAMETER::Pack();
+
+    packed.mutable_string()->set_value( value );
+
+    if( !aCompact )
+        packed.mutable_string()->set_default_( default_value );
+
+    return packed;
 }
 
 

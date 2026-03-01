@@ -45,8 +45,9 @@ public:
 
 protected:
     wxPGProperty* createPGProperty( const PROPERTY_BASE* aProperty ) const override { return nullptr; }
-    wxPGProperty* createPGProperty( const WIZARD_PARAMETER* aParam ) const;
+    wxPGProperty* createPGProperty( WIZARD_PARAMETER* aParam ) const;
     void valueChanged( wxPropertyGridEvent& aEvent ) override;
+    static WIZARD_PARAMETER* getParamFromEvent( const wxPropertyGridEvent& aEvent );
 
 private:
     struct WIZARD_PARAM_INFO

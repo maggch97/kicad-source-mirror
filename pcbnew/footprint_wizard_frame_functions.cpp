@@ -64,28 +64,22 @@ void FOOTPRINT_WIZARD_FRAME::RegenerateFootprint()
     GetBoard()->DeleteAllFootprints();
 
     // Creates the footprint
-    // TODO(JE)
-#if 0
-    wxString   msg;
-    FOOTPRINT* footprint = footprintWizard->GetFootprint( &msg );
-    DisplayBuildMessage( msg );
+    tl::expected<FOOTPRINT*, wxString> result = Manager()->Generate( footprintWizard );
 
-    if( footprint )
+    if( result )
     {
+        m_buildMessageBox->SetValue( footprintWizard->Info().meta.description );
         //  Add the object to board
-        GetBoard()->Add( footprint, ADD_MODE::APPEND );
-        footprint->SetPosition( VECTOR2I( 0, 0 ) );
+        GetBoard()->Add( *result, ADD_MODE::APPEND );
+        ( *result )->SetPosition( VECTOR2I( 0, 0 ) );
     }
-#endif
+    else
+    {
+        m_buildMessageBox->SetValue( result.error() );
+    }
 
     updateView();
     GetCanvas()->Refresh();
-}
-
-
-void FOOTPRINT_WIZARD_FRAME::DisplayBuildMessage( wxString& aMessage )
-{
-    m_buildMessageBox->SetValue( aMessage );
 }
 
 
@@ -97,9 +91,9 @@ FOOTPRINT_WIZARD* FOOTPRINT_WIZARD_FRAME::GetMyWizard()
 
 FOOTPRINT* FOOTPRINT_WIZARD_FRAME::GetBuiltFootprint()
 {
-    // TODO(JE)
-
-    return nullptr;
+    // TODO(JE) should this be cached?
+    tl::expected<FOOTPRINT*, wxString> result = Manager()->Generate( m_currentWizard );
+    return result.value_or( nullptr );
 }
 
 
@@ -139,10 +133,7 @@ void FOOTPRINT_WIZARD_FRAME::DefaultParameters()
     if ( footprintWizard == nullptr )
         return;
 
-    // TODO(JE)
-#if 0
     footprintWizard->ResetParameters();
-#endif
 
     // Reload
     ReCreateParameterList();

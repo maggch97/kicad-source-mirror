@@ -24,7 +24,10 @@
 #include <optional>
 #include <tl/expected.hpp>
 
+#include <import_export.h>
 #include <api/common/types/wizards.pb.h>
+
+class FOOTPRINT;
 
 
 
@@ -45,6 +48,15 @@ public:
     WIZARD_PARAMETER() = default;
     virtual ~WIZARD_PARAMETER() = default;
 
+    virtual void Reset() = 0;
+
+    /**
+     * Packs the current state of this parameter back into a protobuf message
+     * @param aCompact will only include the identifier and value if true
+     * @return a protobuf message describing this parameter
+     */
+    virtual kiapi::common::types::WizardParameter Pack( bool aCompact = true );
+
     wxString identifier;
     wxString name;
     wxString description;
@@ -59,6 +71,9 @@ public:
 class WIZARD_INT_PARAMETER : public WIZARD_PARAMETER
 {
 public:
+    void Reset() override { value = default_value; }
+    kiapi::common::types::WizardParameter Pack( bool aCompact = true ) override;
+
     int value = 0;
     int default_value = 0;
     std::optional<int> min;
@@ -71,6 +86,9 @@ public:
 class WIZARD_REAL_PARAMETER : public WIZARD_PARAMETER
 {
 public:
+    void Reset() override { value = default_value; }
+    kiapi::common::types::WizardParameter Pack( bool aCompact = true ) override;
+
     double value = 0.0;
     double default_value = 0.0;
     std::optional<double> min;
@@ -79,9 +97,12 @@ public:
     void FromProto( const kiapi::common::types::WizardRealParameter& aProto );
 };
 
-struct WIZARD_BOOL_PARAMETER : public WIZARD_PARAMETER
+class WIZARD_BOOL_PARAMETER : public WIZARD_PARAMETER
 {
 public:
+    void Reset() override { value = default_value; }
+    kiapi::common::types::WizardParameter Pack( bool aCompact = true ) override;
+
     bool value = false;
     bool default_value = false;
 
@@ -91,6 +112,9 @@ public:
 class WIZARD_STRING_PARAMETER : public WIZARD_PARAMETER
 {
 public:
+    void Reset() override { value = default_value; }
+    kiapi::common::types::WizardParameter Pack( bool aCompact = true ) override;
+
     wxString value;
     wxString default_value;
     std::optional<wxString> validation_regex;
@@ -119,6 +143,8 @@ public:
 
     const wxString& Identifier() const { return m_identifier; }
     void SetIdentifier( const wxString& aId ) { m_identifier = aId; }
+
+    void ResetParameters();
 
 private:
     WIZARD_INFO m_info;
@@ -157,6 +183,13 @@ public:
      * @return true if the call succeeded
      */
     static bool RefreshInfo( FOOTPRINT_WIZARD* aWizard );
+
+    /**
+     * Generates a footprint using a given wizard
+     * @param aWizard is the wizard data instance (with parameters set) to feed into the wizard
+     * @return a generated footprint, or an error message if generation failed
+     */
+    tl::expected<FOOTPRINT*, wxString> Generate( FOOTPRINT_WIZARD* aWizard );
 
 private:
 

@@ -130,7 +130,7 @@ void FOOTPRINT_WIZARD_PROPERTIES_PANEL::RebuildParameters( FOOTPRINT_WIZARD* aWi
 }
 
 
-wxPGProperty* FOOTPRINT_WIZARD_PROPERTIES_PANEL::createPGProperty( const WIZARD_PARAMETER* aParam ) const
+wxPGProperty* FOOTPRINT_WIZARD_PROPERTIES_PANEL::createPGProperty( WIZARD_PARAMETER* aParam ) const
 {
     wxPGProperty* ret = nullptr;
 
@@ -185,19 +185,53 @@ wxPGProperty* FOOTPRINT_WIZARD_PROPERTIES_PANEL::createPGProperty( const WIZARD_
     if( ret )
     {
         ret->SetLabel( wxGetTranslation( aParam->name ) );
-        ret->SetName( aParam->name );
+        ret->SetName( aParam->identifier );
         ret->SetHelpString( wxGetTranslation( aParam->description ) );
-        ret->SetClientData( const_cast<WIZARD_PARAMETER*>( aParam ) );
+        ret->SetClientData( aParam );
 
-        if( auto concrete = dynamic_cast<const WIZARD_INT_PARAMETER*>( aParam ) )
-            ret->SetValue( concrete->value );
+        if( auto ip = dynamic_cast<const WIZARD_INT_PARAMETER*>( aParam ) )
+            ret->SetValue( ip->value );
+        else if( auto rp = dynamic_cast<const WIZARD_REAL_PARAMETER*>( aParam ) )
+            ret->SetValue( rp->value );
+        else if( auto bp = dynamic_cast<const WIZARD_BOOL_PARAMETER*>( aParam ) )
+            ret->SetValue( bp->value );
+        else if( auto sp = dynamic_cast<const WIZARD_STRING_PARAMETER*>( aParam ) )
+            ret->SetValue( sp->value );
     }
 
     return ret;
 }
 
 
+WIZARD_PARAMETER* FOOTPRINT_WIZARD_PROPERTIES_PANEL::getParamFromEvent( const wxPropertyGridEvent& aEvent )
+{
+    return static_cast<WIZARD_PARAMETER*>( aEvent.GetProperty()->GetClientData() );
+}
+
+
 void FOOTPRINT_WIZARD_PROPERTIES_PANEL::valueChanged( wxPropertyGridEvent& aEvent )
 {
-    // TODO
+    WIZARD_PARAMETER* param = getParamFromEvent( aEvent );
+    wxCHECK( param, /* void */ );
+
+    wxAny newValue = aEvent.GetPropertyValue();
+
+    if( WIZARD_INT_PARAMETER* ip = dynamic_cast<WIZARD_INT_PARAMETER*>( param ) )
+    {
+        ip->value = newValue.As<int>();
+    }
+    else if( WIZARD_REAL_PARAMETER* rp = dynamic_cast<WIZARD_REAL_PARAMETER*>( param ) )
+    {
+        rp->value = newValue.As<double>();
+    }
+    else if( WIZARD_BOOL_PARAMETER* bp = dynamic_cast<WIZARD_BOOL_PARAMETER*>( param ) )
+    {
+        bp->value = newValue.As<bool>();
+    }
+    else if( WIZARD_STRING_PARAMETER* sp = dynamic_cast<WIZARD_STRING_PARAMETER*>( param ) )
+    {
+        sp->value = newValue.As<wxString>();
+    }
+
+    m_frame->OnWizardParametersChanged();
 }
