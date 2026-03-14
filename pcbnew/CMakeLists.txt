@@ -532,6 +532,8 @@ set( PCBNEW_SCRIPTING_PYTHON_HELPERS
 if( KICAD_IPC_API )
     set( PCBNEW_SRCS ${PCBNEW_SRCS}
         api/api_handler_pcb.cpp
+        api/headless_board_context.cpp
+        api/board_context.cpp
         )
 endif()
 

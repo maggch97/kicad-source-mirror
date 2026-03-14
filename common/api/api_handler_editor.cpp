@@ -204,6 +204,9 @@ HANDLER_RESULT<std::optional<KIID>> API_HANDLER_EDITOR::validateItemHeaderDocume
 
 std::optional<ApiResponseStatus> API_HANDLER_EDITOR::checkForBusy()
 {
+    if( !m_frame )
+        return std::nullopt;
+
     if( !m_frame->CanAcceptApiCommands() )
     {
         ApiResponseStatus e;

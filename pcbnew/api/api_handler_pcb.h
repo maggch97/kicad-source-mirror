@@ -21,9 +21,12 @@
 #ifndef KICAD_API_HANDLER_PCB_H
 #define KICAD_API_HANDLER_PCB_H
 
+#include <memory>
+
 #include <google/protobuf/empty.pb.h>
 
 #include <api/api_handler_editor.h>
+#include <api/board_context.h>
 #include <api/board/board_commands.pb.h>
 #include <api/board/board_jobs.pb.h>
 #include <api/board/board_types.pb.h>
@@ -53,6 +56,7 @@ class API_HANDLER_PCB : public API_HANDLER_EDITOR
 {
 public:
     API_HANDLER_PCB( PCB_EDIT_FRAME* aFrame );
+    API_HANDLER_PCB( std::shared_ptr<BOARD_CONTEXT> aContext, PCB_EDIT_FRAME* aFrame = nullptr );
 
 private:
     typedef std::map<std::string, PROPERTY_BASE*> PROTO_PROPERTY_MAP;
@@ -217,7 +221,19 @@ protected:
     std::optional<EDA_ITEM*> getItemFromDocument( const DocumentSpecifier& aDocument, const KIID& aId ) override;
 
 private:
+    BOARD_CONTEXT* context() const { return m_context.get(); }
+
+    BOARD* board() const { return context()->GetBoard(); }
+
+    PROJECT& project() const { return context()->Prj(); }
+
+    TOOL_MANAGER* toolManager() const { return context()->GetToolManager(); }
+
     PCB_EDIT_FRAME* frame() const;
+
+    bool isHeadless() const { return frame() == nullptr; }
+
+    std::optional<ApiResponseStatus> checkForHeadless( const std::string& aCommandName ) const;
 
     void pushCurrentCommit( const std::string& aClientName, const wxString& aMessage ) override;
 
@@ -229,6 +245,8 @@ private:
             const google::protobuf::RepeatedPtrField<google::protobuf::Any>& aItems,
             std::function<void(commands::ItemStatus, google::protobuf::Any)> aItemHandler )
             override;
+
+    std::shared_ptr<BOARD_CONTEXT> m_context;
 };
 
 #endif //KICAD_API_HANDLER_PCB_H
