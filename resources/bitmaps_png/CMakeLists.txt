@@ -724,6 +724,7 @@ set( BMAPS_CONSTRAINTS
     basic-clearance
     board-outline-clearance
     clearance
+    courtyard-clearance
     copper_to_edge_clearance
     copper-to-hole-clearance
     creepage-distance
