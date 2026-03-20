@@ -312,9 +312,6 @@ wxString normalizeQueryFieldAliases( const wxString& aExpression, const std::vec
 
         aliases.push_back(
                 { wxT( "A." ) + exprName, wxString::Format( wxT( "A.getField('%s')" ), escapedFieldName ) } );
-
-        aliases.push_back(
-                { wxT( "B." ) + exprName, wxString::Format( wxT( "B.getField('%s')" ), escapedFieldName ) } );
     }
 
     std::sort( aliases.begin(), aliases.end(),
@@ -363,6 +360,32 @@ wxString normalizeQueryFieldAliases( const wxString& aExpression, const std::vec
 
     return normalized;
 }
+
+
+bool queryUsesUnsupportedPairwiseSyntax( const wxString& aExpression )
+{
+    bool inString = false;
+
+    for( size_t i = 0; i < aExpression.length(); ++i )
+    {
+        wxChar ch = aExpression[i];
+
+        if( ch == wxT( '\'' ) && ( i == 0 || aExpression[i - 1] != wxT( '\\' ) ) )
+        {
+            inString = !inString;
+            continue;
+        }
+
+        if( !inString && i + 2 <= aExpression.length() && aExpression.Mid( i, 2 ) == wxT( "B." )
+            && ( i == 0 || !isExprIdentChar( aExpression[i - 1] ) ) )
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 } // namespace
 
 
@@ -816,6 +839,15 @@ void DIALOG_FIND_BY_PROPERTIES::selectMatchingFromQuery()
 
     wxString normalizedExpression = normalizeQueryFieldAliases( expression, m_propertyRows );
 
+    if( queryUsesUnsupportedPairwiseSyntax( normalizedExpression ) )
+    {
+        wxString error = _( "B. expressions are not supported." );
+
+        m_queryStatusLabel->SetLabel( error );
+        wxMessageBox( error, _( "Expression Error" ), wxOK | wxICON_ERROR, this );
+        return;
+    }
+
     PCBEXPR_COMPILER compiler( new PCBEXPR_UNIT_RESOLVER() );
     PCBEXPR_UCODE    ucode;
     PCBEXPR_CONTEXT  preflightContext( 0, F_Cu );
@@ -961,6 +993,12 @@ void DIALOG_FIND_BY_PROPERTIES::onCheckSyntaxClick( wxCommandEvent& event )
 
     wxString normalizedExpression = normalizeQueryFieldAliases( expression, m_propertyRows );
 
+    if( queryUsesUnsupportedPairwiseSyntax( normalizedExpression ) )
+    {
+        m_queryStatusLabel->SetLabel( _( "B. expressions are not supported." ) );
+        return;
+    }
+
     PCBEXPR_COMPILER compiler( new PCBEXPR_UNIT_RESOLVER() );
     PCBEXPR_UCODE    ucode;
     PCBEXPR_CONTEXT  preflightContext( 0, F_Cu );
@@ -1048,7 +1086,7 @@ void DIALOG_FIND_BY_PROPERTIES::onScintillaCharAdded( wxStyledTextEvent& aEvent 
 
     wxString prev2 = m_queryEditor->GetTextRange( pos - 2, pos );
 
-    if( prev2 == wxT( "A." ) || prev2 == wxT( "B." ) )
+    if( prev2 == wxT( "A." ) )
     {
         PROPERTY_MANAGER&  propMgr = PROPERTY_MANAGER::Instance();
         wxArrayString      tokens;
