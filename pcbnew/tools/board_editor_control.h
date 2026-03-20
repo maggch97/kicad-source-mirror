@@ -66,6 +66,7 @@ public:
     int Search( const TOOL_EVENT& aEvent );
     int Find( const TOOL_EVENT& aEvent );
     int FindNext( const TOOL_EVENT& aEvent );
+    int FindByProperties( const TOOL_EVENT& aEvent );
 
     int BoardSetup( const TOOL_EVENT& aEvent );
     int ImportNetlist( const TOOL_EVENT& aEvent );

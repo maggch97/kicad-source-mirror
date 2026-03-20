@@ -53,6 +53,7 @@
 #include <pcb_layer_box_selector.h>
 #include <footprint_edit_frame.h>
 #include <dialog_find.h>
+#include <dialogs/dialog_find_by_properties.h>
 #include <dialog_footprint_properties.h>
 #include <dialogs/dialog_exchange_footprints.h>
 #include <dialog_board_setup.h>
@@ -197,19 +198,19 @@ END_EVENT_TABLE()
 
 
 PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
-        PCB_BASE_EDIT_FRAME( aKiway, aParent, FRAME_PCB_EDITOR, _( "PCB Editor" ),
-                             wxDefaultPosition, wxDefaultSize, KICAD_DEFAULT_DRAWFRAME_STYLE,
-                             PCB_EDIT_FRAME_NAME ),
-    m_exportNetlistAction( nullptr ),
-    m_findDialog( nullptr ),
-    m_inspectDrcErrorDlg( nullptr ),
-    m_inspectClearanceDlg( nullptr ),
-    m_inspectConstraintsDlg( nullptr ),
-    m_footprintDiffDlg( nullptr ),
-    m_boardSetupDlg( nullptr ),
-    m_designBlocksPane( nullptr ),
-    m_importProperties( nullptr ),
-    m_eventCounterTimer( nullptr )
+        PCB_BASE_EDIT_FRAME( aKiway, aParent, FRAME_PCB_EDITOR, _( "PCB Editor" ), wxDefaultPosition, wxDefaultSize,
+                             KICAD_DEFAULT_DRAWFRAME_STYLE, PCB_EDIT_FRAME_NAME ),
+        m_exportNetlistAction( nullptr ),
+        m_findDialog( nullptr ),
+        m_findByPropertiesDialog( nullptr ),
+        m_inspectDrcErrorDlg( nullptr ),
+        m_inspectClearanceDlg( nullptr ),
+        m_inspectConstraintsDlg( nullptr ),
+        m_footprintDiffDlg( nullptr ),
+        m_boardSetupDlg( nullptr ),
+        m_designBlocksPane( nullptr ),
+        m_importProperties( nullptr ),
+        m_eventCounterTimer( nullptr )
 {
     m_maximizeByDefault = true;
     m_showBorderAndTitleBlock = true;   // true to display sheet references
@@ -1493,6 +1494,12 @@ void PCB_EDIT_FRAME::doCloseWindow()
         m_findDialog = nullptr;
     }
 
+    if( m_findByPropertiesDialog )
+    {
+        m_findByPropertiesDialog->Destroy();
+        m_findByPropertiesDialog = nullptr;
+    }
+
     if( m_inspectDrcErrorDlg )
     {
         m_inspectDrcErrorDlg->Destroy();
@@ -2185,6 +2192,30 @@ void PCB_EDIT_FRAME::ShowFindDialog()
     m_findDialog->Preload( findString );
 
     m_findDialog->Show( true );
+}
+
+
+void PCB_EDIT_FRAME::ShowFindByPropertiesDialog()
+{
+    if( !m_findByPropertiesDialog )
+        m_findByPropertiesDialog = new DIALOG_FIND_BY_PROPERTIES( this );
+
+    m_findByPropertiesDialog->Show( true );
+    m_findByPropertiesDialog->Raise();
+}
+
+
+void PCB_EDIT_FRAME::NotifyFindByPropertiesDialog()
+{
+    if( m_findByPropertiesDialog && m_findByPropertiesDialog->IsShown() )
+        m_findByPropertiesDialog->OnSelectionChanged();
+}
+
+
+void PCB_EDIT_FRAME::UpdateProperties()
+{
+    EDA_DRAW_FRAME::UpdateProperties();
+    NotifyFindByPropertiesDialog();
 }
 
 

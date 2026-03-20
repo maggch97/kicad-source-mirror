@@ -87,6 +87,8 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_export_vrml_base.cpp
     dialogs/dialog_find.cpp
     dialogs/dialog_find_base.cpp
+    dialogs/dialog_find_by_properties.cpp
+    dialogs/dialog_find_by_properties_base.cpp
     dialogs/dialog_footprint_wizard_list.cpp
     dialogs/dialog_footprint_wizard_list_base.cpp
     dialogs/dialog_gen_footprint_position.cpp

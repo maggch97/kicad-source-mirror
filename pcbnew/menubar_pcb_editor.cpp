@@ -191,6 +191,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
 
     editMenu->AppendSeparator();
     editMenu->Add( ACTIONS::find );
+    editMenu->Add( PCB_ACTIONS::findByProperties );
 
     editMenu->AppendSeparator();
     editMenu->Add( PCB_ACTIONS::editTracksAndVias );

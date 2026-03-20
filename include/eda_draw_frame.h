@@ -430,7 +430,7 @@ public:
 
     PROPERTIES_PANEL* GetPropertiesPanel() { return m_propertiesPanel; }
 
-    void UpdateProperties();
+    virtual void UpdateProperties();
 
     virtual void ToggleProperties() {}
 

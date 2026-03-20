@@ -595,6 +595,9 @@ public:
     /// Find an item
     static TOOL_ACTION find;
 
+    /// Find items by property criteria or expression
+    static TOOL_ACTION findByProperties;
+
     /// Find an item and start moving
     static TOOL_ACTION getAndPlace;
 

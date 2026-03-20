@@ -52,6 +52,7 @@
 #include <dialogs/dialog_assign_netclass.h>
 #include <dialog_plot.h>
 #include <dialogs/rule_editor_dialog_base.h>
+#include <dialogs/dialog_find_by_properties.h>
 #include <kiface_base.h>
 #include <kiway.h>
 #include <netlist_reader/pcb_netlist.h>
@@ -408,6 +409,13 @@ int BOARD_EDITOR_CONTROL::Find( const TOOL_EVENT& aEvent )
 int BOARD_EDITOR_CONTROL::FindNext( const TOOL_EVENT& aEvent )
 {
     m_frame->FindNext( aEvent.IsAction( &ACTIONS::findPrevious ) );
+    return 0;
+}
+
+
+int BOARD_EDITOR_CONTROL::FindByProperties( const TOOL_EVENT& aEvent )
+{
+    m_frame->ShowFindByPropertiesDialog();
     return 0;
 }
 
@@ -1870,6 +1878,7 @@ void BOARD_EDITOR_CONTROL::setTransitions()
     Go( &BOARD_EDITOR_CONTROL::Find,                   ACTIONS::find.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::FindNext,               ACTIONS::findNext.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::FindNext,               ACTIONS::findPrevious.MakeEvent() );
+    Go( &BOARD_EDITOR_CONTROL::FindByProperties, PCB_ACTIONS::findByProperties.MakeEvent() );
 
     Go( &BOARD_EDITOR_CONTROL::OpenNonKicadBoard,      PCB_ACTIONS::openNonKicadBoard.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ExportFootprints,       PCB_ACTIONS::exportFootprints.MakeEvent() );
