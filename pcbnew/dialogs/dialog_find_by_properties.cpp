@@ -386,6 +386,17 @@ bool queryUsesUnsupportedPairwiseSyntax( const wxString& aExpression )
     return false;
 }
 
+
+bool isVisibleInFindByProperties( const wxString& aName, const PROPERTY_BASE* aProperty )
+{
+    if( aProperty->IsHiddenFromPropertiesManager() && aName != wxS( "Type" ) )
+        return false;
+
+    if( aProperty->IsHiddenFromDesignEditors() )
+        return false;
+
+    return true;
+}
 } // namespace
 
 
@@ -444,10 +455,7 @@ void DIALOG_FIND_BY_PROPERTIES::rebuildPropertyGrid()
 
     for( auto& [name, property] : commonProps )
     {
-        if( property->IsHiddenFromPropertiesManager() && name != wxS( "Type" ) )
-            continue;
-
-        if( property->IsHiddenFromDesignEditors() )
+        if( !isVisibleInFindByProperties( name, property ) )
             continue;
 
         bool available = true;
@@ -1102,6 +1110,10 @@ void DIALOG_FIND_BY_PROPERTIES::onScintillaCharAdded( wxStyledTextEvent& aEvent 
             for( PROPERTY_BASE* prop : propMgr.GetProperties( type ) )
             {
                 wxString name = prop->Name();
+
+                if( !isVisibleInFindByProperties( name, prop ) )
+                    continue;
+
                 name.Replace( wxT( " " ), wxT( "_" ) );
 
                 if( seen.insert( name ).second )
