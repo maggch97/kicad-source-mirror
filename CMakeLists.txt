@@ -438,11 +438,11 @@ if( CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
     # but no information about local variables.
     # Level 3 includes full information, but binaries are much larger.
     if( KICAD_BUILD_SMALL_DEBUG_FILES )
-        set( CMAKE_C_FLAGS_DEBUG   "-g1 -ggdb1" )
-        set( CMAKE_CXX_FLAGS_DEBUG "-g1 -ggdb1" )
+        set( CMAKE_C_FLAGS_DEBUG   "${CMAKE_C_FLAGS_DEBUG} -g1 -ggdb1" )
+        set( CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g1 -ggdb1" )
     else()
-        set( CMAKE_C_FLAGS_DEBUG   "-g3 -ggdb3" )
-        set( CMAKE_CXX_FLAGS_DEBUG "-g3 -ggdb3" )
+        set( CMAKE_C_FLAGS_DEBUG   "${CMAKE_C_FLAGS_DEBUG} -g3 -ggdb3" )
+        set( CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUGS} -g3 -ggdb3" )
     endif()
 
     check_cxx_compiler_flag( "-ftrivial-auto-var-init=pattern" COMPILER_SUPPORTS_TRIVIAL_PATTERN_INIT )
@@ -526,7 +526,7 @@ if( CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
             list(APPEND mingw_resource_compiler_DEFINES KICAD_WIN32_DPI_AWARE=1 )
         endif()
 
-        set( CMAKE_EXE_LINKER_FLAGS_RELEASE "-s" )
+        set( CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -s" )
 
         # for some reasons, cmake does do use always a response file to send the list of objects
         # to the archiver, and because this list can be very long, and can create issue
