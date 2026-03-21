@@ -22,6 +22,7 @@
 #include <api/api_enums.h>
 #include <api/api_sch_utils.h>
 #include <api/api_utils.h>
+#include <api/sch_context.h>
 #include <magic_enum.hpp>
 #include <jobs/job_export_sch_bom.h>
 #include <jobs/job_export_sch_netlist.h>
@@ -39,11 +40,11 @@ using kiapi::common::types::DocumentType;
 using kiapi::common::types::ItemRequestStatus;
 
 
-HANDLER_RESULT<types::RunJobResponse> ExecuteSchematicJob( SCH_EDIT_FRAME* aFrame, JOB& aJob )
+HANDLER_RESULT<types::RunJobResponse> ExecuteSchematicJob( KIWAY* aKiway, JOB& aJob )
 {
     types::RunJobResponse response;
     WX_STRING_REPORTER reporter;
-    int exitCode = aFrame->Kiway().ProcessJob( KIWAY::FACE_SCH, &aJob, &reporter );
+    int exitCode = aKiway->ProcessJob( KIWAY::FACE_SCH, &aJob, &reporter );
 
     for( const JOB_OUTPUT& output : aJob.GetOutputs() )
         response.add_output_path( output.m_outputPath.ToUTF8() );
@@ -63,8 +64,16 @@ HANDLER_RESULT<types::RunJobResponse> ExecuteSchematicJob( SCH_EDIT_FRAME* aFram
 
 
 API_HANDLER_SCH::API_HANDLER_SCH( SCH_EDIT_FRAME* aFrame ) :
-        API_HANDLER_EDITOR(),
-        m_frame( aFrame )
+        API_HANDLER_SCH( CreateSchFrameContext( aFrame ), aFrame )
+{
+}
+
+
+API_HANDLER_SCH::API_HANDLER_SCH( std::shared_ptr<SCH_CONTEXT> aContext,
+                                  SCH_EDIT_FRAME* aFrame ) :
+        API_HANDLER_EDITOR( aFrame ),
+        m_frame( aFrame ),
+        m_context( std::move( aContext ) )
 {
     registerHandler<GetOpenDocuments, GetOpenDocumentsResponse>(
             &API_HANDLER_SCH::handleGetOpenDocuments );
@@ -118,7 +127,7 @@ HANDLER_RESULT<GetOpenDocumentsResponse> API_HANDLER_SCH::handleGetOpenDocuments
     GetOpenDocumentsResponse response;
     common::types::DocumentSpecifier doc;
 
-    wxFileName fn( m_frame->GetCurrentFileName() );
+    wxFileName fn( m_context->GetCurrentFileName() );
 
     doc.set_type( DocumentType::DOCTYPE_SCHEMATIC );
     doc.set_board_filename( fn.GetFullName() );
@@ -140,7 +149,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
         return tl::unexpected( documentValidation.error() );
 
     auto plotJob = std::make_unique<JOB_EXPORT_SCH_PLOT_SVG>();
-    plotJob->m_filename = m_frame->GetCurrentFileName();
+    plotJob->m_filename = m_context->GetCurrentFileName();
 
     if( !aCtx.Request.job_settings().output_path().empty() )
         plotJob->SetConfiguredOutputPath( wxString::FromUTF8( aCtx.Request.job_settings().output_path() ) );
@@ -168,7 +177,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
         plotJob->m_pageSizeSelect = FromProtoEnum<JOB_PAGE_SIZE>( aCtx.Request.plot_settings().page_size() );
     }
 
-    return ExecuteSchematicJob( m_frame, *plotJob );
+    return ExecuteSchematicJob( m_context->GetKiway(), *plotJob );
 }
 
 
@@ -184,7 +193,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
         return tl::unexpected( documentValidation.error() );
 
     auto plotJob = std::make_unique<JOB_EXPORT_SCH_PLOT_DXF>();
-    plotJob->m_filename = m_frame->GetCurrentFileName();
+    plotJob->m_filename = m_context->GetCurrentFileName();
 
     if( !aCtx.Request.job_settings().output_path().empty() )
         plotJob->SetConfiguredOutputPath( wxString::FromUTF8( aCtx.Request.job_settings().output_path() ) );
@@ -212,7 +221,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
         plotJob->m_pageSizeSelect = FromProtoEnum<JOB_PAGE_SIZE>( aCtx.Request.plot_settings().page_size() );
     }
 
-    return ExecuteSchematicJob( m_frame, *plotJob );
+    return ExecuteSchematicJob( m_context->GetKiway(), *plotJob );
 }
 
 
@@ -228,7 +237,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
         return tl::unexpected( documentValidation.error() );
 
     auto plotJob = std::make_unique<JOB_EXPORT_SCH_PLOT_PDF>( false );
-    plotJob->m_filename = m_frame->GetCurrentFileName();
+    plotJob->m_filename = m_context->GetCurrentFileName();
 
     if( !aCtx.Request.job_settings().output_path().empty() )
         plotJob->SetConfiguredOutputPath( wxString::FromUTF8( aCtx.Request.job_settings().output_path() ) );
@@ -260,7 +269,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
     plotJob->m_PDFHierarchicalLinks = aCtx.Request.hierarchical_links();
     plotJob->m_PDFMetadata = aCtx.Request.include_metadata();
 
-    return ExecuteSchematicJob( m_frame, *plotJob );
+    return ExecuteSchematicJob( m_context->GetKiway(), *plotJob );
 }
 
 
@@ -276,7 +285,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
         return tl::unexpected( documentValidation.error() );
 
     auto plotJob = std::make_unique<JOB_EXPORT_SCH_PLOT_PS>();
-    plotJob->m_filename = m_frame->GetCurrentFileName();
+    plotJob->m_filename = m_context->GetCurrentFileName();
 
     if( !aCtx.Request.job_settings().output_path().empty() )
         plotJob->SetConfiguredOutputPath( wxString::FromUTF8( aCtx.Request.job_settings().output_path() ) );
@@ -304,7 +313,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
         plotJob->m_pageSizeSelect = FromProtoEnum<JOB_PAGE_SIZE>( aCtx.Request.plot_settings().page_size() );
     }
 
-    return ExecuteSchematicJob( m_frame, *plotJob );
+    return ExecuteSchematicJob( m_context->GetKiway(), *plotJob );
 }
 
 
@@ -328,7 +337,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
     }
 
     JOB_EXPORT_SCH_NETLIST netlistJob;
-    netlistJob.m_filename = m_frame->GetCurrentFileName();
+    netlistJob.m_filename = m_context->GetCurrentFileName();
 
     if( !aCtx.Request.job_settings().output_path().empty() )
         netlistJob.SetConfiguredOutputPath( wxString::FromUTF8( aCtx.Request.job_settings().output_path() ) );
@@ -338,7 +347,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
     if( !aCtx.Request.variant_name().empty() )
         netlistJob.m_variantNames.emplace_back( wxString::FromUTF8( aCtx.Request.variant_name() ) );
 
-    return ExecuteSchematicJob( m_frame, netlistJob );
+    return ExecuteSchematicJob( m_context->GetKiway(), netlistJob );
 }
 
 
@@ -354,7 +363,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
         return tl::unexpected( documentValidation.error() );
 
     JOB_EXPORT_SCH_BOM bomJob;
-    bomJob.m_filename = m_frame->GetCurrentFileName();
+    bomJob.m_filename = m_context->GetCurrentFileName();
 
     if( !aCtx.Request.job_settings().output_path().empty() )
         bomJob.SetConfiguredOutputPath( wxString::FromUTF8( aCtx.Request.job_settings().output_path() ) );
@@ -395,7 +404,7 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
     if( !aCtx.Request.variant_name().empty() )
         bomJob.m_variantNames.emplace_back( wxString::FromUTF8( aCtx.Request.variant_name() ) );
 
-    return ExecuteSchematicJob( m_frame, bomJob );
+    return ExecuteSchematicJob( m_context->GetKiway(), bomJob );
 }
 
 
@@ -465,7 +474,7 @@ HANDLER_RESULT<ItemRequestStatus> API_HANDLER_SCH::handleCreateUpdateItemsIntern
         return tl::unexpected( e );
     }
 
-    SCH_SCREEN* screen = m_frame->GetScreen();
+    SCH_SCREEN* screen = m_context->GetSchematic()->RootScreen();
     EE_RTREE& screenItems = screen->Items();
 
     std::map<KIID, EDA_ITEM*> itemUuidMap;

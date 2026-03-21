@@ -22,6 +22,7 @@
 #define KICAD_API_HANDLER_SCH_H
 
 #include <api/api_handler_editor.h>
+#include <api/sch_context.h>
 #include <api/common/commands/editor_commands.pb.h>
 #include <api/schematic/schematic_jobs.pb.h>
 #include <kiid.h>
@@ -37,6 +38,7 @@ class API_HANDLER_SCH : public API_HANDLER_EDITOR
 {
 public:
     API_HANDLER_SCH( SCH_EDIT_FRAME* aFrame );
+    API_HANDLER_SCH( std::shared_ptr<SCH_CONTEXT> aContext, SCH_EDIT_FRAME* aFrame = nullptr );
 
 protected:
     std::unique_ptr<COMMIT> createCommit() override;
@@ -86,7 +88,8 @@ private:
         HANDLER_RESULT<types::RunJobResponse> handleRunSchematicJobExportBOM(
             const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportBOM>& aCtx );
 
-    SCH_EDIT_FRAME* m_frame;
+    SCH_EDIT_FRAME*              m_frame;
+    std::shared_ptr<SCH_CONTEXT> m_context;
 };
 
 
