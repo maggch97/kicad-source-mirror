@@ -52,8 +52,8 @@ CLI::API_SERVER_COMMAND::API_SERVER_COMMAND() :
     m_argParser.add_argument( ARG_PATH )
             .default_value( std::string() )
             .nargs( argparse::nargs_pattern::optional )
-            .help( UTF8STDSTR( _( "Optional path to a .kicad_pro or .kicad_pcb file to pre-load" ) ) )
-            .metavar( "PROJECT_OR_BOARD" );
+            .help( UTF8STDSTR( _( "Optional path to a .kicad_pro, .kicad_pcb, or .kicad_sch file to pre-load" ) ) )
+            .metavar( "PROJECT_OR_FILE" );
 
     m_argParser.add_argument( ARG_SOCKET )
             .default_value( std::string() )
@@ -64,6 +64,8 @@ CLI::API_SERVER_COMMAND::API_SERVER_COMMAND() :
 
 int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
 {
+    using namespace kiapi::common;
+
     std::unique_ptr<KICAD_API_SERVER> server = std::make_unique<KICAD_API_SERVER>( false );
     API_HANDLER_COMMON                commonHandler;
 
@@ -72,40 +74,63 @@ int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
     if( !socketPath.IsEmpty() )
         server->SetSocketPath( socketPath );
 
-    kiapi::common::types::DocumentType openDocumentType = kiapi::common::types::DOCTYPE_UNKNOWN;
-    wxFileName                         openProjectPath;
+    types::DocumentType openDocumentType = types::DOCTYPE_UNKNOWN;
+    KIWAY::FACE_T       openFace = KIWAY::FACE_PCB;
+    wxFileName          openProjectPath;
+
+    auto faceForDocument = []( types::DocumentType aType ) -> KIWAY::FACE_T
+    {
+        switch( aType )
+        {
+        case types::DOCTYPE_SCHEMATIC:  return KIWAY::FACE_SCH;
+        case types::DOCTYPE_PCB:        return KIWAY::FACE_PCB;
+        default:                        return KIWAY::KIWAY_FACE_COUNT;
+        }
+    };
+
+    auto docFileExtension = []( types::DocumentType aType ) -> std::string
+    {
+        switch( aType )
+        {
+        case types::DOCTYPE_SCHEMATIC:  return FILEEXT::KiCadSchematicFileExtension;
+        case types::DOCTYPE_PCB:        return FILEEXT::KiCadPcbFileExtension;
+        default:                        return "";
+        }
+    };
 
     auto closeCurrentDocument = [&]()
     {
-        if( openDocumentType != kiapi::common::types::DOCTYPE_UNKNOWN )
+        if( openDocumentType != types::DOCTYPE_UNKNOWN )
         {
-            wxString boardFileName;
+            wxString docFileName;
 
-            if( openDocumentType == kiapi::common::types::DOCTYPE_PCB )
+            if( openDocumentType == types::DOCTYPE_PCB || openDocumentType == types::DOCTYPE_SCHEMATIC )
             {
-                wxFileName boardPath( openProjectPath );
-                boardPath.SetExt( FILEEXT::KiCadPcbFileExtension );
-                boardFileName = boardPath.GetFullName();
+                wxFileName docPath( openProjectPath );
+                docPath.SetExt( docFileExtension( openDocumentType ) );
+                docFileName = docPath.GetFullName();
             }
 
             wxString error;
-            aKiway.ProcessApiCloseDocument( KIWAY::FACE_PCB, boardFileName, server.get(), &error );
+            aKiway.ProcessApiCloseDocument( openFace, docFileName, server.get(), &error );
         }
 
         openProjectPath.Clear();
-        openDocumentType = kiapi::common::types::DOCTYPE_UNKNOWN;
+        openDocumentType = types::DOCTYPE_UNKNOWN;
     };
 
-    auto openDocument = [&]( const kiapi::common::commands::OpenDocument& aRequest )
-            -> HANDLER_RESULT<kiapi::common::commands::OpenDocumentResponse>
+    auto openDocument = [&]( const commands::OpenDocument& aRequest )
+            -> HANDLER_RESULT<commands::OpenDocumentResponse>
     {
-        using namespace kiapi::common;
+        types::DocumentType requestType = aRequest.type();
 
-        if( aRequest.type() != types::DOCTYPE_PCB && aRequest.type() != types::DOCTYPE_PROJECT )
+        if( requestType != types::DOCTYPE_PCB
+            && requestType != types::DOCTYPE_SCHEMATIC
+            && requestType != types::DOCTYPE_PROJECT )
         {
             ApiResponseStatus e;
             e.set_status( ApiStatusCode::AS_UNIMPLEMENTED );
-            e.set_error_message( "Only PCB and project document types are supported" );
+            e.set_error_message( "Only PCB, schematic, and project document types are supported" );
             return tl::unexpected( e );
         }
 
@@ -121,18 +146,27 @@ int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
 
         wxFileName projectPath( inputPath );
 
-        if( projectPath.GetExt() == FILEEXT::KiCadPcbFileExtension )
-            projectPath.SetExt( FILEEXT::ProjectFileExtension );
-        else if( projectPath.GetExt() != FILEEXT::ProjectFileExtension )
-            projectPath.SetExt( FILEEXT::ProjectFileExtension );
+        // TODO(JE) if the API client just gives a project path rather than sch/board,
+        // we won't dispatch correctly.  We could instead try both handlers until one
+        // succeeds, like we do with other API calls.
 
+        projectPath.SetExt( FILEEXT::ProjectFileExtension );
         projectPath.MakeAbsolute();
 
         closeCurrentDocument();
 
-        wxString error;
+        KIWAY::FACE_T face = faceForDocument( requestType );
+        wxString      error;
 
-        if( !aKiway.ProcessApiOpenDocument( KIWAY::FACE_PCB, projectPath.GetFullPath(), server.get(), &error ) )
+        if( face == KIWAY::KIWAY_FACE_COUNT )
+        {
+            ApiResponseStatus e;
+            e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+            e.set_error_message( "unsupported document type" );
+            return tl::unexpected( e );
+        }
+
+        if( !aKiway.ProcessApiOpenDocument( face, projectPath.GetFullPath(), server.get(), &error ) )
         {
             ApiResponseStatus e;
             e.set_status( ApiStatusCode::AS_BAD_REQUEST );
@@ -141,11 +175,12 @@ int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
         }
 
         openProjectPath = projectPath;
-        openDocumentType = aRequest.type();
+        openDocumentType = requestType;
+        openFace = face;
 
-        kiapi::common::commands::OpenDocumentResponse response;
-        kiapi::common::types::DocumentSpecifier*      doc = response.mutable_document();
-        PROJECT&                                      project = Pgm().GetSettingsManager().Prj();
+        commands::OpenDocumentResponse response;
+        types::DocumentSpecifier*      doc = response.mutable_document();
+        PROJECT&                       project = Pgm().GetSettingsManager().Prj();
 
         doc->set_type( openDocumentType );
 
@@ -155,6 +190,12 @@ int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
             boardPath.SetExt( FILEEXT::KiCadPcbFileExtension );
             doc->set_board_filename( boardPath.GetFullName().ToStdString() );
         }
+        else if( openDocumentType == types::DOCTYPE_SCHEMATIC )
+        {
+            wxFileName schPath( openProjectPath );
+            schPath.SetExt( FILEEXT::KiCadSchematicFileExtension );
+            doc->set_schematic_filename( schPath.GetFullName().ToStdString() );
+        }
 
         doc->mutable_project()->set_name( project.GetProjectName().ToStdString() );
         doc->mutable_project()->set_path( project.GetProjectDirectory().ToStdString() );
@@ -163,10 +204,8 @@ int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
     };
 
     auto closeDocument =
-            [&]( const kiapi::common::commands::CloseDocument& aRequest ) -> HANDLER_RESULT<google::protobuf::Empty>
+            [&]( const commands::CloseDocument& aRequest ) -> HANDLER_RESULT<google::protobuf::Empty>
     {
-        using namespace kiapi::common;
-
         if( openDocumentType == types::DOCTYPE_UNKNOWN )
         {
             ApiResponseStatus e;
@@ -185,33 +224,43 @@ int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
                 return tl::unexpected( e );
             }
 
-            if( openDocumentType == types::DOCTYPE_PCB && !aRequest.document().board_filename().empty() )
-            {
-                wxFileName expectedBoardPath( openProjectPath );
-                expectedBoardPath.SetExt( FILEEXT::KiCadPcbFileExtension );
+            wxFileName expectedPath( openProjectPath );
+            expectedPath.SetExt( docFileExtension( openDocumentType ) );
 
-                if( expectedBoardPath.GetFullName() != wxString::FromUTF8( aRequest.document().board_filename() ) )
-                {
-                    ApiResponseStatus e;
-                    e.set_status( ApiStatusCode::AS_BAD_REQUEST );
-                    e.set_error_message( "Requested document does not match the open document" );
-                    return tl::unexpected( e );
-                }
+            wxString requestedName;
+
+            if( openDocumentType == types::DOCTYPE_PCB
+                && !aRequest.document().board_filename().empty() )
+            {
+                requestedName = wxString::FromUTF8( aRequest.document().board_filename() );
+            }
+            else if( openDocumentType == types::DOCTYPE_SCHEMATIC
+                     && !aRequest.document().schematic_filename().empty() )
+            {
+                requestedName = wxString::FromUTF8( aRequest.document().schematic_filename() );
+            }
+
+            if( !requestedName.IsEmpty() && expectedPath.GetFullName() != requestedName )
+            {
+                ApiResponseStatus e;
+                e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+                e.set_error_message( "Requested document does not match the open document" );
+                return tl::unexpected( e );
             }
         }
 
-        wxString boardFileName;
+        wxString docFileName;
 
-        if( openDocumentType == types::DOCTYPE_PCB )
+        if( openDocumentType == types::DOCTYPE_PCB || openDocumentType == types::DOCTYPE_SCHEMATIC )
         {
-            wxFileName expectedBoardPath( openProjectPath );
-            expectedBoardPath.SetExt( FILEEXT::KiCadPcbFileExtension );
-            boardFileName = expectedBoardPath.GetFullName();
+            wxFileName expectedPath( openProjectPath );
+            expectedPath.SetExt( docFileExtension( openDocumentType ) );
+            docFileName = expectedPath.GetFullName();
         }
 
         wxString error;
 
-        if( !aKiway.ProcessApiCloseDocument( KIWAY::FACE_PCB, boardFileName, server.get(), &error ) )
+        if( !aKiway.ProcessApiCloseDocument( openFace, docFileName, server.get(), &error ) )
         {
             ApiResponseStatus e;
             e.set_status( ApiStatusCode::AS_BAD_REQUEST );
@@ -241,8 +290,18 @@ int CLI::API_SERVER_COMMAND::doPerform( KIWAY& aKiway )
 
     if( !preloadPath.IsEmpty() )
     {
-        kiapi::common::commands::OpenDocument request;
-        request.set_type( kiapi::common::types::DOCTYPE_PROJECT );
+        using namespace kiapi::common;
+
+        wxFileName preloadFile( preloadPath );
+        types::DocumentType preloadType = types::DOCTYPE_PROJECT;
+
+        if( preloadFile.GetExt() == FILEEXT::KiCadSchematicFileExtension )
+            preloadType = types::DOCTYPE_SCHEMATIC;
+        else if( preloadFile.GetExt() == FILEEXT::KiCadPcbFileExtension )
+            preloadType = types::DOCTYPE_PCB;
+
+        commands::OpenDocument request;
+        request.set_type( preloadType );
         request.set_path( preloadPath.ToStdString() );
 
         auto preloadResult = openDocument( request );
