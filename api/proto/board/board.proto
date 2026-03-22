@@ -141,6 +141,150 @@ message BoardSettings
   // Dimension default settings
 }
 
+message MinimumConstraints
+{
+  kiapi.common.types.Distance min_clearance = 1;
+  kiapi.common.types.Distance min_groove_width = 2;
+  kiapi.common.types.Distance min_connection_width = 3;
+  kiapi.common.types.Distance min_track_width = 4;
+  kiapi.common.types.Distance min_via_annular_width = 5;
+  kiapi.common.types.Distance min_via_size = 6;
+  kiapi.common.types.Distance min_through_drill = 7;
+  kiapi.common.types.Distance min_microvia_size = 8;
+  kiapi.common.types.Distance min_microvia_drill = 9;
+  kiapi.common.types.Distance copper_edge_clearance = 10;
+  kiapi.common.types.Distance hole_clearance = 11;
+  kiapi.common.types.Distance hole_to_hole_min = 12;
+  kiapi.common.types.Distance silk_clearance = 13;
+  int32 min_resolved_spokes = 14;
+  kiapi.common.types.Distance min_silk_text_height = 15;
+  kiapi.common.types.Distance min_silk_text_thickness = 16;
+}
+
+message PresetTrackWidth
+{
+  kiapi.common.types.Distance width = 1;
+}
+
+message PresetViaDimension
+{
+  kiapi.common.types.Distance diameter = 1;
+  kiapi.common.types.Distance drill = 2;
+}
+
+message PresetDiffPairDimension
+{
+  kiapi.common.types.Distance width = 1;
+  kiapi.common.types.Distance gap = 2;
+  kiapi.common.types.Distance via_gap = 3;
+}
+
+message PredefinedSizes
+{
+  repeated PresetTrackWidth tracks = 1;
+  repeated PresetViaDimension vias = 2;
+  repeated PresetDiffPairDimension diff_pairs = 3;
+}
+
+message SolderMaskPasteDefaults
+{
+  kiapi.common.types.Distance mask_expansion = 1;
+  kiapi.common.types.Distance mask_min_width = 2;
+  kiapi.common.types.Distance mask_to_copper_clearance = 3;
+  kiapi.common.types.Distance paste_margin = 4;
+  double paste_margin_ratio = 5;
+  bool allow_soldermask_bridges_in_footprints = 6;
+}
+
+enum TeardropTarget
+{
+  TDT_UNKNOWN = 0;
+  TDT_ROUND = 1;
+  TDT_RECT = 2;
+  TDT_TRACK = 3;
+}
+
+message TeardropTargetParams
+{
+  bool enabled = 1;
+  kiapi.common.types.Distance max_length = 2;
+  kiapi.common.types.Distance max_width = 3;
+  double best_length_ratio = 4;
+  double best_width_ratio = 5;
+  double width_to_size_filter_ratio = 6;
+  bool curved_edges = 7;
+  bool allow_two_tracks = 8;
+  bool on_pads_in_zones = 9;
+}
+
+message TeardropTargetEntry
+{
+  TeardropTarget target = 1;
+  TeardropTargetParams params = 2;
+}
+
+message TeardropDefaults
+{
+  bool target_vias = 1;
+  bool target_pth_pads = 2;
+  bool target_smd_pads = 3;
+  bool target_track_to_track = 4;
+  bool use_round_shapes_only = 5;
+  repeated TeardropTargetEntry target_params = 6;
+}
+
+message ViaProtectionDefaults
+{
+  bool tent_front = 1;
+  bool tent_back = 2;
+  bool cover_front = 3;
+  bool cover_back = 4;
+  bool plug_front = 5;
+  bool plug_back = 6;
+  bool cap = 7;
+  bool fill = 8;
+}
+
+message DrcSeveritySetting
+{
+  string error_key = 1;
+  kiapi.common.types.RuleSeverity severity = 2;
+}
+
+message DrcExclusion
+{
+  kiapi.common.types.RuleCheckerMarker marker = 1;
+  string comment = 2;
+}
+
+enum CustomRuleLayerMode
+{
+  CRLM_UNKNOWN = 0;
+  CRLM_OUTER = 1;
+  CRLM_INNER = 2;
+}
+
+message CustomRule
+{
+  string condition = 1;
+  string constraints = 2;
+
+  oneof layer_condition {
+    kiapi.board.types.BoardLayer single_layer = 3;
+    CustomRuleLayerMode layer_mode = 4;
+  }
+
+  kiapi.common.types.RuleSeverity severity = 5;
+}
+
 message BoardDesignRules
 {
+  MinimumConstraints constraints = 1;
+  PredefinedSizes predefined_sizes = 2;
+  SolderMaskPasteDefaults solder_mask_paste = 3;
+  TeardropDefaults teardrops = 4;
+  ViaProtectionDefaults via_protection = 5;
+  repeated DrcSeveritySetting severities = 6;
+  repeated DrcExclusion exclusions = 7;
+  repeated CustomRule custom_rules = 8;
 }

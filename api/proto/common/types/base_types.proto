@@ -485,3 +485,26 @@ enum ElectricalPinType
   // A no-connect pin should not be connected to any net
   EPT_NO_CONNECT = 12;
 }
+
+message RuleCheckerMarkerID
+{
+  string opaque_id = 1;
+}
+
+message RuleCheckerMarker
+{
+  RuleCheckerMarkerID id = 1;
+}
+
+enum RuleSeverity
+{
+  RS_UNKNOWN = 0;
+  RS_WARNING = 1;
+  RS_ERROR = 2;
+  RS_EXCLUSION = 3;
+  RS_IGNORE = 4;
+  RS_INFO = 5;
+  RS_ACTION = 6;
+  RS_DEBUG = 7;
+  RS_UNDEFINED = 8;
+}

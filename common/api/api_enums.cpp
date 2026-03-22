@@ -31,6 +31,7 @@
 #include <layer_ids.h>
 #include <pin_type.h>
 #include <stroke_params.h>
+#include <widgets/report_severity.h>
 
 using namespace kiapi;
 using namespace kiapi::common;
@@ -643,5 +644,44 @@ types::ElectricalPinType ToProtoEnum( ELECTRICAL_PINTYPE aValue )
     default:
         wxCHECK_MSG( false, types::ElectricalPinType::EPT_UNKNOWN,
                      "Unhandled case in ToProtoEnum<ELECTRICAL_PINTYPE>");
+    }
+}
+
+
+template<>
+types::RuleSeverity ToProtoEnum( SEVERITY aValue )
+{
+    switch( aValue )
+    {
+    case RPT_SEVERITY_WARNING:   return types::RuleSeverity::RS_WARNING;
+    case RPT_SEVERITY_ERROR:     return types::RuleSeverity::RS_ERROR;
+    case RPT_SEVERITY_EXCLUSION: return types::RuleSeverity::RS_EXCLUSION;
+    case RPT_SEVERITY_IGNORE:    return types::RuleSeverity::RS_IGNORE;
+    case RPT_SEVERITY_INFO:      return types::RuleSeverity::RS_INFO;
+    case RPT_SEVERITY_ACTION:    return types::RuleSeverity::RS_ACTION;
+    case RPT_SEVERITY_DEBUG:     return types::RuleSeverity::RS_DEBUG;
+    case RPT_SEVERITY_UNDEFINED: return types::RuleSeverity::RS_UNDEFINED;
+    default:
+        wxCHECK_MSG( false, types::RuleSeverity::RS_UNDEFINED,
+                     "Unhandled case in ToProtoEnum<SEVERITY>");
+    }
+}
+
+
+template<>
+SEVERITY FromProtoEnum( types::RuleSeverity aValue )
+{
+    switch( aValue )
+    {
+    case types::RuleSeverity::RS_WARNING:   return RPT_SEVERITY_WARNING;
+    case types::RuleSeverity::RS_ERROR:     return RPT_SEVERITY_ERROR;
+    case types::RuleSeverity::RS_EXCLUSION: return RPT_SEVERITY_EXCLUSION;
+    case types::RuleSeverity::RS_IGNORE:    return RPT_SEVERITY_IGNORE;
+    case types::RuleSeverity::RS_INFO:      return RPT_SEVERITY_INFO;
+    case types::RuleSeverity::RS_ACTION:    return RPT_SEVERITY_ACTION;
+    case types::RuleSeverity::RS_DEBUG:     return RPT_SEVERITY_DEBUG;
+    case types::RuleSeverity::RS_UNKNOWN:
+    default:
+        return RPT_SEVERITY_UNDEFINED;
     }
 }
