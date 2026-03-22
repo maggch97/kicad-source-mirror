@@ -298,7 +298,7 @@ LOGGER::EVENT_ENTRY LOGGER::ParseEventFromJSON( const nlohmann::json& aJSON )
     for( auto &uuid : aJSON.at("uuids") )
         evt.uuids.push_back( uuid.get<KIID>() );
 
-        return evt;
+    return evt;
 }
 
 

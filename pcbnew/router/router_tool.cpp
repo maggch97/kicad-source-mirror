@@ -46,6 +46,7 @@ using namespace std::placeholders;
 #include <dialogs/dialog_pns_settings.h>
 #include <dialogs/dialog_pns_diff_pair_dimensions.h>
 #include <dialogs/dialog_track_via_size.h>
+#include <dialogs/dialog_router_save_test_case.h>
 #include <math/vector2wx.h>
 #include <paths.h>
 #include <confirm.h>
@@ -691,8 +692,10 @@ void ROUTER_TOOL::Reset( RESET_REASON aReason )
 
 void ROUTER_TOOL::saveRouterDebugLog()
 {
-    static wxString mruPath = PATHS::GetDefaultUserProjectsPath();
+    wxString testCaseDir = ADVANCED_CFG::GetCfg().m_RouterTestCaseDirectory;
+    wxString logPath;
     static size_t   lastLoggerSize = 0;
+    static wxString mruPath;
     PNS::LOGGER::LOG_DATA logData;
 
     auto logger = m_router->Logger();
@@ -702,6 +705,47 @@ void ROUTER_TOOL::saveRouterDebugLog()
     {
         return;
     }
+
+    if( !testCaseDir.IsEmpty() )
+    {
+        DIALOG_ROUTER_SAVE_TEST_CASE saveDlg( frame(), testCaseDir );
+        bool doExit = false;
+
+        if( saveDlg.ShowModal() == wxID_OK )
+        {
+            wxFileName path( testCaseDir );
+            path.AppendDir( saveDlg.getTestCaseName() );
+            logData.m_TestCaseType = saveDlg.getTestCaseType();
+
+            if( path.DirExists() )
+            {
+                doExit = !IsOK( frame(), wxString::Format( _("Test case in directory %s already exists. Overwrite?"), path.GetFullPath() ) );
+            }
+            else
+            {
+                wxMkdir( path.GetFullPath() );
+            }
+
+            path.SetName( wxT("pns") );
+            logPath = path.GetFullPath();
+        }
+        else
+        {
+            doExit = true;
+        }
+
+        if( doExit )
+        {
+            lastLoggerSize = logger->GetEvents().size(); // prevent re-entry
+            return;
+        }        
+    }
+    else
+    {
+        if ( mruPath.IsEmpty() )
+        {
+            mruPath = PATHS::GetDefaultUserProjectsPath();
+        }
 
     wxFileDialog dlg( frame(), _( "Save router log" ), mruPath, "pns.log",
                       "PNS log files" + AddFileExtListToFilter( { "log" } ),
@@ -715,8 +759,14 @@ void ROUTER_TOOL::saveRouterDebugLog()
         return;
     }
 
-    wxFileName fname_log( dlg.GetPath() );
+        logPath = dlg.GetPath();
+    }
+
+
+    wxFileName fname_log( logPath );
     mruPath = fname_log.GetPath();
+    fname_log.SetExt( "log" );
+    printf("save log to: %s\n", fname_log.GetFullPath().c_str().AsChar() );
 
     wxFileName fname_dump( fname_log );
     fname_dump.SetExt( "dump" );

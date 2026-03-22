@@ -165,6 +165,8 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_multichannel_generate_rule_areas.cpp
     dialogs/dialog_multichannel_repeat_layout_base.cpp
     dialogs/dialog_multichannel_repeat_layout.cpp
+    dialogs/dialog_router_save_test_case_base.cpp
+    dialogs/dialog_router_save_test_case.cpp
     dialogs/panel_display_options.cpp
     dialogs/panel_display_options_base.cpp
     dialogs/panel_edit_options.cpp
