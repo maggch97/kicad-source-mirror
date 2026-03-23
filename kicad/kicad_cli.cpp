@@ -73,7 +73,6 @@
 #include "cli/command_sch_export_pythonbom.h"
 #include "cli/command_sch_export_netlist.h"
 #include "cli/command_sch_export_plot.h"
-#include "cli/command_api_server.h"
 #include "cli/command_pcb_upgrade.h"
 #include "cli/command_pcb_import.h"
 #include "cli/command_fp.h"
@@ -90,6 +89,10 @@
 #include "cli/command_sym_upgrade.h"
 #include "cli/command_version.h"
 #include "cli/exit_codes.h"
+
+#ifdef KICAD_IPC_API
+#include "cli/command_api_server.h"
+#endif
 
 // Add this header after all others, to avoid a collision name in a Windows header
 // on mingw.
@@ -174,9 +177,11 @@ static CLI::SYM_COMMAND                  symCmd{};
 static CLI::SYM_EXPORT_COMMAND           symExportCmd{};
 static CLI::SYM_EXPORT_SVG_COMMAND       symExportSvgCmd{};
 static CLI::SYM_UPGRADE_COMMAND          symUpgradeCmd{};
-static CLI::API_SERVER_COMMAND           apiServerCmd{};
 static CLI::VERSION_COMMAND              versionCmd{};
 
+#ifdef KICAD_IPC_API
+static CLI::API_SERVER_COMMAND           apiServerCmd{};
+#endif
 
 // clang-format off
 static std::vector<COMMAND_ENTRY> commandStack = {
@@ -286,11 +291,14 @@ static std::vector<COMMAND_ENTRY> commandStack = {
         }
     },
     {
-            &versionCmd,
-        },
-        {
-            &apiServerCmd,
+        &versionCmd,
     }
+#ifdef KICAD_IPC_API
+    ,
+    {
+        &apiServerCmd,
+    }
+#endif
 };
 // clang-format on
 

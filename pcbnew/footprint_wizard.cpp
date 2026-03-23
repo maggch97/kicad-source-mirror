@@ -40,6 +40,7 @@ void FOOTPRINT_WIZARD_MANAGER::ReloadWizards()
 {
     m_wizards.clear();
 
+#ifdef KICAD_IPC_API
     API_PLUGIN_MANAGER& manager = Pgm().GetPluginManager();
     std::vector<const PLUGIN_ACTION*> actions = manager.GetActionsForScope( PLUGIN_ACTION_SCOPE::FOOTPRINT_WIZARD );
 
@@ -51,6 +52,7 @@ void FOOTPRINT_WIZARD_MANAGER::ReloadWizards()
         if( RefreshInfo( wizard.get() ) )
             m_wizards[wizard->Identifier()] = std::move( wizard );
     }
+#endif
 }
 
 
@@ -87,6 +89,7 @@ std::optional<FOOTPRINT_WIZARD*> FOOTPRINT_WIZARD_MANAGER::GetWizard( const wxSt
 bool FOOTPRINT_WIZARD_MANAGER::RefreshInfo( FOOTPRINT_WIZARD* aWizard )
 {
     wxCHECK( aWizard, false );
+#ifdef KICAD_IPC_API
     API_PLUGIN_MANAGER& manager = Pgm().GetPluginManager();
 
     const wxLanguageInfo* lang = wxLocale::GetLanguageInfo( Pgm().GetSelectedLanguageIdentifier() );
@@ -113,11 +116,15 @@ bool FOOTPRINT_WIZARD_MANAGER::RefreshInfo( FOOTPRINT_WIZARD* aWizard )
 
     aWizard->Info().FromProto( info );
     return true;
+#else
+    return false;
+#endif
 }
 
 
 tl::expected<FOOTPRINT*, wxString> FOOTPRINT_WIZARD_MANAGER::Generate( FOOTPRINT_WIZARD* aWizard )
 {
+#ifdef KICAD_IPC_API
     wxCHECK( aWizard, tl::unexpected( _( "Unexpected error with footprint wizard" ) ) );
     API_PLUGIN_MANAGER& manager = Pgm().GetPluginManager();
 
@@ -168,6 +175,9 @@ tl::expected<FOOTPRINT*, wxString> FOOTPRINT_WIZARD_MANAGER::Generate( FOOTPRINT
         return tl::unexpected( _( "Unexpected response from footprint wizard" ) );
 
     return fp.release();
+#else
+    return tl::unexpected( _( "The KiCad API is disabled" ) );
+#endif
 }
 
 
