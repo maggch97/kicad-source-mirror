@@ -958,23 +958,6 @@ check_find_package_result( PYTHONINTERP_FOUND "Python Interpreter" )
 # Find wxWidgets library, required
 #
 
-# Check if '--toolkit=xxx' option has been passed
-string( REGEX MATCH "--toolkit=([a-zA-Z0-9]+)"
-    WXWIDGETS_REQUESTED_TOOLKIT "${wxWidgets_CONFIG_OPTIONS}" )
-
-if( WXWIDGETS_REQUESTED_TOOLKIT
-        AND NOT WXWIDGETS_REQUESTED_TOOLKIT STREQUAL "--toolkit=${WXPYTHON_TOOLKIT}" )
-    message( WARNING "wxWidgets and wxPython must be based on the same toolkit.\n"
-        "It will be fixed automatically if you skip the '--toolkit=xxx' "
-        "wxWidgets_CONFIG_OPTIONS parameter.")
-elseif( UNIX AND NOT APPLE )
-    # Force the use of GTK3 on Linux
-    set( wxWidgets_CONFIG_OPTIONS ${wxWidgets_CONFIG_OPTIONS} "--toolkit=gtk3" )
-else()
-    # Use the same toolkit as wxPython otherwise there will be a symbol conflict
-    set( wxWidgets_CONFIG_OPTIONS ${wxWidgets_CONFIG_OPTIONS} "--toolkit=${WXPYTHON_TOOLKIT}" )
-endif()
-
 set( wxWidgets_REQ_VERSION 3.2.0 )
 
 # See line 49 of cmake/FindwxWidgets.cmake
