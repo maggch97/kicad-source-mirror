@@ -65,7 +65,7 @@ class PANEL_TOOLBAR_CUSTOMIZATION : public PANEL_TOOLBAR_CUSTOMIZATION_BASE
 {
 public:
     PANEL_TOOLBAR_CUSTOMIZATION( wxWindow* aParent, APP_SETTINGS_BASE* aCfg, TOOLBAR_SETTINGS* aTbSettings,
-                                 const std::vector<TOOL_ACTION*>& aTools,
+                                 FRAME_T aActionContext, const std::vector<TOOL_ACTION*>& aTools,
                                  const std::vector<ACTION_TOOLBAR_CONTROL*>& aControls );
 
     ~PANEL_TOOLBAR_CUSTOMIZATION();
@@ -81,6 +81,7 @@ protected:
     void populateToolbarTree();
 
     void populateActions();
+    bool isActionSupported( const TOOL_ACTION& aAction ) const;
 
     void enableCustomControls( bool enable );
     void enableToolbarControls( bool enable );
@@ -109,7 +110,9 @@ protected:
     TOOLBAR_SETTINGS*  m_appTbSettings;
 
     // The toolbar currently being viewed
-    TOOLBAR_LOC  m_currentToolbar;
+    TOOLBAR_LOC              m_currentToolbar;
+    FRAME_T                  m_actionContext;
+    std::vector<TOOLBAR_LOC> m_toolbarChoices;
 
     // Shadow copy of the toolbar configurations used to store the changes in the dialog
     std::map<TOOLBAR_LOC, TOOLBAR_CONFIGURATION>   m_toolbars;
