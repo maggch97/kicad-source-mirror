@@ -25,6 +25,8 @@
 
 #include "router/pns_logger.h"
 
+#include <pcb_base_edit_frame.h>
+
 DIALOG_ROUTER_SAVE_TEST_CASE::DIALOG_ROUTER_SAVE_TEST_CASE( PCB_BASE_EDIT_FRAME* aParent, const wxString& aTestCaseDir ) :
         DIALOG_ROUTER_SAVE_TEST_CASE_BASE( aParent ),
         m_testCaseDir( aTestCaseDir )
@@ -52,7 +54,7 @@ bool DIALOG_ROUTER_SAVE_TEST_CASE::TransferDataFromWindow()
         case 3: m_testCaseType = PNS::LOGGER::TCT_KNOWN_BUG; break;
         default: return false;
     }
-    
+
     m_testCaseName = m_testCaseNameCtrl->GetValue();
     return true;
 }

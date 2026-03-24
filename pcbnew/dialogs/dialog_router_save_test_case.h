@@ -27,6 +27,8 @@
 
 #include "router/pns_logger.h"
 
+class PCB_BASE_EDIT_FRAME;
+
 class DIALOG_ROUTER_SAVE_TEST_CASE : public DIALOG_ROUTER_SAVE_TEST_CASE_BASE
 {
 public:
@@ -38,7 +40,7 @@ public:
 
     PNS::LOGGER::TEST_CASE_TYPE getTestCaseType() const { return m_testCaseType; }
     const wxString& getTestCaseName() const { return m_testCaseName; }
-    
+
 private:
     wxString m_testCaseDir;
     wxString m_testCaseName;
