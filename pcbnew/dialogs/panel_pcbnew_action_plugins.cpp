@@ -36,6 +36,7 @@
 #include <widgets/paged_dialog.h>
 #include <widgets/wx_grid.h>
 #include <widgets/std_bitmap_button.h>
+#include <wx/app.h>
 
 
 #define GRID_CELL_MARGIN 4
