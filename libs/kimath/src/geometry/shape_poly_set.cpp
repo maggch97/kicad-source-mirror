@@ -1894,13 +1894,9 @@ bool SHAPE_POLY_SET::isExteriorWaist( const SEG& aSegA, const SEG& aSegB ) const
     {
         VECTOR2I perp = segDir.Perpendicular().Resize( 10 );
 
-        // Test points on both sides of the overlapping segment
-        bool side1 = PointInside( midpoint + perp );
-        bool side2 = PointInside( midpoint - perp );
-
-        // Only return true if both sides are outside the polygon
-        // This is the case for non-fractured segments
-        if( !side1 && !side2 )
+        // Both sides must be outside for this to be an exterior waist. Short-circuit if
+        // either side is inside the polygon to avoid the second O(N) point-in-polygon test.
+        if( !PointInside( midpoint + perp ) && !PointInside( midpoint - perp ) )
         {
             wxLogTrace( wxT( "collinear" ), wxT( "Found exterior waist between (%d,%d)-(%d,%d) and (%d,%d)-(%d,%d)" ),
                         aSegA.A.x, aSegA.A.y, aSegA.B.x, aSegA.B.y,
