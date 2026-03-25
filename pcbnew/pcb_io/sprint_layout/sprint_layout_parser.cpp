@@ -678,7 +678,31 @@ void SPRINT_LAYOUT_PARSER::addPadToBoard(
 
     PAD* pad = new PAD( fp );
 
-    VECTOR2I pos = sprintToKicadPos( aObj.x, aObj.y );
+    // SMD pad x,y may be a component-relative offset rather than an absolute
+    // position (depends on the Sprint Layout version that created the file).
+    // The points array always stores absolute coordinates, so derive the pad
+    // center from the points when available.
+    VECTOR2I pos;
+
+    if( aObj.type == SPRINT_LAYOUT::OBJ_SMD_PAD && !aObj.points.empty() )
+    {
+        double cx = 0, cy = 0;
+
+        for( const auto& pt : aObj.points )
+        {
+            cx += pt.x;
+            cy += pt.y;
+        }
+
+        cx /= static_cast<double>( aObj.points.size() );
+        cy /= static_cast<double>( aObj.points.size() );
+        pos = sprintToKicadPos( static_cast<float>( cx ), static_cast<float>( cy ) );
+    }
+    else
+    {
+        pos = sprintToKicadPos( aObj.x, aObj.y );
+    }
+
     pad->SetPosition( pos );
 
     if( fp->Pads().empty() )
