@@ -430,21 +430,10 @@ BOARD* PCBNEW_JOBS_HANDLER::getBoard( const wxString& aPath )
 
                 PROJECT* project = settingsManager.GetProject( pro.GetFullPath() );
 
-                if( !project && wxFileExists( pro.GetFullPath() ) )
+                if( !project )
                 {
                     settingsManager.LoadProject( pro.GetFullPath(), true );
                     project = settingsManager.GetProject( pro.GetFullPath() );
-                }
-
-                if( !project )
-                {
-                    project = settingsManager.GetProject( "" );
-
-                    if( !project )
-                    {
-                        settingsManager.LoadProject( "" );
-                        project = settingsManager.GetProject( "" );
-                    }
                 }
 
                 return project;
