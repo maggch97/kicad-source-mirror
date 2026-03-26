@@ -30,6 +30,7 @@
 #include "shapes3D/cylinder_3d.h"
 #include "shapes3D/frustum_3d.h"
 #include "shapes3D/triangle_3d.h"
+#include "shapes3D/dummy_block_3d.h"
 #include "shapes2D/layer_item_2d.h"
 #include "shapes2D/ring_2d.h"
 #include "shapes2D/polygon_2d.h"
@@ -38,6 +39,7 @@
 #include "accelerators/bvh_pbrt.h"
 #include "3d_fastmath.h"
 #include "3d_math.h"
+#include "../3d_placeholder_utils.h"
 
 #include <board.h>
 #include <footprint.h>
@@ -1911,6 +1913,47 @@ void RENDER_3D_RAYTRACE_BASE::addPadsAndVias()
 }
 
 
+void RENDER_3D_RAYTRACE_BASE::addPlaceholderToRaytracer( CONTAINER_3D& aDstContainer, const FOOTPRINT* aFootprint,
+                                                         const glm::mat4& aFpMatrix )
+{
+    BOX2I localBox = CalcPlaceholderLocalBox( aFootprint );
+
+    float bboxW = std::abs( localBox.GetWidth() ) / pcbIUScale.IU_PER_MM * 0.9f;
+    float bboxH = std::abs( localBox.GetHeight() ) / pcbIUScale.IU_PER_MM * 0.9f;
+    float scaleZ = std::min( bboxW, bboxH ) * 0.5f;
+
+    VECTOR2I localCenter = localBox.GetCenter();
+    float    offsetX = localCenter.x / pcbIUScale.IU_PER_MM;
+    float    offsetY = -localCenter.y / pcbIUScale.IU_PER_MM;
+
+    if( aFootprint->IsFlipped() )
+        offsetY = -offsetY;
+
+    // Build box in model space then transform all 8 corners to world space
+    SFVEC3F boxMin( offsetX - bboxW * 0.5f, offsetY - bboxH * 0.5f, 0.0f );
+    SFVEC3F boxMax( offsetX + bboxW * 0.5f, offsetY + bboxH * 0.5f, scaleZ );
+
+    BBOX_3D worldBBox;
+    worldBBox.Reset();
+
+    for( int i = 0; i < 8; ++i )
+    {
+        SFVEC3F corner( ( i & 1 ) ? boxMax.x : boxMin.x, ( i & 2 ) ? boxMax.y : boxMin.y,
+                        ( i & 4 ) ? boxMax.z : boxMin.z );
+
+        glm::vec4 transformed = aFpMatrix * glm::vec4( corner, 1.0f );
+        worldBBox.Union( SFVEC3F( transformed ) );
+    }
+
+    DUMMY_BLOCK* placeholder = new DUMMY_BLOCK( worldBBox );
+    placeholder->SetBoardItem( const_cast<FOOTPRINT*>( aFootprint ) );
+    placeholder->SetMaterial( &m_materials.m_EpoxyBoard );
+    placeholder->SetColor( SFVEC3F( 1.0f, 0.5f, 0.0f ) );
+
+    aDstContainer.Add( placeholder );
+}
+
+
 void RENDER_3D_RAYTRACE_BASE::load3DModels( CONTAINER_3D& aDstContainer,
                                             bool aSkipMaterialInformation )
 {
@@ -1928,8 +1971,10 @@ void RENDER_3D_RAYTRACE_BASE::load3DModels( CONTAINER_3D& aDstContainer,
     // Go for all footprints
     for( FOOTPRINT* fp : m_boardAdapter.GetBoard()->Footprints() )
     {
-        if( !fp->Models().empty()
-          && m_boardAdapter.IsFootprintShown( fp ) )
+        bool hasModels = !fp->Models().empty();
+        bool showMissing = m_boardAdapter.m_Cfg->m_Render.show_missing_models;
+
+        if( ( hasModels || showMissing ) && m_boardAdapter.IsFootprintShown( fp ) )
         {
             double zpos = m_boardAdapter.GetFootprintZPos( fp->IsFlipped() );
 
@@ -2026,6 +2071,16 @@ void RENDER_3D_RAYTRACE_BASE::load3DModels( CONTAINER_3D& aDstContainer,
                     addModels( aDstContainer, modelPtr, modelMatrix, (float) model.m_Opacity,
                                aSkipMaterialInformation, fp );
                 }
+                else if( showMissing )
+                {
+                    addPlaceholderToRaytracer( aDstContainer, fp, fpMatrix );
+                }
+            }
+
+            // Footprint with no models assigned at all
+            if( !hasModels && showMissing )
+            {
+                addPlaceholderToRaytracer( aDstContainer, fp, fpMatrix );
             }
         }
     }

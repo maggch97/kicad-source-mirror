@@ -121,6 +121,8 @@ protected:
                                 bool aIsFront );
     void backfillPostMachine();
     void load3DModels( CONTAINER_3D& aDstContainer, bool aSkipMaterialInformation );
+    void addPlaceholderToRaytracer( CONTAINER_3D& aDstContainer, const FOOTPRINT* aFootprint,
+                                    const glm::mat4& aFpMatrix );
     void addModels( CONTAINER_3D& aDstContainer, const S3DMODEL* a3DModel,
                     const glm::mat4& aModelMatrix, float aFPOpacity,
                     bool aSkipMaterialInformation, BOARD_ITEM* aBoardItem );

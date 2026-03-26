@@ -690,6 +690,7 @@ void RENDER_3D_OPENGL::reload( REPORTER* aStatusReporter, REPORTER* aWarningRepo
     m_reloadRequested = false;
 
     freeAllLists();
+    createPlaceholderModel();
 
     OBJECT_2D_STATS::Instance().ResetStats();
 

@@ -190,7 +190,7 @@ private:
 
     PROJECT*            m_project;
     wxString            m_CacheDir;
-    wxString            m_ConfigDir;       ///< base configuration path for 3D items.
+    wxString            m_ConfigDir; ///< base configuration path for 3D items.
 };
 
 #endif  // CACHE_3D_H
