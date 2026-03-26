@@ -309,7 +309,7 @@ get_property(IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(IS_MULTI_CONFIG)
     set(KICMAKE_CFG_INTDIR "$<CONFIG>")
 else()
-    # For single-config generators (Ninja, Makefiles), default to "." 
+    # For single-config generators (Ninja, Makefiles), default to "."
     set(KICMAKE_CFG_INTDIR ".")
 endif()
 
@@ -573,7 +573,7 @@ if( MSVC )
     # /Gy: Enable Function-Level Linking
     string( APPEND CMAKE_CXX_FLAGS_RELEASE " /Gy" )
     string( APPEND CMAKE_CXX_FLAGS_RELWITHDEBINFO " /Gy" )
-    # Avoid fatal error because /GF + swig wrapper exceed standard obj file limits
+    # Avoid fatal error as we could exceed standard obj file limits
     string( APPEND CMAKE_CXX_FLAGS " /bigobj" )
     # /permissive-: This puts MSVC into compliance mode, this flag is default on with C++20
     # but we want to turn it on to enable debug performance improvements available under C++17 in MSVC 17.5+

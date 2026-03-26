@@ -60,11 +60,6 @@ struct fnv_1a
 };
 
 
-/// Declare a std::unordered_map but no swig %template
-#define DECL_HASH_FOR_SWIG( TypeName, KeyType, ValueType )          \
-    typedef std::unordered_map<KeyType, ValueType> TypeName;
-
-
 /**
  * A hashtable made of a const char* and an int.
  *
