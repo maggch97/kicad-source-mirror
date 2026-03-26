@@ -107,6 +107,7 @@ set( QA_COMMON_SRCS
 
     # Graphics import tests
     test_graphics_importer_buffer.cpp
+    test_svg_import.cpp
 
     # Project template tests (source included directly since it's from kicad executable)
     test_project_template.cpp
