@@ -904,6 +904,15 @@ auto EVAL_VISITOR::evaluateFunction( const FUNC_DATA& aFunc ) const -> Result<Va
         result = result.AfterLast( VALUE_UTILS::ToChar( argValues[1] ) );
         return MakeValue<Value>( result.ToStdString() );
     }
+    else if( name == "replace" && argc == 3 )
+    {
+        wxString result = VALUE_UTILS::ToString( argValues[0] );
+
+        result.Replace( VALUE_UTILS::ToString( argValues[1] ),
+                        VALUE_UTILS::ToString( argValues[2] ) );
+                        
+        return MakeValue<Value>( result.ToStdString() );
+    }
 
     // Conditional functions (handle mixed types)
     if( name == "if" && argc == 3 )
