@@ -261,16 +261,13 @@ int GLOBAL_EDIT_TOOL::ZonesManager( const TOOL_EVENT& aEvent )
 
     wxBusyCursor dummy;
 
-    // OnModify must be called first to clear the zone bounding box cache before
-    // we update the VIEW. Otherwise View->Update() will query stale cached values
-    // and the VIEW's R-Tree will be indexed with incorrect bounding boxes, causing
-    // single-click zone selection to fail.
-    editFrame->OnModify();
+    // Clear the zone bounding box cache before Push() updates the VIEW, otherwise
+    // View->Update() will query stale cached values and the VIEW's R-Tree will be
+    // indexed with incorrect bounding boxes, causing single-click zone selection to fail.
+    board->IncrementTimeStamp();
 
-    for( ZONE* zone : board->Zones() )
-        editFrame->GetCanvas()->GetView()->Update( zone );
+    commit.Push( _( "Zone Manager" ), SKIP_CONNECTIVITY );
 
-    //rebuildConnectivity
     board->BuildConnectivity();
 
     if( TOOL_MANAGER* manager = GetManager() )
