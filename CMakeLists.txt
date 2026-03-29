@@ -701,7 +701,7 @@ if( NOT APPLE )
         CACHE STRING "Location of KiCad stock EDA library data" )
 
     if( WIN32 )
-        set( KICAD_PLUGINS ${KICAD_BIN}/scripting/plugins
+        set( KICAD_PLUGINS ${KICAD_DATA}/plugins
             CACHE PATH "Location of KiCad plugins." )
 
         set( KICAD_LIB ${KICAD_BIN}
