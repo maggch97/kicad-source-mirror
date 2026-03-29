@@ -398,8 +398,9 @@ bool DIALOG_EXPORT_2581::GenerateFile( JOB_EXPORT_PCB_IPC2581& aJob, BOARD* aBoa
                                                   outPath,
                                                   tempFile ),
                                 RPT_SEVERITY_ERROR );
-            return false;
         }
+
+        return false;
     }
 
     aJob.AddOutput( outPath );
