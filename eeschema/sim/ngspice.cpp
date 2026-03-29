@@ -727,7 +727,9 @@ int NGSPICE::cbSendChar( char* aWhat, int aId, void* aUser )
 {
     NGSPICE* sim = reinterpret_cast<NGSPICE*>( aUser );
 
-    if( sim->m_reporter )
+    SIMULATOR_REPORTER* reporter = sim->m_reporter;
+
+    if( reporter )
     {
         // strip stdout/stderr from the line
         if( ( strncasecmp( aWhat, "stdout ", 7 ) == 0 )
@@ -736,7 +738,7 @@ int NGSPICE::cbSendChar( char* aWhat, int aId, void* aUser )
             aWhat += 7;
         }
 
-        sim->m_reporter->Report( aWhat );
+        reporter->Report( aWhat );
     }
 
     return 0;
@@ -757,8 +759,8 @@ int NGSPICE::cbBGThreadRunning( NG_BOOL aFinished, int aId, void* aUser )
     if( aFinished )
         sim->restoreSignalHandlers();
 
-    if( sim->m_reporter )
-        sim->m_reporter->OnSimStateChange( sim, aFinished ? SIM_IDLE : SIM_RUNNING );
+    if( SIMULATOR_REPORTER* reporter = sim->m_reporter )
+        reporter->OnSimStateChange( sim, aFinished ? SIM_IDLE : SIM_RUNNING );
 
     return 0;
 }
@@ -773,13 +775,15 @@ int NGSPICE::cbControlledExit( int aStatus, NG_BOOL aImmediate, NG_BOOL aExitOnQ
     // ngspice calls this when it encounters a fatal error (e.g. out of memory) or receives a
     // 'quit' command. For error exits, we must notify the UI before ngspice crashes during
     // cleanup, since cbBGThreadRunning may never fire if the background thread is terminated.
-    if( !aExitOnQuit && sim->m_reporter )
+    SIMULATOR_REPORTER* reporter = sim->m_reporter;
+
+    if( !aExitOnQuit && reporter )
     {
-        sim->m_reporter->Report(
+        reporter->Report(
                 _( "Simulation terminated by ngspice. This may be caused by insufficient "
                    "memory or an internal error. The simulator will be reset." ) );
 
-        sim->m_reporter->OnSimStateChange( sim, SIM_IDLE );
+        reporter->OnSimStateChange( sim, SIM_IDLE );
     }
 
     return 0;
