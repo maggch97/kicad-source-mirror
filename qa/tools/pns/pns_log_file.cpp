@@ -248,21 +248,36 @@ std::unique_ptr<PNS::ITEM> PNS_LOG_FILE::parseItem( const nlohmann::json& aJSON 
 
     if( kind == wxT("segment") )
     {
-        auto shape = static_cast<const SHAPE_SEGMENT*>( parseShape( aJSON.at("shape") ).get() );
+        auto parsedShape = parseShape( aJSON.at("shape") );
+
+        if( !parsedShape )
+            return nullptr;
+
+        auto shape = static_cast<const SHAPE_SEGMENT*>( parsedShape.get() );
         std::unique_ptr<PNS::SEGMENT> seg( new PNS::SEGMENT( *shape, nullptr ) );
         parseCommonPnsProps( aJSON, seg.get() );
         return std::move( seg );
     }
     else if ( kind == wxT( "arc" ) )
     {
-        auto shape = static_cast<const SHAPE_ARC*>( parseShape( aJSON.at("shape") ).get() );
+        auto parsedShape = parseShape( aJSON.at("shape") );
+
+        if( !parsedShape )
+            return nullptr;
+
+        auto shape = static_cast<const SHAPE_ARC*>( parsedShape.get() );
         std::unique_ptr<PNS::ARC> arc( new PNS::ARC( *shape, nullptr ) );
         parseCommonPnsProps( aJSON, arc.get() );
         return std::move( arc );
     }
     else if ( kind == wxT( "via" ) )
     {
-        auto shape = static_cast<const SHAPE_CIRCLE*>( parseShape( aJSON.at("shape") ).get() );
+        auto parsedShape = parseShape( aJSON.at("shape") );
+
+        if( !parsedShape )
+            return nullptr;
+
+        auto shape = static_cast<const SHAPE_CIRCLE*>( parsedShape.get() );
         std::unique_ptr<PNS::VIA> via( new PNS::VIA() );
         parseCommonPnsProps( aJSON, via.get() );
         via->SetPos( shape->Centre() );
