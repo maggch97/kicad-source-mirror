@@ -907,10 +907,13 @@ auto EVAL_VISITOR::evaluateFunction( const FUNC_DATA& aFunc ) const -> Result<Va
     else if( name == "replace" && argc == 3 )
     {
         wxString result = VALUE_UTILS::ToString( argValues[0] );
+        wxString search = VALUE_UTILS::ToString( argValues[1] );
 
-        result.Replace( VALUE_UTILS::ToString( argValues[1] ),
-                        VALUE_UTILS::ToString( argValues[2] ) );
-                        
+        if( !search.IsEmpty() )
+        {
+            result.Replace( search, VALUE_UTILS::ToString( argValues[2] ) );
+        }
+
         return MakeValue<Value>( result.ToStdString() );
     }
 

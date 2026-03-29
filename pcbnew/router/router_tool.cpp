@@ -766,7 +766,7 @@ void ROUTER_TOOL::saveRouterDebugLog()
     wxFileName fname_log( logPath );
     mruPath = fname_log.GetPath();
     fname_log.SetExt( "log" );
-    printf("save log to: %s\n", fname_log.GetFullPath().c_str().AsChar() );
+    wxLogTrace( wxT( "PNS" ), wxT( "save log to: %s" ), fname_log.GetFullPath() );
 
     wxFileName fname_dump( fname_log );
     fname_dump.SetExt( "dump" );
