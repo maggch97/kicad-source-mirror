@@ -113,7 +113,7 @@ public:
         {
             m_isOpen = true;
             nng_socket_set_ms( m_socket, NNG_OPT_RECVTIMEO, 10000 );
-            nng_socket_set_ms( m_socket, NNG_OPT_SENDTIMEO, 2000 );
+            nng_socket_set_ms( m_socket, NNG_OPT_SENDTIMEO, 10000 );
         }
         else
         {
