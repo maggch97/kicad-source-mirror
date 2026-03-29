@@ -944,6 +944,9 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadClearances( )
 
                 for( PAD* pad : footprint->Pads() )
                 {
+                    // Through-hole pads are tested per-layer, so overlapping TH pads
+                    // may produce one violation per shared copper layer. This is
+                    // intentional for parallelized DRC to avoid cross-layer shared state.
                     for( PCB_LAYER_ID layer : LSET( pad->GetLayerSet() & boardCopperLayers ) )
                     {
                         if( m_drcEngine->IsCancelled() )
