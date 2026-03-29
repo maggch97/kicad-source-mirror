@@ -288,16 +288,19 @@ void DIALOG_PCM::setRepositoryListFromPcm()
     if( repositories.size() > 0 )
     {
         int idx = 0;
-        if( !cfg->m_PcmLastSelectedRepoId.IsEmpty() )
+
+        if( cfg && !cfg->m_PcmLastSelectedRepoId.IsEmpty() )
         {
             auto it = std::find_if( repositories.begin(), repositories.end(),
                                     [&cfg]( const auto& repo )
                                     {
                                         return std::get<0>( repo ) == cfg->m_PcmLastSelectedRepoId;
                                     } );
+
             if( it != repositories.end() )
                 idx = std::distance( repositories.begin(), it );
         }
+
         m_choiceRepository->SetSelection( idx );
         m_selectedRepositoryId = std::get<0>( repositories[idx] );
         setRepositoryData( m_selectedRepositoryId );
@@ -307,7 +310,8 @@ void DIALOG_PCM::setRepositoryListFromPcm()
         m_selectedRepositoryId = "";
     }
 
-    cfg->m_PcmLastSelectedRepoId = m_selectedRepositoryId;
+    if( cfg )
+        cfg->m_PcmLastSelectedRepoId = m_selectedRepositoryId;
 }
 
 
@@ -349,8 +353,8 @@ void DIALOG_PCM::OnRepositoryChoice( wxCommandEvent& event )
 
     setRepositoryData( m_selectedRepositoryId );
 
-    KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" );
-    cfg->m_PcmLastSelectedRepoId = m_selectedRepositoryId;
+    if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" ) )
+        cfg->m_PcmLastSelectedRepoId = m_selectedRepositoryId;
 }
 
 
