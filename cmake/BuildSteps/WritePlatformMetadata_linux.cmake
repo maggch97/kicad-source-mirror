@@ -36,7 +36,7 @@ include( ${KICAD_CMAKE_MODULE_PATH}/KiCadVersion.cmake )
 include( ${KICAD_CMAKE_MODULE_PATH}/KiCadFullVersion.cmake )
 
 # Create the date of the configure
-if( KICAD_COMMIT_DATE EQUAL 0)
+if( KICAD_COMMIT_DATE STREQUAL "0")
     message(STATUS "  No git commit date found, using timestamp")
     string( TIMESTAMP KICAD_CONFIG_TIMESTAMP "%Y-%m-%d" )
 else()
