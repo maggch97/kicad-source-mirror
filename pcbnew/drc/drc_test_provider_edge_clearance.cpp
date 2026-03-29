@@ -116,7 +116,10 @@ void DRC_TEST_PROVIDER_EDGE_CLEARANCE::resolveSilkDisposition( BOARD_ITEM* aItem
         disposition = aBoardOutline.Contains( aItemShape->Centre() ) ? ON_BOARD : OFF_BOARD;
     }
 
-    m_silkDisposition[aItem] = disposition;
+    {
+        std::lock_guard<std::mutex> lock( m_silkMutex );
+        m_silkDisposition[aItem] = disposition;
+    }
 
     if( disposition == CROSSES_EDGE )
     {
@@ -509,10 +512,14 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::Run()
                 if( testSilk
                     && ( item->IsOnLayer( F_SilkS ) || item->IsOnLayer( B_SilkS ) ) )
                 {
-                    std::lock_guard<std::mutex> lock( m_silkMutex );
+                    bool needsResolution = false;
 
-                    if( m_silkDisposition[item] == UNKNOWN
-                        && m_board->BoardOutline()->HasOutline() )
+                    {
+                        std::lock_guard<std::mutex> lock( m_silkMutex );
+                        needsResolution = m_silkDisposition[item] == UNKNOWN;
+                    }
+
+                    if( needsResolution && m_board->BoardOutline()->HasOutline() )
                     {
                         resolveSilkDisposition( item, wu.shape.get(),
                                                 m_board->BoardOutline()->GetOutline() );
