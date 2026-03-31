@@ -255,6 +255,7 @@ if( APPLE )
     if( KICAD_USE_SENTRY )
         install( FILES $<TARGET_FILE:crashpad_handler>
             DESTINATION ${OSX_BUNDLE_INSTALL_BIN_DIR}
+            PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
             COMPONENT binary
             )
     endif()
