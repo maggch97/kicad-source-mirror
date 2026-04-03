@@ -22,7 +22,7 @@ msgstr ""
 "Project-Id-Version: kicad\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-04-02 14:39+0300\n"
-"PO-Revision-Date: 2026-03-29 16:09+0000\n"
+"PO-Revision-Date: 2026-04-04 04:09+0000\n"
 "Last-Translator: ZbeeGin <zbeegin@op.pl>\n"
 "Language-Team: Polish <https://hosted.weblate.org/projects/kicad/master-"
 "source/pl/>\n"
@@ -399,7 +399,7 @@ msgstr "Pokaż pola lutownicze jako zarys"
 
 #: 3d-viewer/3d_viewer/tools/eda_3d_actions.cpp:64
 msgid "Display a placeholder for footprints with missing 3D models"
-msgstr ""
+msgstr "Wyświetl symbol zastępczy dla footprintów z brakującymi modelami 3D"
 
 #: 3d-viewer/3d_viewer/tools/eda_3d_actions.cpp:70
 msgid "Copy 3D image to clipboard"
@@ -5980,6 +5980,8 @@ msgid ""
 "When enabled, KiCad will replace any existing references to built-in "
 "libraries with references to the latest version"
 msgstr ""
+"Po włączeniu tej opcji KiCad zastąpi wszelkie istniejące odniesienia do "
+"wbudowanych bibliotek odniesieniami do najnowszej wersji"
 
 #: common/dialogs/panel_startwizard_libraries_base.cpp:62
 msgid "Start with no libraries"
@@ -29864,12 +29866,14 @@ msgstr "Pokazuje informacje pomocnicze i wychodzi"
 
 #: kicad/cli/command_api_server.cpp:50
 msgid "Run the KiCad IPC API server in headless mode"
-msgstr ""
+msgstr "Uruchom serwer API KiCad IPC w trybie bezgłowym"
 
 #: kicad/cli/command_api_server.cpp:55
 msgid ""
 "Optional path to a .kicad_pro, .kicad_pcb, or .kicad_sch file to pre-load"
 msgstr ""
+"Opcjonalna ścieżka do pliku .kicad_pro, .kicad_pcb lub .kicad_sch dla "
+"ładowania wstępnego"
 
 #: kicad/cli/command_api_server.cpp:60
 #, fuzzy
@@ -32029,6 +32033,8 @@ msgid ""
 "Warning: This plugin only supports the legacy Python API and will not run in "
 "this KiCad version."
 msgstr ""
+"Ostrzeżenie: Ta wtyczka obsługuje tylko starsze API Python i nie będzie "
+"działać w tej wersji programu KiCad."
 
 #: kicad/pcm/dialogs/panel_package.cpp:152
 msgid "Install Pending"
@@ -35973,9 +35979,9 @@ msgid "Value must be between %s and %s."
 msgstr "Szerokość tekstu musi zawierać się między %s a %s."
 
 #: pcbnew/board_design_settings.cpp:1355
-#, fuzzy, c-format
+#, c-format
 msgid "Value must be between %.3f and %.3f."
-msgstr "Szerokość tekstu musi zawierać się między %s a %s."
+msgstr "Wartość musi zawierać się między %.3f a %.3f."
 
 #: pcbnew/board_design_settings.cpp:1396
 #, fuzzy
@@ -35983,9 +35989,8 @@ msgid "Value must be between 0 and 99."
 msgstr "Szerokość tekstu musi zawierać się między %s a %s."
 
 #: pcbnew/board_design_settings.cpp:1427 pcbnew/board_design_settings.cpp:1435
-#, fuzzy
 msgid "Value must be greater than or equal to 0."
-msgstr "Tolerancja musi być większa lub równa 0"
+msgstr "Wartość musi być większa lub równa 0."
 
 #: pcbnew/board_design_settings.cpp:1456
 msgid "No differential pair gap defined."
@@ -38631,6 +38636,8 @@ msgid ""
 "Attempt to match pad positions even if the footprint origin or rotation has "
 "changed."
 msgstr ""
+"Spróbuj dopasować pozycje padów, nawet jeśli zmienił się punkt zaczepienia "
+"lub obrót footprintu."
 
 #: pcbnew/dialogs/dialog_exchange_footprints_base.h:94
 msgid "Update Footprints from Library"
@@ -39431,9 +39438,8 @@ msgstr "Kreskowany"
 
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:492
 #: pcbnew/dialogs/dialog_find_by_properties_base.cpp:24
-#, fuzzy
 msgid "No items selected"
-msgstr "Nie wybrano żadnej sieci."
+msgstr "Nie wybrano elementu"
 
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:668
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:778
@@ -39457,15 +39463,14 @@ msgid "Different"
 msgstr "Różniczkowy"
 
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:901
-#, fuzzy, c-format
+#, c-format
 msgid "%zu items matched"
-msgstr " (załadowano %d obiektów)"
+msgstr "%zu pasujących elementów"
 
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:931
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:1110
-#, fuzzy
 msgid "B. expressions are not supported."
-msgstr " modele podrzędne nie są obecnie obsługiwane."
+msgstr "Wyrażenia B. nie są obecnie obsługiwane."
 
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:934
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:955
@@ -39474,13 +39479,12 @@ msgid "Expression Error"
 msgstr "Eksportuj błąd"
 
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:954
-#, fuzzy
 msgid "Syntax error in expression"
-msgstr "Brak wyrażenia dla asercji."
+msgstr "Błąd składni w wyrażeniu"
 
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:1102
 msgid "Expression is empty"
-msgstr ""
+msgstr "Puste wyrażenie"
 
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:1128
 #: pcbnew/drc/rule_editor/drc_re_custom_rule_panel.cpp:375
@@ -39488,9 +39492,8 @@ msgid "Syntax OK"
 msgstr "Składnia jest prawidłowa"
 
 #: pcbnew/dialogs/dialog_find_by_properties.cpp:1130
-#, fuzzy
 msgid "Syntax error: "
-msgstr "Maksymalne zbliżenie zgłaszające błąd:"
+msgstr "Błąd składni: "
 
 #: pcbnew/dialogs/dialog_find_by_properties_base.cpp:58
 #, fuzzy
@@ -39514,7 +39517,7 @@ msgstr "Utwórz z zaznaczenia"
 
 #: pcbnew/dialogs/dialog_find_by_properties_base.cpp:136
 msgid "Query"
-msgstr ""
+msgstr "Zapytanie"
 
 #: pcbnew/dialogs/dialog_find_by_properties_base.cpp:143
 #, fuzzy
@@ -42980,37 +42983,32 @@ msgid "Render PCB Job Options"
 msgstr "Opcja zadania renderingu PCB"
 
 #: pcbnew/dialogs/dialog_router_save_test_case_base.cpp:25
-#, fuzzy
 msgid "Test cases directory:"
-msgstr "Folder docelowy:"
+msgstr "Folder przypadków testowych:"
 
 #: pcbnew/dialogs/dialog_router_save_test_case_base.cpp:32
-#, fuzzy
 msgid "Test case name:"
-msgstr "Nazwa sieci:"
+msgstr "Nazwa przypadku testowego:"
 
 #: pcbnew/dialogs/dialog_router_save_test_case_base.cpp:45
 msgid "Testcase (strict geometry)"
-msgstr ""
+msgstr "Przypadek testowy (dokładna geometria)"
 
 #: pcbnew/dialogs/dialog_router_save_test_case_base.cpp:45
-#, fuzzy
 msgid "Testcase (connectivity only)"
-msgstr "Testuj połączenie"
+msgstr "Przypadek testowy (tylko łącza)"
 
 #: pcbnew/dialogs/dialog_router_save_test_case_base.cpp:45
-#, fuzzy
 msgid "Testcase (expected fail)"
-msgstr "Zmień nazwę wybranego pola"
+msgstr "Przypadek testowy (oczekiwany błąd)"
 
 #: pcbnew/dialogs/dialog_router_save_test_case_base.cpp:45
 msgid "Known bug"
-msgstr ""
+msgstr "Znany błąd"
 
 #: pcbnew/dialogs/dialog_router_save_test_case_base.h:47
-#, fuzzy
 msgid "Save Router Testcase"
-msgstr "Zapisz dziennik zdarzeń trasowania"
+msgstr "Zapisz przypadek testowy routera"
 
 #: pcbnew/dialogs/dialog_rule_area_properties.cpp:130
 #: pcbnew/tools/board_inspection_tool.cpp:1759
@@ -49840,9 +49838,9 @@ msgid "Unexpected error with footprint wizard"
 msgstr "Wystąpił wyjątek w kodzie skryptu Python"
 
 #: pcbnew/footprint_wizard.cpp:156
-#, fuzzy, c-format
+#, c-format
 msgid "Could not launch footprint wizard '%s'"
-msgstr "Nie mogę przeładować kreatora footprintów"
+msgstr "Nie można uruchomić kreatora footprintu '%s'"
 
 #: pcbnew/footprint_wizard.cpp:166 pcbnew/footprint_wizard.cpp:175
 #, fuzzy
@@ -49850,13 +49848,13 @@ msgid "Unexpected response from footprint wizard"
 msgstr "Nie mogę przeładować kreatora footprintów"
 
 #: pcbnew/footprint_wizard.cpp:170
-#, fuzzy, c-format
+#, c-format
 msgid "Footprint wizard error: %s"
-msgstr "Kreator footprintów"
+msgstr "Błąd kreatora footprintów: %s"
 
 #: pcbnew/footprint_wizard.cpp:179
 msgid "The KiCad API is disabled"
-msgstr ""
+msgstr "KiCad API jest wyłączone"
 
 #: pcbnew/footprint_wizard.cpp:205
 #, fuzzy
@@ -49874,9 +49872,9 @@ msgid "no wizard selected"
 msgstr "nie wybrano kreatora"
 
 #: pcbnew/footprint_wizard_frame.cpp:391
-#, fuzzy, c-format
+#, c-format
 msgid "3D Viewer [%s]"
-msgstr "Przeglądarka 3D"
+msgstr "Przeglądarka 3D [%s]"
 
 #: pcbnew/generate_footprint_info.cpp:45
 msgid "Documentation"
@@ -53546,14 +53544,14 @@ msgstr ""
 "Wprowadź moduł języka Python który implementuje funkcje PCB_IO::Footrpint*()."
 
 #: pcbnew/pcb_io/sprint_layout/pcb_io_sprint_layout.cpp:90
-#, fuzzy, c-format
+#, c-format
 msgid "Failed to parse Sprint Layout file '%s'"
-msgstr "Nie można było zapisać pliku biblioteki footprintów '%s'."
+msgstr "Nie można było przetworzyć pliku Sprint Layout '%s'"
 
 #: pcbnew/pcb_io/sprint_layout/pcb_io_sprint_layout.cpp:132
-#, fuzzy, c-format
+#, c-format
 msgid "Failed to create board from Sprint Layout file '%s'"
-msgstr "Nie dało się utworzyć pliku bibliotek symboli '%s'."
+msgstr "Nie dało się utworzyć płytki z pliku Sprint Layout '%s'"
 
 #: pcbnew/pcb_io/sprint_layout/pcb_io_sprint_layout.h:49
 #, fuzzy
@@ -53577,16 +53575,14 @@ msgid "Invalid string length in Sprint Layout file"
 msgstr "Nieprawidłowa wartość długości fali"
 
 #: pcbnew/pcb_io/sprint_layout/sprint_layout_parser.cpp:194
-#, fuzzy, c-format
+#, c-format
 msgid "File '%s' is too small to be a Sprint Layout file"
-msgstr ""
-"Plik '%s'\n"
-"nie wygląda na plik z projektem programu KiCad."
+msgstr "Plik '%s' jest zbyt mały by mógł być plikiem Sprint Layout"
 
 #: pcbnew/pcb_io/sprint_layout/sprint_layout_parser.cpp:200
-#, fuzzy, c-format
+#, c-format
 msgid "Failed to read file '%s'"
-msgstr "Nie można odczytać pliku '%s'."
+msgstr "Nie można odczytać pliku '%s'"
 
 #: pcbnew/pcb_io/sprint_layout/sprint_layout_parser.cpp:213
 #, fuzzy
@@ -53600,16 +53596,16 @@ msgstr "Nieprawidłowa liczba ułamkowa"
 
 #: pcbnew/pcb_io/sprint_layout/sprint_layout_parser.cpp:297
 msgid "Too many objects in Sprint Layout board"
-msgstr ""
+msgstr "Zbyt wiele obiektów na płytce Sprint Layout"
 
 #: pcbnew/pcb_io/sprint_layout/sprint_layout_parser.cpp:325
 #, c-format
 msgid "Unknown object type %d in Sprint Layout file"
-msgstr ""
+msgstr "Nieznany obiekt typu %d na płytce Sprint Layout"
 
 #: pcbnew/pcb_io/sprint_layout/sprint_layout_parser.cpp:362
 msgid "Too many groups in Sprint Layout object"
-msgstr ""
+msgstr "Zbyt dużo grup w obiekcie Sprint Layout"
 
 #: pcbnew/pcb_io/sprint_layout/sprint_layout_parser.cpp:381
 msgid "Too many text children in Sprint Layout object"
@@ -55204,9 +55200,9 @@ msgid "Track Corner Mode"
 msgstr "Tryb zaokrąglania ścieżek"
 
 #: pcbnew/router/router_tool.cpp:722
-#, fuzzy, c-format
+#, c-format
 msgid "Test case in directory %s already exists. Overwrite?"
-msgstr "Folder wyjściowy '%s' już istnieje."
+msgstr "Przypadek testowy w katalogu %s już istnieje. Nadpisać?"
 
 #: pcbnew/router/router_tool.cpp:750
 msgid "Save router log"
@@ -55580,14 +55576,12 @@ msgid "Move Zone to Top Priority"
 msgstr "Przesuwanie narożnika na określoną pozycję"
 
 #: pcbnew/tools/board_editor_control.cpp:1921
-#, fuzzy
 msgid "Raise Zone Priority"
-msgstr "Poziom priorytetu strefy:"
+msgstr "Podnieś priorytet strefy"
 
 #: pcbnew/tools/board_editor_control.cpp:1975
-#, fuzzy
 msgid "Lower Zone Priority"
-msgstr "Właściwości stref miedzi"
+msgstr "Obniż priorytet strefy"
 
 #: pcbnew/tools/board_editor_control.cpp:2056
 #, fuzzy
