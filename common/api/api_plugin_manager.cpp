@@ -320,7 +320,8 @@ int API_PLUGIN_MANAGER::doInvokeAction( const wxString& aIdentifier, std::vector
         return -1;
     }
 
-    wxFileName pluginFile( plugin.BasePath(), action->entrypoint );
+    wxFileName pluginFile( action->entrypoint );
+    pluginFile.MakeAbsolute( plugin.BasePath() );
     pluginFile.Normalize( wxPATH_NORM_ABSOLUTE | wxPATH_NORM_SHORTCUT | wxPATH_NORM_DOTS
                           | wxPATH_NORM_TILDE, plugin.BasePath() );
     wxString pluginPath = pluginFile.GetFullPath();
