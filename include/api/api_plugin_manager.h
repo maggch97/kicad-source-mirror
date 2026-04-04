@@ -51,7 +51,8 @@ public:
      * @param aDirectoryToScan can be provided to scan an arbitrary directory instead of the
      *                         stock paths; provided for QA testing.
      */
-    void ReloadPlugins( std::optional<wxString> aDirectoryToScan = std::nullopt );
+    void ReloadPlugins( std::optional<wxString> aDirectoryToScan = std::nullopt,
+                        std::shared_ptr<REPORTER> aReporter = nullptr );
 
     void RecreatePluginEnvironment( const wxString& aIdentifier );
 
@@ -81,6 +82,8 @@ public:
     std::map<int, wxString>& ButtonBindings() { return m_buttonBindings; }
 
     std::map<int, wxString>& MenuBindings() { return m_menuBindings; }
+
+    std::shared_ptr<REPORTER> GetReporter() { return m_reloadReporter; }
 
 private:
     void processPluginDependencies();
@@ -131,6 +134,8 @@ private:
     std::deque<JOB> m_jobs;
 
     std::unique_ptr<JSON_SCHEMA_VALIDATOR> m_schema_validator;
+
+    std::shared_ptr<REPORTER> m_reloadReporter;
 
     [[maybe_unused]] long     m_lastPid;
     [[maybe_unused]] wxTimer* m_raiseTimer;
