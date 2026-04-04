@@ -850,8 +850,7 @@ std::unique_ptr<BOARD> LoadBoardWithCapture( PCB_IO& aIoPlugin, const std::strin
 {
     std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
 
-    if( aReporter )
-        aIoPlugin.SetReporter( aReporter );
+    aIoPlugin.SetReporter( aReporter );
 
     try
     {
