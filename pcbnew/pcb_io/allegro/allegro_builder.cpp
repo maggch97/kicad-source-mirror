@@ -23,6 +23,7 @@
  */
 
 #include "allegro_builder.h"
+#include "allegro_db_utils.h"
 
 #include <cmath>
 #include <limits>
@@ -68,60 +69,7 @@ static const wxChar* const traceAllegroBuilder = wxT( "KICAD_ALLEGRO_BUILDER" );
 static const wxChar* const traceAllegroPerf = wxT( "KICAD_ALLEGRO_PERF" );
 
 
-template <typename BLK_T>
-const BLK_T& BlockDataAs( const BLOCK_BASE& aBlock )
-{
-    return static_cast<const BLOCK<BLK_T>&>( aBlock ).GetData();
-}
-
-
 #define BLK_FIELD( BLK_T, FIELD ) BlockDataAs<BLK_T>( aBlock ).FIELD
-
-
-/**
- * Gets the next block in the linked list. Exactly which member does this depends on the block type.
- *
- * It's not yet clear if any blocks can be in multiple linked lists at once - for now just follow the "main"
- * one.
- * This is done as dispatch like this to avoid forcing all the blocks into an inheritance hierarchy.
- *
- * @param aBlock The block to get the next block from.
- * @return The next block in the linked list, or 0 if there is no next block.
- */
-static uint32_t GetPrimaryNext( const BLOCK_BASE& aBlock )
-{
-    const uint8_t type = aBlock.GetBlockType();
-
-    switch( type )
-    {
-    case 0x01: return BLK_FIELD( BLK_0x01_ARC, m_Next );
-    case 0x03: return BLK_FIELD( BLK_0x03_FIELD, m_Next );
-    case 0x04: return BLK_FIELD( BLK_0x04_NET_ASSIGNMENT, m_Next );
-    case 0x05: return BLK_FIELD( BLK_0x05_TRACK, m_Next );
-    case 0x0E: return BLK_FIELD( BLK_0x0E_RECT, m_Next );
-    case 0x14: return BLK_FIELD( BLK_0x14_GRAPHIC, m_Next );
-    case 0x15:
-    case 0x16:
-    case 0x17: return BLK_FIELD( BLK_0x15_16_17_SEGMENT, m_Next );
-    case 0x1B: return BLK_FIELD( BLK_0x1B_NET, m_Next );
-    case 0x1D: return BLK_FIELD( BLK_0x1D_CONSTRAINT_SET, m_Next );
-    case 0x1E: return BLK_FIELD( BLK_0x1E_SI_MODEL, m_Next );
-    case 0x1F: return BLK_FIELD( BLK_0x1F_PADSTACK_DIM, m_Next );
-    case 0x2B: return BLK_FIELD( BLK_0x2B_FOOTPRINT_DEF, m_Next );
-    case 0x2D: return BLK_FIELD( BLK_0x2D_FOOTPRINT_INST, m_Next );
-    case 0x2E: return BLK_FIELD( BLK_0x2E_CONNECTION, m_Next );
-    case 0x30: return BLK_FIELD( BLK_0x30_STR_WRAPPER, m_Next );
-    case 0x31: return 0; // Doesn't exist
-    case 0x32: return BLK_FIELD( BLK_0x32_PLACED_PAD, m_Next );
-    case 0x24: return BLK_FIELD( BLK_0x24_RECT, m_Next );
-    case 0x28: return BLK_FIELD( BLK_0x28_SHAPE, m_Next );
-    case 0x2C: return BLK_FIELD( BLK_0x2C_TABLE, m_Next );
-    case 0x33: return BLK_FIELD( BLK_0x33_VIA, m_Next );
-    case 0x36: return BLK_FIELD( BLK_0x36_DEF_TABLE, m_Next );
-    case 0x37: return BLK_FIELD( BLK_0x37_PTR_ARRAY, m_Next );
-    default: return 0;
-    }
-}
 
 
 /**
@@ -141,90 +89,6 @@ static uint32_t PadGetNextInFootprint( const BLOCK_BASE& aBlock )
     // When iterating in a footprint use this field, not m_Next.
     return BLK_FIELD( BLK_0x32_PLACED_PAD, m_NextInFp );
 }
-
-
-class LL_WALKER
-{
-public:
-
-    using NEXT_FUNC_T = std::function<uint32_t( const BLOCK_BASE& )>;
-
-    class iterator
-    {
-    public:
-        iterator( uint32_t aCurrent, uint32_t aTail, const BRD_DB& aBoard, NEXT_FUNC_T aNextFunc ) :
-                m_current( aCurrent ), m_tail( aTail ), m_board( aBoard ), m_NextFunc( aNextFunc )
-        {
-            m_currBlock = m_board.GetObjectByKey( m_current );
-
-            if( !m_currBlock )
-                m_current = 0;
-        }
-
-        const BLOCK_BASE* operator*() const { return m_currBlock; }
-
-        iterator& operator++()
-        {
-            if( m_current == m_tail || !m_currBlock )
-            {
-                m_current = 0;
-            }
-            else
-            {
-                m_current = m_NextFunc( *m_currBlock );
-
-                if( m_current == m_tail || m_board.IsSentinel( m_current ) )
-                {
-                    m_current = 0;
-                }
-                else
-                {
-                    m_currBlock = m_board.GetObjectByKey( m_current );
-
-                    if( m_currBlock == nullptr )
-                    {
-                        m_current = 0;
-                    }
-                }
-            }
-            return *this;
-        }
-
-        bool operator!=( const iterator& other ) const { return m_current != other.m_current; }
-
-    private:
-        uint32_t          m_current;
-        const BLOCK_BASE* m_currBlock;
-        uint32_t          m_tail;
-        const BRD_DB&  m_board;
-        NEXT_FUNC_T       m_NextFunc;
-    };
-
-    LL_WALKER( uint32_t aHead, uint32_t aTail, const BRD_DB& aBoard ) :
-            m_head( aHead ), m_tail( aTail ), m_board( aBoard )
-    {
-        // The default next function
-        m_nextFunction = GetPrimaryNext;
-    }
-
-    LL_WALKER( const FILE_HEADER::LINKED_LIST& aList, const BRD_DB& aBoard ) :
-            LL_WALKER( aList.m_Head, aList.m_Tail, aBoard )
-    {
-    }
-
-    iterator begin() const { return iterator( m_head, m_tail, m_board, m_nextFunction ); }
-    iterator end() const { return iterator( 0, m_tail, m_board, m_nextFunction ); }
-
-    void SetNextFunc( NEXT_FUNC_T aNextFunc ) { m_nextFunction = aNextFunc; }
-
-private:
-    uint32_t         m_head;
-    uint32_t         m_tail;
-    const BRD_DB& m_board;
-
-    // This is the function that can get the next item in a list. By default
-    NEXT_FUNC_T m_nextFunction;
-};
 
 
 template <>
@@ -1526,16 +1390,19 @@ void BOARD_BUILDER::applyConstraintSets()
         }
     }
 
-    m_brdDb.VisitNets( [&]( const VIEW_OBJS& aView )
-    {
-        if( !aView.m_Net )
-            return;
+    LL_WALKER csNetWalker{ m_brdDb.m_Header->m_LL_0x1B_Nets, m_brdDb };
 
-        const NET& net = *aView.m_Net;
+    for( const BLOCK_BASE* block : csNetWalker )
+    {
+        if( block->GetBlockType() != BLOCK_TYPE::x1B_NET )
+            continue;
+
+        const auto& netBlk = BlockDataAs<BLK_0x1B_NET>( *block );
 
         // Field 0x1a0 references the constraint set. It can be an integer (string table key
         // that matches 0x1D.m_NameStrKey) or a direct string (the constraint set name).
-        auto csField = net.m_Fields.GetOptField( FIELD_KEYS::PHYS_CONSTRAINT_SET );
+        auto csField =
+                GetFirstFieldOfType( m_brdDb, netBlk.m_FieldsPtr, netBlk.m_Key, FIELD_KEYS::PHYS_CONSTRAINT_SET );
 
         wxString assignedSetName;
 
@@ -1560,7 +1427,7 @@ void BOARD_BUILDER::applyConstraintSets()
             assignedSetName = defaultSetName;
 
         if( assignedSetName.IsEmpty() )
-            return;
+            continue;
 
         wxString ncName = assignedSetName;
 
@@ -1568,17 +1435,17 @@ void BOARD_BUILDER::applyConstraintSets()
             ncName = wxS( "Allegro_Default" );
 
         if( !netSettings->HasNetclass( ncName ) )
-            return;
+            continue;
 
-        auto netIt = m_netCache.find( net.GetKey() );
+        auto netIt = m_netCache.find( netBlk.m_Key );
 
         if( netIt == m_netCache.end() )
-            return;
+            continue;
 
         NETINFO_ITEM* kiNet = netIt->second;
         netSettings->SetNetclassPatternAssignment( kiNet->GetNetname(), ncName );
         kiNet->SetNetClass( netSettings->GetNetClassByName( ncName ) );
-    } );
+    }
 
     wxLogTrace( traceAllegroBuilder, "Applied %zu physical constraint sets", constraintSets.size() );
 }
@@ -1595,19 +1462,24 @@ void BOARD_BUILDER::applyNetConstraints()
     // Allegro stores per-net min/max trace width in FIELD blocks attached to each NET.
     std::map<int, std::vector<uint32_t>> widthToNetKeys;
 
-    m_brdDb.VisitNets( [&]( const VIEW_OBJS& aView )
-    {
-        if( !aView.m_Net )
-            return;
+    LL_WALKER widthNetWalker{ m_brdDb.m_Header->m_LL_0x1B_Nets, m_brdDb };
 
-        std::optional<int> minWidth = aView.m_Net->GetNetMinLineWidth();
+    for( const BLOCK_BASE* block : widthNetWalker )
+    {
+        if( block->GetBlockType() != BLOCK_TYPE::x1B_NET )
+            continue;
+
+        const auto& netBlk = BlockDataAs<BLK_0x1B_NET>( *block );
+
+        std::optional<int> minWidth =
+                GetFirstFieldOfTypeInt( m_brdDb, netBlk.m_FieldsPtr, netBlk.m_Key, FIELD_KEYS::MIN_LINE_WIDTH );
 
         if( !minWidth.has_value() || minWidth.value() <= 0 )
-            return;
+            continue;
 
         int widthNm = scale( minWidth.value() );
-        widthToNetKeys[widthNm].push_back( aView.m_Net->GetKey() );
-    } );
+        widthToNetKeys[widthNm].push_back( netBlk.m_Key );
+    }
 
     if( widthToNetKeys.empty() )
     {
