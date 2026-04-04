@@ -1284,11 +1284,11 @@ void BOARD_BUILDER::applyConstraintSets()
         const BLK_0x1D_CONSTRAINT_SET& csBlock = static_cast<const BLOCK<BLK_0x1D_CONSTRAINT_SET>&>( *block ).GetData();
 
         wxString setName;
-        const wxString* resolved = m_brdDb.ResolveString( csBlock.m_NameStrKey );
+        const wxString& resolved = m_brdDb.GetString( csBlock.m_NameStrKey );
 
-        if( resolved && !resolved->IsEmpty() )
+        if( !resolved.IsEmpty() )
         {
-            setName = *resolved;
+            setName = resolved;
         }
         else if( csBlock.m_FieldPtr != 0 )
         {

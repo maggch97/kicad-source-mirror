@@ -328,7 +328,7 @@ std::unique_ptr<ALLEGRO::FILE_HEADER> HEADER_PARSER::ParseHeader()
 }
 
 
-static void ReadStringMap( FILE_STREAM& stream, DB& aDb, uint32_t count )
+static void ReadStringMap( FILE_STREAM& stream, BRD_DB& aDb, uint32_t count )
 {
     stream.Seek( RAW_BOARD::STRING_TABLE_OFFSET );
 
@@ -2780,10 +2780,6 @@ std::unique_ptr<BRD_DB> ALLEGRO::PARSER::Parse()
     const uint32_t stringsCount = board->m_Header->GetStringsCount();
     board->ReserveCapacity( board->m_Header->m_ObjectCount, stringsCount );
 
-    // Skip DB_OBJ creation for high-volume types (segments, graphics, arcs) that the
-    // BOARD_BUILDER accesses only through raw BLOCK_BASE. Saves millions of allocations.
-    board->SetLeanMode( true );
-
     try
     {
         ReadStringMap( m_stream, *board, stringsCount );
@@ -2810,7 +2806,7 @@ std::unique_ptr<BRD_DB> ALLEGRO::PARSER::Parse()
         THROW_IO_ERROR( s );
     }
 
-    // Now the object are read, resolve the DB links
+    // Now the object are read, collect sentinel keys
     board->ResolveAndValidate();
 
     wxLogTrace( traceAllegroPerf, wxT( "  ResolveAndValidate: %.3f ms" ), parseTimer.msecs( true ) ); //format:allow
