@@ -28,6 +28,7 @@
 #include <json_schema_validator.h>
 #include <kicommon.h>
 
+class REPORTER;
 class wxTimer;
 
 /// Internal event used for handling async tasks
@@ -54,7 +55,8 @@ public:
 
     void RecreatePluginEnvironment( const wxString& aIdentifier );
 
-    void InvokeAction( const wxString& aIdentifier );
+    void InvokeAction( const wxString& aIdentifier,
+                       std::shared_ptr<REPORTER> aReporter = nullptr );
 
     /**
      * Invokes an action synchronously, capturing its output.  Mainly used for things like
@@ -67,7 +69,8 @@ public:
      * @return the exit code from the action process
      */
     int InvokeActionSync( const wxString& aIdentifier, std::vector<wxString> aExtraArgs,
-                          wxString* aStdout = nullptr, wxString* aStderr = nullptr );
+                          wxString* aStdout = nullptr, wxString* aStderr = nullptr,
+                          std::shared_ptr<REPORTER> aReporter = nullptr );
 
     bool Busy() const;
 
@@ -86,7 +89,8 @@ private:
 
     int doInvokeAction( const wxString& aIdentifier, std::vector<wxString> aExtraArgs,
                         bool aSync = false, wxString* aStdout = nullptr,
-                        wxString* aStderr = nullptr );
+                        wxString* aStderr = nullptr,
+                        std::shared_ptr<REPORTER> aReporter = nullptr );
 
     wxEvtHandler* m_parent;
 
