@@ -20,6 +20,7 @@
 
 #include <magic_enum.hpp>
 #include <api/api_utils.h>
+#include <api/schematic/schematic_types.pb.h>
 #include <geometry/shape_poly_set.h>
 #include <kiid.h>
 #include <wx/log.h>
@@ -32,6 +33,26 @@ namespace kiapi::common
 
 KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any& aMessage )
 {
+    if( aMessage.type_url() == "type.googleapis.com/kiapi.schematic.types.BusEntry" )
+    {
+        kiapi::schematic::types::BusEntry entry;
+
+        if( !aMessage.UnpackTo( &entry ) )
+            return std::nullopt;
+
+        switch( entry.type() )
+        {
+        case kiapi::schematic::types::BET_WIRE_TO_BUS:
+            return SCH_BUS_WIRE_ENTRY_T;
+
+        case kiapi::schematic::types::BET_BUS_TO_BUS:
+            return SCH_BUS_BUS_ENTRY_T;
+
+        default:
+            return std::nullopt;
+        }
+    }
+
     static const std::map<std::string, KICAD_T> s_types = {
         { "type.googleapis.com/kiapi.board.types.Track", PCB_TRACE_T },
         { "type.googleapis.com/kiapi.board.types.Arc", PCB_ARC_T },
@@ -47,6 +68,21 @@ KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any
         { "type.googleapis.com/kiapi.board.types.Group", PCB_GROUP_T },
         { "type.googleapis.com/kiapi.board.types.Field", PCB_FIELD_T },
         { "type.googleapis.com/kiapi.board.types.FootprintInstance", PCB_FOOTPRINT_T },
+        { "type.googleapis.com/kiapi.schematic.types.Junction", SCH_JUNCTION_T },
+        { "type.googleapis.com/kiapi.schematic.types.NoConnectMarker", SCH_NO_CONNECT_T },
+        { "type.googleapis.com/kiapi.schematic.types.BusEntry", SCH_BUS_WIRE_ENTRY_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicLine", SCH_LINE_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicGraphicShape", SCH_SHAPE_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicImage", SCH_BITMAP_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicTextBox", SCH_TEXTBOX_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicText", SCH_TEXT_T },
+        { "type.googleapis.com/kiapi.schematic.types.Table", SCH_TABLE_T },
+        { "type.googleapis.com/kiapi.schematic.types.LocalLabel", SCH_LABEL_T },
+        { "type.googleapis.com/kiapi.schematic.types.GlobalLabel", SCH_GLOBAL_LABEL_T },
+        { "type.googleapis.com/kiapi.schematic.types.HierarchicalLabel", SCH_HIER_LABEL_T },
+        { "type.googleapis.com/kiapi.schematic.types.DirectiveLabel", SCH_DIRECTIVE_LABEL_T },
+        { "type.googleapis.com/kiapi.schematic.types.Group", SCH_GROUP_T },
+        { "type.googleapis.com/kiapi.schematic.types.SheetSymbol", SCH_SHEET_T },
     };
 
     auto it = s_types.find( aMessage.type_url() );

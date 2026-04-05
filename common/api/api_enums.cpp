@@ -380,32 +380,6 @@ board::types::BoardLayer ToProtoEnum( PCB_LAYER_ID aValue )
 
 
 template<>
-SCH_LAYER_ID FromProtoEnum( schematic::types::SchematicLayer aValue )
-{
-    switch( aValue )
-    {
-
-    default:
-        wxCHECK_MSG( false, SCH_LAYER_ID_START,
-                     "Unhandled case in FromProtoEnum<schematic::types::SchematicLayer>" );
-    }
-}
-
-
-template<>
-schematic::types::SchematicLayer ToProtoEnum( SCH_LAYER_ID aValue )
-{
-    switch( aValue )
-    {
-
-    default:
-        wxCHECK_MSG( false, schematic::types::SchematicLayer::SL_UNKNOWN,
-                     "Unhandled case in ToProtoEnum<SCH_LAYER_ID>");
-    }
-}
-
-
-template<>
 JOB_PAGE_SIZE FromProtoEnum( schematic::jobs::SchematicJobPageSize aValue )
 {
     switch( aValue )

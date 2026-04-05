@@ -446,6 +446,7 @@ set( EESCHEMA_SRCS
     toolbars_sch_editor.cpp
     toolbars_symbol_viewer.cpp
 
+    api/api_sch_enums.cpp
     api/api_sch_utils.cpp
 
     libraries/legacy_symbol_library.cpp

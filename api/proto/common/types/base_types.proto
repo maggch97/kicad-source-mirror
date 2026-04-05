@@ -310,6 +310,9 @@ message TextAttributes
   bool                        multiline            = 12;
   bool                        keep_upright         = 13;
   kiapi.common.types.Vector2  size                 = 14;
+
+  // May be present for schematic text; meaningless for board text
+  optional kiapi.common.types.Color color = 15;
 }
 
 message Text

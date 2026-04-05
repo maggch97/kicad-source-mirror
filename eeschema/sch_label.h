@@ -70,6 +70,8 @@ public:
         return static_cast<int>( m_spin );
     }
 
+    SPIN Spin() const { return m_spin; }
+
     SPIN_STYLE RotateCCW();
 
     /**

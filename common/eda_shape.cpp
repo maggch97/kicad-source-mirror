@@ -219,17 +219,7 @@ void EDA_SHAPE::Serialize( google::protobuf::Any &aContainer ) const
     types::GraphicFillAttributes* fill = shape.mutable_attributes()->mutable_fill();
 
     stroke->mutable_width()->set_value_nm( GetWidth() );
-
-    switch( GetLineStyle() )
-    {
-    case LINE_STYLE::DEFAULT:    stroke->set_style( types::SLS_DEFAULT );    break;
-    case LINE_STYLE::SOLID:      stroke->set_style( types::SLS_SOLID );      break;
-    case LINE_STYLE::DASH:       stroke->set_style( types::SLS_DASH );       break;
-    case LINE_STYLE::DOT:        stroke->set_style( types::SLS_DOT );        break;
-    case LINE_STYLE::DASHDOT:    stroke->set_style( types::SLS_DASHDOT );    break;
-    case LINE_STYLE::DASHDOTDOT: stroke->set_style( types::SLS_DASHDOTDOT ); break;
-    default: break;
-    }
+    stroke->set_style( ToProtoEnum<LINE_STYLE, types::StrokeLineStyle>( GetLineStyle() ) );
 
     switch( GetFillMode() )
     {
@@ -322,17 +312,8 @@ bool EDA_SHAPE::Deserialize( const google::protobuf::Any &aContainer )
 
     SetFilled( shape.attributes().fill().fill_type() == types::GFT_FILLED );
     SetWidth( shape.attributes().stroke().width().value_nm() );
-
-    switch( shape.attributes().stroke().style() )
-    {
-    case types::SLS_DEFAULT:    SetLineStyle( LINE_STYLE::DEFAULT );    break;
-    case types::SLS_SOLID:      SetLineStyle( LINE_STYLE::SOLID );      break;
-    case types::SLS_DASH:       SetLineStyle( LINE_STYLE::DASH );       break;
-    case types::SLS_DOT:        SetLineStyle( LINE_STYLE::DOT );        break;
-    case types::SLS_DASHDOT:    SetLineStyle( LINE_STYLE::DASHDOT );    break;
-    case types::SLS_DASHDOTDOT: SetLineStyle( LINE_STYLE::DASHDOTDOT ); break;
-    default: break;
-    }
+    SetLineStyle( FromProtoEnum<LINE_STYLE, types::StrokeLineStyle>(
+        shape.attributes().stroke().style() ) );
 
     if( shape.has_segment() )
     {
