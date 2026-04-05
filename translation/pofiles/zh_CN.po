@@ -46,8 +46,8 @@ msgstr ""
 "Project-Id-Version: KiCad_zh_CN_Master_v0.0.32\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-04-02 14:39+0300\n"
-"PO-Revision-Date: 2026-04-02 11:36+0000\n"
-"Last-Translator: CloverGit <w991593239@163.com>\n"
+"PO-Revision-Date: 2026-04-06 18:09+0000\n"
+"Last-Translator: yanzhen zhu <acme.zhuyanzhen@gmail.com>\n"
 "Language-Team: Chinese (Simplified Han script) <https://hosted.weblate.org/"
 "projects/kicad/master-source/zh_Hans/>\n"
 "Language: zh_CN\n"
@@ -415,13 +415,12 @@ msgid "Render current view using Raytracing"
 msgstr "使用光线追踪渲染当前视图"
 
 #: 3d-viewer/3d_viewer/tools/eda_3d_actions.cpp:63
-#, fuzzy
 msgid "Show parts without 3D model"
-msgstr "在外框模式下显示焊盘"
+msgstr "显示没有3D模型的Part"
 
 #: 3d-viewer/3d_viewer/tools/eda_3d_actions.cpp:64
 msgid "Display a placeholder for footprints with missing 3D models"
-msgstr ""
+msgstr "为缺少3D模型的封装显示占位符"
 
 #: 3d-viewer/3d_viewer/tools/eda_3d_actions.cpp:70
 msgid "Copy 3D image to clipboard"
@@ -2085,9 +2084,8 @@ msgid "Modification from API"
 msgstr "通过 API 修改"
 
 #: common/api/python_manager.cpp:138
-#, fuzzy
 msgid "Process could not be created"
-msgstr "无法创建文件 '%s'。"
+msgstr "无法创建进程"
 
 #: common/background_jobs_monitor.cpp:98
 msgid "Background Jobs"
@@ -3084,9 +3082,8 @@ msgid "Locked"
 msgstr "锁定"
 
 #: common/dialogs/dialog_group_properties_base.cpp:48
-#, fuzzy
 msgid "Prevents group from being moved on canvas"
-msgstr "防止组在画布上被移动"
+msgstr "防止分组在画布上移动"
 
 #: common/dialogs/dialog_group_properties_base.cpp:52
 msgid "Group members:"
@@ -4700,6 +4697,9 @@ msgid ""
 "\n"
 "Do you want to replace the embedded file with the new version?"
 msgstr ""
+"名为“%s”的文件已嵌入，但磁盘上的文件内容不同。\n"
+"\n"
+"是否要将嵌入的文件替换为新版本？"
 
 #: common/dialogs/panel_embedded_files.cpp:353
 msgid "Embedded File Conflict"
@@ -5881,7 +5881,7 @@ msgstr "加载 KiCad 内置库并启动 (推荐)"
 msgid ""
 "When enabled, KiCad will replace any existing references to built-in "
 "libraries with references to the latest version"
-msgstr ""
+msgstr "启用此功能后，KiCad 会将所有现有的内置库引用替换为最新版本"
 
 #: common/dialogs/panel_startwizard_libraries_base.cpp:62
 msgid "Start with no libraries"
@@ -7747,7 +7747,7 @@ msgstr "无法检索到提交 '%s'"
 msgid ""
 "Cannot merge: you have unstaged changes. Please commit or stash them before "
 "pulling."
-msgstr ""
+msgstr "无法合并：您有未暂存的更改。请先提交或暂存这些更改，然后再拉取。"
 
 #: common/git/libgit_backend.cpp:1106
 #, c-format
@@ -7758,7 +7758,7 @@ msgstr "合并失败: %s"
 msgid ""
 "Cannot pull with rebase: you have unstaged changes. Please commit or stash "
 "them before pulling."
-msgstr ""
+msgstr "无法使用 rebase 拉取：您有未暂存的更改。请先提交或暂存这些更改，然后再拉取。"
 
 #: common/git/libgit_backend.cpp:1135
 #, c-format
@@ -9264,27 +9264,28 @@ msgstr "没有通知"
 
 #: common/oauth/oauth_loopback_server.cpp:126
 msgid "Missing HTTP method in callback request."
-msgstr ""
+msgstr "回调请求中缺少HTTP方法。"
 
 #: common/oauth/oauth_loopback_server.cpp:134
 msgid "Missing callback URL in request."
-msgstr ""
+msgstr "请求中缺少回调 URL。"
 
 #: common/oauth/oauth_loopback_server.cpp:145
+#, fuzzy
 msgid "Unexpected callback path."
-msgstr ""
+msgstr "未知的回调路径。"
 
 #: common/oauth/oauth_loopback_server.cpp:153
 msgid "OAuth callback state did not match."
-msgstr ""
+msgstr "OAuth回调状态不匹配。"
 
 #: common/oauth/oauth_loopback_server.cpp:163
 msgid "Authorization server returned an OAuth error."
-msgstr ""
+msgstr "授权服务器返回了 OAuth 错误。"
 
 #: common/oauth/oauth_loopback_server.cpp:171
 msgid "Missing authorization code in callback."
-msgstr ""
+msgstr "回调中缺少授权码。"
 
 #: common/page_info.cpp:48
 msgid "A5 148 x 210mm"
@@ -9525,8 +9526,9 @@ msgid "Sign in required for this provider."
 msgstr "此服务提供商需要登录。"
 
 #: common/remote_provider_client.cpp:329
+#, fuzzy
 msgid "Provider metadata does not include a session bootstrap URL."
-msgstr ""
+msgstr "提供者的元数据不包含会话引导 URL。"
 
 #: common/remote_provider_client.cpp:352
 msgid "Bootstrap response did not include a nonce URL."
@@ -9537,14 +9539,14 @@ msgid "Bootstrap nonce URL origin does not match the bootstrap endpoint."
 msgstr ""
 
 #: common/remote_provider_client.cpp:407
-#, c-format
+#, c-format, fuzzy
 msgid "Remote provider request failed with HTTP %d."
-msgstr ""
+msgstr "远程提供者程序请求失败，HTTP %d。"
 
 #: common/remote_provider_client.cpp:432
-#, c-format
+#, c-format, fuzzy
 msgid "Remote provider returned invalid JSON: %s"
-msgstr ""
+msgstr "远程提供者返回了无效的 JSON：%s"
 
 #: common/remote_provider_client.cpp:453
 #, c-format
