@@ -1191,9 +1191,9 @@ void BOARD_BUILDER::createNets()
     {
         const uint8_t type = block->GetBlockType();
 
-        if( type != BLOCK_TYPE::x1B_NET )
+        if( type != BLK_0x1B_NET::BLOCK_TYPE_CODE )
         {
-            reportUnexpectedBlockType( type, BLOCK_TYPE::x1B_NET, 0, block->GetOffset(), "Net" );
+            reportUnexpectedBlockType( type, BLK_0x1B_NET::BLOCK_TYPE_CODE, 0, block->GetOffset(), "Net" );
             continue;
         }
 
@@ -1394,7 +1394,7 @@ void BOARD_BUILDER::applyConstraintSets()
 
     for( const BLOCK_BASE* block : csNetWalker )
     {
-        if( block->GetBlockType() != BLOCK_TYPE::x1B_NET )
+        if( block->GetBlockType() != BLK_0x1B_NET::BLOCK_TYPE_CODE )
             continue;
 
         const auto& netBlk = BlockDataAs<BLK_0x1B_NET>( *block );
@@ -1466,7 +1466,7 @@ void BOARD_BUILDER::applyNetConstraints()
 
     for( const BLOCK_BASE* block : widthNetWalker )
     {
-        if( block->GetBlockType() != BLOCK_TYPE::x1B_NET )
+        if( block->GetBlockType() != BLK_0x1B_NET::BLOCK_TYPE_CODE )
             continue;
 
         const auto& netBlk = BlockDataAs<BLK_0x1B_NET>( *block );
@@ -1598,7 +1598,7 @@ void BOARD_BUILDER::applyMatchGroups()
 
     for( const BLOCK_BASE* block : netWalker )
     {
-        if( block->GetBlockType() != BLOCK_TYPE::x1B_NET )
+        if( block->GetBlockType() != BLK_0x1B_NET::BLOCK_TYPE_CODE )
             continue;
 
         const auto& netBlk = static_cast<const BLOCK<BLK_0x1B_NET>&>( *block ).GetData();
@@ -3354,9 +3354,9 @@ void BOARD_BUILDER::createTracks()
     for( const BLOCK_BASE* block : netWalker )
     {
         const uint8_t type = block->GetBlockType();
-        if( type != BLOCK_TYPE::x1B_NET )
+        if( type != BLK_0x1B_NET::BLOCK_TYPE_CODE )
         {
-            reportUnexpectedBlockType( type, BLOCK_TYPE::x1B_NET, 0, block->GetOffset(), "Net" );
+            reportUnexpectedBlockType( type, BLK_0x1B_NET::BLOCK_TYPE_CODE, 0, block->GetOffset(), "Net" );
             continue;
         }
 

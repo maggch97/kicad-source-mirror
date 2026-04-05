@@ -28,6 +28,7 @@
 
 
 #include <array>
+#include <concepts>
 #include <cstdint>
 #include <optional>
 #include <memory>
@@ -60,6 +61,11 @@ public:
 
     virtual ~BLOCK_BASE() = default;
 
+    /**
+     * This is the actual type code as read from the file.
+     *
+     * Some BLOCKs have multiple valid type codes (e.g. segments).
+     */
     uint8_t GetBlockType() const { return m_blockType; }
     size_t  GetOffset() const { return m_offset; }
 
@@ -85,12 +91,6 @@ public:
 
 private:
     T m_data;
-};
-
-
-enum BLOCK_TYPE
-{
-    x1B_NET = 0x1B,
 };
 
 
@@ -526,6 +526,8 @@ struct LAYER_INFO
  */
 struct BLK_0x01_ARC
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x01;
+
     uint8_t  m_UnknownByte;
     uint8_t  m_SubType;     ///< Bit 6 (0x40) = clockwise direction
     uint32_t m_Key;
@@ -556,6 +558,8 @@ struct BLK_0x01_ARC
  */
 struct BLK_0x03_FIELD
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x03;
+
     struct SUB_0x6C
     {
         uint32_t              m_NumEntries;
@@ -613,6 +617,8 @@ enum FIELD_KEYS
  */
 struct BLK_0x04_NET_ASSIGNMENT
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x04;
+
     uint8_t  m_Type;
     uint16_t m_R;
     uint32_t m_Key;
@@ -631,6 +637,8 @@ struct BLK_0x04_NET_ASSIGNMENT
  */
 struct BLK_0x05_TRACK
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x05;
+
     LAYER_INFO m_Layer;
 
     uint32_t m_Key;
@@ -660,6 +668,8 @@ struct BLK_0x05_TRACK
  */
 struct BLK_0x06_COMPONENT
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x06;
+
     uint32_t m_Key;
 
     // Pointer to the next BLK_0x06_COMPONENT
@@ -689,6 +699,8 @@ struct BLK_0x06_COMPONENT
  */
 struct BLK_0x07_COMPONENT_INST
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x07;
+
     uint32_t m_Key;
 
     uint32_t m_Next;
@@ -716,6 +728,8 @@ struct BLK_0x07_COMPONENT_INST
  */
 struct BLK_0x08_PIN_NUMBER
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x08;
+
     uint8_t  m_Type;
     uint16_t m_R;
     uint32_t m_Key;
@@ -747,6 +761,8 @@ struct BLK_0x08_PIN_NUMBER
  */
 struct BLK_0x09_FILL_LINK
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x09;
+
     uint32_t m_Key;
 
     std::array<uint32_t, 4> m_UnknownArray;
@@ -768,6 +784,8 @@ struct BLK_0x09_FILL_LINK
  */
 struct BLK_0x0A_DRC
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x0A;
+
     uint8_t    m_T;
     LAYER_INFO m_Layer;
     uint32_t   m_Key;
@@ -790,6 +808,8 @@ struct BLK_0x0A_DRC
  */
 struct BLK_0x0C_PIN_DEF
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x0C;
+
     enum MARKER_SHAPE
     {
         // These are in the same order as the pad shapes, at least for the 'simple' shapes
@@ -850,6 +870,8 @@ struct BLK_0x0C_PIN_DEF
  */
 struct BLK_0x0D_PAD
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x0D;
+
     uint32_t m_Key;
     uint32_t m_NameStrId;
     uint32_t m_Next;
@@ -874,6 +896,8 @@ struct BLK_0x0D_PAD
  */
 struct BLK_0x0E_RECT
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x0E;
+
     uint8_t  m_T;
     LAYER_INFO m_Layer;
     uint32_t m_Key;
@@ -902,6 +926,8 @@ struct BLK_0x0E_RECT
  */
 struct BLK_0x0F_FUNCTION_SLOT
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x0F;
+
     uint32_t m_Key;
 
     uint32_t m_SlotName;
@@ -932,6 +958,8 @@ struct BLK_0x0F_FUNCTION_SLOT
  */
 struct BLK_0x10_FUNCTION_INST
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x10;
+
     uint32_t m_Key;
 
     COND_GE<FMT_VER::V_172, uint32_t> m_Unknown1;
@@ -954,6 +982,8 @@ struct BLK_0x10_FUNCTION_INST
  */
 struct BLK_0x11_PIN_NAME
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x11;
+
     uint8_t  m_Type;
     uint16_t m_R;
     uint32_t m_Key;
@@ -975,6 +1005,8 @@ struct BLK_0x11_PIN_NAME
  */
 struct BLK_0x12_XREF
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x12;
+
     uint8_t  m_Type;
     uint16_t m_R;
     uint32_t m_Key;
@@ -995,6 +1027,8 @@ struct BLK_0x12_XREF
  */
 struct BLK_0x14_GRAPHIC
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x14;
+
     uint8_t    m_Type;
     LAYER_INFO m_Layer;
     uint32_t   m_Key;
@@ -1019,6 +1053,9 @@ struct BLK_0x14_GRAPHIC
  */
 struct BLK_0x15_16_17_SEGMENT
 {
+    // Segments can be one of 3 codes, so we don't have a BLOCK_TYPE_CODE constant
+    // for this struct.
+
     uint32_t m_Key;
     uint32_t m_Next;
     uint32_t m_Parent;
@@ -1041,6 +1078,8 @@ struct BLK_0x15_16_17_SEGMENT
  */
 struct BLK_0x1B_NET
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x1B;
+
     uint32_t m_Key;
     uint32_t m_Next;
     uint32_t m_NetName;
@@ -1149,6 +1188,8 @@ struct PADSTACK_COMPONENT
  */
 struct BLK_0x1C_PADSTACK
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x1C;
+
     struct HEADER_v16x
     {
         /**
@@ -1415,6 +1456,8 @@ struct BLK_0x1C_PADSTACK
  */
 struct BLK_0x1D_CONSTRAINT_SET
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x1D;
+
     uint32_t m_Key;
     uint32_t m_Next;         ///< Linked list next pointer (used by LL_WALKER)
     uint32_t m_NameStrKey;   ///< String table key for constraint set name
@@ -1444,6 +1487,8 @@ struct BLK_0x1D_CONSTRAINT_SET
  */
 struct BLK_0x1E_SI_MODEL
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x1E;
+
     uint8_t  m_Type;
     uint16_t m_T2;
     uint32_t m_Key;
@@ -1468,6 +1513,8 @@ struct BLK_0x1E_SI_MODEL
  */
 struct BLK_0x1F_PADSTACK_DIM
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x1F;
+
     uint32_t m_Key;
     uint32_t m_Next;         ///< Linked list next pointer (used by LL_WALKER)
     uint32_t m_Unknown2;
@@ -1495,6 +1542,8 @@ struct BLK_0x1F_PADSTACK_DIM
  */
 struct BLK_0x20_UNKNOWN
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x20;
+
     uint8_t                 m_Type;
     uint16_t                m_R;
     uint32_t                m_Key;
@@ -1511,6 +1560,8 @@ struct BLK_0x20_UNKNOWN
  */
 struct BLK_0x21_BLOB
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x21;
+
     uint8_t  m_Type;
     uint16_t m_R;
     uint32_t m_Size;
@@ -1530,6 +1581,8 @@ struct BLK_0x21_BLOB
  */
 struct BLK_0x22_UNKNOWN
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x22;
+
     uint8_t  m_Type;
     uint16_t m_T2;
     uint32_t m_Key;
@@ -1545,6 +1598,8 @@ struct BLK_0x22_UNKNOWN
  */
 struct BLK_0x23_RATLINE
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x23;
+
     uint8_t    m_Type;
     LAYER_INFO m_Layer;
     uint32_t   m_Key;
@@ -1574,6 +1629,8 @@ struct BLK_0x23_RATLINE
  */
 struct BLK_0x24_RECT
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x24;
+
     uint8_t    m_Type;
     LAYER_INFO m_Layer;
     uint32_t   m_Key;
@@ -1600,6 +1657,8 @@ struct BLK_0x24_RECT
  */
 struct BLK_0x26_MATCH_GROUP
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x26;
+
     uint8_t  m_Type;
     uint16_t m_R;
     uint32_t m_Key;
@@ -1624,6 +1683,8 @@ struct BLK_0x26_MATCH_GROUP
  */
 struct BLK_0x27_CSTRMGR_XREF
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x27;
+
     std::vector<uint32_t> m_Refs;
 };
 
@@ -1639,6 +1700,8 @@ struct BLK_0x27_CSTRMGR_XREF
  */
 struct BLK_0x28_SHAPE
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x28;
+
     uint8_t    m_Type;
     LAYER_INFO m_Layer;
     uint32_t   m_Key;
@@ -1678,6 +1741,8 @@ struct BLK_0x28_SHAPE
  */
 struct BLK_0x29_PIN
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x29;
+
     uint8_t  m_Type;
     uint16_t m_T;
     uint32_t m_Key;
@@ -1711,6 +1776,8 @@ struct BLK_0x29_PIN
  */
 struct BLK_0x2A_LAYER_LIST
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x2A;
+
     struct NONREF_ENTRY
     {
         std::string m_Name;
@@ -1741,6 +1808,8 @@ struct BLK_0x2A_LAYER_LIST
  */
 struct BLK_0x2B_FOOTPRINT_DEF
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x2B;
+
     uint32_t m_Key;
 
     uint32_t m_FpStrRef;
@@ -1772,6 +1841,8 @@ struct BLK_0x2B_FOOTPRINT_DEF
  */
 struct BLK_0x2C_TABLE
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x2C;
+
     /**
      * The subtype of a table.
      *
@@ -1830,6 +1901,8 @@ struct BLK_0x2C_TABLE
  */
 struct BLK_0x2D_FOOTPRINT_INST
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x2D;
+
     uint8_t  m_UnknownByte1;
     uint8_t  m_Layer;         // 0 = top (F_Cu), 1 = bottom (B_Cu)
     uint8_t  m_UnknownByte2;
@@ -1879,6 +1952,8 @@ struct BLK_0x2D_FOOTPRINT_INST
  */
 struct BLK_0x2E_CONNECTION
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x2E;
+
     uint8_t  m_Type;
     uint16_t m_T2;
     uint32_t m_Key;
@@ -1899,6 +1974,8 @@ struct BLK_0x2E_CONNECTION
  */
 struct BLK_0x2F_UNKNOWN
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x2F;
+
     uint8_t  m_Type;
     uint16_t m_T2;
     uint32_t m_Key;
@@ -1915,6 +1992,8 @@ struct BLK_0x2F_UNKNOWN
  */
 struct BLK_0x30_STR_WRAPPER
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x30;
+
     enum class TEXT_REVERSAL
     {
         STRAIGHT,
@@ -1979,6 +2058,8 @@ struct BLK_0x30_STR_WRAPPER
  */
 struct BLK_0x31_SGRAPHIC
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x31;
+
     enum class STRING_LAYER : uint16_t
     {
         BOT_TEXT,
@@ -2015,6 +2096,8 @@ struct BLK_0x31_SGRAPHIC
  */
 struct BLK_0x32_PLACED_PAD
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x32;
+
     uint8_t    m_Type;
     LAYER_INFO m_Layer;
     uint32_t   m_Key;
@@ -2049,6 +2132,8 @@ struct BLK_0x32_PLACED_PAD
  */
 struct BLK_0x33_VIA
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x33;
+
     LAYER_INFO m_LayerInfo;
     uint32_t   m_Key;
     uint32_t   m_Next;
@@ -2081,6 +2166,8 @@ struct BLK_0x33_VIA
  */
 struct BLK_0x34_KEEPOUT
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x34;
+
     uint8_t    m_T;
     LAYER_INFO m_Layer;
     uint32_t   m_Key;
@@ -2102,6 +2189,8 @@ struct BLK_0x34_KEEPOUT
  */
 struct BLK_0x35_FILE_REF
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x35;
+
     uint8_t  m_T2;
     uint16_t m_T3;
 
@@ -2116,6 +2205,8 @@ struct BLK_0x35_FILE_REF
  */
 struct BLK_0x36_DEF_TABLE
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x36;
+
     uint16_t m_Code;
     uint32_t m_Key;
     uint32_t m_Next;
@@ -2230,6 +2321,8 @@ struct BLK_0x36_DEF_TABLE
  */
 struct BLK_0x37_PTR_ARRAY
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x37;
+
     uint8_t  m_T;
     uint16_t m_T2;
     uint32_t m_Key;
@@ -2250,6 +2343,8 @@ struct BLK_0x37_PTR_ARRAY
  */
 struct BLK_0x38_FILM
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x38;
+
     uint32_t m_Key;
     uint32_t m_Next;
     uint32_t m_LayerList;
@@ -2270,6 +2365,8 @@ struct BLK_0x38_FILM
  */
 struct BLK_0x39_FILM_LAYER_LIST
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x39;
+
     uint32_t m_Key;
     uint32_t m_Parent;
     uint32_t m_Head;
@@ -2284,6 +2381,8 @@ struct BLK_0x39_FILM_LAYER_LIST
  */
 struct BLK_0x3A_FILM_LIST_NODE
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x3A;
+
     LAYER_INFO m_Layer;
     uint32_t   m_Key;
     uint32_t   m_Next;
@@ -2299,6 +2398,8 @@ struct BLK_0x3A_FILM_LIST_NODE
  */
 struct BLK_0x3B_PROPERTY
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x3B;
+
     uint8_t  m_T;
     uint16_t m_SubType;
     uint32_t m_Len;
@@ -2321,6 +2422,8 @@ struct BLK_0x3B_PROPERTY
  */
 struct BLK_0x3C_KEY_LIST
 {
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x3C;
+
     uint8_t  m_T;
     uint16_t m_T2;
     uint32_t m_Key;

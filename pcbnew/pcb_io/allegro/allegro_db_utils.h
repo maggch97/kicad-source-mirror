@@ -29,9 +29,11 @@
  * Utility functions that operate over BRD_DBs and BLOCKs
  */
 
+#include <concepts>
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <type_traits>
 #include <variant>
 
 #include <convert/allegro_pcb_structs.h>
@@ -44,13 +46,76 @@ namespace ALLEGRO
 {
 
 /**
+ * Satisfied by Allegro block data structs that can be used with BLOCK_REF.
+ *
+ * Every BLK_0x* struct declares a BLOCK_TYPE_CODE trait, except those with multiple valid
+ * codes, which are special-cased.
+ */
+template <typename T>
+concept ALLEGRO_BLOCK_DATA = requires
+{
+    { T::BLOCK_TYPE_CODE }->std::convertible_to<uint8_t>;
+}
+|| std::is_same_v<T, BLK_0x15_16_17_SEGMENT>;
+
+
+/**
+ * Check whether a runtime block type code matches the expected type for T.
+ */
+template <ALLEGRO_BLOCK_DATA BLK_T>
+constexpr bool BlockTypeMatches( uint8_t aType )
+{
+    // Segments can be any of three code (H/oblique/V)
+    if constexpr( std::is_same_v<BLK_T, BLK_0x15_16_17_SEGMENT> )
+        return aType == 0x15 || aType == 0x16 || aType == 0x17;
+    else
+        return aType == BLK_T::BLOCK_TYPE_CODE;
+}
+
+/**
  * Cast a BLOCK_BASE to a typed BLOCK<T> and return the data.
  */
-template <typename BLK_T>
+template <ALLEGRO_BLOCK_DATA BLK_T>
 const BLK_T& BlockDataAs( const BLOCK_BASE& aBlock )
 {
     return static_cast<const BLOCK<BLK_T>&>( aBlock ).GetData();
 }
+
+
+/**
+ * Non-owning, typed reference to a BLOCK in the database.
+ *
+ * Wraps a raw BLOCK_BASE pointer and provides typed access to the block's data
+ * using std::optional-like operator-> and operator*.
+ */
+template <ALLEGRO_BLOCK_DATA BLK_T>
+class BLOCK_REF
+{
+public:
+    BLOCK_REF() :
+            m_block( nullptr )
+    {
+    }
+
+    explicit BLOCK_REF( const BLOCK_BASE* aBlock ) :
+            m_block( aBlock )
+    {
+    }
+
+    /**
+     * True when this BLOCK_REF contains a non-null block pointer (i.e. the block
+     * resolved by its key).
+     */
+    explicit operator bool() const { return m_block != nullptr; }
+
+    const BLK_T& operator*() const { return BlockDataAs<BLK_T>( *m_block ); }
+    const BLK_T* operator->() const { return &BlockDataAs<BLK_T>( *m_block ); }
+
+    const BLOCK_BASE* Block() const { return m_block; }
+
+private:
+    const BLOCK_BASE* m_block;
+};
 
 
 /**
