@@ -330,7 +330,11 @@ std::unique_ptr<ALLEGRO::FILE_HEADER> HEADER_PARSER::ParseHeader()
 
 static void ReadStringMap( FILE_STREAM& stream, BRD_DB& aDb, uint32_t count )
 {
-    stream.Seek( RAW_BOARD::STRING_TABLE_OFFSET );
+    // Fixed file offset of the string table in Allegro board files.
+    // As far as known, this is always a fixed value.
+    static constexpr size_t STRING_TABLE_OFFSET = 0x1200;
+
+    stream.Seek( STRING_TABLE_OFFSET );
 
     for( uint32_t i = 0; i < count; ++i )
     {
@@ -2814,8 +2818,3 @@ std::unique_ptr<BRD_DB> ALLEGRO::PARSER::Parse()
 
     return board;
 }
-
-
-ALLEGRO::RAW_BOARD::RAW_BOARD() :
-    m_FmtVer( FMT_VER::V_UNKNOWN )
-{}
