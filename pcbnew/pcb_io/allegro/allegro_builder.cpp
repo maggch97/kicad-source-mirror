@@ -3120,8 +3120,7 @@ std::unique_ptr<FOOTPRINT> BOARD_BUILDER::buildFootprint( const BLK_0x2D_FOOTPRI
     }
 
     // Find the pads
-    LL_WALKER padWalker{ aFpInstance.m_FirstPadPtr, aFpInstance.m_Key, m_brdDb };
-    padWalker.SetNextFunc( PadGetNextInFootprint );
+    LL_WALKER padWalker{ aFpInstance.m_FirstPadPtr, aFpInstance.m_Key, m_brdDb, PadGetNextInFootprint };
     for( const BLOCK_BASE* padBlock : padWalker )
     {
         const auto& placedPadInfo = static_cast<const BLOCK<BLK_0x32_PLACED_PAD>&>( *padBlock ).GetData();

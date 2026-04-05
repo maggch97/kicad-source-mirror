@@ -144,16 +144,32 @@ class LL_WALKER
 public:
     using NEXT_FUNC_T = std::function<uint32_t( const BLOCK_BASE& )>;
 
-    class iterator
+    class ITERATOR
     {
     public:
-        iterator( uint32_t aCurrent, uint32_t aTail, const BRD_DB& aBoard, NEXT_FUNC_T aNextFunc ) :
+        /**
+         * Usually constructed as an end-of-list sentinel
+         */
+        ITERATOR() :
+                m_current( 0 ),
+                m_currBlock( nullptr ),
+                m_tail( 0 ),
+                m_board( nullptr ),
+                m_nextFunc( nullptr )
+        {
+        }
+
+        /**
+         * Actual object ITERATOR
+         */
+        ITERATOR( uint32_t aCurrent, uint32_t aTail, const BRD_DB& aBoard,
+                  const NEXT_FUNC_T& aNextFunc ) :
                 m_current( aCurrent ),
                 m_tail( aTail ),
-                m_board( aBoard ),
-                m_NextFunc( aNextFunc )
+                m_board( &aBoard ),
+                m_nextFunc( &aNextFunc )
         {
-            m_currBlock = m_board.GetObjectByKey( m_current );
+            m_currBlock = m_board->GetObjectByKey( m_current );
 
             if( !m_currBlock )
                 m_current = 0;
@@ -161,9 +177,12 @@ public:
                 m_visited.insert( m_current );
         }
 
-        const BLOCK_BASE* operator*() const { return m_currBlock; }
+        const BLOCK_BASE* operator*() const
+        {
+            return m_currBlock;
+        }
 
-        iterator& operator++()
+        ITERATOR& operator++()
         {
             if( m_current == m_tail || !m_currBlock )
             {
@@ -171,9 +190,9 @@ public:
             }
             else
             {
-                m_current = m_NextFunc( *m_currBlock );
+                m_current = ( *m_nextFunc )( *m_currBlock );
 
-                if( m_current == m_tail || m_board.IsSentinel( m_current ) )
+                if( m_current == m_tail || m_board->IsSentinel( m_current ) )
                 {
                     m_current = 0;
                 }
@@ -183,46 +202,66 @@ public:
                 }
                 else
                 {
-                    m_currBlock = m_board.GetObjectByKey( m_current );
+                    m_currBlock = m_board->GetObjectByKey( m_current );
 
                     if( m_currBlock == nullptr )
-                    {
                         m_current = 0;
-                    }
                 }
             }
 
             return *this;
         }
 
-        bool operator!=( const iterator& other ) const { return m_current != other.m_current; }
+        friend bool operator==( const ITERATOR& aLhs, const ITERATOR& aRhs )
+        {
+            return aLhs.m_current == aRhs.m_current;
+        }
 
     private:
         uint32_t                     m_current;
         const BLOCK_BASE*            m_currBlock;
         uint32_t                     m_tail;
-        const BRD_DB&                m_board;
-        NEXT_FUNC_T                  m_NextFunc;
+        const BRD_DB*                m_board;
+        const NEXT_FUNC_T*           m_nextFunc;
         std::unordered_set<uint32_t> m_visited;
     };
 
-    LL_WALKER( uint32_t aHead, uint32_t aTail, const BRD_DB& aBoard ) :
+    /**
+     * General constructor for walking any linked list given head/tail keys, a database,
+     * and a next-function that returns the next key for a given block.
+     *
+     * @param aHead key of the first block in the list
+     * @param aTail key of the last block in the list (the list ends when the next key is this value)
+     * @param aBoard the database to look up blocks in
+     * @param aNextFunc function that takes some block and returns the key of the next block
+     */
+    LL_WALKER( uint32_t aHead, uint32_t aTail, const BRD_DB& aBoard,
+               NEXT_FUNC_T aNextFunc = GetPrimaryNext ) :
             m_head( aHead ),
             m_tail( aTail ),
-            m_board( aBoard )
-    {
-        m_nextFunction = GetPrimaryNext;
-    }
-
-    LL_WALKER( const FILE_HEADER::LINKED_LIST& aList, const BRD_DB& aBoard ) :
-            LL_WALKER( aList.m_Head, aList.m_Tail, aBoard )
+            m_board( aBoard ),
+            m_nextFunction( std::move( aNextFunc ) )
     {
     }
 
-    iterator begin() const { return iterator( m_head, m_tail, m_board, m_nextFunction ); }
-    iterator end() const { return iterator( 0, m_tail, m_board, m_nextFunction ); }
+    /**
+     * Convenience constructor for linked lists in the file header.
+     */
+    LL_WALKER( const FILE_HEADER::LINKED_LIST& aList, const BRD_DB& aBoard,
+               NEXT_FUNC_T aNextFunc = GetPrimaryNext ) :
+            LL_WALKER( aList.m_Head, aList.m_Tail, aBoard, std::move( aNextFunc ) )
+    {
+    }
 
-    void SetNextFunc( NEXT_FUNC_T aNextFunc ) { m_nextFunction = aNextFunc; }
+    ITERATOR begin() const
+    {
+        return ITERATOR( m_head, m_tail, m_board, m_nextFunction );
+    }
+
+    ITERATOR end() const
+    {
+        return ITERATOR{};
+    }
 
 private:
     uint32_t      m_head;
