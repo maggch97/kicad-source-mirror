@@ -55,9 +55,12 @@ class BLOCK_BASE
 {
 public:
     BLOCK_BASE( uint8_t aBlockType, size_t aOffset ) :
-        m_blockType( aBlockType ),
-        m_offset( aOffset )
-    {}
+            m_blockType( aBlockType ),
+            m_offset( aOffset ),
+            m_Key( 0 ), // Key and next are set later, during parse
+            m_Next( 0 )
+    {
+    }
 
     virtual ~BLOCK_BASE() = default;
 
@@ -69,12 +72,19 @@ public:
     uint8_t GetBlockType() const { return m_blockType; }
     size_t  GetOffset() const { return m_offset; }
 
-    // If this block data has a key, return it, else 0
-    uint32_t GetKey() const;
+    // Unique object identifier for this block, or 0 if it has none.
+    uint32_t GetKey() const { return m_Key; }
+    // Object key of the next block in this block's primary linked-list, or 0.
+    uint32_t GetNext() const { return m_Next; }
+
+    void SetKey( uint32_t aKey ) { m_Key = aKey; }
+    void SetNext( uint32_t aNext ) { m_Next = aNext; }
 
 private:
-    uint8_t m_blockType;
-    size_t  m_offset;
+    uint8_t  m_blockType;
+    size_t   m_offset;
+    uint32_t m_Key;
+    uint32_t m_Next;
 };
 
 

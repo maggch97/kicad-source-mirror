@@ -27,42 +27,9 @@
 using namespace ALLEGRO;
 
 
-#define BLK_FIELD( BLK_T, FIELD ) BlockDataAs<BLK_T>( aBlock ).FIELD
-
-
 uint32_t ALLEGRO::GetPrimaryNext( const BLOCK_BASE& aBlock )
 {
-    const uint8_t type = aBlock.GetBlockType();
-
-    switch( type )
-    {
-    case 0x01: return BLK_FIELD( BLK_0x01_ARC, m_Next );
-    case 0x03: return BLK_FIELD( BLK_0x03_FIELD, m_Next );
-    case 0x04: return BLK_FIELD( BLK_0x04_NET_ASSIGNMENT, m_Next );
-    case 0x05: return BLK_FIELD( BLK_0x05_TRACK, m_Next );
-    case 0x0E: return BLK_FIELD( BLK_0x0E_RECT, m_Next );
-    case 0x14: return BLK_FIELD( BLK_0x14_GRAPHIC, m_Next );
-    case 0x15:
-    case 0x16:
-    case 0x17: return BLK_FIELD( BLK_0x15_16_17_SEGMENT, m_Next );
-    case 0x1B: return BLK_FIELD( BLK_0x1B_NET, m_Next );
-    case 0x1D: return BLK_FIELD( BLK_0x1D_CONSTRAINT_SET, m_Next );
-    case 0x1E: return BLK_FIELD( BLK_0x1E_SI_MODEL, m_Next );
-    case 0x1F: return BLK_FIELD( BLK_0x1F_PADSTACK_DIM, m_Next );
-    case 0x2B: return BLK_FIELD( BLK_0x2B_FOOTPRINT_DEF, m_Next );
-    case 0x2D: return BLK_FIELD( BLK_0x2D_FOOTPRINT_INST, m_Next );
-    case 0x2E: return BLK_FIELD( BLK_0x2E_CONNECTION, m_Next );
-    case 0x30: return BLK_FIELD( BLK_0x30_STR_WRAPPER, m_Next );
-    case 0x31: return 0; // Doesn't exist
-    case 0x32: return BLK_FIELD( BLK_0x32_PLACED_PAD, m_Next );
-    case 0x24: return BLK_FIELD( BLK_0x24_RECT, m_Next );
-    case 0x28: return BLK_FIELD( BLK_0x28_SHAPE, m_Next );
-    case 0x2C: return BLK_FIELD( BLK_0x2C_TABLE, m_Next );
-    case 0x33: return BLK_FIELD( BLK_0x33_VIA, m_Next );
-    case 0x36: return BLK_FIELD( BLK_0x36_DEF_TABLE, m_Next );
-    case 0x37: return BLK_FIELD( BLK_0x37_PTR_ARRAY, m_Next );
-    default: return 0;
-    }
+    return aBlock.GetNext();
 }
 
 
