@@ -886,6 +886,10 @@ include_directories( SYSTEM ${OCC_INCLUDE_DIR} )
 # Try to find Protobuf with modern approach first, fallback to legacy if needed
 set( _protobuf_found FALSE )
 
+# KiCad 11 relies on proto3 optional behavior available since 3.15
+# Should be set to 3.15 but not enforcing yet
+set( PROTOBUF_MIN_VERSION 3.12 )
+
 if( NOT KICAD_USE_CMAKE_FINDPROTOBUF )
     message( STATUS "Attempting to find Protobuf using CONFIG mode..." )
     find_package( Protobuf QUIET CONFIG )
@@ -906,6 +910,17 @@ if( NOT _protobuf_found )
     if( Protobuf_FOUND )
         message( STATUS "Found Protobuf using FindProtobuf.cmake" )
     endif()
+endif()
+
+if( NOT Protobuf_VERSION )
+    message( WARNING
+             "Unable to determine the Protobuf version. KiCad requires a minimum version of ${PROTOBUF_MIN_VERSION}" )
+elseif( Protobuf_VERSION VERSION_LESS PROTOBUF_MIN_VERSION )
+    message( FATAL_ERROR
+             "================================================================\n"
+             " Protobuf version ${Protobuf_VERSION} was found.\n"
+             "  KiCad requires a minimum version of ${PROTOBUF_MIN_VERSION}\n"
+             "================================================================\n" )
 endif()
 
 if( NOT Protobuf_PROTOC_EXECUTABLE )
