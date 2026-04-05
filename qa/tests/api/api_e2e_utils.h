@@ -591,7 +591,7 @@ private:
 
         if( isProcessAlive() )
         {
-            wxProcess::Kill( m_pid, wxSIGTERM, wxKILL_CHILDREN );
+            wxProcess::Kill( m_pid, wxSIGTERM );
 
             auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds( 5 );
 
@@ -599,7 +599,7 @@ private:
                 wxMilliSleep( 50 );
 
             if( isProcessAlive() )
-                wxProcess::Kill( m_pid, wxSIGKILL, wxKILL_CHILDREN );
+                wxProcess::Kill( m_pid, wxSIGKILL );
         }
 
         collectServerOutput();
