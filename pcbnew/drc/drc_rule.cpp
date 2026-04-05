@@ -235,7 +235,7 @@ wxString DRC_RULE::FormatRuleFromProto( const kiapi::board::CustomRule& aRule, w
                  << "\")\n";
     }
 
-    if( aRule.has_layer_mode() )
+    if( aRule.layer_condition_case() == kiapi::board::CustomRule::LayerConditionCase::kLayerMode )
     {
         switch( aRule.layer_mode() )
         {
@@ -252,7 +252,7 @@ wxString DRC_RULE::FormatRuleFromProto( const kiapi::board::CustomRule& aRule, w
             break;
         }
     }
-    else if( aRule.has_single_layer() )
+    else if( aRule.layer_condition_case() == kiapi::board::CustomRule::LayerConditionCase::kSingleLayer )
     {
         PCB_LAYER_ID layer =
                 FromProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( aRule.single_layer() );
@@ -280,7 +280,7 @@ wxString DRC_RULE::FormatRuleFromProto( const kiapi::board::CustomRule& aRule, w
                     + wxS( "\")" );
         }
 
-        if( constraint.has_disallow() )
+        if( constraint.value_case() == kiapi::board::CustomRuleConstraint::ValueCase::kDisallow )
         {
             for( int disallowTypeValue : constraint.disallow().types() )
             {
@@ -307,7 +307,7 @@ wxString DRC_RULE::FormatRuleFromProto( const kiapi::board::CustomRule& aRule, w
                 }
             }
         }
-        else if( constraint.has_zone_connection() )
+        else if( constraint.value_case() == kiapi::board::CustomRuleConstraint::ValueCase::kZoneConnection )
         {
             switch( constraint.zone_connection() )
             {
@@ -327,13 +327,13 @@ wxString DRC_RULE::FormatRuleFromProto( const kiapi::board::CustomRule& aRule, w
                 return fail( wxS( "Unsupported zone connection style" ) );
             }
         }
-        else if( constraint.has_assertion_expression() )
+        else if( constraint.value_case() == kiapi::board::CustomRuleConstraint::ValueCase::kAssertionExpression )
         {
             text += wxS( " \"" )
                     + escapeQuotedRuleText( wxString::FromUTF8( constraint.assertion_expression() ) )
                     + wxS( "\"" );
         }
-        else if( constraint.has_numeric() )
+        else if( constraint.value_case() == kiapi::board::CustomRuleConstraint::ValueCase::kNumeric )
         {
             const kiapi::common::types::MinOptMax& numeric = constraint.numeric();
 
