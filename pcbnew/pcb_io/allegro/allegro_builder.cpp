@@ -1143,17 +1143,13 @@ wxString BOARD_BUILDER::get0x30StringValue( uint32_t a0x30Key ) const
 
 void BOARD_BUILDER::cacheFontDefs()
 {
-    LL_WALKER x36_walker{ m_brdDb.m_Header->m_LL_0x36.m_Head, m_brdDb.m_Header->m_LL_0x36.m_Tail, m_brdDb };
+    TYPED_LL_WALKER<BLK_0x36_DEF_TABLE> x36Walker{ m_brdDb.m_Header->m_LL_0x36.m_Head,
+                                                   m_brdDb.m_Header->m_LL_0x36.m_Tail, m_brdDb };
 
     bool encountered = false;
 
-    for( const BLOCK_BASE* block : x36_walker )
+    for( const BLK_0x36_DEF_TABLE& blk0x36 : x36Walker )
     {
-        if( block->GetBlockType() != 0x36 )
-            continue;
-
-        const BLK_0x36_DEF_TABLE& blk0x36 = static_cast<const BLOCK<BLK_0x36_DEF_TABLE>&>( *block ).GetData();
-
         if( blk0x36.m_Code != 0x08 )
             continue;
 
@@ -1185,20 +1181,14 @@ void BOARD_BUILDER::createNets()
 
     std::vector<BOARD_ITEM*> bulkAdded;
 
-    LL_WALKER netWalker{ m_brdDb.m_Header->m_LL_0x1B_Nets, m_brdDb };
+    TYPED_LL_WALKER<BLK_0x1B_NET> netWalker{
+        m_brdDb.m_Header->m_LL_0x1B_Nets,
+        m_brdDb,
+        MISMATCH_POLICY::LOG_TRACE,
+    };
 
-    for( const BLOCK_BASE* block : netWalker )
+    for( const BLK_0x1B_NET& netBlk : netWalker )
     {
-        const uint8_t type = block->GetBlockType();
-
-        if( type != BLK_0x1B_NET::BLOCK_TYPE_CODE )
-        {
-            reportUnexpectedBlockType( type, BLK_0x1B_NET::BLOCK_TYPE_CODE, 0, block->GetOffset(), "Net" );
-            continue;
-        }
-
-        const auto& netBlk = static_cast<const BLOCK<BLK_0x1B_NET>&>( *block ).GetData();
-
         wxString netName = m_brdDb.GetString( netBlk.m_NetName );
 
         // Allegro allows unnamed nets. KiCad's NETINFO_LIST matches nets by name, and all
@@ -1273,17 +1263,12 @@ void BOARD_BUILDER::applyConstraintSets()
     // Also map string table keys to set names for net lookup
     std::map<uint32_t, wxString> keyToSetName;
 
-    int csIndex = 0;
-    const LL_WALKER csWalker( m_brdDb.m_Header->m_LL_0x1D_0x1E_0x1F, m_brdDb );
+    int                                      csIndex = 0;
+    TYPED_LL_WALKER<BLK_0x1D_CONSTRAINT_SET> csWalker( m_brdDb.m_Header->m_LL_0x1D_0x1E_0x1F, m_brdDb );
 
-    for( const BLOCK_BASE* block : csWalker )
+    for( const BLK_0x1D_CONSTRAINT_SET& csBlock : csWalker )
     {
-        if( block->GetBlockType() != 0x1D )
-            continue;
-
-        const BLK_0x1D_CONSTRAINT_SET& csBlock = static_cast<const BLOCK<BLK_0x1D_CONSTRAINT_SET>&>( *block ).GetData();
-
-        wxString setName;
+        wxString        setName;
         const wxString& resolved = m_brdDb.GetString( csBlock.m_NameStrKey );
 
         if( !resolved.IsEmpty() )
@@ -1390,15 +1375,10 @@ void BOARD_BUILDER::applyConstraintSets()
         }
     }
 
-    LL_WALKER csNetWalker{ m_brdDb.m_Header->m_LL_0x1B_Nets, m_brdDb };
+    TYPED_LL_WALKER<BLK_0x1B_NET> csNetWalker{ m_brdDb.m_Header->m_LL_0x1B_Nets, m_brdDb };
 
-    for( const BLOCK_BASE* block : csNetWalker )
+    for( const BLK_0x1B_NET& netBlk : csNetWalker )
     {
-        if( block->GetBlockType() != BLK_0x1B_NET::BLOCK_TYPE_CODE )
-            continue;
-
-        const auto& netBlk = BlockDataAs<BLK_0x1B_NET>( *block );
-
         // Field 0x1a0 references the constraint set. It can be an integer (string table key
         // that matches 0x1D.m_NameStrKey) or a direct string (the constraint set name).
         auto csField =
@@ -1462,15 +1442,10 @@ void BOARD_BUILDER::applyNetConstraints()
     // Allegro stores per-net min/max trace width in FIELD blocks attached to each NET.
     std::map<int, std::vector<uint32_t>> widthToNetKeys;
 
-    LL_WALKER widthNetWalker{ m_brdDb.m_Header->m_LL_0x1B_Nets, m_brdDb };
+    TYPED_LL_WALKER<BLK_0x1B_NET> widthNetWalker{ m_brdDb.m_Header->m_LL_0x1B_Nets, m_brdDb };
 
-    for( const BLOCK_BASE* block : widthNetWalker )
+    for( const BLK_0x1B_NET& netBlk : widthNetWalker )
     {
-        if( block->GetBlockType() != BLK_0x1B_NET::BLOCK_TYPE_CODE )
-            continue;
-
-        const auto& netBlk = BlockDataAs<BLK_0x1B_NET>( *block );
-
         std::optional<int> minWidth =
                 GetFirstFieldOfTypeInt( m_brdDb, netBlk.m_FieldsPtr, netBlk.m_Key, FIELD_KEYS::MIN_LINE_WIDTH );
 
@@ -1594,14 +1569,10 @@ void BOARD_BUILDER::applyMatchGroups()
     // Group NET keys by their match group name
     std::map<wxString, std::vector<uint32_t>> groupToNetKeys;
 
-    LL_WALKER netWalker{ m_brdDb.m_Header->m_LL_0x1B_Nets, m_brdDb };
+    TYPED_LL_WALKER<BLK_0x1B_NET> netWalker{ m_brdDb.m_Header->m_LL_0x1B_Nets, m_brdDb };
 
-    for( const BLOCK_BASE* block : netWalker )
+    for( const BLK_0x1B_NET& netBlk : netWalker )
     {
-        if( block->GetBlockType() != BLK_0x1B_NET::BLOCK_TYPE_CODE )
-            continue;
-
-        const auto& netBlk = static_cast<const BLOCK<BLK_0x1B_NET>&>( *block ).GetData();
         wxString groupName = resolveMatchGroupName( netBlk );
 
         if( groupName.empty() )
@@ -2940,44 +2911,33 @@ std::unique_ptr<FOOTPRINT> BOARD_BUILDER::buildFootprint( const BLK_0x2D_FOOTPRI
             aItem->Flip( fpPos, FLIP_DIRECTION::LEFT_RIGHT );
     };
 
-    const LL_WALKER graphicsWalker{ aFpInstance.m_GraphicPtr, aFpInstance.m_Key, m_brdDb };
-
-    for( const BLOCK_BASE* graphicsBlock : graphicsWalker )
-    {
-        const uint8_t type = graphicsBlock->GetBlockType();
-
-        if( type == 0x14 )
-        {
-            const auto& graphics = static_cast<const BLOCK<BLK_0x14_GRAPHIC>&>( *graphicsBlock ).GetData();
-
-            std::vector<std::unique_ptr<PCB_SHAPE>> shapes = buildShapes( graphics, *fp );
-
-            for( std::unique_ptr<PCB_SHAPE>& shape : shapes )
+    TYPED_LL_WALKER<BLK_0x14_GRAPHIC> graphicsWalker{ aFpInstance.m_GraphicPtr, aFpInstance.m_Key, m_brdDb,
+                                                      MISMATCH_POLICY::REPORT };
+    graphicsWalker.SetMismatchReporter(
+            [this]( uint8_t aType, const BLOCK_BASE& )
             {
-                canonicalizeLayer( shape.get() );
-                fp->Add( shape.release() );
-            }
-        }
-        else
+                m_reporter.Report( wxString::Format( "Unexpected type in graphics list: %#04x", aType ),
+                                   RPT_SEVERITY_WARNING );
+            } );
+
+    for( const BLK_0x14_GRAPHIC& graphics : graphicsWalker )
+    {
+        std::vector<std::unique_ptr<PCB_SHAPE>> shapes = buildShapes( graphics, *fp );
+
+        for( std::unique_ptr<PCB_SHAPE>& shape : shapes )
         {
-            m_reporter.Report( wxString::Format( "Unexpected type in graphics list: %#04x", type ),
-                               RPT_SEVERITY_WARNING );
+            canonicalizeLayer( shape.get() );
+            fp->Add( shape.release() );
         }
     }
 
     bool valueFieldSet = false;
 
-    const LL_WALKER textWalker{ aFpInstance.m_TextPtr, aFpInstance.m_Key, m_brdDb };
+    TYPED_LL_WALKER<BLK_0x30_STR_WRAPPER> textWalker{ aFpInstance.m_TextPtr, aFpInstance.m_Key, m_brdDb,
+                                                      MISMATCH_POLICY::LOG_TRACE };
 
-    for( const BLOCK_BASE* textBlock : textWalker )
+    for( const BLK_0x30_STR_WRAPPER& strWrapper : textWalker )
     {
-        const uint8_t type = textBlock->GetBlockType();
-
-        if( type != 0x30 )
-            continue;
-
-        const auto& strWrapper = static_cast<const BLOCK<BLK_0x30_STR_WRAPPER>&>( *textBlock ).GetData();
-
         std::unique_ptr<PCB_TEXT> text = buildPcbText( strWrapper, *fp );
 
         if( !text )
@@ -3120,11 +3080,10 @@ std::unique_ptr<FOOTPRINT> BOARD_BUILDER::buildFootprint( const BLK_0x2D_FOOTPRI
     }
 
     // Find the pads
-    LL_WALKER padWalker{ aFpInstance.m_FirstPadPtr, aFpInstance.m_Key, m_brdDb, PadGetNextInFootprint };
-    for( const BLOCK_BASE* padBlock : padWalker )
+    TYPED_LL_WALKER<BLK_0x32_PLACED_PAD> padWalker{ aFpInstance.m_FirstPadPtr, aFpInstance.m_Key, m_brdDb,
+                                                    MISMATCH_POLICY::THROW, PadGetNextInFootprint };
+    for( const BLK_0x32_PLACED_PAD& placedPadInfo : padWalker )
     {
-        const auto& placedPadInfo = static_cast<const BLOCK<BLK_0x32_PLACED_PAD>&>( *padBlock ).GetData();
-
         const BLK_0x04_NET_ASSIGNMENT* netAssignment =
                 expectBlockByKey<BLK_0x04_NET_ASSIGNMENT>( placedPadInfo.m_NetPtr, 0x04 );
         const BLK_0x0D_PAD* padInfo = expectBlockByKey<BLK_0x0D_PAD>( placedPadInfo.m_PadPtr, 0x0D );
@@ -3349,18 +3308,15 @@ void BOARD_BUILDER::createTracks()
     std::vector<BOARD_ITEM*> newItems;
 
     // We need to walk this list again - we could do this all in createNets, but this seems tidier.
-    LL_WALKER netWalker{ m_brdDb.m_Header->m_LL_0x1B_Nets, m_brdDb };
-    for( const BLOCK_BASE* block : netWalker )
+    TYPED_LL_WALKER<BLK_0x1B_NET> netWalker{ m_brdDb.m_Header->m_LL_0x1B_Nets, m_brdDb, MISMATCH_POLICY::REPORT };
+    netWalker.SetMismatchReporter(
+            [this]( uint8_t aType, const BLOCK_BASE& aBlock )
+            {
+                reportUnexpectedBlockType( aType, BLK_0x1B_NET::BLOCK_TYPE_CODE, 0, aBlock.GetOffset(), "Net" );
+            } );
+
+    for( const BLK_0x1B_NET& net : netWalker )
     {
-        const uint8_t type = block->GetBlockType();
-        if( type != BLK_0x1B_NET::BLOCK_TYPE_CODE )
-        {
-            reportUnexpectedBlockType( type, BLK_0x1B_NET::BLOCK_TYPE_CODE, 0, block->GetOffset(), "Net" );
-            continue;
-        }
-
-        const auto& net = static_cast<const BLOCK<BLK_0x1B_NET>&>( *block ).GetData();
-
         auto netIt = m_netCache.find( net.m_Key );
 
         if( netIt == m_netCache.end() )
@@ -3368,17 +3324,16 @@ void BOARD_BUILDER::createTracks()
 
         const int netCode = netIt->second->GetNetCode();
 
-        LL_WALKER assignmentWalker{ net.m_Assignment, net.m_Key, m_brdDb };
-        for( const BLOCK_BASE* assignBlock : assignmentWalker )
+        TYPED_LL_WALKER<BLK_0x04_NET_ASSIGNMENT> assignmentWalker{ net.m_Assignment, net.m_Key, m_brdDb,
+                                                                   MISMATCH_POLICY::REPORT };
+        assignmentWalker.SetMismatchReporter(
+                [this, &net]( uint8_t aType, const BLOCK_BASE& aBlock )
+                {
+                    reportUnexpectedBlockType( aType, 0x04, 0, aBlock.GetOffset(), "Net assignment" );
+                } );
+
+        for( const BLK_0x04_NET_ASSIGNMENT& assign : assignmentWalker )
         {
-            if( assignBlock->GetBlockType() != 0x04 )
-            {
-                reportUnexpectedBlockType( assignBlock->GetBlockType(), 0x04, 0, block->GetOffset(), "Net assignment" );
-                continue;
-            }
-
-            const auto& assign = static_cast<const BLOCK<BLK_0x04_NET_ASSIGNMENT>&>( *assignBlock ).GetData();
-
             // Walk the 0x05/0x32/... list
             LL_WALKER connWalker{ assign.m_ConnItem, assign.m_Key, m_brdDb };
             for( const BLOCK_BASE* connItemBlock : connWalker )
@@ -3554,33 +3509,19 @@ void BOARD_BUILDER::createBoardShapes()
     wxLogTrace( traceAllegroBuilder, "  Found %d outline items in m_LL_Shapes", blockCount );
     blockCount = 0;
 
-    LL_WALKER graphicContainerWalker( m_brdDb.m_Header->m_LL_0x14, m_brdDb );
-    for( const BLOCK_BASE* block : graphicContainerWalker )
+    TYPED_LL_WALKER<BLK_0x14_GRAPHIC> graphicContainerWalker( m_brdDb.m_Header->m_LL_0x14, m_brdDb,
+                                                              MISMATCH_POLICY::LOG_TRACE );
+    for( const BLK_0x14_GRAPHIC& graphicContainer : graphicContainerWalker )
     {
         blockCount++;
 
-        switch( block->GetBlockType() )
-        {
-        case 0x14:
-        {
-            const auto& graphicContainer = BlockDataAs<BLK_0x14_GRAPHIC>( *block );
+        if( layerIsZone( graphicContainer.m_Layer ) )
+            continue;
 
-            if( layerIsZone( graphicContainer.m_Layer ) )
-                continue;
+        std::vector<std::unique_ptr<PCB_SHAPE>> graphicItems = buildShapes( graphicContainer, m_board );
 
-            std::vector<std::unique_ptr<PCB_SHAPE>> graphicItems = buildShapes( graphicContainer, m_board );
-
-            for( auto& item : graphicItems )
-                newItems.push_back( std::move( item ) );
-            break;
-        }
-        default:
-        {
-            wxLogTrace( traceAllegroBuilder, "  Unhandled block type in graphic container walker: %#04x",
-                        block->GetBlockType() );
-            break;
-        }
-        }
+        for( auto& item : graphicItems )
+            newItems.push_back( std::move( item ) );
     }
 
     wxLogTrace( traceAllegroBuilder, "  Found %d graphic container items", blockCount );
@@ -4081,17 +4022,11 @@ std::vector<const BLOCK_BASE*> BOARD_BUILDER::getShapeRelatedBlocks( const BLK_0
 
 void BOARD_BUILDER::createBoardText()
 {
-    const LL_WALKER textWalker( m_brdDb.m_Header->m_LL_0x03_0x30, m_brdDb );
+    TYPED_LL_WALKER<BLK_0x30_STR_WRAPPER> textWalker( m_brdDb.m_Header->m_LL_0x03_0x30, m_brdDb );
     int textCount = 0;
 
-    for( const BLOCK_BASE* block : textWalker )
+    for( const BLK_0x30_STR_WRAPPER& strWrapper : textWalker )
     {
-        if( block->GetBlockType() != 0x30 )
-            continue;
-
-        const auto& strWrapper =
-                static_cast<const BLOCK<BLK_0x30_STR_WRAPPER>&>( *block ).GetData();
-
         std::unique_ptr<PCB_TEXT> text = buildPcbText( strWrapper, m_board );
 
         if( !text )
@@ -4285,14 +4220,9 @@ void BOARD_BUILDER::createTables()
 {
     wxLogTrace( traceAllegroBuilder, "Creating tables from m_LL_0x2C" );
 
-    const LL_WALKER tableWalker( m_brdDb.m_Header->m_LL_0x2C, m_brdDb );
-    for( const BLOCK_BASE* block : tableWalker )
+    TYPED_LL_WALKER<BLK_0x2C_TABLE> tableWalker( m_brdDb.m_Header->m_LL_0x2C, m_brdDb );
+    for( const BLK_0x2C_TABLE& tableData : tableWalker )
     {
-        if( block->GetBlockType() != 0x2C )
-            continue;
-
-        const BLK_0x2C_TABLE& tableData = static_cast<const BLOCK<BLK_0x2C_TABLE>&>( *block ).GetData();
-
         if( tableData.m_SubType != BLK_0x2C_TABLE::SUBTYPE::SUBTYPE_GRAPHICAL_GROUP )
         {
             // 0x2c tables can have lots of subtypes. Only 0x110 seems useful to iterate in this way for now.
@@ -4303,7 +4233,7 @@ void BOARD_BUILDER::createTables()
 
         std::vector<std::unique_ptr<BOARD_ITEM>> newItems;
 
-        LL_WALKER keyTableWalker{ tableData.m_Ptr1, block->GetKey(), m_brdDb };
+        LL_WALKER keyTableWalker{ tableData.m_Ptr1, tableData.m_Key, m_brdDb };
 
         for( const BLOCK_BASE* keyTable : keyTableWalker )
         {
@@ -4609,53 +4539,40 @@ bool BOARD_BUILDER::BuildBoard()
         m_progressReporter->KeepRefreshing();
     }
 
-    const LL_WALKER          fpWalker( m_brdDb.m_Header->m_LL_0x2B, m_brdDb );
-    std::vector<BOARD_ITEM*> bulkAddedItems;
+    TYPED_LL_WALKER<BLK_0x2B_FOOTPRINT_DEF> fpWalker( m_brdDb.m_Header->m_LL_0x2B, m_brdDb );
+    std::vector<BOARD_ITEM*>                bulkAddedItems;
 
     THROTTLE refreshThrottle( std::chrono::milliseconds( 100 ) );
 
-    for( const BLOCK_BASE* fpContainer : fpWalker )
+    for( const BLK_0x2B_FOOTPRINT_DEF& fpBlock : fpWalker )
     {
-        if( fpContainer->GetBlockType() == 0x2B )
+        TYPED_LL_WALKER<BLK_0x2D_FOOTPRINT_INST> instWalker( fpBlock.m_FirstInstPtr, fpBlock.m_Key, m_brdDb,
+                                                             MISMATCH_POLICY::REPORT );
+        instWalker.SetMismatchReporter(
+                [this, &fpBlock]( uint8_t aType, const BLOCK_BASE& )
+                {
+                    m_reporter.Report( wxString::Format( "Unexpected object of type %#04x found in footprint %#010x",
+                                                         aType, fpBlock.m_Key ),
+                                       RPT_SEVERITY_ERROR );
+                } );
+
+        for( const BLK_0x2D_FOOTPRINT_INST& inst : instWalker )
         {
-            const BLK_0x2B_FOOTPRINT_DEF& fpBlock =
-                    static_cast<const BLOCK<BLK_0x2B_FOOTPRINT_DEF>&>( *fpContainer ).GetData();
+            std::unique_ptr<FOOTPRINT> fp = buildFootprint( inst );
 
-            const LL_WALKER instWalker( fpBlock.m_FirstInstPtr, fpBlock.m_Key, m_brdDb );
-
-            for( const BLOCK_BASE* instBlock : instWalker )
+            if( fp )
             {
-                if( instBlock->GetBlockType() != 0x2D )
-                {
-                    m_reporter.Report(
-                            wxString::Format( "Unexpected object of type %#04x found in footprint %#010x",
-                                              instBlock->GetBlockType(), fpBlock.m_Key ),
-                            RPT_SEVERITY_ERROR );
-                }
-                else
-                {
-                    const auto& inst =
-                            static_cast<const BLOCK<BLK_0x2D_FOOTPRINT_INST>&>( *instBlock ).GetData();
-
-                    std::unique_ptr<FOOTPRINT> fp = buildFootprint( inst );
-
-                    if( fp )
-                    {
-                        bulkAddedItems.push_back( fp.get() );
-                        m_board.Add( fp.release(), ADD_MODE::BULK_APPEND, true );
-                    }
-                    else
-                    {
-                        m_reporter.Report(
-                                wxString::Format( "Failed to construct footprint for 0x2D key %#010x",
-                                                  inst.m_Key ),
-                                RPT_SEVERITY_ERROR );
-                    }
-                }
-
-                if( m_progressReporter && refreshThrottle.Ready() )
-                    m_progressReporter->KeepRefreshing();
+                bulkAddedItems.push_back( fp.get() );
+                m_board.Add( fp.release(), ADD_MODE::BULK_APPEND, true );
             }
+            else
+            {
+                m_reporter.Report( wxString::Format( "Failed to construct footprint for 0x2D key %#010x", inst.m_Key ),
+                                   RPT_SEVERITY_ERROR );
+            }
+
+            if( m_progressReporter && refreshThrottle.Ready() )
+                m_progressReporter->KeepRefreshing();
         }
     }
 
