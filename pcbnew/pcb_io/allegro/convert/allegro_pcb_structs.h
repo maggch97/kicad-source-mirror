@@ -135,16 +135,26 @@ constexpr bool operator>=( FMT_VER lhs, FMT_VER rhs )
 }
 
 
-template <typename T>
-struct COND_FIELD_BASE
+/**
+ * A constexpr predicate that decides whether a field exists for a given FMT_VER.
+ */
+template <typename P>
+concept FMT_VER_PREDICATE = requires( P p, FMT_VER v )
+{
+    { p( v ) }->std::convertible_to<bool>;
+};
+
+
+/**
+ * Version-conditional field. Wraps std::optional<T> with a compile-time
+ * predicate that determines whether the field exists for a given FMT_VER.
+ */
+template <FMT_VER_PREDICATE auto Pred, typename T>
+struct COND_FIELD
 {
     using value_type = T;
 
-    /**
-     * Define this function in the derived class to determine if the field
-     * exists in the given version of the file.
-     */
-    virtual bool exists( FMT_VER ver ) const = 0;
+    static constexpr bool exists( FMT_VER aVer ) { return Pred( aVer ); }
 
     // Access to the value (use std::optional-like semantics)
     T&       value() { return *m_Value; }
@@ -153,21 +163,22 @@ struct COND_FIELD_BASE
 
     const T& value_or( const T& aDefault ) const { return has_value() ? value() : aDefault; }
 
-    T&       operator*() { return *m_Value; }
-    const T& operator*() const { return *m_Value; }
+    T&       operator*() { return m_Value.operator->(); }
+    const T& operator*() const { return m_Value.operator->(); }
 
-    T*       operator->() { return m_Value.operator->(); }
-    const T* operator->() const { return m_Value.operator->(); }
+    T*       operator->() { return &m_Value.value(); }
+    const T* operator->() const { return &*m_Value; }
 
-    // Assigmnent operator
-    COND_FIELD_BASE& operator=( const T& value )
+    // Assignment operator
+    COND_FIELD& operator=( const T& aValue )
     {
-        m_Value = value;
+        m_Value = aValue;
         return *this;
     }
-    COND_FIELD_BASE& operator=( T&& value )
+
+    COND_FIELD& operator=( T&& aValue )
     {
-        m_Value = std::move( value );
+        m_Value = std::move( aValue );
         return *this;
     }
 
@@ -176,42 +187,49 @@ private:
 };
 
 
-/**
- * This is a conditional field that only exists in versions of a file
- * of or above a certain version.
- */
-template <FMT_VER MinVersion, typename T>
-struct COND_GE : public COND_FIELD_BASE<T>
-{
-    constexpr bool exists( FMT_VER ver ) const override { return ver >= MinVersion; }
+// Predicate functors
 
-    using COND_FIELD_BASE<T>::operator=;
+template <FMT_VER Min>
+struct VER_GE
+{
+    constexpr bool operator()( FMT_VER v ) const { return v >= Min; }
+};
+
+template <FMT_VER Max>
+struct VER_LT
+{
+    constexpr bool operator()( FMT_VER v ) const { return v < Max; }
+};
+
+template <FMT_VER Min, FMT_VER Max>
+struct VER_GE_LT
+{
+    constexpr bool operator()( FMT_VER v ) const { return v >= Min && v < Max; }
 };
 
 
+// Useful aliases for common cases
+
+/// Exists for all versions greater than or equal to Min
+template <FMT_VER Min, typename T>
+using COND_GE = COND_FIELD<VER_GE<Min>{}, T>;
+
+/// Exists for all versions less than (and not equal to) Max
+template <FMT_VER Max, typename T>
+using COND_LT = COND_FIELD<VER_LT<Max>{}, T>;
+
+/// Exists for all versions greater than or equal to Min and less than Max
+template <FMT_VER Min, FMT_VER Max, typename T>
+using COND_GE_LT = COND_FIELD<VER_GE_LT<Min, Max>{}, T>;
+
 /**
- * This is a conditional field that only exists in versions of a file
- * less than a certain version.
+ * Satisfied by any COND_FIELD instantiation (COND_GE, COND_LT, COND_GE_LT, ...)
  */
-template <FMT_VER MaxVersion, typename T>
-struct COND_LT : public COND_FIELD_BASE<T>
+template <typename T>
+concept VERSIONED_COND_FIELD = requires( FMT_VER v )
 {
-    constexpr bool exists( FMT_VER ver ) const override { return ver < MaxVersion; }
-
-    using COND_FIELD_BASE<T>::operator=;
-};
-
-
-/**
- * This is a conditional field that only exists in versions of a file
- * less than a certain version and greater than or equal to a certain version.
- */
-template <FMT_VER GEVersion, FMT_VER LTVersion, typename T>
-struct COND_GE_LT : public COND_FIELD_BASE<T>
-{
-    constexpr bool exists( FMT_VER ver ) const override { return ver >= GEVersion && ver < LTVersion; }
-
-    using COND_FIELD_BASE<T>::operator=;
+    { T::exists( v ) }->std::convertible_to<bool>;
+    typename T::value_type;
 };
 
 

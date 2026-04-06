@@ -147,7 +147,7 @@ static T ReadField( FILE_STREAM& aStream, FMT_VER aFmtVer )
 template <typename COND_T>
 static void ReadCond( FILE_STREAM& aStream, FMT_VER aFmtVer, COND_T& aField )
 {
-    if( aField.exists( aFmtVer ) )
+    if( COND_T::exists( aFmtVer ) )
     {
         aField = ReadField<typename COND_T::value_type>( aStream, aFmtVer );
     }
@@ -2767,7 +2767,8 @@ void dumpLL( const char* name, const T& aLL )
     {
         wxLogTrace( traceAllegroParser, "  LL %-20s head=%#010x tail=%#010x", name, aLL.m_Head, aLL.m_Tail );
     }
-    else if constexpr( std::is_base_of_v<COND_FIELD_BASE<FILE_HEADER::LINKED_LIST>, T> )
+    else if constexpr( VERSIONED_COND_FIELD<T> &&
+                       std::is_same_v<typename T::value_type, FILE_HEADER::LINKED_LIST> )
     {
         if( aLL.has_value() )
             dumpLL( name, aLL.value() );
