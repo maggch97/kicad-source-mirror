@@ -198,6 +198,7 @@ message Group
   kiapi.common.types.KIID id = 1;
   string name = 2;
   repeated kiapi.common.types.KIID items = 3;
+  kiapi.common.types.LockedState locked = 4;
 }
 
 enum SheetSide

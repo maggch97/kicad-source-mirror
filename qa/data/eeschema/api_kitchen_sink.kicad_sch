@@ -159,6 +159,20 @@
 		)
 		(uuid "000e0d81-3113-4b9c-bbb4-a8de3f392bd0")
 	)
+	(circle
+		(center 157.48 63.5)
+		(radius 4.0161)
+		(stroke
+			(width 0)
+			(type solid)
+		)
+		(fill
+			(type cross_hatch)
+			(color 58 104 255 1)
+		)
+		(uuid "1c20a5ba-7190-401a-b021-abb688d52ffd")
+		(locked yes)
+	)
 	(bezier
 		(pts
 			(xy 162.56 34.29) (xy 173.99 34.29) (xy 162.56 31.75) (xy 176.53 31.75)
@@ -252,6 +266,19 @@
 		(uuid "9ae3d9fc-24b2-4d24-b8c9-278985af495f")
 	)
 	(circle
+		(center 167.64 63.5)
+		(radius 4.0161)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "bf6e7e59-beed-4ba7-a7bf-ffa7476e6e5d")
+		(locked yes)
+	)
+	(circle
 		(center 201.93 35.56)
 		(radius 14.0276)
 		(stroke
@@ -262,6 +289,34 @@
 			(type none)
 		)
 		(uuid "c36b8525-565e-4cd3-9fa0-31833eed7d0e")
+	)
+	(circle
+		(center 146.05 63.5)
+		(radius 4.0161)
+		(stroke
+			(width 0)
+			(type solid)
+		)
+		(fill
+			(type reverse_hatch)
+			(color 0 0 0 0)
+		)
+		(uuid "e335506b-7a34-4e1e-bd33-077d7ea2b1b5")
+		(locked yes)
+	)
+	(rectangle
+		(start 194.31 63.5)
+		(end 176.53 60.96)
+		(stroke
+			(width 0)
+			(type solid)
+		)
+		(fill
+			(type hatch)
+			(color 255 64 87 1)
+		)
+		(uuid "e3e9fe17-b56a-4c49-a669-9d6f9adbbbc8")
+		(locked yes)
 	)
 	(text "Some text"
 		(exclude_from_sim no)
@@ -351,6 +406,16 @@
 	)
 	(wire
 		(pts
+			(xy 102.87 77.47) (xy 90.17 77.47)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "063ed316-364c-426f-a33e-72a56f5a4743")
+	)
+	(wire
+		(pts
 			(xy 59.69 40.64) (xy 59.69 53.34)
 		)
 		(stroke
@@ -368,6 +433,16 @@
 			(type default)
 		)
 		(uuid "1f4e003d-1597-4829-98c4-beac830a6448")
+	)
+	(wire
+		(pts
+			(xy 139.7 77.47) (xy 129.54 77.47)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2f09d3b3-e266-49d7-b50b-cc5b656e5ea6")
 	)
 	(wire
 		(pts
@@ -398,6 +473,16 @@
 			(type default)
 		)
 		(uuid "3677ba9c-cf57-42fb-84e5-6f8d231c301f")
+	)
+	(wire
+		(pts
+			(xy 90.17 77.47) (xy 90.17 63.5)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "3f4007a7-3cac-4e50-95a6-cddccb773152")
 	)
 	(bus
 		(pts
@@ -439,6 +524,16 @@
 			(color 255 176 0 1)
 		)
 		(uuid "7c3f2747-132d-4172-8f8a-0e5fe9821503")
+	)
+	(wire
+		(pts
+			(xy 139.7 63.5) (xy 139.7 77.47)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7d4d4a8b-c4da-48cd-a1e2-59770323e0f5")
 	)
 	(wire
 		(pts
@@ -509,6 +604,16 @@
 			(type default)
 		)
 		(uuid "b4698df5-afc9-4dff-874f-f25810b89cd6")
+	)
+	(wire
+		(pts
+			(xy 90.17 63.5) (xy 139.7 63.5)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ba6e712a-cdbc-4906-bdae-33e2328a3338")
 	)
 	(bus
 		(pts
@@ -855,6 +960,91 @@
 				(path "/d6ee7e6a-6570-43fd-93e6-b98f9cea3e37"
 					(reference "R1")
 					(unit 1)
+				)
+			)
+		)
+	)
+	(group "MyGroup"
+		(uuid "5293140e-402e-4756-967e-45a85458734f")
+		(locked yes)
+		(members "1c20a5ba-7190-401a-b021-abb688d52ffd" "bf6e7e59-beed-4ba7-a7bf-ffa7476e6e5d"
+			"e335506b-7a34-4e1e-bd33-077d7ea2b1b5" "e3e9fe17-b56a-4c49-a669-9d6f9adbbbc8"
+		)
+	)
+	(sheet
+		(at 102.87 71.12)
+		(size 26.67 12.7)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.3048)
+			(type solid)
+			(color 139 160 255 1)
+		)
+		(fill
+			(color 247 255 168 0.3607843137)
+		)
+		(uuid "1d56ee61-b958-4d93-aec6-604a5d265d83")
+		(property "Sheetname" "Subsheet"
+			(at 102.87 70.3322 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "erc_test_dynamic_power_symbol_subsheet.kicad_sch"
+			(at 102.87 84.4808 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(property "param" "Test"
+			(at 102.87 71.12 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "${param}" input
+			(at 102.87 77.47 180)
+			(uuid "598621ab-604d-47a7-9d1f-c07a463fadd1")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(pin "REF_NODE" input
+			(at 129.54 77.47 0)
+			(uuid "decf0de1-4f7d-46c2-8944-9032e4b059e9")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(instances
+			(project "api_kitchen_sink"
+				(path "/d6ee7e6a-6570-43fd-93e6-b98f9cea3e37"
+					(page "2")
 				)
 			)
 		)

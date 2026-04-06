@@ -29,11 +29,13 @@
 
 #include <sch_bitmap.h>
 #include <sch_bus_entry.h>
+#include <sch_group.h>
 #include <sch_junction.h>
 #include <sch_label.h>
 #include <sch_line.h>
 #include <sch_no_connect.h>
 #include <sch_shape.h>
+#include <sch_sheet.h>
 #include <wx/filename.h>
 
 
@@ -135,6 +137,24 @@ BOOST_AUTO_TEST_CASE( KitchenSink )
                     []()
                     {
                         return std::make_unique<SCH_HIERLABEL>();
+                    } );
+            break;
+
+        case SCH_GROUP_T:
+            testProtoFromKiCadObject<kiapi::schematic::types::Group>(
+                    static_cast<SCH_GROUP*>( item ),
+                    [this]()
+                    {
+                        return std::make_unique<SCH_GROUP>( m_schematic->RootScreen() );
+                    } );
+            break;
+
+        case SCH_SHEET_T:
+            testProtoFromKiCadObject<kiapi::schematic::types::SheetSymbol>(
+                    static_cast<SCH_SHEET*>( item ),
+                    [this]()
+                    {
+                        return std::make_unique<SCH_SHEET>( m_schematic->RootScreen() );
                     } );
             break;
 
