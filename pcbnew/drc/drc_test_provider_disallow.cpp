@@ -363,7 +363,7 @@ bool DRC_TEST_PROVIDER_DISALLOW::Run()
             break;
         }
 
-        std::this_thread::sleep_for( std::chrono::milliseconds( 250 ) );
+        itemFutures.wait_for( std::chrono::milliseconds( 250 ) );
     }
 
     return !m_drcEngine->IsCancelled();

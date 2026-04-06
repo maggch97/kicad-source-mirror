@@ -553,7 +553,7 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::Run()
             break;
         }
 
-        std::this_thread::sleep_for( std::chrono::milliseconds( 250 ) );
+        futures.wait_for( std::chrono::milliseconds( 250 ) );
     }
 
     return !m_drcEngine->IsCancelled();
