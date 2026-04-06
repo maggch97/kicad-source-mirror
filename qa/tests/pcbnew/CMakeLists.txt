@@ -51,6 +51,7 @@ set( QA_PCBNEW_SRCS
     test_graphics_import_mgr.cpp
     test_group_load_save.cpp
     test_headless_board_context.cpp
+    test_history_autosave.cpp
     test_footprint.cpp
     test_footprint_load_save.cpp
     test_footprint_realignment.cpp
