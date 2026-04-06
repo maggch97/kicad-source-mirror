@@ -350,9 +350,14 @@ message StrokeAttributes
 
 enum GraphicFillType
 {
-  GFT_UNKNOWN  = 0;
-  GFT_UNFILLED = 1;
-  GFT_FILLED   = 2;
+  GFT_UNKNOWN                           = 0;
+  GFT_UNFILLED                          = 1;
+  GFT_FILLED                            = 2;
+  GFT_FILLED_WITH_COLOR                 = 3;
+  GFT_FILLED_WITH_BACKGROUND_BODY_COLOR = 4;
+  GFT_HATCH                             = 5;
+  GFT_REVERSE_HATCH                     = 6;
+  GFT_CROSS_HATCH                       = 7;
 }
 
 message GraphicFillAttributes

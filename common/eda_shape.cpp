@@ -219,13 +219,15 @@ void EDA_SHAPE::Serialize( google::protobuf::Any &aContainer ) const
     types::GraphicFillAttributes* fill = shape.mutable_attributes()->mutable_fill();
 
     stroke->mutable_width()->set_value_nm( GetWidth() );
-    stroke->set_style( ToProtoEnum<LINE_STYLE, types::StrokeLineStyle>( GetLineStyle() ) );
+    stroke->set_style( ToProtoEnum<LINE_STYLE, types::StrokeLineStyle>( m_stroke.GetLineStyle() ) );
 
-    switch( GetFillMode() )
-    {
-    case FILL_T::FILLED_SHAPE: fill->set_fill_type( types::GFT_FILLED );   break;
-    default:                   fill->set_fill_type( types::GFT_UNFILLED ); break;
-    }
+    if( m_stroke.GetColor() != COLOR4D::UNSPECIFIED )
+        PackColor( *stroke->mutable_color(), m_stroke.GetColor() );
+
+    fill->set_fill_type( ToProtoEnum<FILL_T, types::GraphicFillType>( GetFillMode() ) );
+
+    if( m_fillColor != COLOR4D::UNSPECIFIED )
+        PackColor( *fill->mutable_color(), m_fillColor );
 
     switch( GetShape() )
     {
@@ -309,11 +311,20 @@ bool EDA_SHAPE::Deserialize( const google::protobuf::Any &aContainer )
     m_editState = 0;
     m_proxyItem = false;
     m_endsSwapped = false;
+    m_fillColor = COLOR4D::UNSPECIFIED;
 
-    SetFilled( shape.attributes().fill().fill_type() == types::GFT_FILLED );
+    if( shape.attributes().stroke().has_color() )
+        m_stroke.SetColor( UnpackColor( shape.attributes().stroke().color() ) );
+    else
+        m_stroke.SetColor( COLOR4D::UNSPECIFIED );
+
+    if( shape.attributes().fill().has_color() )
+        SetFillColor( UnpackColor( shape.attributes().fill().color() ) );
+
     SetWidth( shape.attributes().stroke().width().value_nm() );
     SetLineStyle( FromProtoEnum<LINE_STYLE, types::StrokeLineStyle>(
-        shape.attributes().stroke().style() ) );
+            shape.attributes().stroke().style() ) );
+    SetFillMode( FromProtoEnum<FILL_T, types::GraphicFillType>( shape.attributes().fill().fill_type() ) );
 
     if( shape.has_segment() )
     {
@@ -2684,28 +2695,63 @@ bool EDA_SHAPE::operator==( const EDA_SHAPE& aOther ) const
     if( m_fillColor != aOther.m_fillColor )
         return false;
 
-    if( m_start != aOther.m_start )
-        return false;
-
-    if( m_end != aOther.m_end )
-        return false;
-
-    if( m_arcCenter != aOther.m_arcCenter )
-        return false;
-
-    if( m_bezierC1 != aOther.m_bezierC1 )
-        return false;
-
-    if( m_bezierC2 != aOther.m_bezierC2 )
-        return false;
-
-    if( m_bezierPoints != aOther.m_bezierPoints )
-        return false;
-
-    for( int ii = 0; ii < GetPolyShape().TotalVertices(); ++ii )
+    switch( GetShape() )
     {
-        if( GetPolyShape().CVertex( ii ) != aOther.GetPolyShape().CVertex( ii ) )
+    case SHAPE_T::SEGMENT:
+    case SHAPE_T::RECTANGLE:
+    case SHAPE_T::CIRCLE:
+        if( m_start != aOther.m_start )
             return false;
+
+        if( m_end != aOther.m_end )
+            return false;
+
+        break;
+
+    case SHAPE_T::ARC:
+        if( m_start != aOther.m_start )
+            return false;
+
+        if( m_end != aOther.m_end )
+            return false;
+
+        if( m_arcCenter != aOther.m_arcCenter )
+            return false;
+
+        break;
+
+    case SHAPE_T::POLY:
+        if( GetPolyShape().TotalVertices() != aOther.GetPolyShape().TotalVertices() )
+            return false;
+
+        for( int ii = 0; ii < GetPolyShape().TotalVertices(); ++ii )
+        {
+            if( GetPolyShape().CVertex( ii ) != aOther.GetPolyShape().CVertex( ii ) )
+                return false;
+        }
+
+        break;
+
+    case SHAPE_T::BEZIER:
+        if( m_start != aOther.m_start )
+            return false;
+
+        if( m_end != aOther.m_end )
+            return false;
+
+        if( m_bezierC1 != aOther.m_bezierC1 )
+            return false;
+
+        if( m_bezierC2 != aOther.m_bezierC2 )
+            return false;
+
+        if( m_bezierPoints != aOther.m_bezierPoints )
+            return false;
+
+        break;
+
+    default:
+        return false;
     }
 
     return true;

@@ -27,8 +27,13 @@
 
 #include <eeschema_test_utils.h>
 
+#include <sch_bitmap.h>
+#include <sch_bus_entry.h>
+#include <sch_junction.h>
 #include <sch_label.h>
 #include <sch_line.h>
+#include <sch_no_connect.h>
+#include <sch_shape.h>
 #include <wx/filename.h>
 
 
@@ -43,12 +48,66 @@ BOOST_AUTO_TEST_CASE( KitchenSink )
     {
         switch( item->Type() )
         {
+        case SCH_JUNCTION_T:
+            testProtoFromKiCadObject<kiapi::schematic::types::Junction>(
+                    static_cast<SCH_JUNCTION*>( item ),
+                    []()
+                    {
+                        return std::make_unique<SCH_JUNCTION>();
+                    } );
+            break;
+
+        case SCH_NO_CONNECT_T:
+            testProtoFromKiCadObject<kiapi::schematic::types::NoConnectMarker>(
+                    static_cast<SCH_NO_CONNECT*>( item ),
+                    []()
+                    {
+                        return std::make_unique<SCH_NO_CONNECT>();
+                    } );
+            break;
+
+        case SCH_BUS_WIRE_ENTRY_T:
+            testProtoFromKiCadObject<kiapi::schematic::types::BusEntry>(
+                    static_cast<SCH_BUS_WIRE_ENTRY*>( item ),
+                    []()
+                    {
+                        return std::make_unique<SCH_BUS_WIRE_ENTRY>();
+                    } );
+            break;
+
+        case SCH_BUS_BUS_ENTRY_T:
+            testProtoFromKiCadObject<kiapi::schematic::types::BusEntry>(
+                    static_cast<SCH_BUS_BUS_ENTRY*>( item ),
+                    []()
+                    {
+                        return std::make_unique<SCH_BUS_BUS_ENTRY>();
+                    } );
+            break;
+
         case SCH_LINE_T:
             testProtoFromKiCadObject<kiapi::schematic::types::SchematicLine>(
                     static_cast<SCH_LINE*>( item ),
                     []()
                     {
                         return std::make_unique<SCH_LINE>();
+                    } );
+            break;
+
+        case SCH_SHAPE_T:
+            testProtoFromKiCadObject<kiapi::schematic::types::SchematicGraphicShape>(
+                    static_cast<SCH_SHAPE*>( item ),
+                    []()
+                    {
+                        return std::make_unique<SCH_SHAPE>();
+                    } );
+            break;
+
+        case SCH_BITMAP_T:
+            testProtoFromKiCadObject<kiapi::schematic::types::SchematicImage>(
+                    static_cast<SCH_BITMAP*>( item ),
+                    []()
+                    {
+                        return std::make_unique<SCH_BITMAP>();
                     } );
             break;
 
