@@ -88,13 +88,31 @@ private:
 };
 
 
+/**
+ * Concept that is statisfied by any struct that has a block tpye code
+ */
+template <typename T>
+concept HAS_BLOCK_TYPE_CODE = requires
+{
+    T::BLOCK_TYPE_CODE;
+};
+
+
 template <typename T>
 class BLOCK : public BLOCK_BASE
 {
 public:
+    /// Deduce the type code from T::BLOCK_TYPE_CODE (single-code types only)
+    explicit BLOCK( size_t aOffset ) requires HAS_BLOCK_TYPE_CODE<T>
+        : BLOCK_BASE( T::BLOCK_TYPE_CODE, aOffset )
+    {
+    }
+
+    /// Explicit type code for multi-code types (e.g. segments 0x15/0x16/0x17)
     BLOCK( uint8_t aBlockType, size_t aOffset ) :
-        BLOCK_BASE( aBlockType, aOffset )
-    {}
+            BLOCK_BASE( aBlockType, aOffset )
+    {
+    }
 
     const T& GetData() const { return m_data; }
     T&       GetData() { return m_data; }
@@ -105,9 +123,9 @@ private:
 
 
 /**
- * The format of an Allego file.
+ * The format of an Allegro file.
  *
- * Allgro formats seem to be versioned per the magic, with the lowest
+ * Allegro formats seem to be versioned per the magic, with the lowest
  * byte masked out (or at least there no known case of the lower
  * magic byte changing the format.
  *
