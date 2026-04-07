@@ -48,7 +48,9 @@ protected:
         return kiapi::common::types::DOCTYPE_SCHEMATIC;
     }
 
-    bool validateDocumentInternal( const DocumentSpecifier& aDocument ) const override;
+    tl::expected<bool, ApiResponseStatus> validateDocumentInternal( const DocumentSpecifier& aDocument ) const override;
+
+    std::optional<SCH_ITEM*> getItemById( const KIID& aId, SCH_SHEET_PATH* aPathOut = nullptr ) const;
 
     HANDLER_RESULT<std::unique_ptr<EDA_ITEM>> createItemForType( KICAD_T aType,
                                                                  EDA_ITEM* aContainer );
@@ -66,30 +68,44 @@ protected:
     std::optional<EDA_ITEM*> getItemFromDocument( const DocumentSpecifier& aDocument,
                                                   const KIID& aId ) override;
 
+    std::optional<TITLE_BLOCK*> getTitleBlock() override;
+
+    void onModified() override;
+
 private:
-    HANDLER_RESULT<commands::GetOpenDocumentsResponse> handleGetOpenDocuments(
-            const HANDLER_CONTEXT<commands::GetOpenDocuments>& aCtx );
+    HANDLER_RESULT<commands::GetOpenDocumentsResponse>
+    handleGetOpenDocuments( const HANDLER_CONTEXT<commands::GetOpenDocuments>& aCtx );
 
-        HANDLER_RESULT<types::RunJobResponse> handleRunSchematicJobExportSvg(
-            const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportSvg>& aCtx );
+    HANDLER_RESULT<commands::GetItemsResponse> handleGetItems( const HANDLER_CONTEXT<commands::GetItems>& aCtx );
 
-        HANDLER_RESULT<types::RunJobResponse> handleRunSchematicJobExportDxf(
-            const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportDxf>& aCtx );
+    HANDLER_RESULT<commands::GetItemsResponse>
+    handleGetItemsById( const HANDLER_CONTEXT<commands::GetItemsById>& aCtx );
 
-        HANDLER_RESULT<types::RunJobResponse> handleRunSchematicJobExportPdf(
-            const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportPdf>& aCtx );
+    HANDLER_RESULT<types::RunJobResponse>
+    handleRunSchematicJobExportSvg( const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportSvg>& aCtx );
 
-        HANDLER_RESULT<types::RunJobResponse> handleRunSchematicJobExportPs(
-            const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportPs>& aCtx );
+    HANDLER_RESULT<types::RunJobResponse>
+    handleRunSchematicJobExportDxf( const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportDxf>& aCtx );
 
-        HANDLER_RESULT<types::RunJobResponse> handleRunSchematicJobExportNetlist(
+    HANDLER_RESULT<types::RunJobResponse>
+    handleRunSchematicJobExportPdf( const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportPdf>& aCtx );
+
+    HANDLER_RESULT<types::RunJobResponse>
+    handleRunSchematicJobExportPs( const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportPs>& aCtx );
+
+    HANDLER_RESULT<types::RunJobResponse> handleRunSchematicJobExportNetlist(
             const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportNetlist>& aCtx );
 
-        HANDLER_RESULT<types::RunJobResponse> handleRunSchematicJobExportBOM(
-            const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportBOM>& aCtx );
+    HANDLER_RESULT<types::RunJobResponse>
+    handleRunSchematicJobExportBOM( const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportBOM>& aCtx );
+
+    SCHEMATIC* schematic() const;
+
+    void filterValidSchTypes( std::set<KICAD_T>& aTypeList );
 
     SCH_EDIT_FRAME*              m_frame;
     std::shared_ptr<SCH_CONTEXT> m_context;
+    static std::set<KICAD_T>     s_allowedTypes;
 };
 
 
