@@ -36,6 +36,8 @@
 #include <sch_no_connect.h>
 #include <sch_shape.h>
 #include <sch_sheet.h>
+#include <sch_text.h>
+#include <sch_textbox.h>
 #include <wx/filename.h>
 
 
@@ -113,6 +115,24 @@ BOOST_AUTO_TEST_CASE( KitchenSink )
                     } );
             break;
 
+        case SCH_TEXT_T:
+            testProtoFromKiCadObject<kiapi::schematic::types::SchematicText>(
+                    static_cast<SCH_TEXT*>( item ),
+                    []()
+                    {
+                        return std::make_unique<SCH_TEXT>();
+                    } );
+            break;
+
+        case SCH_TEXTBOX_T:
+            testProtoFromKiCadObject<kiapi::schematic::types::SchematicTextBox>(
+                    static_cast<SCH_TEXTBOX*>( item ),
+                    []()
+                    {
+                        return std::make_unique<SCH_TEXTBOX>();
+                    } );
+            break;
+
         case SCH_LABEL_T:
             testProtoFromKiCadObject<kiapi::schematic::types::LocalLabel>(
                     static_cast<SCH_LABEL*>( item ),
@@ -137,6 +157,15 @@ BOOST_AUTO_TEST_CASE( KitchenSink )
                     []()
                     {
                         return std::make_unique<SCH_HIERLABEL>();
+                    } );
+            break;
+
+        case SCH_DIRECTIVE_LABEL_T:
+            testProtoFromKiCadObject<kiapi::schematic::types::DirectiveLabel>(
+                    static_cast<SCH_DIRECTIVE_LABEL*>( item ),
+                    []()
+                    {
+                        return std::make_unique<SCH_DIRECTIVE_LABEL>();
                     } );
             break;
 

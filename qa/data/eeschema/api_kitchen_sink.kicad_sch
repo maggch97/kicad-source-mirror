@@ -814,12 +814,13 @@
 		)
 	)
 	(netclass_flag ""
-		(length 2.54)
-		(shape round)
+		(length 3.81)
+		(shape dot)
 		(at 102.87 30.48 0)
 		(effects
 			(font
 				(size 1.27 1.27)
+				(color 236 104 255 1)
 			)
 			(justify left bottom)
 		)
@@ -836,7 +837,7 @@
 			)
 		)
 		(property "Component Class" "Classy"
-			(at 99.314 26.162 0)
+			(at 99.822 24.892 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects

@@ -521,6 +521,8 @@ public:
     /// Increment the netclass and component class labels if possible
     bool IncrementLabel( int aIncrement ) override;
 
+    bool operator==( const SCH_ITEM& aOther ) const override;
+
 private:
     int       m_pinLength;
     int       m_symbolSize;

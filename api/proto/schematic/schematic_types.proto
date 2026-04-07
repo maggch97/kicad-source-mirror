@@ -191,6 +191,8 @@ message DirectiveLabel
   SchematicLabelShape shape = 5;
   repeated SchematicField fields = 6;
   kiapi.common.types.LockedState locked = 7;
+  kiapi.common.types.Distance pin_length = 8;
+  kiapi.common.types.Distance symbol_size = 9;
 }
 
 message Group

@@ -1760,14 +1760,50 @@ SCH_DIRECTIVE_LABEL::~SCH_DIRECTIVE_LABEL()
 
 void SCH_DIRECTIVE_LABEL::Serialize( google::protobuf::Any& aContainer ) const
 {
-    UNIMPLEMENTED_FOR( GetClass() );
+    kiapi::schematic::types::DirectiveLabel label;
+
+    packLabel( label, *this );
+    label.set_shape( ToProtoEnum<LABEL_FLAG_SHAPE, kiapi::schematic::types::SchematicLabelShape>( GetShape() ) );
+    label.mutable_pin_length()->set_value_nm( m_pinLength );
+    label.mutable_symbol_size()->set_value_nm( m_symbolSize );
+
+    aContainer.PackFrom( label );
 }
 
 
 bool SCH_DIRECTIVE_LABEL::Deserialize( const google::protobuf::Any& aContainer )
 {
-    UNIMPLEMENTED_FOR( GetClass() );
-    return false;
+    kiapi::schematic::types::DirectiveLabel label;
+
+    if( !aContainer.UnpackTo( &label ) )
+        return false;
+
+    if( !unpackLabel( label, *this ) )
+        return false;
+
+    SetShape( FromProtoEnum<LABEL_FLAG_SHAPE, kiapi::schematic::types::SchematicLabelShape>( label.shape() ) );
+
+    if( label.has_pin_length() )
+        m_pinLength = label.pin_length().value_nm();
+
+    if( label.has_symbol_size() )
+        m_symbolSize = label.symbol_size().value_nm();
+
+    return true;
+}
+
+
+bool SCH_DIRECTIVE_LABEL::operator==( const SCH_ITEM& aOther ) const
+{
+    if( !SCH_LABEL_BASE::operator==( aOther ) )
+        return false;
+
+    const SCH_DIRECTIVE_LABEL* other = dynamic_cast<const SCH_DIRECTIVE_LABEL*>( &aOther );
+
+    if( !other )
+        return false;
+
+    return m_pinLength == other->m_pinLength && m_symbolSize == other->m_symbolSize;
 }
 
 
