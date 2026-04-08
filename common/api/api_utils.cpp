@@ -23,6 +23,7 @@
 #include <api/schematic/schematic_types.pb.h>
 #include <geometry/shape_poly_set.h>
 #include <kiid.h>
+#include <project.h>
 #include <wx/log.h>
 
 const wxChar* const traceApi = wxT( "KICAD_API" );
@@ -83,6 +84,8 @@ KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any
         { "type.googleapis.com/kiapi.schematic.types.DirectiveLabel", SCH_DIRECTIVE_LABEL_T },
         { "type.googleapis.com/kiapi.schematic.types.Group", SCH_GROUP_T },
         { "type.googleapis.com/kiapi.schematic.types.SheetSymbol", SCH_SHEET_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicSymbolInstance", SCH_SYMBOL_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicPin", SCH_PIN_T },
     };
 
     auto it = s_types.find( aMessage.type_url() );
@@ -286,6 +289,12 @@ KICOMMON_API KIID_PATH UnpackSheetPath( const types::SheetPath& aInput )
         output.push_back( KIID( sheet.value() ) );
 
     return output;
+}
+
+KICOMMON_API void PackProject( types::ProjectSpecifier& aOutput, const PROJECT& aInput )
+{
+    aOutput.set_name( aInput.GetProjectName().ToUTF8() );
+    aOutput.set_path( aInput.GetProjectPath().ToUTF8() );
 }
 
 } // namespace kiapi::common

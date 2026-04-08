@@ -66,9 +66,7 @@ std::set<KICAD_T> API_HANDLER_SCH::s_allowedTypes = {
     SCH_GROUP_T,
     SCH_HIER_LABEL_T,
     SCH_DIRECTIVE_LABEL_T,
-    // SCH_FIELD_T, // TODO(JE) allow at top level?
-    // SCH_SYMBOL_T,
-    // SCH_SHEET_PIN_T, // TODO(JE) allow at top level?
+    SCH_SYMBOL_T,
     SCH_SHEET_T,
 };
 
@@ -168,14 +166,24 @@ API_HANDLER_SCH::validateDocumentInternal( const DocumentSpecifier& aDocument ) 
         return tl::unexpected( e );
     }
 
-    wxFileName fn( m_context->GetCurrentFileName() );
+    const PROJECT& prj = m_context->Prj();
 
-    if( aDocument.schematic_filename().compare( fn.GetFullName() ) != 0 )
+    if( aDocument.project().name().compare( prj.GetProjectName().ToUTF8() ) != 0 )
     {
         ApiResponseStatus e;
         e.set_status( ApiStatusCode::AS_BAD_REQUEST );
-        e.set_error_message( fmt::format( "the requested document {} is not open",
-                                          aDocument.schematic_filename() ) );
+        e.set_error_message( fmt::format( "the requested project {} is not open",
+                                          aDocument.project().name() ) );
+        return tl::unexpected( e );
+    }
+
+    if( aDocument.project().path().compare( prj.GetProjectPath().ToUTF8() ) != 0 )
+    {
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+        e.set_error_message( fmt::format( "the requested project {} is not open at path {}",
+                                          aDocument.project().name(),
+                                          aDocument.project().path() ) );
         return tl::unexpected( e );
     }
 
@@ -215,7 +223,11 @@ HANDLER_RESULT<GetOpenDocumentsResponse> API_HANDLER_SCH::handleGetOpenDocuments
     wxFileName fn( m_context->GetCurrentFileName() );
 
     doc.set_type( DocumentType::DOCTYPE_SCHEMATIC );
-    doc.set_schematic_filename( fn.GetFullName() );
+
+    if( std::optional<SCH_SHEET_PATH> path = m_context->GetCurrentSheet() )
+        PackSheetPath( *doc.mutable_sheet_path(), path->Path() );
+
+    PackProject( *doc.mutable_project(), m_context->Prj() );
 
     response.mutable_documents()->Add( std::move( doc ) );
     return response;
@@ -237,11 +249,10 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_SCH::handleGetItems( const HANDLER_
     if( std::optional<ApiResponseStatus> busy = checkForBusy() )
         return tl::unexpected( *busy );
 
-    if( !validateItemHeaderDocument( aCtx.Request.header() ) )
+    if( HANDLER_RESULT<std::optional<KIID>> valid = validateItemHeaderDocument( aCtx.Request.header() );
+        !valid.has_value() )
     {
-        ApiResponseStatus e;
-        e.set_status( ApiStatusCode::AS_UNHANDLED );
-        return tl::unexpected( e );
+        return tl::unexpected( valid.error() );
     }
 
     std::set<KICAD_T> typesRequested, typesInserted;
@@ -400,7 +411,16 @@ HANDLER_RESULT<std::unique_ptr<EDA_ITEM>> API_HANDLER_SCH::createItemForType( KI
                                           aContainer->GetFriendlyName().ToStdString() ) );
         return tl::unexpected( e );
     }
-    else if( ( aType == SCH_SYMBOL_T || aType == SCH_SHEET_T ) && !dynamic_cast<SCH_SHEET*>( aContainer ) )
+    else if( aType == SCH_SHEET_T && !dynamic_cast<SCH_SHEET*>( aContainer ) )
+    {
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+        e.set_error_message( fmt::format( "Tried to create a sheet symbol in {}, which is not a "
+                                          "schematic sheet",
+                                          aContainer->GetFriendlyName().ToStdString() ) );
+        return tl::unexpected( e );
+    }
+    else if( aType == SCH_SYMBOL_T && !dynamic_cast<SCH_SCREEN*>( aContainer ) )
     {
         ApiResponseStatus e;
         e.set_status( ApiStatusCode::AS_BAD_REQUEST );
@@ -451,7 +471,7 @@ HANDLER_RESULT<ItemRequestStatus> API_HANDLER_SCH::handleCreateUpdateItemsIntern
     }
 
     SCH_SHEET_LIST hierarchy = schematic()->Hierarchy();
-    SCH_SCREEN* targetScreen = schematic()->RootScreen();
+    SCH_SCREEN* targetScreen = schematic()->GetCurrentScreen();
     std::optional<SCH_SHEET_PATH> targetPath;
 
     if( aHeader.document().has_sheet_path() )
@@ -479,7 +499,12 @@ HANDLER_RESULT<ItemRequestStatus> API_HANDLER_SCH::handleCreateUpdateItemsIntern
             continue;
         }
 
-        HANDLER_RESULT<std::unique_ptr<EDA_ITEM>> creationResult = createItemForType( *type, targetScreen );
+        EDA_ITEM* container = targetScreen;
+
+        if( *type == SCH_SHEET_T )
+            container = schematic()->CurrentSheet().Last();
+
+        HANDLER_RESULT<std::unique_ptr<EDA_ITEM>> creationResult = createItemForType( *type, container );
 
         if( !creationResult )
         {

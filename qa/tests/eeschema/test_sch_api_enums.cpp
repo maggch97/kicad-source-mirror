@@ -25,6 +25,7 @@
 
 #include <api/api_enums.h>
 #include <api/schematic/schematic_types.pb.h>
+#include <lib_symbol.h>
 
 #include <sch_label.h>
 #include <sch_sheet_pin.h>
@@ -47,6 +48,26 @@ BOOST_AUTO_TEST_CASE( SchematicLabelSpinStyle )
 BOOST_AUTO_TEST_CASE( SheetSide )
 {
     testEnums<SHEET_SIDE, types::SheetSide>( true );
+}
+
+BOOST_AUTO_TEST_CASE( SchematicSymbolType )
+{
+    testEnums<LIBRENTRYOPTIONS, types::SchematicSymbolType>();
+}
+
+BOOST_AUTO_TEST_CASE( SchematicSymbolRotation )
+{
+    testEnums<SYMBOL_ORIENTATION_PROP, types::SchematicSymbolRotation>();
+}
+
+BOOST_AUTO_TEST_CASE( SchematicPinOrientation )
+{
+    testEnums<PIN_ORIENTATION, types::SchematicPinOrientation>( true );
+}
+
+BOOST_AUTO_TEST_CASE( SchematicPinShape )
+{
+    testEnums<GRAPHIC_PINSHAPE, types::SchematicPinShape>( true );
 }
 
 BOOST_AUTO_TEST_SUITE_END()

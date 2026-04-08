@@ -24,8 +24,11 @@
 
 #include <core/typeinfo.h>
 #include <layer_ids.h>
+#include <lib_symbol.h>
+#include <pin_type.h>
 #include <sch_label.h>
 #include <sch_sheet_pin.h>
+#include <symbol.h>
 
 using namespace kiapi::schematic;
 
@@ -141,5 +144,149 @@ SHEET_SIDE FromProtoEnum( types::SheetSide aValue )
     default:
         wxCHECK_MSG( false, SHEET_SIDE::UNDEFINED,
                      "Unhandled case in FromProtoEnum<types::SheetSide>" );
+    }
+}
+
+
+template<>
+types::SchematicSymbolType ToProtoEnum( LIBRENTRYOPTIONS aValue )
+{
+    switch( aValue )
+    {
+    case LIBRENTRYOPTIONS::ENTRY_NORMAL:        return types::SchematicSymbolType::SST_NORMAL;
+    case LIBRENTRYOPTIONS::ENTRY_GLOBAL_POWER:  return types::SchematicSymbolType::SST_GLOBAL_POWER;
+    case LIBRENTRYOPTIONS::ENTRY_LOCAL_POWER:   return types::SchematicSymbolType::SST_LOCAL_POWER;
+
+    default:
+        wxCHECK_MSG( false, types::SchematicSymbolType::SST_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<SHEET_SIDE>" );
+    }
+}
+
+
+template<>
+LIBRENTRYOPTIONS FromProtoEnum( types::SchematicSymbolType aValue )
+{
+    switch( aValue )
+    {
+    case types::SchematicSymbolType::SST_NORMAL:       return LIBRENTRYOPTIONS::ENTRY_NORMAL;
+    case types::SchematicSymbolType::SST_GLOBAL_POWER: return LIBRENTRYOPTIONS::ENTRY_GLOBAL_POWER;
+    case types::SchematicSymbolType::SST_LOCAL_POWER:  return LIBRENTRYOPTIONS::ENTRY_LOCAL_POWER;
+
+    default:
+        wxCHECK_MSG( false, LIBRENTRYOPTIONS::ENTRY_NORMAL,
+                     "Unhandled case in FromProtoEnum<types::SchematicSymbolType>" );
+    }
+}
+
+
+template<>
+types::SchematicSymbolRotation ToProtoEnum( SYMBOL_ORIENTATION_PROP aValue )
+{
+    switch( aValue )
+    {
+    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_0:   return types::SchematicSymbolRotation::SSR_0;
+    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_90:  return types::SchematicSymbolRotation::SSR_90;
+    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_180: return types::SchematicSymbolRotation::SSR_180;
+    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_270: return types::SchematicSymbolRotation::SSR_270;
+
+    default:
+        wxCHECK_MSG( false, types::SchematicSymbolRotation::SSR_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<SYMBOL_ORIENTATION_PROP>" );
+    }
+}
+
+
+template<>
+SYMBOL_ORIENTATION_PROP FromProtoEnum( types::SchematicSymbolRotation aValue )
+{
+    switch( aValue )
+    {
+    case types::SchematicSymbolRotation::SSR_0:   return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_0;
+    case types::SchematicSymbolRotation::SSR_90:  return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_90;
+    case types::SchematicSymbolRotation::SSR_180: return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_180;
+    case types::SchematicSymbolRotation::SSR_270: return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_270;
+
+    default:
+        wxCHECK_MSG( false, SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_0,
+                     "Unhandled case in FromProtoEnum<types::SchematicSymbolRotation>" );
+    }
+}
+
+
+template<>
+types::SchematicPinOrientation ToProtoEnum( PIN_ORIENTATION aValue )
+{
+    switch( aValue )
+    {
+    case PIN_ORIENTATION::PIN_RIGHT:    return types::SchematicPinOrientation::SPO_RIGHT;
+    case PIN_ORIENTATION::PIN_LEFT:     return types::SchematicPinOrientation::SPO_LEFT;
+    case PIN_ORIENTATION::PIN_UP:       return types::SchematicPinOrientation::SPO_UP;
+    case PIN_ORIENTATION::PIN_DOWN:     return types::SchematicPinOrientation::SPO_DOWN;
+
+    default:
+        wxCHECK_MSG( false, types::SchematicPinOrientation::SPO_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<PIN_ORIENTATION>" );
+    }
+}
+
+
+template<>
+PIN_ORIENTATION FromProtoEnum( types::SchematicPinOrientation aValue )
+{
+    switch( aValue )
+    {
+    case types::SchematicPinOrientation::SPO_RIGHT:     return PIN_ORIENTATION::PIN_RIGHT;
+    case types::SchematicPinOrientation::SPO_LEFT:      return PIN_ORIENTATION::PIN_LEFT;
+    case types::SchematicPinOrientation::SPO_UP:        return PIN_ORIENTATION::PIN_UP;
+    case types::SchematicPinOrientation::SPO_DOWN:      return PIN_ORIENTATION::PIN_DOWN;
+
+    default:
+        wxCHECK_MSG( false, PIN_ORIENTATION::PIN_LEFT,
+                     "Unhandled case in FromProtoEnum<types::SheetSide>" );
+    }
+}
+
+
+template<>
+types::SchematicPinShape ToProtoEnum( GRAPHIC_PINSHAPE aValue )
+{
+    switch( aValue )
+    {
+    case GRAPHIC_PINSHAPE::LINE:                return types::SchematicPinShape::SPS_LINE;
+    case GRAPHIC_PINSHAPE::INVERTED:            return types::SchematicPinShape::SPS_INVERTED;
+    case GRAPHIC_PINSHAPE::CLOCK:               return types::SchematicPinShape::SPS_CLOCK;
+    case GRAPHIC_PINSHAPE::INVERTED_CLOCK:      return types::SchematicPinShape::SPS_INVERTED_CLOCK;
+    case GRAPHIC_PINSHAPE::INPUT_LOW:           return types::SchematicPinShape::SPS_INPUT_LOW;
+    case GRAPHIC_PINSHAPE::CLOCK_LOW:           return types::SchematicPinShape::SPS_CLOCK_LOW;
+    case GRAPHIC_PINSHAPE::OUTPUT_LOW:          return types::SchematicPinShape::SPS_OUTPUT_LOW;
+    case GRAPHIC_PINSHAPE::FALLING_EDGE_CLOCK:  return types::SchematicPinShape::SPS_FALLING_EDGE_CLOCK;
+    case GRAPHIC_PINSHAPE::NONLOGIC:            return types::SchematicPinShape::SPS_NONLOGIC;
+
+    default:
+        wxCHECK_MSG( false, types::SchematicPinShape::SPS_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<GRAPHIC_PINSHAPE>" );
+    }
+}
+
+
+template<>
+GRAPHIC_PINSHAPE FromProtoEnum( types::SchematicPinShape aValue )
+{
+    switch( aValue )
+    {
+    case types::SchematicPinShape::SPS_LINE:                return GRAPHIC_PINSHAPE::LINE;
+    case types::SchematicPinShape::SPS_INVERTED:            return GRAPHIC_PINSHAPE::INVERTED;
+    case types::SchematicPinShape::SPS_CLOCK:               return GRAPHIC_PINSHAPE::CLOCK;
+    case types::SchematicPinShape::SPS_INVERTED_CLOCK:      return GRAPHIC_PINSHAPE::INVERTED_CLOCK;
+    case types::SchematicPinShape::SPS_INPUT_LOW:           return GRAPHIC_PINSHAPE::INPUT_LOW;
+    case types::SchematicPinShape::SPS_CLOCK_LOW:           return GRAPHIC_PINSHAPE::CLOCK_LOW;
+    case types::SchematicPinShape::SPS_OUTPUT_LOW:          return GRAPHIC_PINSHAPE::OUTPUT_LOW;
+    case types::SchematicPinShape::SPS_FALLING_EDGE_CLOCK:  return GRAPHIC_PINSHAPE::FALLING_EDGE_CLOCK;
+    case types::SchematicPinShape::SPS_NONLOGIC:            return GRAPHIC_PINSHAPE::NONLOGIC;
+
+    default:
+        wxCHECK_MSG( false, GRAPHIC_PINSHAPE::LINE,
+                     "Unhandled case in FromProtoEnum<types::SchematicPinShape>" );
     }
 }

@@ -321,10 +321,14 @@ bool EDA_SHAPE::Deserialize( const google::protobuf::Any &aContainer )
     if( shape.attributes().fill().has_color() )
         SetFillColor( UnpackColor( shape.attributes().fill().color() ) );
 
-    SetWidth( shape.attributes().stroke().width().value_nm() );
-    SetLineStyle( FromProtoEnum<LINE_STYLE, types::StrokeLineStyle>(
-            shape.attributes().stroke().style() ) );
-    SetFillMode( FromProtoEnum<FILL_T, types::GraphicFillType>( shape.attributes().fill().fill_type() ) );
+    if( shape.attributes().has_stroke() )
+    {
+        SetWidth( shape.attributes().stroke().width().value_nm() );
+        SetLineStyle( FromProtoEnum<LINE_STYLE, types::StrokeLineStyle>( shape.attributes().stroke().style() ) );
+    }
+
+    if( shape.attributes().has_fill() )
+        SetFillMode( FromProtoEnum<FILL_T, types::GraphicFillType>( shape.attributes().fill().fill_type() ) );
 
     if( shape.has_segment() )
     {

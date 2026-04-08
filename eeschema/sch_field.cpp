@@ -127,7 +127,6 @@ void SCH_FIELD::Serialize( google::protobuf::Any& aContainer ) const
 {
     kiapi::schematic::types::SchematicField field;
 
-    field.mutable_id()->set_value( m_Uuid.AsStdString() );
     field.set_name( GetName( false ).ToUTF8() );
     field.set_visible( IsVisible() );
     field.set_show_name( IsNameShown() );
@@ -152,7 +151,6 @@ bool SCH_FIELD::Deserialize( const google::protobuf::Any& aContainer )
     SetVisible( field.visible() );
     SetNameShown( field.show_name() );
     SetCanAutoplace( field.allow_auto_place() );
-    const_cast<KIID&>( m_Uuid ) = KIID( field.id().value() );
 
     google::protobuf::Any any;
     any.PackFrom( field.text() );

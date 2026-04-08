@@ -24,6 +24,7 @@
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
 #include <api/schematic/schematic_types.pb.h>
+#include <api/api_sch_utils.h>
 
 #include <eeschema_test_utils.h>
 
@@ -36,6 +37,7 @@
 #include <sch_no_connect.h>
 #include <sch_shape.h>
 #include <sch_sheet.h>
+#include <sch_symbol.h>
 #include <sch_text.h>
 #include <sch_textbox.h>
 #include <wx/filename.h>
@@ -47,6 +49,7 @@ BOOST_AUTO_TEST_CASE( KitchenSink )
 {
     wxFileName fn( KI_TEST::GetEeschemaTestDataDir(), wxS( "api_kitchen_sink.kicad_sch" ) );
     LoadSchematic( fn );
+    SCH_SHEET_PATH path = m_schematic->CurrentSheet();
 
     for( SCH_ITEM* item : m_schematic->RootScreen()->Items() )
     {
@@ -186,6 +189,40 @@ BOOST_AUTO_TEST_CASE( KitchenSink )
                         return std::make_unique<SCH_SHEET>( m_schematic->RootScreen() );
                     } );
             break;
+
+        case SCH_SYMBOL_T:
+        {
+            SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
+
+            BOOST_TEST_CONTEXT( "symbol: " << symbol->m_Uuid.AsStdString() )
+            {
+                bool result = false;
+                kiapi::schematic::types::SchematicSymbolInstance symbolProto;
+                BOOST_REQUIRE_NO_THROW( result = PackSymbol( &symbolProto, symbol, path ) );
+                BOOST_REQUIRE_MESSAGE( result, "Serialization failed" );
+
+                std::unique_ptr<SCH_SYMBOL> output = std::make_unique<SCH_SYMBOL>();
+
+                BOOST_REQUIRE_NO_THROW( result = UnpackSymbol( output.get(), symbolProto ) );
+                BOOST_REQUIRE_MESSAGE( result, "Deserialization failed" );
+
+                kiapi::schematic::types::SchematicSymbolInstance outputProto;
+                BOOST_REQUIRE_NO_THROW( result = PackSymbol( &outputProto, output.get(), path ) );
+                BOOST_REQUIRE_MESSAGE( result, "Second serialization failed" );
+
+                if( !( outputProto.SerializeAsString() == symbolProto.SerializeAsString() ) )
+                {
+                    BOOST_TEST_MESSAGE( "Input: " << symbolProto.Utf8DebugString() );
+                    BOOST_TEST_MESSAGE( "Output: " << outputProto.Utf8DebugString() );
+                    BOOST_TEST_FAIL( "Round-tripped protobuf does not match" );
+                }
+
+                if( !output->operator==( *symbol ) )
+                    BOOST_TEST_FAIL( "Round-tripped object does not match" );
+            }
+
+            break;
+        }
 
         default:
             break;

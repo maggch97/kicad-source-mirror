@@ -145,6 +145,401 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "MCU_ST_STM32C0:STM32C011J_4-6_Mx"
+			(pin_numbers
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U1"
+				(at 2.1433 15.24 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Value" "STM32C011J_4-6_Mx"
+				(at 2.1433 12.7 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+				(at -22.86 -10.16 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify right)
+				)
+			)
+			(property "Datasheet" "https://www.st.com/resource/en/datasheet/stm32c011j4.pdf"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "STMicroelectronics Arm Cortex-M0+ MCU, 16-32KB flash, 6KB RAM, 48 MHz, 2.0-3.6V, 6 GPIO, SO8N"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "Arm Cortex-M0+ STM32C0 STM32C0x1"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "SO*3.9x4.9mm*P1.27mm*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "STM32C011J_4-6_Mx_0_1"
+				(rectangle
+					(start -22.86 -10.16)
+					(end 22.86 10.16)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+			)
+			(symbol "STM32C011J_4-6_Mx_1_1"
+				(pin bidirectional line
+					(at -25.4 5.08 0)
+					(length 2.54)
+					(name "PB7/PC14"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(alternate "I2C1_SCL (PB7)" bidirectional line)
+					(alternate "I2C1_SDA (PB7)" bidirectional line)
+					(alternate "I2C1_SDA (PC14)" bidirectional line)
+					(alternate "IR_OUT (PC14)" bidirectional line)
+					(alternate "PB7" bidirectional line)
+					(alternate "PC14" bidirectional line)
+					(alternate "RCC_OSCX_IN (PC14)" bidirectional line)
+					(alternate "RTC_REFIN (PB7)" bidirectional line)
+					(alternate "TIM16_CH1 (PB7)" bidirectional line)
+					(alternate "TIM17_CH1 (PC14)" bidirectional line)
+					(alternate "TIM17_CH1N (PB7)" bidirectional line)
+					(alternate "TIM1_BKIN2 (PC14)" bidirectional line)
+					(alternate "TIM1_CH4 (PB7)" bidirectional line)
+					(alternate "TIM1_ETR (PC14)" bidirectional line)
+					(alternate "TIM3_CH1 (PB7)" bidirectional line)
+					(alternate "TIM3_CH2 (PC14)" bidirectional line)
+					(alternate "TIM3_CH4 (PB7)" bidirectional line)
+					(alternate "USART1_RX (PB7)" bidirectional line)
+					(alternate "USART1_TX (PC14)" bidirectional line)
+					(alternate "USART2_CK (PC14)" bidirectional line)
+					(alternate "USART2_CTS (PB7)" bidirectional line)
+					(alternate "USART2_DE (PC14)" bidirectional line)
+					(alternate "USART2_NSS (PB7)" bidirectional line)
+					(alternate "USART2_RTS (PC14)" bidirectional line)
+				)
+				(pin power_in line
+					(at 0 12.7 270)
+					(length 2.54)
+					(name "VDD"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at 0 -12.7 90)
+					(length 2.54)
+					(name "VSS"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at 25.4 5.08 180)
+					(length 2.54)
+					(name "PA0/PA1/PA2/PF2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(alternate "ADC1_IN0 (PA0)" bidirectional line)
+					(alternate "ADC1_IN1 (PA1)" bidirectional line)
+					(alternate "ADC1_IN2 (PA2)" bidirectional line)
+					(alternate "I2C1_SMBA (PA1)" bidirectional line)
+					(alternate "I2S1_CK (PA1)" bidirectional line)
+					(alternate "I2S1_SD (PA2)" bidirectional line)
+					(alternate "PA0" bidirectional line)
+					(alternate "PA1" bidirectional line)
+					(alternate "PA2" bidirectional line)
+					(alternate "PF2" bidirectional line)
+					(alternate "PWR_WKUP1 (PA0)" bidirectional line)
+					(alternate "PWR_WKUP4 (PA2)" bidirectional line)
+					(alternate "RCC_LSCO (PA2)" bidirectional line)
+					(alternate "RCC_MCO (PF2)" bidirectional line)
+					(alternate "SPI1_MOSI (PA2)" bidirectional line)
+					(alternate "SPI1_SCK (PA1)" bidirectional line)
+					(alternate "TIM16_CH1 (PA0)" bidirectional line)
+					(alternate "TIM16_CH1N (PA2)" bidirectional line)
+					(alternate "TIM17_CH1 (PA1)" bidirectional line)
+					(alternate "TIM1_CH1 (PA0)" bidirectional line)
+					(alternate "TIM1_CH2 (PA1)" bidirectional line)
+					(alternate "TIM1_CH3 (PA2)" bidirectional line)
+					(alternate "TIM1_CH4 (PF2)" bidirectional line)
+					(alternate "TIM3_ETR (PA2)" bidirectional line)
+					(alternate "USART1_RX (PA1)" bidirectional line)
+					(alternate "USART1_TX (PA0)" bidirectional line)
+					(alternate "USART2_CK (PA1)" bidirectional line)
+					(alternate "USART2_CTS (PA0)" bidirectional line)
+					(alternate "USART2_DE (PA1)" bidirectional line)
+					(alternate "USART2_NSS (PA0)" bidirectional line)
+					(alternate "USART2_RTS (PA1)" bidirectional line)
+					(alternate "USART2_TX (PA2)" bidirectional line)
+				)
+				(pin bidirectional line
+					(at 25.4 2.54 180)
+					(length 2.54)
+					(name "PA8/PA9/PA11"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(alternate "ADC1_EXTI11 (PA11)" bidirectional line)
+					(alternate "ADC1_IN11 (PA11)" bidirectional line)
+					(alternate "ADC1_IN8 (PA8)" bidirectional line)
+					(alternate "I2C1_SCL (PA9)" bidirectional line)
+					(alternate "I2S1_MCK (PA11)" bidirectional line)
+					(alternate "I2S1_WS (PA8)" bidirectional line)
+					(alternate "PA11" bidirectional line)
+					(alternate "PA8" bidirectional line)
+					(alternate "PA9" bidirectional line)
+					(alternate "RCC_MCO (PA8)" bidirectional line)
+					(alternate "RCC_MCO (PA9)" bidirectional line)
+					(alternate "RCC_MCO_2 (PA8)" bidirectional line)
+					(alternate "SPI1_MISO (PA11)" bidirectional line)
+					(alternate "SPI1_NSS (PA8)" bidirectional line)
+					(alternate "TIM14_CH1 (PA8)" bidirectional line)
+					(alternate "TIM1_BKIN2 (PA11)" bidirectional line)
+					(alternate "TIM1_CH1 (PA8)" bidirectional line)
+					(alternate "TIM1_CH2 (PA9)" bidirectional line)
+					(alternate "TIM1_CH2N (PA8)" bidirectional line)
+					(alternate "TIM1_CH3N (PA8)" bidirectional line)
+					(alternate "TIM1_CH4 (PA11)" bidirectional line)
+					(alternate "TIM3_CH3 (PA8)" bidirectional line)
+					(alternate "TIM3_CH4 (PA8)" bidirectional line)
+					(alternate "TIM3_ETR (PA9)" bidirectional line)
+					(alternate "USART1_CTS (PA11)" bidirectional line)
+					(alternate "USART1_NSS (PA11)" bidirectional line)
+					(alternate "USART1_RX (PA8)" bidirectional line)
+					(alternate "USART1_TX (PA9)" bidirectional line)
+					(alternate "USART2_TX (PA8)" bidirectional line)
+				)
+				(pin bidirectional line
+					(at 25.4 0 180)
+					(length 2.54)
+					(name "PA10/PA12"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(alternate "ADC1_IN12 (PA12)" bidirectional line)
+					(alternate "I2C1_SDA (PA10)" bidirectional line)
+					(alternate "I2S1_SD (PA12)" bidirectional line)
+					(alternate "I2S_CKIN (PA12)" bidirectional line)
+					(alternate "PA10" bidirectional line)
+					(alternate "PA12" bidirectional line)
+					(alternate "RCC_MCO_2 (PA10)" bidirectional line)
+					(alternate "SPI1_MOSI (PA12)" bidirectional line)
+					(alternate "TIM17_BKIN (PA10)" bidirectional line)
+					(alternate "TIM1_CH3 (PA10)" bidirectional line)
+					(alternate "TIM1_ETR (PA12)" bidirectional line)
+					(alternate "USART1_CK (PA12)" bidirectional line)
+					(alternate "USART1_DE (PA12)" bidirectional line)
+					(alternate "USART1_RTS (PA12)" bidirectional line)
+					(alternate "USART1_RX (PA10)" bidirectional line)
+				)
+				(pin bidirectional line
+					(at 25.4 -2.54 180)
+					(length 2.54)
+					(name "PA13"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "7"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(alternate "ADC1_IN13" bidirectional line)
+					(alternate "DEBUG_SWDIO" bidirectional line)
+					(alternate "IR_OUT" bidirectional line)
+					(alternate "TIM3_ETR" bidirectional line)
+					(alternate "USART2_RX" bidirectional line)
+				)
+				(pin open_emitter edge_clock_high
+					(at 26.67 -5.08 180)
+					(length 3.81)
+					(name "PA14/PB6/PC15"
+						(effects
+							(font
+								(size 1.143 1.143)
+							)
+						)
+					)
+					(number "8"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(alternate "ADC1_IN14 (PA14)" bidirectional line)
+					(alternate "DEBUG_SWCLK (PA14)" bidirectional line)
+					(alternate "I2C1_SCL (PB6)" bidirectional line)
+					(alternate "I2C1_SMBA (PB6)" bidirectional line)
+					(alternate "I2S1_CK (PB6)" bidirectional line)
+					(alternate "I2S1_MCK (PB6)" bidirectional line)
+					(alternate "I2S1_SD (PB6)" bidirectional line)
+					(alternate "I2S1_WS (PA14)" bidirectional line)
+					(alternate "PA14" bidirectional line)
+					(alternate "PB6" bidirectional line)
+					(alternate "PC15" bidirectional line)
+					(alternate "PWR_WKUP3 (PB6)" bidirectional line)
+					(alternate "RCC_MCO_2 (PA14)" bidirectional line)
+					(alternate "RCC_OSC32_EN (PC15)" bidirectional line)
+					(alternate "RCC_OSCX_OUT (PC15)" bidirectional line)
+					(alternate "RCC_OSC_EN (PC15)" bidirectional line)
+					(alternate "SPI1_MISO (PB6)" bidirectional line)
+					(alternate "SPI1_MOSI (PB6)" bidirectional line)
+					(alternate "SPI1_NSS (PA14)" bidirectional line)
+					(alternate "SPI1_SCK (PB6)" bidirectional line)
+					(alternate "TIM16_BKIN (PB6)" bidirectional line)
+					(alternate "TIM16_CH1N (PB6)" bidirectional line)
+					(alternate "TIM17_BKIN (PB6)" bidirectional line)
+					(alternate "TIM1_CH1 (PA14)" bidirectional line)
+					(alternate "TIM1_CH2 (PB6)" bidirectional line)
+					(alternate "TIM1_CH3 (PB6)" bidirectional line)
+					(alternate "TIM1_ETR (PC15)" bidirectional line)
+					(alternate "TIM3_CH1 (PB6)" bidirectional line)
+					(alternate "TIM3_CH2 (PB6)" bidirectional line)
+					(alternate "TIM3_CH3 (PB6)" bidirectional line)
+					(alternate "TIM3_CH3 (PC15)" bidirectional line)
+					(alternate "USART1_CK (PA14)" bidirectional line)
+					(alternate "USART1_CK (PB6)" bidirectional line)
+					(alternate "USART1_CTS (PB6)" bidirectional line)
+					(alternate "USART1_DE (PA14)" bidirectional line)
+					(alternate "USART1_DE (PB6)" bidirectional line)
+					(alternate "USART1_NSS (PB6)" bidirectional line)
+					(alternate "USART1_RTS (PA14)" bidirectional line)
+					(alternate "USART1_RTS (PB6)" bidirectional line)
+					(alternate "USART1_TX (PB6)" bidirectional line)
+					(alternate "USART2_RX (PA14)" bidirectional line)
+					(alternate "USART2_TX (PA14)" bidirectional line)
+				)
+			)
+			(embedded_fonts no)
+		)
 	)
 	(circle
 		(center 175.26 50.8)
@@ -879,6 +1274,109 @@
 				(font
 					(size 1.27 1.27)
 					(italic yes)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "MCU_ST_STM32C0:STM32C011J_4-6_Mx")
+		(at 52.07 73.66 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files no)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "45f8b93d-708a-47ab-a23e-854a49d5dc44")
+		(property "Reference" "U1"
+			(at 54.2133 58.42 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "STM32C011J_4-6_Mx"
+			(at 54.2133 60.96 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+			(at 29.21 83.82 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Datasheet" "https://www.st.com/resource/en/datasheet/stm32c011j4.pdf"
+			(at 52.07 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "STMicroelectronics Arm Cortex-M0+ MCU, 16-32KB flash, 6KB RAM, 48 MHz, 2.0-3.6V, 6 GPIO, SO8N"
+			(at 52.07 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "6"
+			(uuid "7a99a888-a550-4b71-8943-c1bcc16405b9")
+		)
+		(pin "7"
+			(uuid "d7a34d90-cd42-426e-b37b-96e71f7bef91")
+		)
+		(pin "8"
+			(uuid "ba07dcf2-bd3e-4d81-9432-977835c84b2e")
+		)
+		(pin "1"
+			(uuid "2e7b06f5-3736-4b0f-a7ad-3a8290b6b09c")
+		)
+		(pin "2"
+			(uuid "6de06543-7308-4b1c-91cd-53a1ab52c2a8")
+		)
+		(pin "3"
+			(uuid "237b9e0c-7fab-40b7-a26a-73b2cbf05dc8")
+		)
+		(pin "4"
+			(uuid "79f7b14d-37ed-4e9a-ac1a-a5d29bd809fe")
+			(alternate "TIM1_CH1 (PA0)")
+		)
+		(pin "5"
+			(uuid "33f36d5c-4178-42a1-96af-2e29f7e5bfc9")
+			(alternate "TIM3_ETR (PA9)")
+		)
+		(instances
+			(project "api_kitchen_sink"
+				(path "/d6ee7e6a-6570-43fd-93e6-b98f9cea3e37"
+					(reference "U1")
+					(unit 1)
 				)
 			)
 		)

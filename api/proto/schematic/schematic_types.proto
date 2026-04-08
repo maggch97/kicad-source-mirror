@@ -22,11 +22,13 @@ syntax = "proto3";
 
 package kiapi.schematic.types;
 
+import "google/protobuf/any.proto";
 import "common/types/base_types.proto";
 
 message SchematicField
 {
-  kiapi.common.types.KIID id = 1;
+  // Fields do not currently track a unique ID; but may in the future
+  //kiapi.common.types.KIID id = 1;
   string name = 2;
   kiapi.common.types.Text text = 3;
   bool visible = 4;
@@ -239,4 +241,181 @@ message SheetSymbol
   bool exclude_from_bom = 12;
   bool exclude_from_board = 13;
   bool dnp = 14;
+}
+
+enum SchematicSymbolType
+{
+  SST_UNKNOWN = 0;
+  SST_NORMAL = 1;
+  SST_GLOBAL_POWER = 2;
+  SST_LOCAL_POWER = 3;
+}
+
+enum SchematicSymbolRotation
+{
+  SSR_UNKNOWN = 0;
+  SSR_0 = 1;
+  SSR_90 = 2;
+  SSR_180 = 3;
+  SSR_270 = 4;
+}
+
+enum SchematicPinOrientation
+{
+  SPO_UNKNOWN = 0;
+  SPO_RIGHT = 1;
+  SPO_LEFT = 2;
+  SPO_UP = 3;
+  SPO_DOWN = 4;
+}
+
+enum SchematicPinShape
+{
+  SPS_UNKNOWN = 0;
+  SPS_LINE = 1;
+  SPS_INVERTED = 2;
+  SPS_CLOCK = 3;
+  SPS_INVERTED_CLOCK = 4;
+  SPS_INPUT_LOW = 5;
+  SPS_CLOCK_LOW = 6;
+  SPS_OUTPUT_LOW = 7;
+  SPS_FALLING_EDGE_CLOCK = 8;
+  SPS_NONLOGIC = 9;
+}
+
+message SchematicPinAlternate
+{
+  string name = 1;
+  SchematicPinShape shape = 2;
+  kiapi.common.types.ElectricalPinType electrical_type = 3;
+}
+
+message SchematicPin
+{
+  kiapi.common.types.KIID id = 1;
+
+  string name = 2;
+  string number = 3;
+
+  kiapi.common.types.Vector2 position = 4;
+  kiapi.common.types.Distance length = 5;
+  SchematicPinOrientation orientation = 6;
+
+  kiapi.common.types.ElectricalPinType electrical_type = 7;
+  SchematicPinShape shape = 8;
+  bool visible = 9;
+
+  kiapi.common.types.Distance name_text_size = 10;
+  kiapi.common.types.Distance number_text_size = 11;
+
+  repeated SchematicPinAlternate alternates = 12;
+  optional string active_alternate = 13;
+}
+
+message SchematicSymbolUnit
+{
+  int32 unit = 1;
+}
+
+message SchematicSymbolBodyStyle
+{
+  int32 style = 1;
+}
+
+// A schematic item that is stored in a symbol definition
+message SchematicSymbolChild
+{
+  google.protobuf.Any item = 1;
+
+  // if absent, item is common to all units
+  optional SchematicSymbolUnit unit = 2;
+
+  // if absent, item is common to all body styles
+  optional SchematicSymbolBodyStyle body_style = 3;
+
+  // Private items are only shown in the symbol editor, not the schematic
+  bool is_private = 4;
+}
+
+message SchematicSymbolAttributes
+{
+  bool exclude_from_simulation = 1;
+  bool exclude_from_bill_of_materials = 2;
+  bool exclude_from_board = 3;
+  bool exclude_from_position_files = 4;
+  bool do_not_populate = 5;
+}
+
+// Data that can change between design variants
+message SchematicSymbolVariant
+{
+  string name = 1;
+  string description = 2;
+
+  SchematicSymbolAttributes attributes = 3;
+
+  map<string, string> fields = 4;
+}
+
+message SchematicSymbol
+{
+  kiapi.common.types.LibraryIdentifier id = 1;
+
+  SchematicSymbolType type = 2;
+  SchematicSymbolAttributes attributes = 3;
+
+  SchematicField reference_field = 4;
+  SchematicField value_field = 5;
+  SchematicField footprint_field = 6;
+  SchematicField datasheet_field = 7;
+  SchematicField description_field = 8;
+
+  // The pins, graphics, text, fields, etc that form the library definition of the symbol
+  repeated SchematicSymbolChild items = 9;
+
+  uint32 unit_count = 10;
+  uint32 body_style_count = 11;
+
+  string keywords = 12;
+  repeated string footprint_filters = 13;
+}
+
+message SchematicSymbolTransform
+{
+  SchematicSymbolRotation rotation = 1;
+  bool mirror_x = 2;
+  bool mirror_y = 3;
+}
+
+// An instance of a symbol placed on a schematic sheet.
+message SchematicSymbolInstance
+{
+  kiapi.common.types.KIID id = 1;
+
+  // Symbol instances may refer to the same graphical symbol from multiple different sheets
+  // in a hierarchical schematic.  Each instance will have its own reference designator, and
+  // may also have a different selected unit and other attributes.
+  kiapi.common.types.SheetPath path = 2;
+
+  kiapi.common.types.Vector2 position = 3;
+  SchematicSymbolTransform transform = 4;
+  kiapi.common.types.LockedState locked = 5;
+
+  SchematicSymbol definition = 6;
+
+  SchematicField reference_field = 7;
+  SchematicField value_field = 8;
+  SchematicField footprint_field = 9;
+  SchematicField datasheet_field = 10;
+  SchematicField description_field = 11;
+
+  SchematicSymbolAttributes attributes = 12;
+
+  SchematicSymbolUnit unit = 13;
+  optional SchematicSymbolBodyStyle body_style = 14;
+  bool show_pin_names = 15;
+  bool show_pin_numbers = 16;
+  kiapi.common.types.Distance pin_name_offset = 17;
+
+  repeated SchematicSymbolVariant variants = 18;
 }
