@@ -37,7 +37,7 @@ msgstr ""
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-04-07 19:08+0300\n"
 "PO-Revision-Date: 2026-04-08 22:09+0000\n"
-"Last-Translator: \"Pferd O.\" <frank.0228@ich-war-hier.de>\n"
+"Last-Translator: Ettore Atalan <atalanttore@googlemail.com>\n"
 "Language-Team: German <https://hosted.weblate.org/projects/kicad/master-"
 "source/de/>\n"
 "Language: de\n"
@@ -1589,7 +1589,7 @@ msgstr "Während des Verschiebens"
 #: 3d-viewer/dialogs/panel_3D_opengl_options_base.cpp:85
 #: kicad/cli/command_gerber_convert_png.cpp:63
 msgid "Disable anti-aliasing"
-msgstr "Kein Anti-Aliasing"
+msgstr "Kantenglättung deaktivieren"
 
 #: 3d-viewer/dialogs/panel_3D_opengl_options_base.cpp:88
 msgid "Disable thickness"
@@ -4338,15 +4338,15 @@ msgstr "Kantenglättung:"
 
 #: common/dialogs/panel_common_settings_base.cpp:62
 msgid "No Antialiasing"
-msgstr "Kein Anti-Aliasing"
+msgstr "Keine Kantenglättung"
 
 #: common/dialogs/panel_common_settings_base.cpp:62
 msgid "Fast Antialiasing"
-msgstr "Schnelles Anti-Aliasing"
+msgstr "Schnelle Kantenglättung"
 
 #: common/dialogs/panel_common_settings_base.cpp:62
 msgid "High Quality Antialiasing"
-msgstr "Hochwertiges Anti-Aliasing"
+msgstr "Hochwertige Kantenglättung"
 
 #: common/dialogs/panel_common_settings_base.cpp:82
 msgid "Helper Applications"
@@ -11633,14 +11633,13 @@ msgid "View load messages"
 msgstr "Zeige Lade-Meldungen"
 
 #: common/widgets/kistatusbar.cpp:509
-#, fuzzy, c-format
+#, c-format
 msgid "View %zu message(s)"
-msgstr "%zu Ladenachricht(en) zeigen"
+msgstr "%zu Meldung(en) ansehen"
 
 #: common/widgets/kistatusbar.cpp:522
-#, fuzzy
 msgid "View messages"
-msgstr "Zeige Lade-Meldungen"
+msgstr "Meldungen ansehen"
 
 #: common/widgets/lib_tree.cpp:99
 msgid "Sort by Best Match"
@@ -17340,9 +17339,8 @@ msgid "Copy Design Variant"
 msgstr "Designvariante kopieren"
 
 #: eeschema/dialogs/dialog_symbol_fields_table.cpp:2947
-#, fuzzy
 msgid "Cannot edit the default variant description."
-msgstr "Die Standardvariante kann nicht gelöscht werden."
+msgstr "Die Standardvariantenbeschreibung kann nicht bearbeitet werden."
 
 #: eeschema/dialogs/dialog_symbol_fields_table.cpp:2955
 #: eeschema/sch_edit_frame.cpp:3055
@@ -20763,9 +20761,8 @@ msgid "Resolved Netclass"
 msgstr "Aufgelöste Netzklasse"
 
 #: eeschema/sch_bus_entry.cpp:652 eeschema/sch_line.cpp:1286
-#, fuzzy
 msgid "Wire Style"
-msgstr "Linienstil"
+msgstr "Stil der elektrischen Verbindung"
 
 #: eeschema/sch_connection.cpp:455
 msgid "Connection Name"
@@ -20937,14 +20934,12 @@ msgid "No design variants to edit."
 msgstr "Neue Designvariante zum Schaltplan hinzufügen."
 
 #: eeschema/sch_edit_frame.cpp:3041
-#, fuzzy
 msgid "Select variant to edit description:"
-msgstr "Zu löschenden Variantennamen wählen:"
+msgstr "Variante zum Bearbeiten der Beschreibung auswählen:"
 
 #: eeschema/sch_edit_frame.cpp:3042
-#, fuzzy
 msgid "Edit Variant Description"
-msgstr "Auftragsbeschreibung bearbeiten"
+msgstr "Variantenbeschreibung bearbeiten"
 
 #: eeschema/sch_edit_frame.cpp:3102
 msgid "Select variant name to remove:"
@@ -27034,9 +27029,8 @@ msgid "Import 2D drawing file"
 msgstr "Eine 2D-Zeichnung importieren"
 
 #: eeschema/tools/sch_actions.cpp:1233
-#, fuzzy
 msgid "Import Non-KiCad Schematic..."
-msgstr "Nicht-KiCad-Schaltplan ..."
+msgstr "Nicht-KiCad-Schaltplan importieren ..."
 
 #: eeschema/tools/sch_actions.cpp:1234
 msgid ""
@@ -27571,9 +27565,8 @@ msgid "Remove an existing design variant from the schematic."
 msgstr "Eine bestehende Designvariante aus dem Schaltplan entfernen."
 
 #: eeschema/tools/sch_actions.cpp:1808
-#, fuzzy
 msgid "Edit Variant Description..."
-msgstr "Auftragsbeschreibung bearbeiten"
+msgstr "Variantenbeschreibung bearbeiten ..."
 
 #: eeschema/tools/sch_actions.cpp:1809
 #, fuzzy
@@ -30284,9 +30277,8 @@ msgid "Convert a Gerber or Excellon file to PNG image"
 msgstr ""
 
 #: kicad/cli/command_gerber_convert_png.cpp:48
-#, fuzzy
 msgid "Resolution in DPI (default: 300)"
-msgstr "(optional; 0 voreingestellt)"
+msgstr "Auflösung in DPI (Standard: 300)"
 
 #: kicad/cli/command_gerber_convert_png.cpp:54
 msgid "Output width in pixels (overrides DPI)"
@@ -30298,7 +30290,7 @@ msgstr ""
 
 #: kicad/cli/command_gerber_convert_png.cpp:66
 msgid "Use transparent background (default)"
-msgstr ""
+msgstr "Transparenten Hintergrund verwenden (Standard)"
 
 #: kicad/cli/command_gerber_convert_png.cpp:69
 #: kicad/cli/command_gerber_diff.cpp:85 kicad/cli/command_gerber_info.cpp:56
@@ -30311,29 +30303,27 @@ msgstr ""
 
 #: kicad/cli/command_gerber_diff.cpp:49
 msgid "Reference file (first Gerber/Excellon file)"
-msgstr ""
+msgstr "Referenzdatei (erste Gerber/Excellon-Datei)"
 
 #: kicad/cli/command_gerber_diff.cpp:53
 msgid "Comparison file (second Gerber/Excellon file)"
-msgstr ""
+msgstr "Vergleichsdatei (zweite Gerber/Excellon-Datei)"
 
 #: kicad/cli/command_gerber_diff.cpp:58
-#, fuzzy
 msgid "Output format: png, text, or json (default: png)"
-msgstr "Import Berichtsformat: none, json, text (Standard: none)"
+msgstr "Ausgabeformat: png, text oder json (Standard: png)"
 
 #: kicad/cli/command_gerber_diff.cpp:64
 msgid "Resolution in DPI for PNG output (default: 300)"
-msgstr ""
+msgstr "Auflösung in DPI für PNG-Ausgabe (Standard: 300)"
 
 #: kicad/cli/command_gerber_diff.cpp:68
-#, fuzzy
 msgid "Disable anti-aliasing for PNG output"
-msgstr "Kein Anti-Aliasing"
+msgstr "Kantenglättung für PNG-Ausgabe deaktivieren"
 
 #: kicad/cli/command_gerber_diff.cpp:72
 msgid "Use transparent background for PNG output"
-msgstr ""
+msgstr "Transparenten Hintergrund für PNG-Ausgabe verwenden"
 
 #: kicad/cli/command_gerber_diff.cpp:76
 msgid "Only set exit code (0=identical, 1=different), no output"
@@ -30344,33 +30334,30 @@ msgid "Tolerance in nm for floating point comparisons (default: 0)"
 msgstr ""
 
 #: kicad/cli/command_gerber_diff.cpp:118 kicad/cli/command_gerber_info.cpp:80
-#, fuzzy, c-format
+#, c-format
 msgid "Invalid output format: %s\n"
-msgstr "Ungültiges Berichtsformat: %s\n"
+msgstr "Ungültiges Ausgabeformat: %s\n"
 
 #: kicad/cli/command_gerber_info.cpp:40
 msgid "Display information about a Gerber or Excellon file"
-msgstr ""
+msgstr "Informationen über eine Gerber- oder Excellon-Datei anzeigen"
 
 #: kicad/cli/command_gerber_info.cpp:44
-#, fuzzy
 msgid "Output format, options: text, json"
-msgstr "Ausgabedateiformat, Optionen: json, report"
+msgstr "Ausgabeformat, Optionen: text, json"
 
 #: kicad/cli/command_gerber_info.cpp:49
-#, fuzzy
 msgid "Output units, options: mm, inch, mils (default: mm)"
-msgstr "Ausgabeeinheiten, gültige Optionen: mm, in"
+msgstr "Ausgabeeinheiten, Optionen: mm, inch, mils (Standard: mm)"
 
 #: kicad/cli/command_gerber_info.cpp:53
-#, fuzzy
 msgid "Calculate and display copper area"
-msgstr "Kupferbeschichtung berechnen"
+msgstr "Kupferbereich berechnen und anzeigen"
 
 #: kicad/cli/command_gerber_info.cpp:100
-#, fuzzy, c-format
+#, c-format
 msgid "Invalid units: %s\n"
-msgstr "Ungültige Einheiten angegeben\n"
+msgstr "Ungültige Einheiten: %s\n"
 
 #: kicad/cli/command_jobset.h:32
 msgid "Jobset"
@@ -58112,9 +58099,8 @@ msgstr ""
 "Rettungsdatei öffnen"
 
 #: pcbnew/tools/pcb_actions.cpp:1215
-#, fuzzy
 msgid "Import Non-KiCad Board File..."
-msgstr "Importiere Nicht Kicad Platinendatei"
+msgstr "Nicht-KiCad-Platinendatei importieren ..."
 
 #: pcbnew/tools/pcb_actions.cpp:1216
 msgid "Import board file from other applications"
