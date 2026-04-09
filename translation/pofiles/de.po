@@ -37,7 +37,7 @@ msgstr ""
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-04-07 19:08+0300\n"
 "PO-Revision-Date: 2026-04-09 18:49+0000\n"
-"Last-Translator: Frank Sonnenberg <frasoberg@web.de>\n"
+"Last-Translator: \"Pferd O.\" <frank.0228@ich-war-hier.de>\n"
 "Language-Team: German <https://hosted.weblate.org/projects/kicad/master-"
 "source/de/>\n"
 "Language: de\n"
@@ -30352,7 +30352,7 @@ msgstr "Ausgabeeinheiten, Optionen: mm, inch, mils (Standard: mm)"
 
 #: kicad/cli/command_gerber_info.cpp:53
 msgid "Calculate and display copper area"
-msgstr "Kupferbereich berechnen und anzeigen"
+msgstr "Kupferfläche berechnen und anzeigen"
 
 #: kicad/cli/command_gerber_info.cpp:100
 #, c-format
