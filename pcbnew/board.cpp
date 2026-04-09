@@ -934,6 +934,7 @@ int BOARD::GetCopperLayerCount() const
 void BOARD::SetCopperLayerCount( int aCount )
 {
     GetDesignSettings().SetCopperLayerCount( aCount );
+    recalcOpposites();
 }
 
 
