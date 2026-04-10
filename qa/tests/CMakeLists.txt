@@ -48,9 +48,25 @@ elseif ( MSVC )
     set( EXTRA_PYTEST_ENVIRONMENT "FONTCONFIG_PATH=${CMAKE_SOURCE_DIR}/qa/resources/windows/fonts/" )
 endif()
 
+# Use pytest-xdist for parallel CLI test execution when available
+execute_process(
+    COMMAND ${PYTHON_EXECUTABLE} -c "import xdist"
+    RESULT_VARIABLE PYTEST_XDIST_RESULT
+    OUTPUT_QUIET
+    ERROR_QUIET
+)
+
+if( PYTEST_XDIST_RESULT EQUAL 0 )
+    set( PYTEST_PARALLEL_ARGS -n auto )
+    message( STATUS "pytest-xdist found, qa_cli tests will run in parallel" )
+else()
+    set( PYTEST_PARALLEL_ARGS "" )
+    message( STATUS "pytest-xdist not found, qa_cli tests will run sequentially" )
+endif()
 
 add_test(NAME qa_cli
-    COMMAND ${PYTHON_EXECUTABLE} -m pytest ${CMAKE_CURRENT_SOURCE_DIR}/cli ${PYTEST_ARGS_QACLI}
+    COMMAND ${PYTHON_EXECUTABLE} -m pytest ${PYTEST_PARALLEL_ARGS}
+            ${CMAKE_CURRENT_SOURCE_DIR}/cli ${PYTEST_ARGS_QACLI}
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
