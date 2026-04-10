@@ -221,6 +221,170 @@ if( WIN32 )
         )
 endif()
 
-kicad_add_boost_test( qa_pcbnew qa_pcbnew )
+# Register split test groups for parallel execution.  Each group runs the same
+# qa_pcbnew binary with a different --run_test= filter.  Groups were chosen by
+# profiling wall-clock time so that no single group dominates.
+#
+# The "other" group is a catch-all that uses exclusion filters: any new test
+# suites or cases added to the binary will automatically land here.
 
-setup_qa_env( qa_pcbnew )
+# Keep build-system dependencies from the original single-entry registration
+add_dependencies( qa_all_tests qa_pcbnew )
+
+if( NOT KICAD_BUILD_QA_TESTS )
+    set_target_properties( qa_pcbnew PROPERTIES EXCLUDE_FROM_ALL TRUE )
+endif()
+
+# Helper to register one pcbnew test group
+function( add_pcbnew_test_group GROUP_NAME FILTER )
+    set( TEST_NAME "qa_pcbnew_${GROUP_NAME}" )
+    set( BOOST_PARAMS "" )
+
+    if( KICAD_TEST_XML_OUTPUT )
+        set( BOOST_PARAMS
+            --logger=JUNIT,warning,${TEST_NAME}.boost-results.xml:HRF,message )
+    endif()
+
+    add_test( NAME ${TEST_NAME}
+        COMMAND $<TARGET_FILE:qa_pcbnew> "--run_test=${FILTER}" ${BOOST_PARAMS}
+    )
+
+    setup_qa_env( ${TEST_NAME} )
+endfunction()
+
+# Zone fill and zone tests (~40s)
+set( PCBNEW_ZONE_TESTS
+    "BasicZoneFills\
+:NotchedZones\
+:RegressionZoneFillTests\
+:RegressionZoneClearanceWithIterativeRefill\
+:RegressionSliverZoneFillTests\
+:RegressionTeardropFill\
+:RegressionNetTie\
+:RegressionZonePriorityIsolatedIslands\
+:RegressionViaFlashingUnreachableZone\
+:RegressionViaZoneNetShort\
+:HatchZoneThermalConnectivity\
+:RegressionShallowArcZoneFill\
+:RegressionIterativeRefillRespectsKeepouts\
+:RegressionTHPadInnerLayerFlashing\
+:RegressionRoundRectTeardropGeometry\
+:OvalPadTeardropGeometry\
+:LargeCircleTeardropGeometry\
+:RegressionCoincidentPadClearance\
+:ZoneViaNetClearance\
+:ZoneLayerSpecificRules\
+:RegressionZoneFillMinWidthAfterKnockout\
+:RegressionSameNetOverlappingZones\
+:RegressionDiffNetOverlappingZones\
+:RegressionThermalReliefsToNowhere\
+:OffCenterTeardropSymmetry\
+:RegressionKeepoutBoundaryMissingFill\
+:HatchZoneViaConnectionRespectsSetting\
+:Zone" )
+
+# Allegro importer tests (~31s)
+set( PCBNEW_ALLEGRO_TESTS
+    "AllegroBlocks:AllegroBoards:AllegroImport:AllegroComprehensive" )
+
+# Creepage DRC tests (~16s, heavily multi-threaded internally)
+set( PCBNEW_CREEPAGE_TESTS
+    "CreepageHVvsGND\
+:CreepageAroundSlotIssue20480\
+:CreepagePerformanceIssue21482\
+:CreepageDualSlotsIssue23364\
+:CreepageNPTHSlotIssue23389\
+:CreepagePathStartPointIssue23576" )
+
+# IPC-2581 export tests (~15s)
+set( PCBNEW_IPC2581_TESTS "Ipc2581Export" )
+
+# Tracks cleaner tests (~14s)
+set( PCBNEW_TRACKS_CLEANER_TESTS
+    "FailedToCleanRegressionTests:TrackCleanerRegressionTests" )
+
+# Multichannel tool tests (~11s)
+set( PCBNEW_MULTICHANNEL_TESTS "MultichannelTool" )
+
+# DRC regression tests (~10s)
+set( PCBNEW_DRC_REGRESSION_TESTS
+    "DRCFalsePositiveRegressions\
+:DRCFalseNegativeRegressions\
+:DRCZoneFalsePositiveRegressions" )
+
+# Solder mask and copper sliver DRC tests (~6s)
+set( PCBNEW_DRC_SOLDER_MASK_TESTS
+    "DRCCopperSliver\
+:DRCSolderMaskBridgingTest\
+:DRCSolderMaskBridgeAllTracksTest\
+:DRCSolderMaskBridgeSingleErrorTest\
+:DRCTrackToPadBridgeTest\
+:FootprintLevelSolderMaskExpansion\
+:SolderMaskExpansionPerformance" )
+
+add_pcbnew_test_group( zone "${PCBNEW_ZONE_TESTS}" )
+add_pcbnew_test_group( allegro "${PCBNEW_ALLEGRO_TESTS}" )
+add_pcbnew_test_group( creepage "${PCBNEW_CREEPAGE_TESTS}" )
+add_pcbnew_test_group( ipc2581 "${PCBNEW_IPC2581_TESTS}" )
+add_pcbnew_test_group( tracks_cleaner "${PCBNEW_TRACKS_CLEANER_TESTS}" )
+add_pcbnew_test_group( multichannel "${PCBNEW_MULTICHANNEL_TESTS}" )
+add_pcbnew_test_group( drc_regression "${PCBNEW_DRC_REGRESSION_TESTS}" )
+add_pcbnew_test_group( drc_solder_mask "${PCBNEW_DRC_SOLDER_MASK_TESTS}" )
+
+# Catch-all for everything not in a named group.  New tests automatically
+# land here so they are never silently skipped.
+set( PCBNEW_EXCLUDED_FROM_OTHER
+    "!BasicZoneFills\
+:!NotchedZones\
+:!RegressionZoneFillTests\
+:!RegressionZoneClearanceWithIterativeRefill\
+:!RegressionSliverZoneFillTests\
+:!RegressionTeardropFill\
+:!RegressionNetTie\
+:!RegressionZonePriorityIsolatedIslands\
+:!RegressionViaFlashingUnreachableZone\
+:!RegressionViaZoneNetShort\
+:!HatchZoneThermalConnectivity\
+:!RegressionShallowArcZoneFill\
+:!RegressionIterativeRefillRespectsKeepouts\
+:!RegressionTHPadInnerLayerFlashing\
+:!RegressionRoundRectTeardropGeometry\
+:!OvalPadTeardropGeometry\
+:!LargeCircleTeardropGeometry\
+:!RegressionCoincidentPadClearance\
+:!ZoneViaNetClearance\
+:!ZoneLayerSpecificRules\
+:!RegressionZoneFillMinWidthAfterKnockout\
+:!RegressionSameNetOverlappingZones\
+:!RegressionDiffNetOverlappingZones\
+:!RegressionThermalReliefsToNowhere\
+:!OffCenterTeardropSymmetry\
+:!RegressionKeepoutBoundaryMissingFill\
+:!HatchZoneViaConnectionRespectsSetting\
+:!Zone\
+:!AllegroBlocks\
+:!AllegroBoards\
+:!AllegroImport\
+:!AllegroComprehensive\
+:!CreepageHVvsGND\
+:!CreepageAroundSlotIssue20480\
+:!CreepagePerformanceIssue21482\
+:!CreepageDualSlotsIssue23364\
+:!CreepageNPTHSlotIssue23389\
+:!CreepagePathStartPointIssue23576\
+:!Ipc2581Export\
+:!FailedToCleanRegressionTests\
+:!TrackCleanerRegressionTests\
+:!MultichannelTool\
+:!DRCFalsePositiveRegressions\
+:!DRCFalseNegativeRegressions\
+:!DRCZoneFalsePositiveRegressions\
+:!DRCCopperSliver\
+:!DRCSolderMaskBridgingTest\
+:!DRCSolderMaskBridgeAllTracksTest\
+:!DRCSolderMaskBridgeSingleErrorTest\
+:!DRCTrackToPadBridgeTest\
+:!FootprintLevelSolderMaskExpansion\
+:!SolderMaskExpansionPerformance" )
+
+add_pcbnew_test_group( other "${PCBNEW_EXCLUDED_FROM_OTHER}" )
