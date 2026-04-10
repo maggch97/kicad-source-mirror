@@ -217,3 +217,9 @@ void KIPLATFORM::UI::AllowNetworkFileSystems( wxDialog* aDialog )
 {
     // Not needed on Windows - file dialogs show network filesystems by default
 }
+
+
+void KIPLATFORM::UI::DismissChildComboBoxes( wxWindow* aWindow )
+{
+    // Not needed on Windows - native controls dismiss their popups on deactivation
+}

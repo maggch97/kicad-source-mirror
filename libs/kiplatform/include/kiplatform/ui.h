@@ -228,6 +228,22 @@ namespace KIPLATFORM
          * @param aDialog is the file dialog to configure
          */
         void AllowNetworkFileSystems( wxDialog* aDialog );
+
+        /**
+         * Dismiss any open wxChoice or wxComboBox dropdown popups that are children of
+         * aWindow.
+         *
+         * On GTK, a combo popup that is open when the parent dialog loses activation (e.g.
+         * via Alt+Tab) does not automatically dismiss itself because the GTK modal grab
+         * prevents the popup's grab-broken signal from being processed. This function
+         * explicitly closes any open popup so the stale dropdown is not left on screen.
+         *
+         * This is a NOP on Windows and macOS where the native controls handle deactivation
+         * correctly on their own.
+         *
+         * @param aWindow the window whose child combo controls should be dismissed
+         */
+        void DismissChildComboBoxes( wxWindow* aWindow );
     }
 }
 

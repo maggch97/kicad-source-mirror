@@ -260,3 +260,9 @@ void KIPLATFORM::UI::AllowNetworkFileSystems( wxDialog* aDialog )
 {
     // Not needed on macOS - file dialogs show network filesystems by default
 }
+
+
+void KIPLATFORM::UI::DismissChildComboBoxes( wxWindow* aWindow )
+{
+    // Not needed on macOS - native controls dismiss their popups on deactivation
+}
