@@ -50,6 +50,7 @@
 #include <board.h>
 #include <board_design_settings.h>
 #include <footprint.h>
+#include <3d_rendering/3d_placeholder_utils.h>
 #include <pad.h>
 #include <pcb_track.h>
 #include <kiplatform/io.h>
@@ -1672,6 +1673,85 @@ void STEP_PCB_MODEL::getBoardBodyZPlacement( double& aZPos, double& aThickness )
 }
 
 
+bool STEP_PCB_MODEL::AddExtrudedBody( const SHAPE_POLY_SET& aOutline, bool aBottom, double aStandoff, double aHeight,
+                                      const VECTOR2D& aOrigin, uint32_t aColor, EXTRUSION_MATERIAL aMaterial,
+                                      const wxString& aRefDes )
+{
+    double f_pos, f_thickness;
+    double b_pos, b_thickness;
+    getLayerZPlacement( F_Cu, f_pos, f_thickness );
+    getLayerZPlacement( B_Cu, b_pos, b_thickness );
+
+    double boardSurfaceZ;
+
+    if( !aBottom )
+        boardSurfaceZ = std::max( f_pos, f_pos + f_thickness );
+    else
+        boardSurfaceZ = std::min( b_pos, b_pos + b_thickness );
+
+    double bodyThickness = aHeight - aStandoff;
+    double zBot;
+
+    if( !aBottom )
+        zBot = boardSurfaceZ + aStandoff;
+    else
+        zBot = boardSurfaceZ - aHeight;
+
+    m_extruded_bodies.push_back( { {}, {}, aRefDes, aColor, aMaterial } );
+    return MakeShapes( m_extruded_bodies.back().bodyShapes, aOutline, false, bodyThickness, zBot, aOrigin );
+}
+
+
+bool STEP_PCB_MODEL::AddExtrudedPins( const FOOTPRINT* aFootprint, bool aBottom, double aStandoff,
+                                      const VECTOR2D& aOrigin )
+{
+    if( aStandoff <= 0.0 )
+        return false;
+
+    SHAPE_POLY_SET pinPoly;
+
+    if( !GetExtrusionPinOutline( aFootprint, pinPoly ) )
+        return false;
+
+    const EXTRUDED_3D_BODY* body = aFootprint->GetExtrudedBody();
+
+    if( body )
+    {
+        VECTOR2I fpPos = aFootprint->GetPosition();
+        ApplyExtrusionTransform( pinPoly, body, fpPos );
+    }
+
+    double f_pos, f_thickness;
+    double b_pos, b_thickness;
+    getLayerZPlacement( F_Cu, f_pos, f_thickness );
+    getLayerZPlacement( B_Cu, b_pos, b_thickness );
+
+    double boardTopZ = std::max( f_pos, f_pos + f_thickness );
+    double boardBotZ = std::min( b_pos, b_pos + b_thickness );
+
+    static const double c_protrusion = 1.0; // 1mm below opposite side
+
+    double pinZBot, pinHeight;
+
+    if( !aBottom )
+    {
+        pinZBot = boardBotZ - c_protrusion;
+        pinHeight = ( boardTopZ + aStandoff ) - pinZBot;
+    }
+    else
+    {
+        double pinZTop = boardTopZ + c_protrusion;
+        pinZBot = boardBotZ - aStandoff;
+        pinHeight = pinZTop - pinZBot;
+    }
+
+    if( m_extruded_bodies.empty() )
+        return false;
+
+    return MakeShapes( m_extruded_bodies.back().pinShapes, pinPoly, false, pinHeight, pinZBot, aOrigin );
+}
+
+
 bool STEP_PCB_MODEL::AddPolygonShapes( const SHAPE_POLY_SET* aPolyShapes, PCB_LAYER_ID aLayer,
                                        const VECTOR2D& aOrigin, const wxString& aNetname )
 {
@@ -2879,6 +2959,93 @@ bool STEP_PCB_MODEL::CreatePCB( SHAPE_POLY_SET& aOutline, const VECTOR2D& aOrigi
 
     if( aPushBoardBody )
         pushToAssembly( m_board_outlines, board_mat, "PCB", false, "Body" );
+
+    Quantity_ColorRGBA pinClr( Quantity_Color( 0.75, 0.75, 0.75, Quantity_TOC_RGB ), 1.0 );
+    TDF_Label          pin_mat = makeMaterial( "extruded_pin", pinClr, 0.6, 0.3 );
+
+    for( auto& entry : m_extruded_bodies )
+    {
+        if( entry.bodyShapes.empty() && entry.pinShapes.empty() )
+            continue;
+
+        TopoDS_Compound asmCompound;
+        BRep_Builder    asmBuilder;
+        asmBuilder.MakeCompound( asmCompound );
+        TDF_Label fpLabel = m_assy->AddShape( asmCompound, true );
+        TDataStd_Name::Set( fpLabel, TCollection_ExtendedString( ( entry.refDes + " (extruded)" ).ToUTF8().data() ) );
+
+        if( !entry.bodyShapes.empty() )
+        {
+            double r = ( ( entry.colorKey >> 24 ) & 0xFF ) / 255.0;
+            double g = ( ( entry.colorKey >> 16 ) & 0xFF ) / 255.0;
+            double b = ( ( entry.colorKey >> 8 ) & 0xFF ) / 255.0;
+            double a = ( entry.colorKey & 0xFF ) / 255.0;
+
+            double metallic, roughness;
+
+            switch( entry.material )
+            {
+            default:
+            case EXTRUSION_MATERIAL::PLASTIC:
+                metallic = 0.0;
+                roughness = 0.6;
+                break;
+            case EXTRUSION_MATERIAL::MATTE:
+                metallic = 0.0;
+                roughness = 0.9;
+                break;
+            case EXTRUSION_MATERIAL::METAL:
+                metallic = 0.8;
+                roughness = 0.3;
+                break;
+            case EXTRUSION_MATERIAL::COPPER:
+                metallic = 1.0;
+                roughness = 0.4;
+                break;
+            }
+
+            Quantity_ColorRGBA bodyClr( Quantity_Color( r, g, b, Quantity_TOC_RGB ), a );
+            TDF_Label          body_mat = makeMaterial( "extruded_body", bodyClr, metallic, roughness );
+
+            TopoDS_Shape bodyCompound = makeCompound( entry.bodyShapes );
+            TDF_Label    bodyLbl = m_assy->AddComponent( fpLabel, bodyCompound, false );
+
+            Handle( TDataStd_TreeNode ) bodyNode;
+            bodyLbl.FindAttribute( XCAFDoc::ShapeRefGUID(), bodyNode );
+            TDF_Label bodyShpLbl = bodyNode->Father()->Label();
+
+            if( !bodyShpLbl.IsNull() )
+            {
+                visMatTool->SetShapeMaterial( bodyShpLbl, body_mat );
+                TDataStd_Name::Set( bodyShpLbl,
+                                    TCollection_ExtendedString( ( entry.refDes + "_body" ).ToUTF8().data() ) );
+            }
+        }
+
+        int pinIdx = 1;
+
+        for( TopoDS_Shape& pinShape : entry.pinShapes )
+        {
+            TDF_Label pinLbl = m_assy->AddComponent( fpLabel, pinShape, false );
+
+            Handle( TDataStd_TreeNode ) pinNode;
+            pinLbl.FindAttribute( XCAFDoc::ShapeRefGUID(), pinNode );
+            TDF_Label pinShpLbl = pinNode->Father()->Label();
+
+            if( !pinShpLbl.IsNull() )
+            {
+                visMatTool->SetShapeMaterial( pinShpLbl, pin_mat );
+                wxString pinName = wxString::Format( "%s_pin_%d", entry.refDes, pinIdx++ );
+                TDataStd_Name::Set( pinShpLbl, TCollection_ExtendedString( pinName.ToUTF8().data() ) );
+            }
+        }
+
+        TopLoc_Location loc;
+        TDF_Label       fpCompLbl = m_assy->AddComponent( m_assy_label, fpLabel, loc );
+        TDataStd_Name::Set( fpCompLbl, TCollection_ExtendedString( entry.refDes.ToUTF8().data() ) );
+        KICAD3D_INFO::Set( fpCompLbl, KICAD3D_MODEL_TYPE::BOARD, entry.refDes.ToStdString() );
+        m_pcb_labels.push_back( fpCompLbl );
+    }
 
 #if( defined OCC_VERSION_HEX ) && ( OCC_VERSION_HEX > 0x070101 )
     m_assy->UpdateAssemblies();

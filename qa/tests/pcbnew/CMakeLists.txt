@@ -36,6 +36,7 @@ set( QA_PCBNEW_SRCS
     # test compilation units (start test_)
     test_array_pad_name_provider.cpp
     test_barcode_load_save.cpp
+    test_extruded_body_load_save.cpp
     test_board_connected_items.cpp
     test_board_design_settings.cpp
     test_board_item_index.cpp

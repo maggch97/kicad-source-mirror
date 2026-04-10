@@ -784,6 +784,81 @@ bool RENDER_3D_OPENGL::Redraw( bool aIsMoving, REPORTER* aStatusReporter,
     // Render 3D Models (Non-transparent)
     renderOpaqueModels( cameraViewMatrix );
 
+    // Render extruded 3D bodies
+    {
+        EDA_3D_VIEWER_SETTINGS::RENDER_SETTINGS& extCfg = m_boardAdapter.m_Cfg->m_Render;
+        const SFVEC3F                            extSelColor = m_boardAdapter.GetColor( extCfg.opengl_selection_color );
+
+        // Render extruded pad standoffs (metallic pins)
+        for( auto& [fp, renderList] : m_extrudedPadLists )
+        {
+            if( renderList )
+            {
+                bool highlight = false;
+
+                if( m_boardAdapter.m_IsBoardView )
+                {
+                    if( fp->IsSelected() )
+                        highlight = true;
+
+                    if( extCfg.highlight_on_rollover && fp == m_currentRollOverItem )
+                        highlight = true;
+                }
+
+                SMATERIAL mat = m_materials.m_Copper;
+                mat.m_Diffuse = SFVEC3F( 0.75f, 0.75f, 0.75f );
+                mat.m_Specular = SFVEC3F( 0.85f, 0.85f, 0.85f );
+                mat.m_Shininess = 0.6f * 128.0f;
+                mat.m_Transparency = 0.0f;
+
+                OglSetMaterial( mat, 1.0f, highlight, extSelColor );
+                renderList->DrawAll();
+            }
+        }
+
+        for( auto& [fp, renderList] : m_extrudedBodyLists )
+        {
+            const EXTRUDED_3D_BODY* body = fp->GetExtrudedBody();
+
+            if( !body )
+                continue;
+
+            if( renderList )
+            {
+                bool highlight = false;
+
+                if( m_boardAdapter.m_IsBoardView )
+                {
+                    if( fp->IsSelected() )
+                        highlight = true;
+
+                    if( extCfg.highlight_on_rollover && fp == m_currentRollOverItem )
+                        highlight = true;
+                }
+
+                KIGFX::COLOR4D c = body->m_color;
+
+                if( c == KIGFX::COLOR4D::UNSPECIFIED )
+                    c = EXTRUDED_3D_BODY::GetDefaultColor( body->m_material );
+
+                SMATERIAL mat;
+
+                SFVEC3F                  diffuse( c.r, c.g, c.b );
+                EXTRUSION_MATERIAL_PROPS props = GetMaterialProps( body->m_material, diffuse );
+
+                mat.m_Diffuse = diffuse;
+                mat.m_Ambient = props.m_Ambient;
+                mat.m_Specular = props.m_Specular;
+                mat.m_Shininess = props.m_Shininess;
+                mat.m_Emissive = SFVEC3F( 0.0f );
+                mat.m_Transparency = 1.0f - c.a;
+
+                OglSetMaterial( mat, 1.0f, highlight, extSelColor );
+                renderList->DrawAll();
+            }
+        }
+    }
+
     // Display board body
     if( layerFlags.test( LAYER_3D_BOARD ) )
         renderBoardBody( skipRenderHoles );
@@ -1005,6 +1080,9 @@ void RENDER_3D_OPENGL::freeAllLists()
     DELETE_AND_FREE( m_viaFrontCover )
     DELETE_AND_FREE( m_viaBackCover )
     DELETE_AND_FREE( m_placeholderModel )
+
+    DELETE_AND_FREE_MAP( m_extrudedBodyLists )
+    DELETE_AND_FREE_MAP( m_extrudedPadLists )
 }
 
 
@@ -1217,6 +1295,10 @@ void RENDER_3D_OPENGL::renderPlaceholderForFootprint( std::list<MODELTORENDER>& 
                                                       bool aRenderTransparentOnly, bool aIsSelected, float aOpacity )
 {
     if( !m_boardAdapter.m_Cfg->m_Render.show_missing_models || !m_placeholderModel )
+        return;
+
+    // Suppress placeholder if a valid extruded body was built
+    if( m_extrudedBodyLists.count( aFootprint ) )
         return;
 
     BOX2I localBox = CalcPlaceholderLocalBox( aFootprint );

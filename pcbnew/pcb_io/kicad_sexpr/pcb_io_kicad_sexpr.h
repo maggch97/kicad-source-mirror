@@ -200,7 +200,8 @@ class PCB_IO_KICAD_SEXPR;   // forward decl
 //#define SEXPR_BOARD_FILE_VERSION    20251101  // Backdrill and tertiary drill support
 //#define SEXPR_BOARD_FILE_VERSION    20260101  // PCB variants with per-footprint overrides
 //#define SEXPR_BOARD_FILE_VERSION    20260206  // Fix barcode and variant attribute serialization
-#define SEXPR_BOARD_FILE_VERSION      20260329  // Fix embedded files MMH3 checksum algorithm
+//----------------- Start of 11.0 development -----------------
+#define SEXPR_BOARD_FILE_VERSION      20260410  // Extruded 3D body
 
 #define BOARD_FILE_HOST_VERSION       20200825  ///< Earlier files than this include the host tag
 #define LEGACY_ARC_FORMATTING         20210925  ///< These were the last to use old arc formatting

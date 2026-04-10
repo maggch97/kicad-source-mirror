@@ -25,8 +25,20 @@
 #define PLACEHOLDER_3D_UTILS_H
 
 #include <math/box2.h>
+#include <layer_ids.h>
+#include <plugins/3dapi/xv3d_types.h>
 
 class FOOTPRINT;
+class SHAPE_POLY_SET;
+class EXTRUDED_3D_BODY;
+enum class EXTRUSION_MATERIAL;
+
+struct EXTRUSION_MATERIAL_PROPS
+{
+    SFVEC3F m_Ambient;
+    SFVEC3F m_Specular;
+    float   m_Shininess;
+};
 
 /**
  * Calculate a local space bounding box for a placeholder 3D model.
@@ -35,5 +47,34 @@ class FOOTPRINT;
  * then falls back to the footprint bounding box.
  */
 BOX2I CalcPlaceholderLocalBox( const FOOTPRINT* aFootprint );
+
+/**
+ * Get the extrusion outline polygon for a footprint in board coordinates.
+ *
+ * @param aFootprint the footprint to extract an outline from.
+ * @param aOutline output polygon set.
+ * @param aLayerOverride when not UNDEFINED_LAYER, use this layer instead of
+ *                       the footprint's extruded body layer setting.
+ * @return true if outline was found.
+ */
+bool GetExtrusionOutline( const FOOTPRINT* aFootprint, SHAPE_POLY_SET& aOutline,
+                          PCB_LAYER_ID aLayerOverride = UNDEFINED_LAYER );
+
+/**
+ * Get the pin outline polygons for extruded THT pin rendering.
+ *
+ * Collects drill hole shapes from all pads with holes, shrunk to ~90% of the
+ * drill diameter so pins sit inside the hole.
+ *
+ * @return true if at least one hole polygon was generated.
+ */
+bool GetExtrusionPinOutline( const FOOTPRINT* aFootprint, SHAPE_POLY_SET& aPinPoly );
+
+EXTRUSION_MATERIAL_PROPS GetMaterialProps( EXTRUSION_MATERIAL aMaterial, const SFVEC3F& aDiffuse );
+
+/**
+ * Apply 2D extrusion transforms (rotation, scale, offset) to an outline.
+ */
+void ApplyExtrusionTransform( SHAPE_POLY_SET& aOutline, const EXTRUDED_3D_BODY* aBody, const VECTOR2I& aFpPos );
 
 #endif // PLACEHOLDER_3D_UTILS_H
