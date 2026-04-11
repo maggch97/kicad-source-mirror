@@ -17,13 +17,14 @@
 # maksz42 <maksz@op.pl>, 2026.
 # szumsky <beish97@gmail.com>, 2026.
 # Annonmus <cabbagesAreTheBest@proton.me>, 2026.
+# Zbigniew Gibek <zbeegin@op.pl>, 2026.
 msgid ""
 msgstr ""
 "Project-Id-Version: kicad\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-04-07 19:08+0300\n"
-"PO-Revision-Date: 2026-04-05 09:09+0000\n"
-"Last-Translator: ZbeeGin <zbeegin@op.pl>\n"
+"PO-Revision-Date: 2026-04-12 05:09+0000\n"
+"Last-Translator: Zbigniew Gibek <zbeegin@op.pl>\n"
 "Language-Team: Polish <https://hosted.weblate.org/projects/kicad/master-"
 "source/pl/>\n"
 "Language: pl\n"
@@ -2085,100 +2086,94 @@ msgstr "Modyfikacja z pomocą API"
 #: common/api/api_plugin.cpp:58
 #, c-format
 msgid "invalid plugin configuration at '%s': %s"
-msgstr ""
+msgstr "nieprawidłowa konfiguracja wtyczki w '%s': %s"
 
 #: common/api/api_plugin.cpp:73
-#, fuzzy, c-format
+#, c-format
 msgid "invalid plugin runtime: %s"
-msgstr "Nieprawidłowa nazwa pinu"
+msgstr "nieprawidłowy czas wykonania: %s"
 
 #: common/api/api_plugin.cpp:105
-#, fuzzy
 msgid "could not read plugin configuration file"
-msgstr "Nie można uzyskać konfiguracji repozytorium"
+msgstr "nie można odczytać pliku konfiguracji wtyczki"
 
 #: common/api/api_plugin.cpp:125
-#, fuzzy, c-format
+#, c-format
 msgid "plugin configuration file error: %s"
-msgstr "Błąd Konfiguracji"
+msgstr "błąd konfiguracji pliku wtyczki: %s"
 
 #: common/api/api_plugin.cpp:158
-#, fuzzy, c-format
+#, c-format
 msgid "missing or invalid required keys: %s"
-msgstr "Brak lub niepoprawna wartość Zakres temperatury."
+msgstr "brak lub niepoprawne wymagane klucze: %s"
 
 #: common/api/api_plugin.cpp:167
-#, fuzzy, c-format
+#, c-format
 msgid "identifier '%s' is invalid"
-msgstr "Identyfikator symbolu %s nie jest prawidłowy."
+msgstr "identyfikator '%s' nie jest prawidłowy"
 
 #: common/api/api_plugin.cpp:194
-#, fuzzy, c-format
+#, c-format
 msgid "actions section is invalid: %s"
-msgstr "Niepowodzenie przy połączeniu z bazą danych: %s"
+msgstr "sekcja akcji nie jest prawidłowa: %s"
 
 #: common/api/api_plugin_manager.cpp:98
-#, fuzzy, c-format
+#, c-format
 msgid "Plugin action '%s': %s"
-msgstr "Opcje wtyczki"
+msgstr "Akcje wtyczki '%s': %s"
 
 #: common/api/api_plugin_manager.cpp:109
-#, fuzzy, c-format
+#, c-format
 msgid "Plugin '%s': %s"
-msgstr "Wtyczki (%d)"
+msgstr "Wtyczka '%s': %s"
 
 #: common/api/api_plugin_manager.cpp:124
-#, fuzzy, c-format
+#, c-format
 msgid "exited with code %d"
-msgstr "Proces zakończony z kodem błędu %d"
+msgstr "zakończono z kodem błędu %d"
 
 #: common/api/api_plugin_manager.cpp:335
-#, fuzzy
 msgid "action is not registered"
-msgstr "Wymagany jest wybór warstwy."
+msgstr "akcja nie zarejestrowana"
 
 #: common/api/api_plugin_manager.cpp:369 common/api/api_plugin_manager.cpp:779
 #: common/api/api_plugin_manager.cpp:863
-#, fuzzy
 msgid "missing plugin environment"
-msgstr "Ponownie utwórz środowisko wtyczek"
+msgstr "brak środowiska wtyczki"
 
 #: common/api/api_plugin_manager.cpp:378
-#, fuzzy, c-format
+#, c-format
 msgid "entrypoint '%s' could not be read"
-msgstr "Plik '%s' nie może zostać utworzony."
+msgstr "punkt wejścia '%s' nie może zostać odczytany"
 
 #: common/api/api_plugin_manager.cpp:446
-#, fuzzy
 msgid "process could not be created"
-msgstr "Proces nie mógł zostać utworzony"
+msgstr "proces nie mógł zostać utworzony"
 
 #: common/api/api_plugin_manager.cpp:490
-#, fuzzy, c-format
+#, c-format
 msgid "entrypoint '%s' is not executable"
-msgstr "Folder '%s' nie posiada możliwości zapisu."
+msgstr "punkt wejścia '%s' nie posiada możliwości wykonywania"
 
 #: common/api/api_plugin_manager.cpp:571
-#, fuzzy
 msgid "could not launch plugin"
-msgstr "Nie można uruchomić kreatora footprintu '%s'"
+msgstr "nie można uruchomić wtyczki"
 
 #: common/api/api_plugin_manager.cpp:749 common/api/api_plugin_manager.cpp:831
 #: common/api/api_plugin_manager.cpp:921
-#, fuzzy, c-format
+#, c-format
 msgid "error code %d"
-msgstr "Kod błędu: %d"
+msgstr "kod błędu %d"
 
 #: common/api/api_plugin_manager.cpp:751 common/api/api_plugin_manager.cpp:833
 #: common/api/api_plugin_manager.cpp:923
-#, fuzzy, c-format
+#, c-format
 msgid "could not create plugin environment: %s"
-msgstr "Ponownie utwórz środowisko wtyczek"
+msgstr "nie można utworzyć środowiska wtyczek: %s"
 
 #: common/api/api_plugin_manager.cpp:872
-#, fuzzy
 msgid "requirements.txt could not be read"
-msgstr "Proces nie mógł zostać utworzony"
+msgstr "plik requirements.txt nie mógł zostać odczytany"
 
 #: common/api/python_manager.cpp:138
 msgid "Process could not be created"
@@ -8623,49 +8618,40 @@ msgid "Schematic PythonBOM export"
 msgstr "Eksport PythonBOM schematu"
 
 #: common/jobs/job_gerber_diff.cpp:45
-#, fuzzy
 msgid "Gerber Diff"
-msgstr "Plik Gerber"
+msgstr "Porównywanie Gerber"
 
 #: common/jobs/job_gerber_diff.cpp:51
-#, fuzzy
 msgid "Gerber Diff Job Settings"
-msgstr "Ustawienia zadania eksportu plików Gerber"
+msgstr "Ustawienia zadania porównania plików Gerber"
 
 #: common/jobs/job_gerber_diff.cpp:55
-#, fuzzy
 msgid "Gerber: Diff"
-msgstr "Plik Gerber"
+msgstr "Gerber: Porównanie"
 
 #: common/jobs/job_gerber_export_png.cpp:39
-#, fuzzy
 msgid "Gerber Export PNG"
-msgstr "Eksport PCB do formatu Gerber"
+msgstr "Eksport Gerber do PNG"
 
 #: common/jobs/job_gerber_export_png.cpp:45
-#, fuzzy
 msgid "Gerber Export PNG Job Settings"
-msgstr "Ustawienia zadania eksportu HPGL"
+msgstr "Ustawienia zadania eksportu Gerber do PNG"
 
 #: common/jobs/job_gerber_export_png.cpp:49
-#, fuzzy
 msgid "Gerber: Export PNG"
-msgstr "Eksport PCB do formatu Gerber"
+msgstr "Gerber: Eksport PNG"
 
 #: common/jobs/job_gerber_info.cpp:39
-#, fuzzy
 msgid "Gerber Info"
-msgstr "Plik Gerber"
+msgstr "Informacja o pliku Gerber"
 
 #: common/jobs/job_gerber_info.cpp:45
-#, fuzzy
 msgid "Gerber Info Job Settings"
-msgstr "Ustawienia zadania eksportu plików Gerber"
+msgstr "Ustawienia zadania informacji o plikach Gerber"
 
 #: common/jobs/job_gerber_info.cpp:49
-#, fuzzy
 msgid "Gerber: Info"
-msgstr "Plik Gerber"
+msgstr "Gerber: Informacja"
 
 #: common/jobs/job_pcb_drc.cpp:42
 msgid "Perform DRC"
@@ -11554,14 +11540,13 @@ msgid "View load messages"
 msgstr "Pokazuj wiadomości podczas wczytywania"
 
 #: common/widgets/kistatusbar.cpp:509
-#, fuzzy, c-format
+#, c-format
 msgid "View %zu message(s)"
-msgstr "Podgląd %zu załadowanych wiadomości"
+msgstr "Wyświetl %zu wiadomości"
 
 #: common/widgets/kistatusbar.cpp:522
-#, fuzzy
 msgid "View messages"
-msgstr "Pokazuj wiadomości podczas wczytywania"
+msgstr "Wyświetl wiadomości"
 
 #: common/widgets/lib_tree.cpp:99
 msgid "Sort by Best Match"
@@ -13491,7 +13476,6 @@ msgid "Change severity to Error for all '%s' violations"
 msgstr "Zmień stopień na Błąd dla wszystkich naruszeń typu '%s'"
 
 #: eeschema/dialogs/dialog_erc.cpp:776 eeschema/dialogs/dialog_erc.cpp:783
-#, fuzzy
 msgid "Violation severities can also be edited in Schematic Setup"
 msgstr ""
 "Stopnie naruszeń można również zmieniać w oknie dialogowym Ustawienia "
@@ -13517,7 +13501,6 @@ msgstr "Edytuj mapę konfliktów pin-do-pinu..."
 
 #: eeschema/dialogs/dialog_erc.cpp:797 eeschema/dialogs/dialog_erc.cpp:803
 #: eeschema/dialogs/dialog_erc.cpp:810
-#, fuzzy
 msgid "Open the Schematic Setup dialog"
 msgstr "Otwiera okno dialogowe Ustawienia schematu"
 
@@ -17244,15 +17227,14 @@ msgid "Copy Design Variant"
 msgstr "Kopiuj wariant"
 
 #: eeschema/dialogs/dialog_symbol_fields_table.cpp:2947
-#, fuzzy
 msgid "Cannot edit the default variant description."
-msgstr "Nie można usunąć podstawowego wariantu."
+msgstr "Nie można zmienić opisu podstawowego wariantu."
 
 #: eeschema/dialogs/dialog_symbol_fields_table.cpp:2955
 #: eeschema/sch_edit_frame.cpp:3055
-#, fuzzy, c-format
+#, c-format
 msgid "Edit Description for '%s'"
-msgstr "Edytuj opis zadania"
+msgstr "Edytuj opis dla '%s'"
 
 #: eeschema/dialogs/dialog_symbol_fields_table_base.cpp:79
 msgid "Add a new field"
@@ -20664,9 +20646,8 @@ msgid "Resolved Netclass"
 msgstr "Przeanalizowane klasy sieci"
 
 #: eeschema/sch_bus_entry.cpp:652 eeschema/sch_line.cpp:1286
-#, fuzzy
 msgid "Wire Style"
-msgstr "Styl linii"
+msgstr "Styl połączenia"
 
 #: eeschema/sch_connection.cpp:455
 msgid "Connection Name"
@@ -20829,19 +20810,16 @@ msgid "Find in Net Inspector"
 msgstr "Szukaj w Inspektorze sieci"
 
 #: eeschema/sch_edit_frame.cpp:3037
-#, fuzzy
 msgid "No design variants to edit."
-msgstr "Dodaje nowy wariant projektu do schematu."
+msgstr "Brak wariantu projektowego by go edytować."
 
 #: eeschema/sch_edit_frame.cpp:3041
-#, fuzzy
 msgid "Select variant to edit description:"
-msgstr "Wybierz nazwę wariantu do usunięcia:"
+msgstr "Wybierz wariant by zmienić opis:"
 
 #: eeschema/sch_edit_frame.cpp:3042
-#, fuzzy
 msgid "Edit Variant Description"
-msgstr "Edytuj opis zadania"
+msgstr "Edytuj opis wariantu"
 
 #: eeschema/sch_edit_frame.cpp:3102
 msgid "Select variant name to remove:"
@@ -26889,9 +26867,8 @@ msgid "Import 2D drawing file"
 msgstr "Importuj plik z rysunkami 2D"
 
 #: eeschema/tools/sch_actions.cpp:1233
-#, fuzzy
 msgid "Import Non-KiCad Schematic..."
-msgstr "Schemat spoza programu KiCad..."
+msgstr "Importuj schemat spoza programu KiCad..."
 
 #: eeschema/tools/sch_actions.cpp:1234
 msgid ""
@@ -27421,14 +27398,12 @@ msgid "Remove an existing design variant from the schematic."
 msgstr "Usuwa istniejący wariant projektu ze schematu."
 
 #: eeschema/tools/sch_actions.cpp:1808
-#, fuzzy
 msgid "Edit Variant Description..."
-msgstr "Edytuj opis zadania"
+msgstr "Edycja opisu wariantu..."
 
 #: eeschema/tools/sch_actions.cpp:1809
-#, fuzzy
 msgid "Edit the description of an existing design variant."
-msgstr "Edycja pliku skryptu w edytorze tekstu"
+msgstr "Edycja opisu istniejącego wariantu projektowego."
 
 #: eeschema/tools/sch_align_tool.cpp:64
 msgid "Align"
@@ -30108,103 +30083,102 @@ msgid ""
 "View and compare existing Gerber/Excellon files. To export Gerbers from a "
 "PCB, use 'pcb export gerber'"
 msgstr ""
+"Przegląda i porównuje istniejące pliki Gerber/Excellon. Aby wyeksportować "
+"pliki Gerber z płytki PCB, użyj polecenia 'Pliki produkcyjne -> Eksportuj "
+"pliki Gerber...'"
 
 #: kicad/cli/command_gerber_convert.h:33
 msgid "Convert Gerber/Excellon to other formats"
-msgstr ""
+msgstr "Konwertuje pliki Gerber/Excellon do innych formatów"
 
 #: kicad/cli/command_gerber_convert_png.cpp:43
 msgid "Convert a Gerber or Excellon file to PNG image"
-msgstr ""
+msgstr "Konwertuje plik Gerber lub Excellon do obrazu PNG"
 
 #: kicad/cli/command_gerber_convert_png.cpp:48
-#, fuzzy
 msgid "Resolution in DPI (default: 300)"
-msgstr "(opcionalny; domyślnie 0)"
+msgstr "Rozdzielczość w DPI (domyślnie: 300)"
 
 #: kicad/cli/command_gerber_convert_png.cpp:54
 msgid "Output width in pixels (overrides DPI)"
-msgstr ""
+msgstr "Szerokość w pikselach (zmienia DPI)"
 
 #: kicad/cli/command_gerber_convert_png.cpp:60
 msgid "Output height in pixels (overrides DPI)"
-msgstr ""
+msgstr "Wysokość w pikselach (zmienia DPI)"
 
 #: kicad/cli/command_gerber_convert_png.cpp:66
 msgid "Use transparent background (default)"
-msgstr ""
+msgstr "Użyj przeźroczystości tła (domyślnie)"
 
 #: kicad/cli/command_gerber_convert_png.cpp:69
 #: kicad/cli/command_gerber_diff.cpp:85 kicad/cli/command_gerber_info.cpp:56
 msgid "Fail on any parse warnings or errors"
-msgstr ""
+msgstr "Przerwij w przypadku błędów lub ostrzeżeń parsowania"
 
 #: kicad/cli/command_gerber_diff.cpp:46
 msgid "Compare two Gerber or Excellon files and show differences"
-msgstr ""
+msgstr "Porównuje dwa pliki Gerber lub Excellon i pokazuje różnice"
 
 #: kicad/cli/command_gerber_diff.cpp:49
 msgid "Reference file (first Gerber/Excellon file)"
-msgstr ""
+msgstr "Plik odniesienia (pierwszy plik Gerber/Excellon)"
 
 #: kicad/cli/command_gerber_diff.cpp:53
 msgid "Comparison file (second Gerber/Excellon file)"
-msgstr ""
+msgstr "Plik porównywany (drugi plik Gerber/Excellon)"
 
 #: kicad/cli/command_gerber_diff.cpp:58
-#, fuzzy
 msgid "Output format: png, text, or json (default: png)"
-msgstr "Formaty importowanych raportów: none, json, text (domyślnie: none)"
+msgstr "Formaty wyjściowe: png, tekst lub json (domyślnie: png)"
 
 #: kicad/cli/command_gerber_diff.cpp:64
 msgid "Resolution in DPI for PNG output (default: 300)"
-msgstr ""
+msgstr "Rozdzielczość DPI dla PNG (domyślnie: 300)"
 
 #: kicad/cli/command_gerber_diff.cpp:68
-#, fuzzy
 msgid "Disable anti-aliasing for PNG output"
-msgstr "Wyłącz antyaliasing"
+msgstr "Wyłącz antyaliasing w PNG"
 
 #: kicad/cli/command_gerber_diff.cpp:72
 msgid "Use transparent background for PNG output"
-msgstr ""
+msgstr "Użyj transparentnego tła dla wyjściowego pliku PNG"
 
 #: kicad/cli/command_gerber_diff.cpp:76
 msgid "Only set exit code (0=identical, 1=different), no output"
 msgstr ""
+"Ustaw wyłącznie kod wyjścia (0 = identyczne, 1 = różne), bez generowania "
+"niczego"
 
 #: kicad/cli/command_gerber_diff.cpp:82
 msgid "Tolerance in nm for floating point comparisons (default: 0)"
-msgstr ""
+msgstr "Tolerancja w nm dla porównań ułamkowych (domyślnie: 0)"
 
 #: kicad/cli/command_gerber_diff.cpp:118 kicad/cli/command_gerber_info.cpp:80
-#, fuzzy, c-format
+#, c-format
 msgid "Invalid output format: %s\n"
-msgstr "Nieprawidłowy format raportu: %s\n"
+msgstr "Nieprawidłowy format wyjściowy: %s\n"
 
 #: kicad/cli/command_gerber_info.cpp:40
 msgid "Display information about a Gerber or Excellon file"
-msgstr ""
+msgstr "Wyświetl informacje o pliku Gernber lub Excellon"
 
 #: kicad/cli/command_gerber_info.cpp:44
-#, fuzzy
 msgid "Output format, options: text, json"
-msgstr "Format pliku wyjściowego, opcje: json, report"
+msgstr "Format pliku wyjściowego, opcje: tekst, json"
 
 #: kicad/cli/command_gerber_info.cpp:49
-#, fuzzy
 msgid "Output units, options: mm, inch, mils (default: mm)"
-msgstr "Jednostki wyjściowe, prawidłowe opcje: mm, in"
+msgstr "Jednostki wyjściowe, opcje: mm, in, mils (domyślnie: mm)"
 
 #: kicad/cli/command_gerber_info.cpp:53
-#, fuzzy
 msgid "Calculate and display copper area"
-msgstr "Obliczanie powierzchni pokrytej"
+msgstr "Obliczanie i wyświetlanie powierzchni pokrytej miedzią"
 
 #: kicad/cli/command_gerber_info.cpp:100
-#, fuzzy, c-format
+#, c-format
 msgid "Invalid units: %s\n"
-msgstr "Określono nieprawidłową liczbę jednostek\n"
+msgstr "Nieprawidłowa liczba jednostek: %s\n"
 
 #: kicad/cli/command_jobset.h:32
 msgid "Jobset"
@@ -38027,12 +38001,12 @@ msgstr "liczba pionowo"
 #: pcbnew/dialogs/dialog_create_array.cpp:436
 #, c-format
 msgid "horizontal delta of zero with %ld objects"
-msgstr ""
+msgstr "pozioma delta zera z obiektami %ld"
 
 #: pcbnew/dialogs/dialog_create_array.cpp:442
 #, c-format
 msgid "vertical delta of zero with %ld objects"
-msgstr ""
+msgstr "pinowa delta zera z obiektami %ld"
 
 #: pcbnew/dialogs/dialog_create_array.cpp:451
 msgid "stagger"
@@ -38045,7 +38019,7 @@ msgstr "liczba wyprowadzeń"
 #: pcbnew/dialogs/dialog_create_array.cpp:517
 #, c-format
 msgid "angular delta of zero with %ld objects"
-msgstr ""
+msgstr "kątowa delta zera z obiektami %ld"
 
 #: pcbnew/dialogs/dialog_create_array.cpp:564
 msgid "Bad parameters"
@@ -38729,13 +38703,11 @@ msgid "They will be excluded from the %s list"
 msgstr "Zostanie wykluczone z listy %s"
 
 #: pcbnew/dialogs/dialog_drc.cpp:788 pcbnew/dialogs/dialog_drc.cpp:795
-#, fuzzy
 msgid "Violation severities can also be edited in Board Setup"
 msgstr ""
 "Stopnie naruszeń można również zmieniać w oknie dialogowym Ustawienia płytki"
 
 #: pcbnew/dialogs/dialog_drc.cpp:806
-#, fuzzy
 msgid "Open the Board Setup dialog"
 msgstr "Otwiera okno dialogowe Ustawienia płytki"
 
@@ -57816,9 +57788,8 @@ msgstr ""
 "automatycznie przez edytor PCB"
 
 #: pcbnew/tools/pcb_actions.cpp:1215
-#, fuzzy
 msgid "Import Non-KiCad Board File..."
-msgstr "Importuj płytkę spoza programu KiCad"
+msgstr "Importuj płytkę spoza programu KiCad..."
 
 #: pcbnew/tools/pcb_actions.cpp:1216
 msgid "Import board file from other applications"
