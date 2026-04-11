@@ -420,12 +420,6 @@ bool PGM_SINGLE_TOP::OnPgmInit()
     // Load library tables after startup wizard
     GetLibraryManager().LoadGlobalTables();
 
-    // Preload libraries, since for single-top this won't have been done earlier
-    if( KIFACE* topFrame = Kiway.KiFACE( KIWAY::KifaceType( TOP_FRAME ) ) )
-        topFrame->PreloadLibraries( &Kiway );
-
-    PreloadDesignBlockLibraries( &Kiway );
-
     App().SetTopWindow( frame );      // wxApp gets a face.
     App().SetAppDisplayName( frame->GetAboutTitle() );
 
@@ -489,6 +483,13 @@ bool PGM_SINGLE_TOP::OnPgmInit()
 
         frame->OpenProjectFiles( fileArgs );
     }
+
+    // In single-top mode, OpenProjectFiles() may switch to a different project. Preload
+    // libraries only after that so project-local libraries are loaded for the active project.
+    if( KIFACE* topFrame = Kiway.KiFACE( KIWAY::KifaceType( TOP_FRAME ) ) )
+        topFrame->PreloadLibraries( &Kiway );
+
+    PreloadDesignBlockLibraries( &Kiway );
 
 #ifdef KICAD_IPC_API
     m_api_server->SetReadyToReply();
