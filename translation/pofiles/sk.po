@@ -14,7 +14,7 @@ msgstr ""
 "Project-Id-Version: kicad\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-04-07 19:08+0300\n"
-"PO-Revision-Date: 2026-04-08 22:09+0000\n"
+"PO-Revision-Date: 2026-04-12 18:37+0000\n"
 "Last-Translator: EdizonTN <edizontn@gmail.com>\n"
 "Language-Team: Slovak <https://hosted.weblate.org/projects/kicad/master-"
 "source/sk/>\n"
@@ -1632,7 +1632,7 @@ msgstr "Počet odrazov, ktoré môže lúč dopadnúť na reflexné objekty"
 
 #: 3d-viewer/dialogs/panel_3D_raytracing_options_base.cpp:124
 msgid "Lights Configuration"
-msgstr "Nastavenie svetla"
+msgstr "Nastavenie osvetlenia"
 
 #: 3d-viewer/dialogs/panel_3D_raytracing_options_base.cpp:137
 msgid "Ambient camera light:"
@@ -2075,7 +2075,7 @@ msgstr "Modifikácia z API"
 #: common/api/api_plugin.cpp:58
 #, c-format
 msgid "invalid plugin configuration at '%s': %s"
-msgstr ""
+msgstr "neplatné nastavenie doplnku na '%s':%s"
 
 #: common/api/api_plugin.cpp:73
 #, fuzzy, c-format
@@ -2083,14 +2083,13 @@ msgid "invalid plugin runtime: %s"
 msgstr "Neplatný názov vývodu"
 
 #: common/api/api_plugin.cpp:105
-#, fuzzy
 msgid "could not read plugin configuration file"
-msgstr "Nepodarilo sa získať prístup ku konfigurácii úložiska"
+msgstr "nebolo možné načítať súbor nastavenia doplnku"
 
 #: common/api/api_plugin.cpp:125
-#, fuzzy, c-format
+#, c-format
 msgid "plugin configuration file error: %s"
-msgstr "Chyby v nastavení"
+msgstr "chyba súboru nastavenia doplnku: %s"
 
 #: common/api/api_plugin.cpp:158
 #, fuzzy, c-format
@@ -2808,11 +2807,11 @@ msgid ""
 "this behavior, either rename any conflicting entries or remove\n"
 "the external environment variable(s) from your system."
 msgstr ""
-"Pri ďalšom spustení KiCadu všetky cesty, ktoré už bolidefinované,\n"
-"budú dodržané a všetky ostatné nastavenia definované v ceste\n"
-"konfiguračného dialógu sú ignorované. Ak ste nemali v úmysle\n"
-"toto správanie, premenujte všetky konfliktné položky, alebo odstráňte\n"
-"premenné externého prostredia z vášho systému."
+"Pri ďalšom spustení KiCadu budú akceptované všetky\n"
+"už definované cesty a všetky nastavenia definované v dialógovom\n"
+"okne nastavenia ciest sa ignorujú.  Ak ste s toto správanie\n"
+"nezamýšľali, premenujte všetky konfliktné položky alebo odstráňte\n"
+"externú(-é) premennú(-é) prostredia zo systému."
 
 #: common/dialogs/dialog_configure_paths.cpp:358
 #, c-format
@@ -11065,7 +11064,7 @@ msgstr "Konfigurovať cesty..."
 
 #: common/tool/actions.cpp:1361
 msgid "Edit path configuration environment variables"
-msgstr "Upraviť konfiguráciu ciesty premenných prostredia"
+msgstr "Upraviť nastavenie cesty v premenných prostredia"
 
 #: common/tool/actions.cpp:1367
 msgid "Manage Symbol Libraries..."
@@ -12144,7 +12143,7 @@ msgstr ""
 
 #: cvpcb/cvpcb_mainframe.cpp:906
 msgid "Configuration Error"
-msgstr "Chyby v nastavení"
+msgstr "Chyba v nastavení"
 
 #: cvpcb/cvpcb_mainframe.cpp:910
 msgid "Load Footprint Libraries"
@@ -13199,11 +13198,11 @@ msgstr "Pripojovací reťazec:"
 
 #: eeschema/dialogs/dialog_database_lib_settings_base.cpp:104
 msgid "Reload Configuration"
-msgstr "Znova načítať konfiguráciu"
+msgstr "Znova načítať nastavenie"
 
 #: eeschema/dialogs/dialog_database_lib_settings_base.cpp:105
 msgid "Reload the database library configuration file"
-msgstr "Znova načítať konfiguračný súbor databázovej knižnice"
+msgstr "Znova načítať súbor nastavení databázovej knižnice"
 
 #: eeschema/dialogs/dialog_database_lib_settings_base.cpp:120
 msgid "Caching"
@@ -16594,7 +16593,7 @@ msgstr "Režim kompatibility:"
 
 #: eeschema/dialogs/dialog_sim_command_base.cpp:666
 msgid "User configuration"
-msgstr "Používateľská konfigurácia"
+msgstr "Používateľské nastavenia"
 
 #: eeschema/dialogs/dialog_sim_command_base.cpp:666
 msgid "Spice"
@@ -19048,7 +19047,7 @@ msgstr "Vývod %s nie je pripojený k spoju uzemnenia"
 #: eeschema/erc/erc.cpp:1708
 #, c-format
 msgid "The current configuration does not include the symbol library '%s'"
-msgstr "Aktuálna konfigurácia nezahŕňa knižnicu symbolov '%s'"
+msgstr "Aktuálne nastavenie nezahŕňa knižnicu symbolov '%s'"
 
 #: eeschema/erc/erc.cpp:1726
 #, c-format
@@ -19074,13 +19073,13 @@ msgstr "'%s' nie je platný identifikátor puzdra"
 #: pcbnew/drc/drc_test_provider_library_parity.cpp:1109
 #, c-format
 msgid "The current configuration does not include the footprint library '%s'"
-msgstr "Aktuálna konfigurácia nezahŕňa knižnicu puzdier '%s'"
+msgstr "Aktuálne nastavenia nezahŕňajú knižnicu puzdier '%s'"
 
 #: eeschema/erc/erc.cpp:1849
 #: pcbnew/drc/drc_test_provider_library_parity.cpp:1123
 #, c-format
 msgid "The footprint library '%s' is not enabled in the current configuration"
-msgstr "Knižnica puzdier '%s' nie je povolená v aktuálnej konfigurácii"
+msgstr "Knižnica puzdier '%s' nie je povolená v aktuálnom nastavení"
 
 #: eeschema/erc/erc.cpp:1858
 #: pcbnew/drc/drc_test_provider_library_parity.cpp:1174
@@ -25100,12 +25099,12 @@ msgstr "Nepodarilo sa uložiť zálohu do '%s'."
 #: eeschema/symbol_editor/symbol_edit_frame.cpp:1716
 #, c-format
 msgid "The current configuration does not include the symbol library '%s'."
-msgstr "Aktuálna konfigurácia nezahŕňa knižnicu symbolov '%s'."
+msgstr "Aktuálne nastavenie nezahŕňa knižnicu symbolov '%s'."
 
 #: eeschema/symbol_editor/symbol_edit_frame.cpp:1718
 #: eeschema/symbol_editor/symbol_edit_frame.cpp:1729
 msgid "Use Manage Symbol Libraries to edit the configuration."
-msgstr "Na úpravu konfigurácie použite 'Spravovať knižnice symbolov'."
+msgstr "Na úpravu nastavenia, použite 'Spravovať knižnice symbolov'."
 
 #: eeschema/symbol_editor/symbol_edit_frame.cpp:1719
 msgid "Library not found in symbol library table."
@@ -25114,7 +25113,7 @@ msgstr "Knižnica sa nenašla v tabuľke knižnice symbolov."
 #: eeschema/symbol_editor/symbol_edit_frame.cpp:1727
 #, c-format
 msgid "The symbol library '%s' is not enabled in the current configuration."
-msgstr "Knižnica symbolov '%s' nie je povolená v aktuálnej konfigurácii."
+msgstr "Knižnica symbolov '%s' nie je povolená v aktuálnom nastavení."
 
 #: eeschema/symbol_editor/symbol_edit_frame.cpp:1730
 msgid "Symbol library not enabled."
@@ -27729,7 +27728,7 @@ msgstr "Položka knižnice: "
 #: eeschema/tools/sch_inspection_tool.cpp:374
 #: pcbnew/tools/board_inspection_tool.cpp:1891
 msgid "The library is not included in the current configuration."
-msgstr "Knižnica nie je zahrnutá v aktuálnej konfigurácii."
+msgstr "Knižnica nie je zahrnutá v aktuálnom nastavení."
 
 #: eeschema/tools/sch_inspection_tool.cpp:376
 #: eeschema/tools/sch_inspection_tool.cpp:382
@@ -27739,7 +27738,7 @@ msgstr "Spravovať knižnice symbolov"
 #: eeschema/tools/sch_inspection_tool.cpp:380
 #: pcbnew/tools/board_inspection_tool.cpp:1899
 msgid "The library is not enabled in the current configuration."
-msgstr "Knižnica nie je povolená v aktuálnej konfigurácii."
+msgstr "Knižnica nie je povolená v aktuálnom nastavení."
 
 #: eeschema/tools/sch_inspection_tool.cpp:400
 #: pcbnew/tools/board_inspection_tool.cpp:1919
@@ -29892,14 +29891,16 @@ msgid ""
 "View and compare existing Gerber/Excellon files. To export Gerbers from a "
 "PCB, use 'pcb export gerber'"
 msgstr ""
+"Zobraziť a porovnať existujúce súbory Gerber/Excellon. Na export súborov "
+"Gerber z DPS, použite príkaz 'pcb export gerber'"
 
 #: kicad/cli/command_gerber_convert.h:33
 msgid "Convert Gerber/Excellon to other formats"
-msgstr ""
+msgstr "Konvertovať Gerber/Excellon do iných formátov"
 
 #: kicad/cli/command_gerber_convert_png.cpp:43
 msgid "Convert a Gerber or Excellon file to PNG image"
-msgstr ""
+msgstr "Konvertovať súboru Gerber alebo Excellon do obrázku PNG"
 
 #: kicad/cli/command_gerber_convert_png.cpp:48
 #, fuzzy
@@ -29908,28 +29909,28 @@ msgstr "(voliteľné; predvolené 0)"
 
 #: kicad/cli/command_gerber_convert_png.cpp:54
 msgid "Output width in pixels (overrides DPI)"
-msgstr ""
+msgstr "Výstupná šírka v pixeloch (prepísanie DPI)"
 
 #: kicad/cli/command_gerber_convert_png.cpp:60
 msgid "Output height in pixels (overrides DPI)"
-msgstr ""
+msgstr "Výstupná výška v pixeloch (prepísanie DPI)"
 
 #: kicad/cli/command_gerber_convert_png.cpp:66
 msgid "Use transparent background (default)"
-msgstr ""
+msgstr "Použiť priehľadné pozadie (predvolené)"
 
 #: kicad/cli/command_gerber_convert_png.cpp:69
 #: kicad/cli/command_gerber_diff.cpp:85 kicad/cli/command_gerber_info.cpp:56
 msgid "Fail on any parse warnings or errors"
-msgstr ""
+msgstr "Zlyhanie pri akýchkoľvek upozorneniach alebo chybách spracovania"
 
 #: kicad/cli/command_gerber_diff.cpp:46
 msgid "Compare two Gerber or Excellon files and show differences"
-msgstr ""
+msgstr "Porovnať dva Gerber alebo Excellon súbory a zobraziť rozdiely"
 
 #: kicad/cli/command_gerber_diff.cpp:49
 msgid "Reference file (first Gerber/Excellon file)"
-msgstr ""
+msgstr "Referenčný súbor (prvý Gerber/Excellon súbor)"
 
 #: kicad/cli/command_gerber_diff.cpp:53
 msgid "Comparison file (second Gerber/Excellon file)"
@@ -31099,7 +31100,7 @@ msgstr "Zahrnúť úlohy:"
 
 #: kicad/dialogs/dialog_edit_cfg.cpp:160
 msgid "Edit Advanced Configuration"
-msgstr "Upraviť rozšírenú konfiguráciu"
+msgstr "Upraviť rozšírené nastavenie"
 
 #: kicad/dialogs/dialog_edit_cfg.cpp:173
 msgid "Key"
@@ -31469,7 +31470,7 @@ msgstr "Skladby vrstiev dosky"
 
 #: kicad/dialogs/template_default_html.h:258
 msgid "Layer configurations optimized for common manufacturing processes."
-msgstr "Konfigurácie vrstiev optimalizované pre bežné výrobné procesy."
+msgstr "Nastavenie vrstiev optimalizované pre bežné výrobné procesy."
 
 #: kicad/dialogs/template_default_html.h:265
 msgid ""
@@ -31556,8 +31557,7 @@ msgstr "Prepnúť na kartu systémových šablón"
 
 #: kicad/dialogs/template_default_html.h:556
 msgid "Each template needs a 'meta' folder containing configuration files."
-msgstr ""
-"Každá šablóna potrebuje priečinok 'meta' obsahujúci konfiguračné súbory."
+msgstr "Každá šablóna potrebuje priečinok 'meta' obsahujúci súbory nastavení."
 
 #: kicad/files-io.cpp:42
 msgid "KiCad project file"
@@ -46404,7 +46404,7 @@ msgstr "Ladiaci profil musí mať názov"
 
 #: pcbnew/dialogs/panel_setup_tuning_profile_info.cpp:845
 msgid "Duplicated signal layer configuration in tuning profile"
-msgstr "Duplicitná konfigurácia signálovej vrstvy v profile ladenia"
+msgstr "Duplicitné nastavenie signálovej vrstvy v profile ladenia"
 
 #: pcbnew/dialogs/panel_setup_tuning_profile_info.cpp:873
 #: pcbnew/dialogs/panel_setup_tuning_profile_info.cpp:884
@@ -49638,11 +49638,11 @@ msgstr "Upraviť zónu"
 #: pcbnew/footprint_editor_utils.cpp:348
 #, c-format
 msgid "The current configuration does not include the footprint library '%s'."
-msgstr "Aktuálna konfigurácia neobsahuje knižnicu puzdier '%s'."
+msgstr "Aktuálne nastavenie neobsahuje knižnicu puzdier '%s'."
 
 #: pcbnew/footprint_editor_utils.cpp:350 pcbnew/footprint_editor_utils.cpp:362
 msgid "Use Manage Footprint Libraries to edit the configuration."
-msgstr "Použite Spravovať knižnice puzdier na úpravu konfigurácie."
+msgstr "Na úpravu nastavenia, použite \"Spravovať knižnice puzdier\"."
 
 #: pcbnew/footprint_editor_utils.cpp:351
 msgid "Library not found in footprint library table."
@@ -49651,7 +49651,7 @@ msgstr "Knižnica sa nenašla v tabuľke knižníc puzdier."
 #: pcbnew/footprint_editor_utils.cpp:360
 #, c-format
 msgid "The footprint library '%s' is not enabled in the current configuration."
-msgstr "Knižnica puzdier '%s' nie je povolená v aktuálnej konfigurácii."
+msgstr "Knižnica puzdier '%s' nie je povolená v aktuálnom nastavení."
 
 #: pcbnew/footprint_editor_utils.cpp:363
 msgid "Footprint library not enabled."
