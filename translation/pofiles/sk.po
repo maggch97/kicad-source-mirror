@@ -14,7 +14,7 @@ msgstr ""
 "Project-Id-Version: kicad\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-04-07 19:08+0300\n"
-"PO-Revision-Date: 2026-04-12 18:37+0000\n"
+"PO-Revision-Date: 2026-04-13 19:09+0000\n"
 "Last-Translator: EdizonTN <edizontn@gmail.com>\n"
 "Language-Team: Slovak <https://hosted.weblate.org/projects/kicad/master-"
 "source/sk/>\n"
@@ -2078,9 +2078,9 @@ msgid "invalid plugin configuration at '%s': %s"
 msgstr "neplatné nastavenie doplnku na '%s':%s"
 
 #: common/api/api_plugin.cpp:73
-#, fuzzy, c-format
+#, c-format
 msgid "invalid plugin runtime: %s"
-msgstr "Neplatný názov vývodu"
+msgstr "neplatný runtime doplnku: %s"
 
 #: common/api/api_plugin.cpp:105
 msgid "could not read plugin configuration file"
@@ -2092,82 +2092,77 @@ msgid "plugin configuration file error: %s"
 msgstr "chyba súboru nastavenia doplnku: %s"
 
 #: common/api/api_plugin.cpp:158
-#, fuzzy, c-format
+#, c-format
 msgid "missing or invalid required keys: %s"
-msgstr "Chýbajúca alebo neplatná hodnota teplotného rozsahu."
+msgstr "chýbajúce alebo neplatné požadované kľúče: %s"
 
 #: common/api/api_plugin.cpp:167
-#, fuzzy, c-format
+#, c-format
 msgid "identifier '%s' is invalid"
-msgstr "Knižničný identifikátor symbolu %s nie je platný."
+msgstr "neplatný identifikátor '%s'"
 
 #: common/api/api_plugin.cpp:194
-#, fuzzy, c-format
+#, c-format
 msgid "actions section is invalid: %s"
-msgstr "Pripojenie k databáze zlyhalo: %s"
+msgstr "neplatná sekcia akcií: %s"
 
 #: common/api/api_plugin_manager.cpp:98
-#, fuzzy, c-format
+#, c-format
 msgid "Plugin action '%s': %s"
-msgstr "Možnosti doplnku"
+msgstr "Akcie doplnku '%s': %s"
 
 #: common/api/api_plugin_manager.cpp:109
-#, fuzzy, c-format
+#, c-format
 msgid "Plugin '%s': %s"
-msgstr "Pluginy (%d)"
+msgstr "Doplnok '%s': %s"
 
 #: common/api/api_plugin_manager.cpp:124
-#, fuzzy, c-format
+#, c-format
 msgid "exited with code %d"
-msgstr "Proces zlyhal s ukončovacím kódom %d"
+msgstr "ukončené kódom %d"
 
 #: common/api/api_plugin_manager.cpp:335
-#, fuzzy
 msgid "action is not registered"
-msgstr "Výber vrstvy je povinný."
+msgstr "neregistrovaná akcia"
 
 #: common/api/api_plugin_manager.cpp:369 common/api/api_plugin_manager.cpp:779
 #: common/api/api_plugin_manager.cpp:863
-#, fuzzy
 msgid "missing plugin environment"
-msgstr "Obnoviť prostredie zásuvného modulu"
+msgstr "chýbajúce prostredie doplnku"
 
 #: common/api/api_plugin_manager.cpp:378
-#, fuzzy, c-format
+#, c-format
 msgid "entrypoint '%s' could not be read"
-msgstr "Súbor '%s' sa nepodarilo vytvoriť."
+msgstr "vstupný bod '%s' nebolo možné prečítať"
 
 #: common/api/api_plugin_manager.cpp:446
-#, fuzzy
 msgid "process could not be created"
-msgstr "Proces sa nepodarilo vytvoriť"
+msgstr "proces nebolo možné vytvoriť"
 
 #: common/api/api_plugin_manager.cpp:490
-#, fuzzy, c-format
+#, c-format
 msgid "entrypoint '%s' is not executable"
-msgstr "Adresár '%s' nie je zapisovateľný."
+msgstr "vstupný bod '%s' nie je spustiteľný"
 
 #: common/api/api_plugin_manager.cpp:571
-#, fuzzy
 msgid "could not launch plugin"
-msgstr "Nebolo možné spustiť sprievodcu puzdrom '%s'"
+msgstr "nebolo možné spustiť doplnok"
 
 #: common/api/api_plugin_manager.cpp:749 common/api/api_plugin_manager.cpp:831
 #: common/api/api_plugin_manager.cpp:921
-#, fuzzy, c-format
+#, c-format
 msgid "error code %d"
-msgstr "Číslo chyby: %d"
+msgstr "kód chyby: %d"
 
 #: common/api/api_plugin_manager.cpp:751 common/api/api_plugin_manager.cpp:833
 #: common/api/api_plugin_manager.cpp:923
-#, fuzzy, c-format
+#, c-format
 msgid "could not create plugin environment: %s"
-msgstr "Obnoviť prostredie zásuvného modulu"
+msgstr "nebolo možné vytvoriť prostredie doplnku: %s"
 
 #: common/api/api_plugin_manager.cpp:872
-#, fuzzy
 msgid "requirements.txt could not be read"
-msgstr "Proces sa nepodarilo vytvoriť"
+msgstr "requirements.txt nebolo možné načítať"
 
 #: common/api/python_manager.cpp:138
 msgid "Process could not be created"
@@ -7362,7 +7357,7 @@ msgstr "Viditeľné"
 #: common/eda_text.cpp:1412 eeschema/sch_field.cpp:1682
 #: eeschema/sch_field.cpp:1686 eeschema/sch_label.cpp:2497
 msgid "Horizontal Justification"
-msgstr "Horizontálne zarovnanie"
+msgstr "Vodorovné zarovnanie"
 
 #: common/eda_text.cpp:1416 eeschema/sch_field.cpp:1688
 #: eeschema/sch_field.cpp:1692 eeschema/sch_label.cpp:2498
@@ -7370,7 +7365,7 @@ msgstr "Horizontálne zarovnanie"
 #: pcbnew/pcb_dimension.cpp:2085 pcbnew/pcb_dimension.cpp:2127
 #: pcbnew/pcb_dimension.cpp:2161
 msgid "Vertical Justification"
-msgstr "Vertikálne zarovnanie"
+msgstr "Zvislé zarovnanie"
 
 #: common/eda_text.cpp:1425 eeschema/sch_field.cpp:1700
 #: eeschema/sch_label.cpp:2459 eeschema/sch_tablecell.cpp:450
@@ -8575,49 +8570,40 @@ msgid "Schematic PythonBOM export"
 msgstr "Export PythonBOM schémy"
 
 #: common/jobs/job_gerber_diff.cpp:45
-#, fuzzy
 msgid "Gerber Diff"
-msgstr "Súbor Gerber"
+msgstr "Gerber rozdiely"
 
 #: common/jobs/job_gerber_diff.cpp:51
-#, fuzzy
 msgid "Gerber Diff Job Settings"
-msgstr "Nastavenia úlohy exportu Gerber súborov"
+msgstr "Nastavenia úlohy Gerber rozdielov"
 
 #: common/jobs/job_gerber_diff.cpp:55
-#, fuzzy
 msgid "Gerber: Diff"
-msgstr "Súbor Gerber"
+msgstr "Gerber: Rozdiely"
 
 #: common/jobs/job_gerber_export_png.cpp:39
-#, fuzzy
 msgid "Gerber Export PNG"
-msgstr "STEP export"
+msgstr "Exportovať Gerber do PNG"
 
 #: common/jobs/job_gerber_export_png.cpp:45
-#, fuzzy
 msgid "Gerber Export PNG Job Settings"
-msgstr "Upraviť možnosti..."
+msgstr "Nastavenia úlohy exportu Gerber do PNG"
 
 #: common/jobs/job_gerber_export_png.cpp:49
-#, fuzzy
 msgid "Gerber: Export PNG"
-msgstr "STEP export"
+msgstr "Gerber: Export do PNG"
 
 #: common/jobs/job_gerber_info.cpp:39
-#, fuzzy
 msgid "Gerber Info"
-msgstr "Súbor Gerber"
+msgstr "Gerber informácie"
 
 #: common/jobs/job_gerber_info.cpp:45
-#, fuzzy
 msgid "Gerber Info Job Settings"
-msgstr "Nastavenia úlohy exportu Gerber súborov"
+msgstr "Nastavenia úlohy Gerber informácií"
 
 #: common/jobs/job_gerber_info.cpp:49
-#, fuzzy
 msgid "Gerber: Info"
-msgstr "Súbor Gerber"
+msgstr "Gerber: Informácie"
 
 #: common/jobs/job_pcb_drc.cpp:42
 msgid "Perform DRC"
@@ -11501,14 +11487,13 @@ msgid "View load messages"
 msgstr "Zobraziť správy o načítaní"
 
 #: common/widgets/kistatusbar.cpp:509
-#, fuzzy, c-format
+#, c-format
 msgid "View %zu message(s)"
-msgstr "Zobraziť %zu správ(y) z načítania"
+msgstr "Zobraziť %zu správ(y)"
 
 #: common/widgets/kistatusbar.cpp:522
-#, fuzzy
 msgid "View messages"
-msgstr "Zobraziť správy o načítaní"
+msgstr "Zobraziť správy"
 
 #: common/widgets/lib_tree.cpp:99
 msgid "Sort by Best Match"
@@ -13422,11 +13407,10 @@ msgid "Change severity to Error for all '%s' violations"
 msgstr "Pri všetkých porušeniach pravidla '%s' zmeniť závažnosť na Chybu"
 
 #: eeschema/dialogs/dialog_erc.cpp:776 eeschema/dialogs/dialog_erc.cpp:783
-#, fuzzy
 msgid "Violation severities can also be edited in Schematic Setup"
 msgstr ""
-"Závažnosti porušenia je možné upraviť aj v dialógovom okne Nastavenie "
-"schémy..."
+"Závažnosti porušenia je možné upraviť aj v dialógovom okne 'Nastavenie "
+"schémy'"
 
 #: eeschema/dialogs/dialog_erc.cpp:781 pcbnew/dialogs/dialog_drc.cpp:793
 #, c-format
@@ -17152,15 +17136,14 @@ msgid "Copy Design Variant"
 msgstr "Kopírovať variant návrhu"
 
 #: eeschema/dialogs/dialog_symbol_fields_table.cpp:2947
-#, fuzzy
 msgid "Cannot edit the default variant description."
-msgstr "Nie je možné odstrániť predvolený variant."
+msgstr "Nie je možné upraviť popis predvoleného variantu."
 
 #: eeschema/dialogs/dialog_symbol_fields_table.cpp:2955
 #: eeschema/sch_edit_frame.cpp:3055
-#, fuzzy, c-format
+#, c-format
 msgid "Edit Description for '%s'"
-msgstr "Upraviť popis úlohy"
+msgstr "Upraviť popis pre '%s'"
 
 #: eeschema/dialogs/dialog_symbol_fields_table_base.cpp:79
 msgid "Add a new field"
@@ -19937,7 +19920,7 @@ msgstr "Pri načítaní knižnice symbolov '%s' nastala chyba."
 
 #: eeschema/menubar.cpp:104
 msgid "Non-KiCad Schematic..."
-msgstr "Importovať schému inú ako KiCad..."
+msgstr "Schéma inú ako KiCad..."
 
 #: eeschema/menubar.cpp:105
 msgid "Footprint Assignments..."
@@ -20539,9 +20522,8 @@ msgid "Resolved Netclass"
 msgstr "Zistená trieda spojov"
 
 #: eeschema/sch_bus_entry.cpp:652 eeschema/sch_line.cpp:1286
-#, fuzzy
 msgid "Wire Style"
-msgstr "Štýl čiary"
+msgstr "Štýl spoja"
 
 #: eeschema/sch_connection.cpp:455
 msgid "Connection Name"
@@ -20700,19 +20682,16 @@ msgid "Find in Net Inspector"
 msgstr "Hľadať v inšpektorovi spojov"
 
 #: eeschema/sch_edit_frame.cpp:3037
-#, fuzzy
 msgid "No design variants to edit."
-msgstr "Pridať nový variant návrhu do schémy."
+msgstr "Žiadny variant návrhu k úprave."
 
 #: eeschema/sch_edit_frame.cpp:3041
-#, fuzzy
 msgid "Select variant to edit description:"
-msgstr "Vybrať názov variantu na odstránenie:"
+msgstr "Vybrať variantu pre úpravu popisu:"
 
 #: eeschema/sch_edit_frame.cpp:3042
-#, fuzzy
 msgid "Edit Variant Description"
-msgstr "Upraviť popis úlohy"
+msgstr "Upraviť popis variantu"
 
 #: eeschema/sch_edit_frame.cpp:3102
 msgid "Select variant name to remove:"
@@ -21962,12 +21941,12 @@ msgstr "Zvislý, dĺžka %s"
 #: eeschema/sch_line.cpp:755
 #, c-format
 msgid "Vertical Bus, length %s"
-msgstr "Vertikální zbernica, dĺžka %s"
+msgstr "Zvislá zbernica, dĺžka %s"
 
 #: eeschema/sch_line.cpp:756
 #, c-format
 msgid "Vertical Graphic Line, length %s"
-msgstr "Vertikální grafická čára, dĺžka %s"
+msgstr "Zvislá grafická čiara, dĺžka %s"
 
 #: eeschema/sch_line.cpp:763
 #, c-format
@@ -21977,7 +21956,7 @@ msgstr "Vodorovný spoj, dĺžka %s"
 #: eeschema/sch_line.cpp:764
 #, c-format
 msgid "Horizontal Bus, length %s"
-msgstr "Horizontální zbernica, dĺžka %s"
+msgstr "Vodorovná zbernica, dĺžka %s"
 
 #: eeschema/sch_line.cpp:765
 #, c-format
@@ -26706,7 +26685,6 @@ msgid "Import 2D drawing file"
 msgstr "Importovať súbor 2D kresby"
 
 #: eeschema/tools/sch_actions.cpp:1233
-#, fuzzy
 msgid "Import Non-KiCad Schematic..."
 msgstr "Importovať schému inú ako KiCad..."
 
@@ -26852,15 +26830,15 @@ msgstr "Kresliť a ťahať v ľubovolnom uhle"
 
 #: eeschema/tools/sch_actions.cpp:1369 pcbnew/tools/pcb_actions.cpp:1502
 msgid "Constrain drawing and dragging to horizontal or vertical motions"
-msgstr "Obmedziť kreslenie a ťahanie na horizontálne alebo vertikálne pohyby"
+msgstr "Obmedziť kreslenie a ťahanie na vodorovné alebo zvislé pohyby"
 
 #: eeschema/tools/sch_actions.cpp:1378 pcbnew/tools/pcb_actions.cpp:1511
 msgid ""
 "Constrain drawing and dragging to horizontal, vertical, or 45-degree angle "
 "motions"
 msgstr ""
-"Obmedziť kreslenie a ťahanie na pohyby horizontálne, vertikálne alebo pod "
-"uhlom 45 stupňov"
+"Obmedziť kreslenie a ťahanie na pohyby vodorovné, zvislé alebo pod uhlom 45 "
+"stupňov"
 
 #: eeschema/tools/sch_actions.cpp:1388 pcbnew/tools/pcb_actions.cpp:1521
 msgid "Switch to next angle snapping mode"
@@ -27220,14 +27198,12 @@ msgid "Remove an existing design variant from the schematic."
 msgstr "Odstrániť existujúci variant návrhu zo schémy."
 
 #: eeschema/tools/sch_actions.cpp:1808
-#, fuzzy
 msgid "Edit Variant Description..."
-msgstr "Upraviť popis úlohy"
+msgstr "Upraviť popis variantu..."
 
 #: eeschema/tools/sch_actions.cpp:1809
-#, fuzzy
 msgid "Edit the description of an existing design variant."
-msgstr "Upraviť súbor skriptu v textovom editore"
+msgstr "Upraviť popis existujúceho variantu návrhu."
 
 #: eeschema/tools/sch_align_tool.cpp:64
 msgid "Align"
@@ -29903,9 +29879,8 @@ msgid "Convert a Gerber or Excellon file to PNG image"
 msgstr "Konvertovať súboru Gerber alebo Excellon do obrázku PNG"
 
 #: kicad/cli/command_gerber_convert_png.cpp:48
-#, fuzzy
 msgid "Resolution in DPI (default: 300)"
-msgstr "(voliteľné; predvolené 0)"
+msgstr "Rozlíšenie v DPI (predvolené: 300)"
 
 #: kicad/cli/command_gerber_convert_png.cpp:54
 msgid "Output width in pixels (overrides DPI)"
@@ -29934,62 +29909,57 @@ msgstr "Referenčný súbor (prvý Gerber/Excellon súbor)"
 
 #: kicad/cli/command_gerber_diff.cpp:53
 msgid "Comparison file (second Gerber/Excellon file)"
-msgstr ""
+msgstr "Porovnávaný súbor (druhý Gerber/Excellon súbor)"
 
 #: kicad/cli/command_gerber_diff.cpp:58
-#, fuzzy
 msgid "Output format: png, text, or json (default: png)"
-msgstr "Formát protokolu importu: none, json, text (predvolené: none)"
+msgstr "Formát výstupu: png, text, alebo json (predvolené: png)"
 
 #: kicad/cli/command_gerber_diff.cpp:64
 msgid "Resolution in DPI for PNG output (default: 300)"
-msgstr ""
+msgstr "Rozlíšenie v DPI pre výstup do PNG (predvolené: 300)"
 
 #: kicad/cli/command_gerber_diff.cpp:68
-#, fuzzy
 msgid "Disable anti-aliasing for PNG output"
-msgstr "Zakázať antialiasing"
+msgstr "Zakázať antialiasing pre výstup do PNG"
 
 #: kicad/cli/command_gerber_diff.cpp:72
 msgid "Use transparent background for PNG output"
-msgstr ""
+msgstr "Použiť priehľadné pozadie pre výstup do PNG"
 
 #: kicad/cli/command_gerber_diff.cpp:76
 msgid "Only set exit code (0=identical, 1=different), no output"
-msgstr ""
+msgstr "Nastaviť iba výstupný kód (0=identický, 1=rôzny), žiadny výstup"
 
 #: kicad/cli/command_gerber_diff.cpp:82
 msgid "Tolerance in nm for floating point comparisons (default: 0)"
-msgstr ""
+msgstr "Tolerancia v mm, pre porovnania vo float (predvolené: 0)"
 
 #: kicad/cli/command_gerber_diff.cpp:118 kicad/cli/command_gerber_info.cpp:80
-#, fuzzy, c-format
+#, c-format
 msgid "Invalid output format: %s\n"
-msgstr "Neplatný formát protokolu: %s\n"
+msgstr "Neplatný formát výstupu: %s\n"
 
 #: kicad/cli/command_gerber_info.cpp:40
 msgid "Display information about a Gerber or Excellon file"
-msgstr ""
+msgstr "Zobraziť informácie o Gerber alebo Excellon súbore"
 
 #: kicad/cli/command_gerber_info.cpp:44
-#, fuzzy
 msgid "Output format, options: text, json"
-msgstr "Formát výstupného súboru. možnosti: json, textový protokol"
+msgstr "Formát výstupu, možnosti: text, json"
 
 #: kicad/cli/command_gerber_info.cpp:49
-#, fuzzy
 msgid "Output units, options: mm, inch, mils (default: mm)"
-msgstr "Výstupní jednotky, platné možnosti: mm, in"
+msgstr "Jednotky výstupu, možnosti: mm, palce, mily (predvolené: mm)"
 
 #: kicad/cli/command_gerber_info.cpp:53
-#, fuzzy
 msgid "Calculate and display copper area"
-msgstr "Vypočítavanie plátovania medi"
+msgstr "Výpočet a zobrazenie plochy medi"
 
 #: kicad/cli/command_gerber_info.cpp:100
-#, fuzzy, c-format
+#, c-format
 msgid "Invalid units: %s\n"
-msgstr "Zadané jednotky sú neplatné\n"
+msgstr "Neplatné jednotky: %s\n"
 
 #: kicad/cli/command_jobset.h:32
 msgid "Jobset"
@@ -37154,15 +37124,15 @@ msgstr "Vodorovne: z ľava hore na doprava dole"
 
 #: pcbnew/dialogs/dialog_board_reannotate_base.cpp:60
 msgid "Horizontally: top right to bottom left"
-msgstr "Horizontálne: z vpravo hore na dole vľavo"
+msgstr "Vodorovne: z vpravo hore na dole vľavo"
 
 #: pcbnew/dialogs/dialog_board_reannotate_base.cpp:71
 msgid "Horizontally: bottom left to top right"
-msgstr "Horizontálne: z vľavo dole na vpravo hore"
+msgstr "Vodorovne: z vľavo dole na vpravo hore"
 
 #: pcbnew/dialogs/dialog_board_reannotate_base.cpp:82
 msgid "Horizontally:: bottom right to top left"
-msgstr "Horizontálne:: z vpravo dole na dole vľavo"
+msgstr "Vodorovne: z vpravo dole na dole vľavo"
 
 #: pcbnew/dialogs/dialog_board_reannotate_base.cpp:93
 msgid "Vertically: top left to bottom right"
@@ -37170,15 +37140,15 @@ msgstr "Zvislo: z ľava hore na doprava dole"
 
 #: pcbnew/dialogs/dialog_board_reannotate_base.cpp:104
 msgid "Vertically: bottom left to top right"
-msgstr "Vertikálne: z vľavo dole na vpravo hore"
+msgstr "Zvislo: z vľavo dole na vpravo hore"
 
 #: pcbnew/dialogs/dialog_board_reannotate_base.cpp:115
 msgid "Vertically: top right to bottom left"
-msgstr "Vertikálne: z vpravo hore na dole vľavo"
+msgstr "Zvislo: z vpravo hore na dole vľavo"
 
 #: pcbnew/dialogs/dialog_board_reannotate_base.cpp:126
 msgid "Vertically: bottom right to top left"
-msgstr "Vertikálne: z vpravo dole na dole vľavo"
+msgstr "Zvislo: z vpravo dole na dole vľavo"
 
 #: pcbnew/dialogs/dialog_board_reannotate_base.cpp:138
 msgid "Based on location of:"
@@ -37760,21 +37730,21 @@ msgstr "hodnota kroku"
 
 #: pcbnew/dialogs/dialog_create_array.cpp:428
 msgid "horizontal count"
-msgstr "horizontálny počet"
+msgstr "počet vodorovne"
 
 #: pcbnew/dialogs/dialog_create_array.cpp:429
 msgid "vertical count"
-msgstr "vertikálny počet"
+msgstr "počet zvislo"
 
 #: pcbnew/dialogs/dialog_create_array.cpp:436
 #, c-format
 msgid "horizontal delta of zero with %ld objects"
-msgstr ""
+msgstr "vodorovný rozdiel je nulový pre %ld objektov"
 
 #: pcbnew/dialogs/dialog_create_array.cpp:442
 #, c-format
 msgid "vertical delta of zero with %ld objects"
-msgstr ""
+msgstr "zvislý rozdiel je nulový pre %ld objektov"
 
 #: pcbnew/dialogs/dialog_create_array.cpp:451
 msgid "stagger"
@@ -37787,7 +37757,7 @@ msgstr "počet bodov"
 #: pcbnew/dialogs/dialog_create_array.cpp:517
 #, c-format
 msgid "angular delta of zero with %ld objects"
-msgstr ""
+msgstr "šikmý rozdiel je nulový pre %ld objektov"
 
 #: pcbnew/dialogs/dialog_create_array.cpp:564
 msgid "Bad parameters"
@@ -37799,7 +37769,7 @@ msgstr "Veľkosť poľa mriežky"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:41
 msgid "Horizontal count:"
-msgstr "Horizontálny počet:"
+msgstr "Počet vodorovne:"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:43
 msgid "Number of columns"
@@ -37807,7 +37777,7 @@ msgstr "Počet stĺpcov"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:52
 msgid "Vertical count:"
-msgstr "Vertikálny počet:"
+msgstr "Počet zvislo:"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:54
 #: pcbnew/dialogs/dialog_create_array_base.cpp:59
@@ -37820,7 +37790,7 @@ msgstr "Rozstup prvkov"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:79
 msgid "Horizontal spacing:"
-msgstr "Horizontálne rozstupy:"
+msgstr "Rozstupy vodorovne:"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:81
 msgid "Distance between columns"
@@ -37833,7 +37803,7 @@ msgstr "2.54"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:92
 msgid "Vertical spacing:"
-msgstr "Vertikálne rozstupy:"
+msgstr "Rozstupy zvislo:"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:94
 msgid "Distance between rows"
@@ -37841,7 +37811,7 @@ msgstr "Vzdialenosť medzi riadkami"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:114
 msgid "Horizontal offset:"
-msgstr "Vodorovný posun:"
+msgstr "Posun vodorovne:"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:116
 msgid "Offset added to the next row position."
@@ -37849,7 +37819,7 @@ msgstr "Posun pridaný k pozícii nasledujúceho riadku."
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:127
 msgid "Vertical offset:"
-msgstr "Zvislý posun:"
+msgstr "Posun zvislo:"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:129
 msgid "Offset added to the next column position"
@@ -37893,11 +37863,11 @@ msgstr "Prečíslovať plôšky"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:201
 msgid "Horizontal, then vertical"
-msgstr "Horizontálne, potom vertikálne"
+msgstr "Vodorovne, potom zvislo"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:201
 msgid "Vertical, then horizontal"
-msgstr "Vertikálne, potom horizontálne"
+msgstr "Zvislo, potom vodorovne"
 
 #: pcbnew/dialogs/dialog_create_array_base.cpp:203
 msgid "Numbering Direction"
@@ -38467,10 +38437,8 @@ msgid "They will be excluded from the %s list"
 msgstr "Budú vylúčené zo zoznamu %s"
 
 #: pcbnew/dialogs/dialog_drc.cpp:788 pcbnew/dialogs/dialog_drc.cpp:795
-#, fuzzy
 msgid "Violation severities can also be edited in Board Setup"
-msgstr ""
-"Závažnosti porušenia je možné upraviť v dialógovom okne Nastavenie dosky..."
+msgstr "Závažnosť porušení je možné upraviť aj v nastavení dosky"
 
 #: pcbnew/dialogs/dialog_drc.cpp:806
 msgid "Open the Board Setup dialog"
@@ -40017,7 +39985,7 @@ msgstr ""
 "Toto je lokálny pomer odstupu ako percentuálna šírka a výška plôšky pre toto "
 "puzdro.\n"
 "Hodnota 10 znamená, že hodnota vodorovného odstupu je 10% šírky plôšky a "
-"vertikálneho odstupu je 10% výšky plôšky.\n"
+"zvislého odstupu je 10% výšky plôšky.\n"
 "Výsledná hodnota odstupu je súčet týchto hodnôt a absolútnej hodnoty "
 "odstupu.\n"
 "Záporná hodnota znamená menšiu veľkosť apertúry ako je veľkosť plôšky.\n"
@@ -57345,9 +57313,8 @@ msgstr ""
 "Vymazať DPS a načítať posledný záložný súbor automaticky uložený editorom DPS"
 
 #: pcbnew/tools/pcb_actions.cpp:1215
-#, fuzzy
 msgid "Import Non-KiCad Board File..."
-msgstr "Importujte súbor dosiek iných ako KiCad"
+msgstr "Importovať súbor dosky iný ako KiCad..."
 
 #: pcbnew/tools/pcb_actions.cpp:1216
 msgid "Import board file from other applications"
@@ -58023,7 +57990,7 @@ msgstr "Spustiť rôzne diagnostiky a pokúsiť sa opraviť puzdro"
 
 #: pcbnew/tools/pcb_actions.cpp:2279
 msgid "Distribute Horizontally by Centers"
-msgstr "Rozdeliť horizontálne podľa stredov"
+msgstr "Rozdeliť vodorovne podľa stredov"
 
 #: pcbnew/tools/pcb_actions.cpp:2280
 msgid ""
@@ -58035,7 +58002,7 @@ msgstr ""
 
 #: pcbnew/tools/pcb_actions.cpp:2287
 msgid "Distribute Horizontally with Even Gaps"
-msgstr "Rozdeliť horizontálne s rovnomernými medzerami"
+msgstr "Rozdeliť vodorovne s rovnomernými medzerami"
 
 #: pcbnew/tools/pcb_actions.cpp:2288
 msgid ""
@@ -58047,7 +58014,7 @@ msgstr ""
 
 #: pcbnew/tools/pcb_actions.cpp:2295
 msgid "Distribute Vertically with Even Gaps"
-msgstr "Rozdeliť vertikálne s rovnomernými medzerami"
+msgstr "Rozdeliť zvislo s rovnomernými medzerami"
 
 #: pcbnew/tools/pcb_actions.cpp:2296
 msgid ""
@@ -58059,7 +58026,7 @@ msgstr ""
 
 #: pcbnew/tools/pcb_actions.cpp:2303
 msgid "Distribute Vertically by Centers"
-msgstr "Rozdeliť vertikálne podľa stredov"
+msgstr "Rozdeliť zvislo podľa stredov"
 
 #: pcbnew/tools/pcb_actions.cpp:2304
 msgid ""
