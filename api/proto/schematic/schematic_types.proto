@@ -253,13 +253,13 @@ enum SchematicSymbolType
   SST_LOCAL_POWER = 3;
 }
 
-enum SchematicSymbolRotation
+enum SchematicSymbolOrientation
 {
-  SSR_UNKNOWN = 0;
-  SSR_0 = 1;
-  SSR_90 = 2;
-  SSR_180 = 3;
-  SSR_270 = 4;
+  SSO_UNKNOWN = 0;
+  SSO_0 = 1;
+  SSO_90 = 2;
+  SSO_180 = 3;
+  SSO_270 = 4;
 }
 
 enum SchematicPinOrientation
@@ -384,7 +384,7 @@ message SchematicSymbol
 
 message SchematicSymbolTransform
 {
-  SchematicSymbolRotation rotation = 1;
+  SchematicSymbolOrientation orientation = 1;
   bool mirror_x = 2;
   bool mirror_y = 3;
 }

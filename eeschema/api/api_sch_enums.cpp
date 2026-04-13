@@ -181,35 +181,35 @@ LIBRENTRYOPTIONS FromProtoEnum( types::SchematicSymbolType aValue )
 
 
 template<>
-types::SchematicSymbolRotation ToProtoEnum( SYMBOL_ORIENTATION_PROP aValue )
+types::SchematicSymbolOrientation ToProtoEnum( SYMBOL_ORIENTATION_PROP aValue )
 {
     switch( aValue )
     {
-    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_0:   return types::SchematicSymbolRotation::SSR_0;
-    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_90:  return types::SchematicSymbolRotation::SSR_90;
-    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_180: return types::SchematicSymbolRotation::SSR_180;
-    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_270: return types::SchematicSymbolRotation::SSR_270;
+    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_0:   return types::SchematicSymbolOrientation::SSO_0;
+    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_90:  return types::SchematicSymbolOrientation::SSO_90;
+    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_180: return types::SchematicSymbolOrientation::SSO_180;
+    case SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_270: return types::SchematicSymbolOrientation::SSO_270;
 
     default:
-        wxCHECK_MSG( false, types::SchematicSymbolRotation::SSR_UNKNOWN,
+        wxCHECK_MSG( false, types::SchematicSymbolOrientation::SSO_UNKNOWN,
                      "Unhandled case in ToProtoEnum<SYMBOL_ORIENTATION_PROP>" );
     }
 }
 
 
 template<>
-SYMBOL_ORIENTATION_PROP FromProtoEnum( types::SchematicSymbolRotation aValue )
+SYMBOL_ORIENTATION_PROP FromProtoEnum( types::SchematicSymbolOrientation aValue )
 {
     switch( aValue )
     {
-    case types::SchematicSymbolRotation::SSR_0:   return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_0;
-    case types::SchematicSymbolRotation::SSR_90:  return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_90;
-    case types::SchematicSymbolRotation::SSR_180: return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_180;
-    case types::SchematicSymbolRotation::SSR_270: return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_270;
+    case types::SchematicSymbolOrientation::SSO_0:   return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_0;
+    case types::SchematicSymbolOrientation::SSO_90:  return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_90;
+    case types::SchematicSymbolOrientation::SSO_180: return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_180;
+    case types::SchematicSymbolOrientation::SSO_270: return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_270;
 
     default:
         wxCHECK_MSG( false, SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_0,
-                     "Unhandled case in FromProtoEnum<types::SchematicSymbolRotation>" );
+                     "Unhandled case in FromProtoEnum<types::SchematicSymbolOrientation>" );
     }
 }
 

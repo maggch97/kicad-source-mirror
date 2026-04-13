@@ -55,9 +55,9 @@ BOOST_AUTO_TEST_CASE( SchematicSymbolType )
     testEnums<LIBRENTRYOPTIONS, types::SchematicSymbolType>();
 }
 
-BOOST_AUTO_TEST_CASE( SchematicSymbolRotation )
+BOOST_AUTO_TEST_CASE( SchematicSymbolOrientation )
 {
-    testEnums<SYMBOL_ORIENTATION_PROP, types::SchematicSymbolRotation>();
+    testEnums<SYMBOL_ORIENTATION_PROP, types::SchematicSymbolOrientation>();
 }
 
 BOOST_AUTO_TEST_CASE( SchematicPinOrientation )

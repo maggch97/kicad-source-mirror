@@ -225,7 +225,8 @@ void SCH_SYMBOL::Serialize( google::protobuf::Any& aContainer ) const
     symbol.set_locked( IsLocked() ? types::LockedState::LS_LOCKED : types::LockedState::LS_UNLOCKED );
 
     SchematicSymbolTransform* transform = symbol.mutable_transform();
-    transform->set_rotation( ToProtoEnum<SYMBOL_ORIENTATION_PROP, SchematicSymbolRotation>( GetOrientationProp() ) );
+    transform->set_orientation(
+            ToProtoEnum<SYMBOL_ORIENTATION_PROP, SchematicSymbolOrientation>( GetOrientationProp() ) );
     transform->set_mirror_x( GetMirrorX() );
     transform->set_mirror_y( GetMirrorY() );
 
@@ -325,7 +326,7 @@ bool SCH_SYMBOL::Deserialize( const google::protobuf::Any& aContainer )
     SetPosition( UnpackVector2( symbol.position() ) );
     SetLocked( symbol.locked() == LockedState::LS_LOCKED );
 
-    SetOrientationProp( FromProtoEnum<SYMBOL_ORIENTATION_PROP>( symbol.transform().rotation() ) );
+    SetOrientationProp( FromProtoEnum<SYMBOL_ORIENTATION_PROP>( symbol.transform().orientation() ) );
     SetMirrorX( symbol.transform().mirror_x() );
     SetMirrorY( symbol.transform().mirror_y() );
 
