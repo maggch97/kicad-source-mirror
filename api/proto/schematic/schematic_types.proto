@@ -241,6 +241,8 @@ message SheetSymbol
   bool exclude_from_bom = 12;
   bool exclude_from_board = 13;
   bool dnp = 14;
+  kiapi.common.types.SheetPath path = 15;
+  string page_number = 16;
 }
 
 enum SchematicSymbolType

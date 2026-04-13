@@ -279,19 +279,21 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_SCH::handleGetItems( const HANDLER_
         pathFilter = hierarchy.GetSheetPathByKIIDPath( kp );
     }
 
-    std::map<KICAD_T, std::vector<EDA_ITEM*>> itemMap;
+    std::map<KICAD_T, std::vector<std::pair<EDA_ITEM*, SCH_SHEET_PATH>>> itemMap;
 
     auto processScreen =
-        [&]( const SCH_SCREEN* aScreen )
+        [&]( const SCH_SHEET_PATH& aPath )
         {
+            const SCH_SCREEN* aScreen = aPath.LastScreen();
+
             for( SCH_ITEM* aItem : aScreen->Items() )
             {
-                itemMap[ aItem->Type() ].emplace_back( aItem );
+                itemMap[ aItem->Type() ].emplace_back( aItem, aPath );
 
                 aItem->RunOnChildren(
                         [&]( SCH_ITEM* aChild )
                         {
-                            itemMap[ aChild->Type() ].emplace_back( aChild );
+                            itemMap[ aChild->Type() ].emplace_back( aChild, aPath );
                         },
                         RECURSE_MODE::NO_RECURSE );
             }
@@ -299,12 +301,12 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_SCH::handleGetItems( const HANDLER_
 
     if( pathFilter )
     {
-        processScreen( pathFilter->LastScreen() );
+        processScreen( *pathFilter );
     }
     else
     {
         for( const SCH_SHEET_PATH& path : hierarchy )
-            processScreen( path.LastScreen() );
+            processScreen( path );
     }
 
     GetItemsResponse response;
@@ -318,9 +320,31 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_SCH::handleGetItems( const HANDLER_
         if( typesInserted.contains( type ) )
             continue;
 
-        for( EDA_ITEM* item : itemMap[type] )
+        for( const auto& [item, itemPath] : itemMap[type] )
         {
-            item->Serialize( any );
+            if( item->Type() == SCH_SYMBOL_T )
+            {
+                kiapi::schematic::types::SchematicSymbolInstance symbol;
+
+                if( !PackSymbol( &symbol, static_cast<SCH_SYMBOL*>( item ), itemPath ) )
+                    continue;
+
+                any.PackFrom( symbol );
+            }
+            else if( item->Type() == SCH_SHEET_T )
+            {
+                kiapi::schematic::types::SheetSymbol sheet;
+
+                if( !PackSheet( &sheet, static_cast<SCH_SHEET*>( item ), itemPath ) )
+                    continue;
+
+                any.PackFrom( sheet );
+            }
+            else
+            {
+                item->Serialize( any );
+            }
+
             response.mutable_items()->Add( std::move( any ) );
         }
     }
@@ -359,15 +383,44 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_SCH::handleGetItemsById( const HAND
     {
         KIID id( idProto.value() );
 
+        SCH_SHEET_PATH itemPath;
+
         if( pathFilter )
+        {
             item = pathFilter->ResolveItem( id );
+            itemPath = *pathFilter;
+        }
         else
-            item = hierarchy.ResolveItem( id, nullptr, true );
+        {
+            item = hierarchy.ResolveItem( id, &itemPath, true );
+        }
 
         if( !item || !s_allowedTypes.contains( item->Type() ) )
             continue;
 
-        item->Serialize( any );
+        if( item->Type() == SCH_SYMBOL_T )
+        {
+            kiapi::schematic::types::SchematicSymbolInstance symbol;
+
+            if( !PackSymbol( &symbol, static_cast<SCH_SYMBOL*>( item ), itemPath ) )
+                continue;
+
+            any.PackFrom( symbol );
+        }
+        else if( item->Type() == SCH_SHEET_T )
+        {
+            kiapi::schematic::types::SheetSymbol sheet;
+
+            if( !PackSheet( &sheet, static_cast<SCH_SHEET*>( item ), itemPath ) )
+                continue;
+
+            any.PackFrom( sheet );
+        }
+        else
+        {
+            item->Serialize( any );
+        }
+
         response.mutable_items()->Add( std::move( any ) );
     }
 
@@ -502,7 +555,7 @@ HANDLER_RESULT<ItemRequestStatus> API_HANDLER_SCH::handleCreateUpdateItemsIntern
         EDA_ITEM* container = targetScreen;
 
         if( *type == SCH_SHEET_T )
-            container = schematic()->CurrentSheet().Last();
+            container = targetPath ? targetPath->Last() : schematic()->CurrentSheet().Last();
 
         HANDLER_RESULT<std::unique_ptr<EDA_ITEM>> creationResult = createItemForType( *type, container );
 
@@ -516,7 +569,26 @@ HANDLER_RESULT<ItemRequestStatus> API_HANDLER_SCH::handleCreateUpdateItemsIntern
 
         std::unique_ptr<EDA_ITEM> item( std::move( *creationResult ) );
 
-        if( !item->Deserialize( anyItem ) )
+        bool unpacked = false;
+
+        if( *type == SCH_SYMBOL_T )
+        {
+            kiapi::schematic::types::SchematicSymbolInstance symbol;
+            unpacked = anyItem.UnpackTo( &symbol )
+                       && UnpackSymbol( static_cast<SCH_SYMBOL*>( item.get() ), symbol );
+        }
+        else if( *type == SCH_SHEET_T )
+        {
+            kiapi::schematic::types::SheetSymbol sheet;
+            unpacked = anyItem.UnpackTo( &sheet )
+                       && UnpackSheet( static_cast<SCH_SHEET*>( item.get() ), sheet );
+        }
+        else
+        {
+            unpacked = item->Deserialize( anyItem );
+        }
+
+        if( !unpacked )
         {
             e.set_status( ApiStatusCode::AS_BAD_REQUEST );
             e.set_error_message( fmt::format( "could not unpack {} from request",
@@ -528,7 +600,12 @@ HANDLER_RESULT<ItemRequestStatus> API_HANDLER_SCH::handleCreateUpdateItemsIntern
         SCH_SHEET_PATH existingPath;
 
         if( targetPath )
+        {
             existingItem = targetPath->ResolveItem( item->m_Uuid );
+
+            if( existingItem )
+                existingPath = *targetPath;
+        }
         else
             existingItem = hierarchy.ResolveItem( item->m_Uuid, &existingPath, true );
 
@@ -549,13 +626,56 @@ HANDLER_RESULT<ItemRequestStatus> API_HANDLER_SCH::handleCreateUpdateItemsIntern
             continue;
         }
 
-        if( !aCreate && targetPath && existingPath.LastScreen() != targetScreen )
+        if( !aCreate && targetPath )
         {
-            status.set_code( ItemStatusCode::ISC_INVALID_DATA );
-            status.set_error_message( fmt::format( "item {} exists on a different sheet than targeted",
-                                                   item->m_Uuid.AsStdString() ) );
-            aItemHandler( status, anyItem );
-            continue;
+            SCH_SCREEN* itemScreen = existingPath.LastScreen();
+
+            if( itemScreen != targetScreen )
+            {
+                status.set_code( ItemStatusCode::ISC_INVALID_DATA );
+                status.set_error_message( fmt::format( "item {} exists on a different sheet than targeted",
+                                                       item->m_Uuid.AsStdString() ) );
+                aItemHandler( status, anyItem );
+                continue;
+            }
+        }
+
+        if( *type == SCH_SHEET_T )
+        {
+            SCH_SHEET* sheet = static_cast<SCH_SHEET*>( item.get() );
+
+            if( aCreate && !sheet->GetScreen() )
+                sheet->SetScreen( new SCH_SCREEN( schematic() ) );
+
+            SCH_SHEET_PATH parentPath;
+
+            if( aCreate )
+            {
+                if( targetPath )
+                    parentPath = *targetPath;
+                else
+                    parentPath = schematic()->CurrentSheet();
+            }
+            else
+            {
+                parentPath = existingPath;
+            }
+
+            wxString destFilePath = parentPath.LastScreen()->GetFileName();
+
+            if( !destFilePath.IsEmpty() )
+            {
+                SCH_SHEET_LIST schematicSheets = schematic()->Hierarchy();
+                SCH_SHEET_LIST loadedSheets( sheet );
+
+                if( schematicSheets.TestForRecursion( loadedSheets, destFilePath ) )
+                {
+                    status.set_code( ItemStatusCode::ISC_INVALID_DATA );
+                    status.set_error_message( "sheet update would create recursive hierarchy" );
+                    aItemHandler( status, anyItem );
+                    continue;
+                }
+            }
         }
 
         status.set_code( ItemStatusCode::ISC_OK );
@@ -579,13 +699,52 @@ HANDLER_RESULT<ItemRequestStatus> API_HANDLER_SCH::handleCreateUpdateItemsIntern
                 schematic()->RefreshHierarchy();
             }
 
-            createdItem->Serialize( newItem );
+            if( createdItem->Type() == SCH_SYMBOL_T )
+            {
+                SCH_SHEET_PATH path = targetPath ? *targetPath : schematic()->CurrentSheet();
+                kiapi::schematic::types::SchematicSymbolInstance symbol;
+
+                if( PackSymbol( &symbol, static_cast<SCH_SYMBOL*>( createdItem ), path ) )
+                    newItem.PackFrom( symbol );
+            }
+            else if( createdItem->Type() == SCH_SHEET_T )
+            {
+                SCH_SHEET_PATH path = targetPath ? *targetPath : schematic()->CurrentSheet();
+                kiapi::schematic::types::SheetSymbol sheet;
+
+                if( PackSheet( &sheet, static_cast<SCH_SHEET*>( createdItem ), path ) )
+                    newItem.PackFrom( sheet );
+            }
+            else
+            {
+                createdItem->Serialize( newItem );
+            }
         }
         else
         {
             commit->Modify( existingItem, targetScreen );
             existingItem->SwapItemData( static_cast<SCH_ITEM*>( item.get() ) );
-            existingItem->Serialize( newItem );
+
+            if( existingItem->Type() == SCH_SYMBOL_T )
+            {
+                SCH_SHEET_PATH path = existingPath;
+                kiapi::schematic::types::SchematicSymbolInstance symbol;
+
+                if( PackSymbol( &symbol, static_cast<SCH_SYMBOL*>( existingItem ), path ) )
+                    newItem.PackFrom( symbol );
+            }
+            else if( existingItem->Type() == SCH_SHEET_T )
+            {
+                SCH_SHEET_PATH path = existingPath;
+                kiapi::schematic::types::SheetSymbol sheet;
+
+                if( PackSheet( &sheet, static_cast<SCH_SHEET*>( existingItem ), path ) )
+                    newItem.PackFrom( sheet );
+            }
+            else
+            {
+                existingItem->Serialize( newItem );
+            }
         }
 
         aItemHandler( status, newItem );

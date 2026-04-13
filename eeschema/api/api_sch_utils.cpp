@@ -33,6 +33,7 @@
 #include <sch_no_connect.h>
 #include <sch_shape.h>
 #include <sch_sheet.h>
+#include <sch_screen.h>
 #include <sch_sheet_pin.h>
 #include <sch_table.h>
 #include <sch_tablecell.h>
@@ -203,6 +204,55 @@ bool UnpackSymbol( SCH_SYMBOL* aOutput, const kiapi::schematic::types::Schematic
     }
 
     aOutput->AddHierarchicalReference( instance );
+    return true;
+}
+
+
+bool PackSheet( kiapi::schematic::types::SheetSymbol* aOutput, const SCH_SHEET* aInput,
+                const SCH_SHEET_PATH& aPath )
+{
+    google::protobuf::Any any;
+    aInput->Serialize( any );
+
+    if( !any.UnpackTo( aOutput ) )
+        return false;
+
+    // todo(je) do we need this?
+    SCH_SHEET_PATH pagePath = aPath;
+
+    if( pagePath.empty() || pagePath.Last() != aInput )
+        pagePath.push_back( const_cast<SCH_SHEET*>( aInput ) );
+
+    kiapi::common::PackSheetPath( *aOutput->mutable_path(), aPath.Path() );
+    aOutput->set_page_number( aPath.GetPageNumber().ToUTF8() );
+
+    return true;
+}
+
+
+bool UnpackSheet( SCH_SHEET* aOutput, const kiapi::schematic::types::SheetSymbol& aInput )
+{
+    using namespace kiapi::common;
+
+    google::protobuf::Any any;
+    any.PackFrom( aInput );
+
+    if( !aOutput->Deserialize( any ) )
+        return false;
+
+    KIID_PATH instancePath = UnpackSheetPath( aInput.path() );
+
+    if( instancePath.empty() )
+        return false;
+
+    SCH_SHEET_INSTANCE instance;
+    instance.m_Path = instancePath;
+    instance.m_PageNumber = wxString::FromUTF8( aInput.page_number() );
+
+    if( instance.m_PageNumber.IsEmpty() )
+        instance.m_PageNumber = wxS( "#" );
+
+    aOutput->AddInstance( instance );
 
     return true;
 }
