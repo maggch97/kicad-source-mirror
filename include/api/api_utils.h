@@ -51,9 +51,9 @@ namespace kiapi::common
 
 KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any& aMessage );
 
-KICOMMON_API LIB_ID LibIdFromProto( const types::LibraryIdentifier& aId );
+KICOMMON_API LIB_ID UnpackLibId( const types::LibraryIdentifier& aId );
 
-KICOMMON_API types::LibraryIdentifier LibIdToProto( const LIB_ID& aId );
+KICOMMON_API void PackLibId( types::LibraryIdentifier* aOutput, const LIB_ID& aId );
 
 KICOMMON_API void PackVector2( types::Vector2& aOutput, const VECTOR2I& aInput );
 

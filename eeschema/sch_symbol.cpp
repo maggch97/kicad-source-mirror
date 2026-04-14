@@ -234,15 +234,7 @@ void SCH_SYMBOL::Serialize( google::protobuf::Any& aContainer ) const
         symbol.mutable_body_style()->set_style( GetBodyStyle() );
 
     SchematicSymbol* def = symbol.mutable_definition();
-
-    for( SCH_PIN* pin : GetAllLibPins() )
-    {
-        SchematicSymbolChild* item = def->add_items();
-        item->mutable_unit()->set_unit( pin->GetUnit() );
-        item->mutable_body_style()->set_style( pin->GetBodyStyle() );
-        item->set_is_private( pin->IsPrivate() );
-        pin->Serialize( *item->mutable_item() );
-    }
+    PackLibId( def->mutable_id(), m_lib_id );
 
     google::protobuf::Any any;
 
@@ -283,6 +275,8 @@ void SCH_SYMBOL::Serialize( google::protobuf::Any& aContainer ) const
             if( drawItem.Type() == SCH_FIELD_T && static_cast<const SCH_FIELD&>( drawItem ).IsMandatory() )
                 continue;
 
+            // pins in the definition are not serialized; we serialize them via PackSymbol
+            // with the sheet-specific information
             if( drawItem.Type() == SCH_PIN_T )
                 continue;
 
@@ -332,7 +326,7 @@ bool SCH_SYMBOL::Deserialize( const google::protobuf::Any& aContainer )
 
     const SchematicSymbol& def = symbol.definition();
 
-    LIB_ID libId = LibIdFromProto( def.id() );
+    LIB_ID libId = UnpackLibId( def.id() );
     m_lib_id = libId;
 
     LIB_SYMBOL* libSymbol = new LIB_SYMBOL( libId.GetLibItemName() );
@@ -355,6 +349,8 @@ bool SCH_SYMBOL::Deserialize( const google::protobuf::Any& aContainer )
     any.PackFrom( def.description_field() );
     libSymbol->GetField( FIELD_T::DESCRIPTION )->Deserialize( any );
 
+    std::unordered_map<::KIID, wxString> pinAltMap;
+
     for( const SchematicSymbolChild& child : def.items() )
     {
         std::optional<KICAD_T> type = TypeNameFromAny( child.item() );
@@ -369,12 +365,24 @@ bool SCH_SYMBOL::Deserialize( const google::protobuf::Any& aContainer )
 
         SCH_ITEM* schItem = static_cast<SCH_ITEM*>( item.release() );
 
+        if( schItem->Type() == SCH_PIN_T )
+        {
+            SchematicPin pinProto;
+
+            if( aContainer.UnpackTo( &pinProto ) )
+            {
+                if( pinProto.has_active_alternate() )
+                    pinAltMap[schItem->m_Uuid] = wxString::FromUTF8( pinProto.active_alternate() );
+            }
+        }
+
         if( child.has_unit() )
             schItem->SetUnit( child.unit().unit() );
 
         if( child.has_body_style() )
             schItem->SetBodyStyle( child.body_style().style() );
 
+        schItem->SetLayer( LAYER_DEVICE );
         schItem->SetPrivate( child.is_private() );
         libSymbol->AddDrawItem( schItem );
     }
@@ -421,6 +429,33 @@ bool SCH_SYMBOL::Deserialize( const google::protobuf::Any& aContainer )
     SetShowPinNames( symbol.show_pin_names() );
     SetShowPinNumbers( symbol.show_pin_numbers() );
     SetPinNameOffset( symbol.pin_name_offset().value_nm() );
+
+    // The proto is storing a single pin struct that has the UUID and alternate selection
+    // as well as the library pin definition.  Deserializing the pin will have set up most
+    // of this, but we want to make sure that the UUIDs of the instance pins round-trip
+    // so we have to set them up in advance so that UpdatePins links them up with the
+    // lib pins, and then we need to set the alternates for pins if applicable
+
+    m_pins.clear();
+    TRANSFORM t = GetTransform().InverseTransform();
+
+    for( SCH_PIN* pin : GetAllLibPins() )
+    {
+        m_pins.emplace_back( std::make_unique<SCH_PIN>( *pin ) );
+        m_pins.back()->SetParent( this );
+        const_cast<::KIID&>( m_pins.back() ->m_Uuid ) = pin->m_Uuid;
+
+        // We also need to reset the lib pin to use relative coordinates
+        pin->SetPosition( t.TransformCoordinate( pin->GetLocalPosition() - m_pos ) );
+    }
+
+    UpdatePins();
+
+    for( SCH_PIN* pin : GetPins() )
+    {
+        if( pinAltMap.contains( pin->m_Uuid ) )
+            pin->SetAlt( pinAltMap.at( pin->m_Uuid ) );
+    }
 
     return true;
 }

@@ -100,18 +100,16 @@ KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any
 }
 
 
-KICOMMON_API LIB_ID LibIdFromProto( const types::LibraryIdentifier& aId )
+KICOMMON_API LIB_ID UnpackLibId( const types::LibraryIdentifier& aId )
 {
     return LIB_ID( aId.library_nickname(), aId.entry_name() );
 }
 
 
-KICOMMON_API types::LibraryIdentifier LibIdToProto( const LIB_ID& aId )
+KICOMMON_API void PackLibId( types::LibraryIdentifier* aOutput, const LIB_ID& aId )
 {
-    types::LibraryIdentifier msg;
-    msg.set_library_nickname( aId.GetLibNickname() );
-    msg.set_entry_name( aId.GetLibItemName() );
-    return msg;
+    aOutput->set_library_nickname( aId.GetLibNickname() );
+    aOutput->set_entry_name( aId.GetLibItemName() );
 }
 
 

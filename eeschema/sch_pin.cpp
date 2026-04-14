@@ -326,9 +326,6 @@ bool SCH_PIN::Deserialize( const google::protobuf::Any& aContainer )
         alts.emplace( alt.m_Name, alt );
     }
 
-    if( pin.has_active_alternate() )
-        SetAlt( wxString::FromUTF8( pin.active_alternate() ) );
-
     return true;
 }
 

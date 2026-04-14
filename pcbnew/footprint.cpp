@@ -347,7 +347,7 @@ void FOOTPRINT::Serialize( google::protobuf::Any &aContainer ) const
 
     types::Footprint* def = footprint.mutable_definition();
 
-    def->mutable_id()->CopyFrom( kiapi::common::LibIdToProto( GetFPID() ) );
+    kiapi::common::PackLibId( def->mutable_id(), GetFPID() );
     // anchor?
     def->mutable_attributes()->set_description( GetLibDescription().ToUTF8() );
     def->mutable_attributes()->set_keywords( GetKeywords().ToUTF8() );
@@ -517,7 +517,7 @@ bool FOOTPRINT::Deserialize( const google::protobuf::Any &aContainer )
     SetAllowSolderMaskBridges( footprint.attributes().allow_soldermask_bridges() );
 
     // Definition
-    SetFPID( kiapi::common::LibIdFromProto( footprint.definition().id() ) );
+    SetFPID( kiapi::common::UnpackLibId( footprint.definition().id() ) );
     // TODO: how should anchor be handled?
     SetLibDescription( footprint.definition().attributes().description() );
     SetKeywords( footprint.definition().attributes().keywords() );

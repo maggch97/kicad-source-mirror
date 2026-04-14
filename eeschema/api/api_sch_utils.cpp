@@ -120,6 +120,17 @@ bool PackSymbol( kiapi::schematic::types::SchematicSymbolInstance* aOutput, cons
     aOutput->mutable_reference_field()->mutable_text()->set_text( instance.m_Reference.ToUTF8() );
     aOutput->mutable_unit()->set_unit( instance.m_Unit );
 
+    kiapi::schematic::types::SchematicSymbol* def = aOutput->mutable_definition();
+
+    for( const SCH_PIN* pin : aInput->GetPins( &aPath ) )
+    {
+        kiapi::schematic::types::SchematicSymbolChild* item = def->add_items();
+        item->mutable_unit()->set_unit( pin->GetUnit() );
+        item->mutable_body_style()->set_style( pin->GetBodyStyle() );
+        item->set_is_private( pin->IsPrivate() );
+        pin->Serialize( *item->mutable_item() );
+    }
+
     kiapi::schematic::types::SchematicSymbolAttributes* attributes = aOutput->mutable_attributes();
 
     attributes->set_exclude_from_simulation( instance.m_ExcludedFromSim );
@@ -216,12 +227,6 @@ bool PackSheet( kiapi::schematic::types::SheetSymbol* aOutput, const SCH_SHEET* 
 
     if( !any.UnpackTo( aOutput ) )
         return false;
-
-    // todo(je) do we need this?
-    SCH_SHEET_PATH pagePath = aPath;
-
-    if( pagePath.empty() || pagePath.Last() != aInput )
-        pagePath.push_back( const_cast<SCH_SHEET*>( aInput ) );
 
     kiapi::common::PackSheetPath( *aOutput->mutable_path(), aPath.Path() );
     aOutput->set_page_number( aPath.GetPageNumber().ToUTF8() );
