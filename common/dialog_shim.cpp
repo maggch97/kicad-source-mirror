@@ -1482,7 +1482,11 @@ void DIALOG_SHIM::OnCloseWindow( wxCloseEvent& aEvent )
 
 void DIALOG_SHIM::onDialogDeactivate( wxActivateEvent& aEvent )
 {
-    if( !aEvent.GetActive() )
+    // Only dismiss for true-modal dialogs.  Quasi-modal dialogs don't install a GTK modal
+    // grab, so their combo popups receive focus-out events normally and dismiss themselves.
+    // Calling DismissChildComboBoxes here for quasi-modal dialogs would immediately close
+    // any popup that was just opened (the popup steals focus, triggering this handler).
+    if( !aEvent.GetActive() && !IsQuasiModal() )
         KIPLATFORM::UI::DismissChildComboBoxes( this );
 
     aEvent.Skip();
