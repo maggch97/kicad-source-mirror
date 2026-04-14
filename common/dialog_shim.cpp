@@ -154,7 +154,6 @@ DIALOG_SHIM::DIALOG_SHIM( wxWindow* aParent, wxWindowID id, const wxString& titl
     Bind( wxEVT_SIZE, &DIALOG_SHIM::OnSize, this );
     Bind( wxEVT_MOVE, &DIALOG_SHIM::OnMove, this );
     Bind( wxEVT_INIT_DIALOG, &DIALOG_SHIM::onInitDialog, this );
-    Bind( wxEVT_ACTIVATE, &DIALOG_SHIM::onDialogDeactivate, this );
 
 #ifdef __WINDOWS__
     // On Windows, the app top windows can be brought to the foreground (at least temporarily)
@@ -181,7 +180,6 @@ DIALOG_SHIM::~DIALOG_SHIM()
     Unbind( wxEVT_SIZE, &DIALOG_SHIM::OnSize, this );
     Unbind( wxEVT_MOVE, &DIALOG_SHIM::OnMove, this );
     Unbind( wxEVT_INIT_DIALOG, &DIALOG_SHIM::onInitDialog, this );
-    Unbind( wxEVT_ACTIVATE, &DIALOG_SHIM::onDialogDeactivate, this );
 
     std::function<void( wxWindowList& )> disconnectFocusHandlers =
             [&]( wxWindowList& children )
@@ -1476,19 +1474,6 @@ void DIALOG_SHIM::OnCloseWindow( wxCloseEvent& aEvent )
     }
 
     // This is mandatory to allow wxDialogBase::OnCloseWindow() to be called.
-    aEvent.Skip();
-}
-
-
-void DIALOG_SHIM::onDialogDeactivate( wxActivateEvent& aEvent )
-{
-    // Only dismiss for true-modal dialogs.  Quasi-modal dialogs don't install a GTK modal
-    // grab, so their combo popups receive focus-out events normally and dismiss themselves.
-    // Calling DismissChildComboBoxes here for quasi-modal dialogs would immediately close
-    // any popup that was just opened (the popup steals focus, triggering this handler).
-    if( !aEvent.GetActive() && !IsQuasiModal() )
-        KIPLATFORM::UI::DismissChildComboBoxes( this );
-
     aEvent.Skip();
 }
 

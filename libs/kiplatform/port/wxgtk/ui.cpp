@@ -21,7 +21,6 @@
 #include <kiplatform/ui.h>
 
 #include <wx/choice.h>
-#include <wx/combobox.h>
 #include <wx/dialog.h>
 #include <wx/nonownedwnd.h>
 #include <wx/settings.h>
@@ -440,28 +439,6 @@ void KIPLATFORM::UI::AllowNetworkFileSystems( wxDialog* aDialog )
     if( widget && GTK_IS_FILE_CHOOSER( widget ) )
         gtk_file_chooser_set_local_only( GTK_FILE_CHOOSER( widget ), FALSE );
 }
-
-
-void KIPLATFORM::UI::DismissChildComboBoxes( wxWindow* aWindow )
-{
-    // On GTK, a combo popup that is open when its parent dialog loses activation does not
-    // automatically close. The GTK modal grab on the dialog window prevents the GtkComboBox
-    // from receiving the grab-broken event that would normally trigger a popdown. Walk the
-    // child tree and explicitly close any open popup.
-    for( wxWindow* child : aWindow->GetChildren() )
-    {
-        GtkWidget* widget = nullptr;
-
-        if( dynamic_cast<wxChoice*>( child ) || dynamic_cast<wxComboBox*>( child ) )
-            widget = static_cast<GtkWidget*>( child->GetHandle() );
-
-        if( widget && GTK_IS_COMBO_BOX( widget ) )
-            gtk_combo_box_popdown( GTK_COMBO_BOX( widget ) );
-        else
-            DismissChildComboBoxes( child );
-    }
-}
-
 
 //
 // **** Wayland hacks ahead ****

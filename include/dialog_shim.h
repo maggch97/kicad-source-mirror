@@ -240,16 +240,6 @@ private:
      */
     void OnCloseWindow( wxCloseEvent& aEvent );
 
-    /**
-     * Dismiss any open combo-box dropdowns when the dialog loses activation.
-     *
-     * On GTK, the modal event loop holds a device grab that prevents the standard GTK
-     * grab-broken / focus-out path from reaching open GtkComboBox popups. The result is
-     * that switching away with Alt+Tab leaves a floating dropdown visible on screen.
-     * Explicitly popdown any open combos so the dialog deactivates cleanly.
-     */
-    void onDialogDeactivate( wxActivateEvent& aEvent );
-
     void OnSize( wxSizeEvent& aEvent );
     void OnMove( wxMoveEvent& aEvent );
 
