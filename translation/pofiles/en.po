@@ -2,7 +2,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: KiCad\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-04-07 19:08+0300\n"
+"POT-Creation-Date: 2026-04-15 19:16+0300\n"
 "PO-Revision-Date: 2018-07-15 17:07+0200\n"
 "Last-Translator: Simon Richter <Simon.Richter@hogyros.de>\n"
 "Language-Team: Simon Richter <Simon.Richter@hogyros.de>\n"
@@ -3702,6 +3702,15 @@ msgstr "Could not use OpenGL, falling back to software rendering"
 msgid "Graphics error"
 msgstr "Graphics error"
 
+msgid "Graphics error during recovery"
+msgstr "Graphics error during recovery"
+
+msgid "Unknown exception during backend switch"
+msgstr "Unknown exception during backend switch"
+
+msgid "Unknown exception"
+msgstr "Unknown exception"
+
 msgid "Could not use OpenGL"
 msgstr "Could not use OpenGL"
 
@@ -5625,6 +5634,15 @@ msgstr "Syntax error at line %zu, column %zu"
 
 msgid "An unexpected error occurred while reading library table"
 msgstr "An unexpected error occurred while reading library table"
+
+msgid "Compacting local history..."
+msgstr "Compacting local history..."
+
+msgid "Trimming local history..."
+msgstr "Trimming local history..."
+
+msgid "Compacting trimmed history..."
+msgstr "Compacting trimmed history..."
 
 msgid ""
 "The following files will be deleted when restoring this commit:\n"
@@ -20398,6 +20416,36 @@ msgstr "Use transparent background (default)"
 msgid "Fail on any parse warnings or errors"
 msgstr "Fail on any parse warnings or errors"
 
+msgid "Units for viewport parameters, options: mm, inch, mils (default: mm)"
+msgstr "Units for viewport parameters, options: mm, inch, mils (default: mm)"
+
+msgid "Viewport origin X"
+msgstr "Viewport origin X"
+
+msgid "Viewport origin Y"
+msgstr "Viewport origin Y"
+
+msgid "Viewport width (enables viewport mode)"
+msgstr "Viewport width (enables viewport mode)"
+
+msgid "Viewport height (enables viewport mode)"
+msgstr "Viewport height (enables viewport mode)"
+
+msgid "Foreground color as hex (e.g., '#FFFFFF')"
+msgstr "Foreground color as hex (e.g., '#FFFFFF')"
+
+msgid "Background color as hex (e.g., '#000000')"
+msgstr "Background color as hex (e.g., '#000000')"
+
+#, c-format
+msgid "Invalid units: %s\n"
+msgstr "Invalid units: %s\n"
+
+msgid ""
+"Error: both --window-width and --window-height must be specified together\n"
+msgstr ""
+"Error: both --window-width and --window-height must be specified together\n"
+
 msgid "Compare two Gerber or Excellon files and show differences"
 msgstr "Compare two Gerber or Excellon files and show differences"
 
@@ -20425,6 +20473,11 @@ msgstr "Only set exit code (0=identical, 1=different), no output"
 msgid "Tolerance in nm for floating point comparisons (default: 0)"
 msgstr "Tolerance in nm for floating point comparisons (default: 0)"
 
+msgid ""
+"Skip bounding-box origin alignment; catches absolute-placement regressions"
+msgstr ""
+"Skip bounding-box origin alignment; catches absolute-placement regressions"
+
 #, c-format
 msgid "Invalid output format: %s\n"
 msgstr "Invalid output format: %s\n"
@@ -20440,10 +20493,6 @@ msgstr "Output units, options: mm, inch, mils (default: mm)"
 
 msgid "Calculate and display copper area"
 msgstr "Calculate and display copper area"
-
-#, c-format
-msgid "Invalid units: %s\n"
-msgstr "Invalid units: %s\n"
 
 msgid "Jobset"
 msgstr "Jobset"
@@ -26802,6 +26851,9 @@ msgstr "Compress output"
 msgid "Compress output into 'zip' file"
 msgstr "Compress output into 'zip' file"
 
+msgid "BOM Columns"
+msgstr "BOM Columns"
+
 msgid "BOM revision:"
 msgstr "BOM revision:"
 
@@ -26811,9 +26863,6 @@ msgid ""
 msgstr ""
 "Revision string for the BOM section. Auto-populated from schematic title "
 "block revision"
-
-msgid "BOM Columns"
-msgstr "BOM Columns"
 
 msgid "Internal ID:"
 msgstr "Internal ID:"
@@ -28415,6 +28464,16 @@ msgstr "Auto-Match Layers"
 msgid "Automatically match any unmatched layers to their KiCad equivalent."
 msgstr "Automatically match any unmatched layers to their KiCad equivalent."
 
+msgid "Keep KiCad layer names"
+msgstr "Keep KiCad layer names"
+
+msgid ""
+"If checked, layers will keep their standard KiCad names instead of being "
+"renamed to the imported layer names."
+msgstr ""
+"If checked, layers will keep their standard KiCad names instead of being "
+"renamed to the imported layer names."
+
 msgid "Edit Mapping of Imported Layers"
 msgstr "Edit Mapping of Imported Layers"
 
@@ -29072,11 +29131,17 @@ msgstr ""
 msgid "Hole Post Machining"
 msgstr "Hole Post Machining"
 
+msgid "Front:"
+msgstr "Front:"
+
 msgid "Countersink"
 msgstr "Countersink"
 
 msgid "Counterbore"
 msgstr "Counterbore"
+
+msgid "Back:"
+msgstr "Back:"
 
 msgid "Backdrill"
 msgstr "Backdrill"
@@ -29084,8 +29149,8 @@ msgstr "Backdrill"
 msgid "Top & bottom"
 msgstr "Top & bottom"
 
-msgid "Top backdrill must-cut:"
-msgstr "Top backdrill must-cut:"
+msgid "Front backdrill must-cut:"
+msgstr "Front backdrill must-cut:"
 
 msgid "The backdrill must pass through this layer"
 msgstr "The backdrill must pass through this layer"
@@ -29093,8 +29158,8 @@ msgstr "The backdrill must pass through this layer"
 msgid "Top backdrill size:"
 msgstr "Top backdrill size:"
 
-msgid "Bottom backdrill must-cut:"
-msgstr "Bottom backdrill must-cut:"
+msgid "Back backdrill must-cut:"
+msgstr "Back backdrill must-cut:"
 
 msgid "Bottom backdrill size:"
 msgstr "Bottom backdrill size:"
@@ -30053,6 +30118,12 @@ msgstr "Backdrill:"
 msgid "Both"
 msgstr "Both"
 
+msgid "Front backdrill size:"
+msgstr "Front backdrill size:"
+
+msgid "Back backdrill size:"
+msgstr "Back backdrill size:"
+
 msgid "Hole Post-machining"
 msgstr "Hole Post-machining"
 
@@ -30492,6 +30563,21 @@ msgstr "Select Library Table"
 msgid "Error adding 3D model"
 msgstr "Error adding 3D model"
 
+msgid "Courtyard layer"
+msgstr "Courtyard layer"
+
+msgid "Fabrication layer"
+msgstr "Fabrication layer"
+
+msgid "Component height must be greater than zero."
+msgstr "Component height must be greater than zero."
+
+msgid "Extruded 3D Body"
+msgstr "Extruded 3D Body"
+
+msgid "Standoff height must be less than the overall height."
+msgstr "Standoff height must be less than the overall height."
+
 msgid "No filename entered"
 msgstr "No filename entered"
 
@@ -30501,8 +30587,59 @@ msgstr "Illegal filename"
 msgid "Unable to open file"
 msgstr "Unable to open file"
 
+msgid "Export Extruded Body"
+msgstr "Export Extruded Body"
+
+msgid "No extrusion outline could be generated for this footprint."
+msgstr "No extrusion outline could be generated for this footprint."
+
+msgid "Export Extruded 3D Body"
+msgstr "Export Extruded 3D Body"
+
+msgid "GLB files"
+msgstr "GLB files"
+
+msgid "BREP files"
+msgstr "BREP files"
+
+msgid "Failed to create extruded body geometry."
+msgstr "Failed to create extruded body geometry."
+
+msgid "Failed to write file."
+msgstr "Failed to write file."
+
 msgid "3D Model(s)"
 msgstr "3D Model(s)"
+
+msgid "Enable extruded 3D model for this footprint"
+msgstr "Enable extruded 3D model for this footprint"
+
+msgid "Show extruded 3D model"
+msgstr "Show extruded 3D model"
+
+msgid "Overall height:"
+msgstr "Overall height:"
+
+msgid "Standoff height:"
+msgstr "Standoff height:"
+
+msgid "Extrusion source:"
+msgstr "Extrusion source:"
+
+msgid "Material:"
+msgstr "Material:"
+
+msgid "Plastic"
+msgstr "Plastic"
+
+msgid "Matte"
+msgstr "Matte"
+
+msgid "Metal"
+msgstr "Metal"
+
+msgid "Export generated 3D model"
+msgstr "Export generated 3D model"
 
 #, c-format
 msgid "Layer name %s already in use."
@@ -32736,12 +32873,6 @@ msgstr "Zone Hatched Fill Offsets"
 msgid "Default Properties for New Zones"
 msgstr "Default Properties for New Zones"
 
-msgid "Chamfer:"
-msgstr "Chamfer:"
-
-msgid "Fillet:"
-msgstr "Fillet:"
-
 msgid "Thermal spoke width cannot be smaller than the minimum width."
 msgstr "Thermal spoke width cannot be smaller than the minimum width."
 
@@ -32810,6 +32941,9 @@ msgstr "Hatch offset overrides:"
 
 msgid "Hatched Fill"
 msgstr "Hatched Fill"
+
+msgid "Radius:"
+msgstr "Radius:"
 
 msgid "Remove islands:"
 msgstr "Remove islands:"
@@ -34483,6 +34617,22 @@ msgid ""
 "OpenCASCADE error: %s\n"
 msgstr ""
 "Could not add 3D model for %s.\n"
+"OpenCASCADE error: %s\n"
+
+#, c-format
+msgid ""
+"Could not add extruded body for %s.\n"
+"OpenCASCADE error: %s\n"
+msgstr ""
+"Could not add extruded body for %s.\n"
+"OpenCASCADE error: %s\n"
+
+#, c-format
+msgid ""
+"Could not add extruded pins for %s.\n"
+"OpenCASCADE error: %s\n"
+msgstr ""
+"Could not add extruded pins for %s.\n"
 "OpenCASCADE error: %s\n"
 
 msgid "Could not create PCB solid model.\n"
@@ -40117,9 +40267,6 @@ msgstr "At least two straight track segments must be selected."
 msgid "Fillet Tracks"
 msgstr "Fillet Tracks"
 
-msgid "Radius:"
-msgstr "Radius:"
-
 msgid "Unable to fillet the selected track segments."
 msgstr "Unable to fillet the selected track segments."
 
@@ -43239,6 +43386,18 @@ msgstr "KiCad Schematic Symbol"
 
 msgid "KiCad Drawing Sheet"
 msgstr "KiCad Drawing Sheet"
+
+#~ msgid "Top backdrill must-cut:"
+#~ msgstr "Top backdrill must-cut:"
+
+#~ msgid "Bottom backdrill must-cut:"
+#~ msgstr "Bottom backdrill must-cut:"
+
+#~ msgid "Chamfer:"
+#~ msgstr "Chamfer:"
+
+#~ msgid "Fillet:"
+#~ msgstr "Fillet:"
 
 #, c-format
 #~ msgid "View %zu load message(s)"
