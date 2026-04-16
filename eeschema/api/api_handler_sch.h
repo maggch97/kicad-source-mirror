@@ -24,6 +24,7 @@
 #include <api/api_handler_editor.h>
 #include <api/sch_context.h>
 #include <api/common/commands/editor_commands.pb.h>
+#include <api/schematic/schematic_commands.pb.h>
 #include <api/schematic/schematic_jobs.pb.h>
 #include <kiid.h>
 
@@ -32,6 +33,7 @@ using namespace kiapi::common;
 
 class SCH_EDIT_FRAME;
 class SCH_ITEM;
+class SCH_SHEET;
 
 
 class API_HANDLER_SCH : public API_HANDLER_EDITOR
@@ -98,6 +100,12 @@ private:
 
     HANDLER_RESULT<types::RunJobResponse>
     handleRunSchematicJobExportBOM( const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportBOM>& aCtx );
+
+    HANDLER_RESULT<kiapi::schematic::types::SchematicHierarchyResponse>
+    handleGetSchematicHierarchy( const HANDLER_CONTEXT<kiapi::schematic::types::GetSchematicHierarchy>& aCtx );
+
+    void packSheetInstance( kiapi::schematic::types::SheetInstance* aInstance, SCH_SHEET_PATH& aPath,
+                            SCH_SHEET* aSheet );
 
     SCHEMATIC* schematic() const;
 

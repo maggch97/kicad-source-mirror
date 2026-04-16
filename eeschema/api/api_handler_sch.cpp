@@ -107,6 +107,7 @@ API_HANDLER_SCH::API_HANDLER_SCH( std::shared_ptr<SCH_CONTEXT> aContext,
         m_context( std::move( aContext ) )
 {
     using namespace kiapi::schematic::jobs;
+    using namespace kiapi::schematic::types;
 
     registerHandler<GetOpenDocuments, GetOpenDocumentsResponse>(
             &API_HANDLER_SCH::handleGetOpenDocuments );
@@ -125,6 +126,7 @@ API_HANDLER_SCH::API_HANDLER_SCH( std::shared_ptr<SCH_CONTEXT> aContext,
             &API_HANDLER_SCH::handleRunSchematicJobExportNetlist );
     registerHandler<RunSchematicJobExportBOM, types::RunJobResponse>(
             &API_HANDLER_SCH::handleRunSchematicJobExportBOM );
+    registerHandler<GetSchematicHierarchy, SchematicHierarchyResponse>( &API_HANDLER_SCH::handleGetSchematicHierarchy );
 }
 
 
@@ -1086,4 +1088,91 @@ HANDLER_RESULT<types::RunJobResponse> API_HANDLER_SCH::handleRunSchematicJobExpo
         bomJob.m_variantNames.emplace_back( wxString::FromUTF8( aCtx.Request.variant_name() ) );
 
     return ExecuteSchematicJob( m_context->GetKiway(), bomJob );
+}
+
+
+void API_HANDLER_SCH::packSheetInstance( kiapi::schematic::types::SheetInstance* aInstance, SCH_SHEET_PATH& aPath,
+                                          SCH_SHEET* aSheet )
+{
+    aPath.push_back( aSheet );
+
+    PackSheetPath( *aInstance->mutable_path(), aPath.Path() );
+
+    wxString sheetName = aSheet->GetShownName( false );
+
+    if( sheetName.IsEmpty() && aSheet->GetScreen() )
+    {
+        wxFileName fn( aSheet->GetScreen()->GetFileName() );
+        sheetName = fn.GetName();
+    }
+
+    aInstance->set_name( sheetName.ToUTF8() );
+    aInstance->set_filename( aSheet->GetFileName().ToUTF8() );
+    aInstance->set_page_number( aPath.GetPageNumber().ToUTF8() );
+
+    if( aSheet->GetScreen() )
+    {
+        std::vector<SCH_ITEM*> childSheets;
+        aSheet->GetScreen()->GetSheets( &childSheets );
+
+        std::ranges::sort( childSheets,
+                           [&]( SCH_ITEM* a, SCH_ITEM* b )
+                           {
+                               SCH_SHEET_PATH pathA = aPath;
+                               pathA.push_back( static_cast<SCH_SHEET*>( a ) );
+
+                               SCH_SHEET_PATH pathB = aPath;
+                               pathB.push_back( static_cast<SCH_SHEET*>( b ) );
+
+                               return pathA.ComparePageNum( pathB ) < 0;
+                           } );
+
+        for( SCH_ITEM* childItem : childSheets )
+        {
+            SCH_SHEET* childSheet = static_cast<SCH_SHEET*>( childItem );
+            kiapi::schematic::types::SheetInstance* childInstance = aInstance->add_children();
+            packSheetInstance( childInstance, aPath, childSheet );
+        }
+    }
+
+    aPath.pop_back();
+}
+
+
+HANDLER_RESULT<kiapi::schematic::types::SchematicHierarchyResponse> API_HANDLER_SCH::handleGetSchematicHierarchy(
+        const HANDLER_CONTEXT<kiapi::schematic::types::GetSchematicHierarchy>& aCtx )
+{
+    HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.document() );
+
+    if( !documentValidation )
+        return tl::unexpected( documentValidation.error() );
+
+    kiapi::schematic::types::SchematicHierarchyResponse response;
+    response.mutable_document()->CopyFrom( aCtx.Request.document() );
+
+    if( !schematic()->HasHierarchy() )
+        schematic()->RefreshHierarchy();
+
+    SCH_SHEET_PATH path;
+    std::vector<SCH_SHEET*> topLevelSheets = schematic()->GetTopLevelSheets();
+
+    std::ranges::sort( topLevelSheets,
+               [&]( SCH_SHEET* a, SCH_SHEET* b )
+               {
+                   SCH_SHEET_PATH pathA;
+                   pathA.push_back( a );
+
+                   SCH_SHEET_PATH pathB;
+                   pathB.push_back( b );
+
+                   return pathA.ComparePageNum( pathB ) < 0;
+               } );
+
+    for( SCH_SHEET* topSheet : topLevelSheets )
+    {
+        kiapi::schematic::types::SheetInstance* instance = response.add_top_level_sheets();
+        packSheetInstance( instance, path, topSheet );
+    }
+
+    return response;
 }

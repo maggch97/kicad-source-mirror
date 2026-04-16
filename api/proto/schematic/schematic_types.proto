@@ -421,3 +421,13 @@ message SchematicSymbolInstance
 
   repeated SchematicSymbolVariant variants = 18;
 }
+
+message SheetInstance
+{
+  kiapi.common.types.SheetPath path = 1;
+  string name = 2;
+  string filename = 3;
+  string page_number = 4;
+
+  repeated SheetInstance children = 5;
+}
