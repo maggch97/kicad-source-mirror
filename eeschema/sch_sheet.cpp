@@ -1940,9 +1940,7 @@ bool SCH_SHEET::GetDNP( const SCH_SHEET_PATH* aInstance, const wxString& aVarian
     if( !getInstance( instance, aInstance->Path() ) )
         return m_DNP;
 
-    if( aVariantName.IsEmpty() )
-        return m_DNP;
-    else if( instance.m_Variants.contains( aVariantName ) )
+    if( instance.m_Variants.contains( aVariantName ) )
         return instance.m_Variants[aVariantName].m_DNP;
 
     // If the variant has not been defined, return the default DNP setting.
@@ -2009,9 +2007,7 @@ bool SCH_SHEET::GetExcludedFromSim( const SCH_SHEET_PATH* aInstance, const wxStr
     if( !getInstance( instance, aInstance->Path() ) )
         return m_excludedFromSim;
 
-    if( aVariantName.IsEmpty() )
-        return m_excludedFromSim;
-    else if( instance.m_Variants.contains( aVariantName ) )
+    if( instance.m_Variants.contains( aVariantName ) )
         return instance.m_Variants[aVariantName].m_ExcludedFromSim;
 
     // If the variant has not been defined, return the default DNP setting.
@@ -2078,9 +2074,7 @@ bool SCH_SHEET::GetExcludedFromBOM( const SCH_SHEET_PATH* aInstance, const wxStr
     if( !getInstance( instance, aInstance->Path() ) )
         return m_excludedFromBOM;
 
-    if( aVariantName.IsEmpty() )
-        return m_excludedFromBOM;
-    else if( instance.m_Variants.contains( aVariantName ) )
+    if( instance.m_Variants.contains( aVariantName ) )
         return instance.m_Variants[aVariantName].m_ExcludedFromBOM;
 
     // If the variant has not been defined, return the default DNP setting.

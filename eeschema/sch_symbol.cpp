@@ -959,9 +959,7 @@ bool SCH_SYMBOL::GetDNP( const SCH_SHEET_PATH* aInstance, const wxString& aVaria
     if( !GetInstance( instance, aInstance->Path() ) )
         return m_DNP;
 
-    if( aVariantName.IsEmpty() )
-        return m_DNP;
-    else if( instance.m_Variants.contains( aVariantName ) )
+    if( instance.m_Variants.contains( aVariantName ) )
         return instance.m_Variants[aVariantName].m_DNP;
 
     return m_DNP;
@@ -1015,9 +1013,7 @@ bool SCH_SYMBOL::GetExcludedFromBOM( const SCH_SHEET_PATH* aInstance, const wxSt
     if( !GetInstance( instance, aInstance->Path() ) )
         return m_excludedFromBOM;
 
-    if( aVariantName.IsEmpty() )
-        return m_excludedFromBOM;
-    else if( instance.m_Variants.contains( aVariantName ) )
+    if( instance.m_Variants.contains( aVariantName ) )
         return instance.m_Variants[aVariantName].m_ExcludedFromBOM;
 
     // If the variant has not been defined yet, return the default exclude from BOM setting.
@@ -1072,9 +1068,7 @@ bool SCH_SYMBOL::GetExcludedFromSim( const SCH_SHEET_PATH* aInstance, const wxSt
     if( !GetInstance( instance, aInstance->Path() ) )
         return m_excludedFromSim;
 
-    if( aVariantName.IsEmpty() )
-        return m_excludedFromSim;
-    else if ( instance.m_Variants.contains( aVariantName ) )
+    if( instance.m_Variants.contains( aVariantName ) )
         return instance.m_Variants[aVariantName].m_ExcludedFromSim;
 
     // If variant is not defined yet, return default exclude from simulation setting.
@@ -1131,9 +1125,7 @@ bool SCH_SYMBOL::GetExcludedFromBoard( const SCH_SHEET_PATH* aInstance,
     if( !GetInstance( instance, aInstance->Path() ) )
         return m_excludedFromBoard;
 
-    if( aVariantName.IsEmpty() )
-        return m_excludedFromBoard;
-    else if( instance.m_Variants.contains( aVariantName ) )
+    if( instance.m_Variants.contains( aVariantName ) )
         return instance.m_Variants[aVariantName].m_ExcludedFromBoard;
 
     // If variant is not defined yet, return default exclude from board setting.
@@ -1190,9 +1182,7 @@ bool SCH_SYMBOL::GetExcludedFromPosFiles( const SCH_SHEET_PATH* aInstance,
     if( !GetInstance( instance, aInstance->Path() ) )
         return m_excludedFromPosFiles;
 
-    if( aVariantName.IsEmpty() )
-        return m_excludedFromPosFiles;
-    else if( instance.m_Variants.contains( aVariantName ) )
+    if( instance.m_Variants.contains( aVariantName ) )
         return instance.m_Variants[aVariantName].m_ExcludedFromPosFiles;
 
     // If variant is not defined yet, return default exclude from position files setting.
