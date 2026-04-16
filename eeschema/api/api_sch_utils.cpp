@@ -18,6 +18,7 @@
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
 #include <trace_helpers.h>
 
 #include <sch_pin.h>
@@ -122,7 +123,15 @@ bool PackSymbol( kiapi::schematic::types::SchematicSymbolInstance* aOutput, cons
 
     kiapi::schematic::types::SchematicSymbol* def = aOutput->mutable_definition();
 
-    for( const SCH_PIN* pin : aInput->GetPins( &aPath ) )
+    std::vector<const SCH_PIN*> pins = aInput->GetPins( &aPath );
+
+    std::ranges::sort( pins,
+                       []( const SCH_PIN* a, const SCH_PIN* b )
+                       {
+                           return a->m_Uuid < b->m_Uuid;
+                       } );
+
+    for( const SCH_PIN* pin : pins )
     {
         kiapi::schematic::types::SchematicSymbolChild* item = def->add_items();
         item->mutable_unit()->set_unit( pin->GetUnit() );

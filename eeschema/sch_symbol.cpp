@@ -368,7 +368,7 @@ bool SCH_SYMBOL::Deserialize( const google::protobuf::Any& aContainer )
         {
             SchematicPin pinProto;
 
-            if( aContainer.UnpackTo( &pinProto ) )
+            if( child.item().UnpackTo( &pinProto ) )
             {
                 if( pinProto.has_active_alternate() )
                     pinAltMap[schItem->m_Uuid] = wxString::FromUTF8( pinProto.active_alternate() );

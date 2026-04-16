@@ -261,7 +261,7 @@ void SCH_PIN::Serialize( google::protobuf::Any& aContainer ) const
     SchematicPin pin;
 
     pin.mutable_id()->set_value( m_Uuid.AsStdString() );
-    pin.set_name( GetName().ToUTF8() );
+    pin.set_name( GetBaseName().ToUTF8() );
     pin.set_number( GetNumber().ToUTF8() );
 
     PackVector2( *pin.mutable_position(), GetPosition(), schIUScale );
@@ -283,7 +283,7 @@ void SCH_PIN::Serialize( google::protobuf::Any& aContainer ) const
         altProto->set_electrical_type( ToProtoEnum<ELECTRICAL_PINTYPE, types::ElectricalPinType>( alt.m_Type ) );
     }
 
-    if( !m_alt.IsEmpty() )
+    if( !m_alt.IsEmpty() && m_alt != GetBaseName() )
         pin.set_active_alternate( m_alt.ToUTF8() );
 
     aContainer.PackFrom( pin );
@@ -301,19 +301,19 @@ bool SCH_PIN::Deserialize( const google::protobuf::Any& aContainer )
         return false;
 
     const_cast<KIID&>( m_Uuid ) = KIID( pin.id().value() );
-    SetName( wxString::FromUTF8( pin.name() ) );
-    SetNumber( wxString::FromUTF8( pin.number() ) );
+    m_name = wxString::FromUTF8( pin.name() );
+    m_number = wxString::FromUTF8( pin.number() );
 
     SetPosition( UnpackVector2( pin.position(), schIUScale ) );
     SetLength( UnpackDistance( pin.length(), schIUScale ) );
     SetOrientation( FromProtoEnum<PIN_ORIENTATION>( pin.orientation() ) );
 
-    SetType( FromProtoEnum<ELECTRICAL_PINTYPE>( pin.electrical_type() ) );
-    SetShape( FromProtoEnum<GRAPHIC_PINSHAPE>( pin.shape() ) );
+    m_type = FromProtoEnum<ELECTRICAL_PINTYPE>( pin.electrical_type() );
+    m_shape = FromProtoEnum<GRAPHIC_PINSHAPE>( pin.shape() );
     SetVisible( pin.visible() );
 
-    SetNameTextSize( UnpackDistance( pin.name_text_size(), schIUScale ) );
-    SetNumberTextSize( UnpackDistance( pin.number_text_size(), schIUScale ) );
+    m_nameTextSize = UnpackDistance( pin.name_text_size(), schIUScale );
+    m_numTextSize = UnpackDistance( pin.number_text_size(), schIUScale );
 
     std::map<wxString, ALT>& alts = GetAlternates();
 
@@ -325,6 +325,9 @@ bool SCH_PIN::Deserialize( const google::protobuf::Any& aContainer )
         alt.m_Type = FromProtoEnum<ELECTRICAL_PINTYPE>( altProto.electrical_type() );
         alts.emplace( alt.m_Name, alt );
     }
+
+    if( m_layoutCache )
+        m_layoutCache->MarkDirty( PIN_LAYOUT_CACHE::DIRTY_FLAGS::ALL );
 
     return true;
 }
