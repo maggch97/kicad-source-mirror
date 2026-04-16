@@ -38,6 +38,7 @@
 class OUTPUTFORMATTER;
 class SHAPE_COMPOUND;
 class SHAPE_POLY_SET;
+struct EDA_IU_SCALE;
 
 
 struct EDA_TEXT_RENDER_CACHE_DATA
@@ -100,6 +101,9 @@ public:
 
     void Serialize( google::protobuf::Any &aContainer ) const override;
     bool Deserialize( const google::protobuf::Any &aContainer ) override;
+
+    void Serialize( google::protobuf::Any &aContainer, const EDA_IU_SCALE& aScale ) const;
+    bool Deserialize( const google::protobuf::Any &aContainer, const EDA_IU_SCALE& aScale );
 
     /**
      * Return the string associated with the text object.

@@ -38,6 +38,7 @@ class LINE_READER;
 class EDA_DRAW_FRAME;
 class FOOTPRINT;
 class MSG_PANEL_ITEM;
+struct EDA_IU_SCALE;
 
 using KIGFX::COLOR4D;
 
@@ -113,6 +114,9 @@ public:
 
     void Serialize( google::protobuf::Any &aContainer ) const override;
     bool Deserialize( const google::protobuf::Any &aContainer ) override;
+
+    void Serialize( google::protobuf::Any &aContainer, const EDA_IU_SCALE& aScale ) const;
+    bool Deserialize( const google::protobuf::Any& aContainer, const EDA_IU_SCALE& aScale );
 
     wxString ShowShape() const;
 

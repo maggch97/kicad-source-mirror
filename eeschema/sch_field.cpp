@@ -133,7 +133,7 @@ void SCH_FIELD::Serialize( google::protobuf::Any& aContainer ) const
     field.set_allow_auto_place( CanAutoplace() );
 
     google::protobuf::Any any;
-    EDA_TEXT::Serialize( any );
+    EDA_TEXT::Serialize( any, schIUScale );
     any.UnpackTo( field.mutable_text() );
 
     aContainer.PackFrom( field );
@@ -154,7 +154,7 @@ bool SCH_FIELD::Deserialize( const google::protobuf::Any& aContainer )
 
     google::protobuf::Any any;
     any.PackFrom( field.text() );
-    return EDA_TEXT::Deserialize( any );
+    return EDA_TEXT::Deserialize( any, schIUScale );
 }
 
 

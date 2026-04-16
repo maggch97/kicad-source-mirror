@@ -113,16 +113,16 @@ KICOMMON_API void PackLibId( types::LibraryIdentifier* aOutput, const LIB_ID& aI
 }
 
 
-KICOMMON_API void PackVector2( types::Vector2& aOutput, const VECTOR2I& aInput )
+KICOMMON_API void PackVector2( types::Vector2& aOutput, const VECTOR2I& aInput, const EDA_IU_SCALE& aScale )
 {
-    aOutput.set_x_nm( aInput.x );
-    aOutput.set_y_nm( aInput.y );
+    aOutput.set_x_nm( aScale.IUToNm( aInput.x ) );
+    aOutput.set_y_nm( aScale.IUToNm( aInput.y ) );
 }
 
 
-KICOMMON_API VECTOR2I UnpackVector2( const types::Vector2& aInput )
+KICOMMON_API VECTOR2I UnpackVector2( const types::Vector2& aInput, const EDA_IU_SCALE& aScale )
 {
-    return VECTOR2I( aInput.x_nm(), aInput.y_nm() );
+    return VECTOR2I( aScale.NmToIU( aInput.x_nm() ), aScale.NmToIU( aInput.y_nm() ) );
 }
 
 
@@ -140,20 +140,32 @@ KICOMMON_API VECTOR3D UnpackVector3D( const types::Vector3D& aInput )
 }
 
 
-KICOMMON_API void PackBox2( types::Box2& aOutput, const BOX2I& aInput )
+KICOMMON_API void PackBox2( types::Box2& aOutput, const BOX2I& aInput, const EDA_IU_SCALE& aScale )
 {
-    PackVector2( *aOutput.mutable_position(), aInput.GetOrigin() );
-    PackVector2( *aOutput.mutable_size(), aInput.GetSize() );
+    PackVector2( *aOutput.mutable_position(), aInput.GetOrigin(), aScale );
+    PackVector2( *aOutput.mutable_size(), aInput.GetSize(), aScale );
 }
 
 
-KICOMMON_API BOX2I UnpackBox2( const types::Box2& aInput )
+KICOMMON_API BOX2I UnpackBox2( const types::Box2& aInput, const EDA_IU_SCALE& aScale )
 {
-    return BOX2I( UnpackVector2( aInput.position() ), UnpackVector2( aInput.size() ) );
+    return BOX2I( UnpackVector2( aInput.position(), aScale ), UnpackVector2( aInput.size(), aScale ) );
 }
 
 
-KICOMMON_API void PackPolyLine( types::PolyLine& aOutput, const SHAPE_LINE_CHAIN& aSlc )
+KICOMMON_API void PackDistance( types::Distance& aOutput, int aInput, const EDA_IU_SCALE& aScale )
+{
+    aOutput.set_value_nm( aScale.IUToNm( aInput ) );
+}
+
+
+KICOMMON_API int UnpackDistance( const types::Distance& aInput, const EDA_IU_SCALE& aScale )
+{
+    return aScale.NmToIU( aInput.value_nm() );
+}
+
+
+KICOMMON_API void PackPolyLine( types::PolyLine& aOutput, const SHAPE_LINE_CHAIN& aSlc, const EDA_IU_SCALE& aScale )
 {
     for( int vertex = 0; vertex < aSlc.PointCount(); vertex = aSlc.NextShape( vertex ) )
     {
@@ -164,18 +176,14 @@ KICOMMON_API void PackPolyLine( types::PolyLine& aOutput, const SHAPE_LINE_CHAIN
         {
             types::PolyLineNode* node = aOutput.mutable_nodes()->Add();
             const SHAPE_ARC& arc = aSlc.Arc( aSlc.ArcIndex( vertex ) );
-            node->mutable_arc()->mutable_start()->set_x_nm( arc.GetP0().x );
-            node->mutable_arc()->mutable_start()->set_y_nm( arc.GetP0().y );
-            node->mutable_arc()->mutable_mid()->set_x_nm( arc.GetArcMid().x );
-            node->mutable_arc()->mutable_mid()->set_y_nm( arc.GetArcMid().y );
-            node->mutable_arc()->mutable_end()->set_x_nm( arc.GetP1().x );
-            node->mutable_arc()->mutable_end()->set_y_nm( arc.GetP1().y );
+            PackVector2( *node->mutable_arc()->mutable_start(), arc.GetP0(), aScale );
+            PackVector2( *node->mutable_arc()->mutable_mid(), arc.GetArcMid(), aScale );
+            PackVector2( *node->mutable_arc()->mutable_end(), arc.GetP1(), aScale );
         }
         else if( !aSlc.IsPtOnArc( vertex ) )
         {
             types::PolyLineNode* node = aOutput.mutable_nodes()->Add();
-            node->mutable_point()->set_x_nm( aSlc.CPoint( vertex ).x );
-            node->mutable_point()->set_y_nm( aSlc.CPoint( vertex ).y );
+            PackVector2( *node->mutable_point(), aSlc.CPoint( vertex ), aScale );
         }
     }
 
@@ -183,7 +191,7 @@ KICOMMON_API void PackPolyLine( types::PolyLine& aOutput, const SHAPE_LINE_CHAIN
 }
 
 
-KICOMMON_API SHAPE_LINE_CHAIN UnpackPolyLine( const types::PolyLine& aInput )
+KICOMMON_API SHAPE_LINE_CHAIN UnpackPolyLine( const types::PolyLine& aInput, const EDA_IU_SCALE& aScale )
 {
     SHAPE_LINE_CHAIN slc;
 
@@ -191,14 +199,14 @@ KICOMMON_API SHAPE_LINE_CHAIN UnpackPolyLine( const types::PolyLine& aInput )
     {
         if( node.has_point() )
         {
-            slc.Append( VECTOR2I( node.point().x_nm(), node.point().y_nm() ) );
+            slc.Append( UnpackVector2( node.point(), aScale ) );
         }
         else if( node.has_arc() )
         {
-            slc.Append( SHAPE_ARC( VECTOR2I( node.arc().start().x_nm(), node.arc().start().y_nm() ),
-                                   VECTOR2I( node.arc().mid().x_nm(), node.arc().mid().y_nm() ),
-                                   VECTOR2I( node.arc().end().x_nm(), node.arc().end().y_nm() ),
-                                   0 /* don't care about width here */ ) );
+            slc.Append( SHAPE_ARC( UnpackVector2( node.arc().start(), aScale ),
+                                   UnpackVector2( node.arc().mid(), aScale ),
+                                   UnpackVector2( node.arc().end(), aScale ),
+                                   0 ) );
         }
     }
 
@@ -208,7 +216,7 @@ KICOMMON_API SHAPE_LINE_CHAIN UnpackPolyLine( const types::PolyLine& aInput )
 }
 
 
-KICOMMON_API void PackPolySet( types::PolySet& aOutput, const SHAPE_POLY_SET& aInput )
+KICOMMON_API void PackPolySet( types::PolySet& aOutput, const SHAPE_POLY_SET& aInput, const EDA_IU_SCALE& aScale )
 {
     for( int idx = 0; idx < aInput.OutlineCount(); ++idx )
     {
@@ -218,21 +226,21 @@ KICOMMON_API void PackPolySet( types::PolySet& aOutput, const SHAPE_POLY_SET& aI
             continue;
 
         types::PolygonWithHoles* polyMsg = aOutput.mutable_polygons()->Add();
-        PackPolyLine( *polyMsg->mutable_outline(), poly.front() );
+        PackPolyLine( *polyMsg->mutable_outline(), poly.front(), aScale );
 
         if( poly.size() > 1 )
         {
             for( size_t hole = 1; hole < poly.size(); ++hole )
             {
                 types::PolyLine* pl = polyMsg->mutable_holes()->Add();
-                PackPolyLine( *pl, poly[hole] );
+                PackPolyLine( *pl, poly[hole], aScale );
             }
         }
     }
 }
 
 
-KICOMMON_API SHAPE_POLY_SET UnpackPolySet( const types::PolySet& aInput )
+KICOMMON_API SHAPE_POLY_SET UnpackPolySet( const types::PolySet& aInput, const EDA_IU_SCALE& aScale )
 {
     SHAPE_POLY_SET sps;
 
@@ -240,10 +248,10 @@ KICOMMON_API SHAPE_POLY_SET UnpackPolySet( const types::PolySet& aInput )
     {
         SHAPE_POLY_SET::POLYGON polygon;
 
-        polygon.emplace_back( UnpackPolyLine( polygonWithHoles.outline() ) );
+        polygon.emplace_back( UnpackPolyLine( polygonWithHoles.outline(), aScale ) );
 
         for( const types::PolyLine& holeMsg : polygonWithHoles.holes() )
-            polygon.emplace_back( UnpackPolyLine( holeMsg ) );
+            polygon.emplace_back( UnpackPolyLine( holeMsg, aScale ) );
 
         sps.AddPolygon( polygon );
     }

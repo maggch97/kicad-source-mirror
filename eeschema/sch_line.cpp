@@ -111,11 +111,11 @@ void SCH_LINE::Serialize( google::protobuf::Any &aContainer ) const
     types::StrokeAttributes* stroke = line.mutable_stroke();
 
     line.mutable_id()->set_value( m_Uuid.AsStdString() );
-    PackVector2( *line.mutable_start(), GetStartPoint() );
-    PackVector2( *line.mutable_end(), GetEndPoint() );
+    PackVector2( *line.mutable_start(), GetStartPoint(), schIUScale );
+    PackVector2( *line.mutable_end(), GetEndPoint(), schIUScale );
     line.set_locked( IsLocked() ? types::LockedState::LS_LOCKED : types::LockedState::LS_UNLOCKED );
 
-    stroke->mutable_width()->set_value_nm( m_stroke.GetWidth() );
+    PackDistance( *stroke->mutable_width(), m_stroke.GetWidth(), schIUScale );
     stroke->set_style( ToProtoEnum<LINE_STYLE, types::StrokeLineStyle>( m_stroke.GetLineStyle() ) );
 
     if( m_stroke.GetColor() != COLOR4D::UNSPECIFIED )
@@ -154,11 +154,11 @@ bool SCH_LINE::Deserialize( const google::protobuf::Any &aContainer )
         return false;
 
     const_cast<KIID&>( m_Uuid ) = KIID( line.id().value() );
-    SetStartPoint( UnpackVector2( line.start() ) );
-    SetEndPoint( UnpackVector2( line.end() ) );
+    SetStartPoint( UnpackVector2( line.start(), schIUScale ) );
+    SetEndPoint( UnpackVector2( line.end(), schIUScale ) );
     SetLocked( line.locked() == types::LockedState::LS_LOCKED );
 
-    m_stroke.SetWidth( line.stroke().width().value_nm() );
+    m_stroke.SetWidth( UnpackDistance( line.stroke().width(), schIUScale ) );
     m_stroke.SetLineStyle( FromProtoEnum<LINE_STYLE, types::StrokeLineStyle>( line.stroke().style() ) );
 
     if( line.stroke().has_color() )

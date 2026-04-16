@@ -70,8 +70,8 @@ void SCH_JUNCTION::Serialize( google::protobuf::Any& aContainer ) const
     kiapi::schematic::types::Junction junction;
 
     junction.mutable_id()->set_value( m_Uuid.AsStdString() );
-    PackVector2( *junction.mutable_position(), m_pos );
-    junction.mutable_diameter()->set_value_nm( m_diameter );
+    PackVector2( *junction.mutable_position(), m_pos, schIUScale );
+    PackDistance( *junction.mutable_diameter(), m_diameter, schIUScale );
 
     if( m_color != COLOR4D::UNSPECIFIED )
         PackColor( *junction.mutable_color(), m_color );
@@ -93,8 +93,8 @@ bool SCH_JUNCTION::Deserialize( const google::protobuf::Any& aContainer )
         return false;
 
     const_cast<KIID&>( m_Uuid ) = KIID( junction.id().value() );
-    m_pos = UnpackVector2( junction.position() );
-    m_diameter = junction.diameter().value_nm();
+    m_pos = UnpackVector2( junction.position(), schIUScale );
+    m_diameter = UnpackDistance( junction.diameter(), schIUScale );
 
     if( junction.has_color() )
         m_color = UnpackColor( junction.color() );

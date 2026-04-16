@@ -124,13 +124,13 @@ void SCH_BUS_ENTRY_BASE::Serialize( google::protobuf::Any& aContainer ) const
     types::StrokeAttributes* stroke = entry.mutable_stroke();
 
     entry.mutable_id()->set_value( m_Uuid.AsStdString() );
-    PackVector2( *entry.mutable_position(), m_pos );
-    PackVector2( *entry.mutable_size(), m_size );
+    PackVector2( *entry.mutable_position(), m_pos, schIUScale );
+    PackVector2( *entry.mutable_size(), m_size, schIUScale );
     entry.set_locked( IsLocked() ? types::LockedState::LS_LOCKED : types::LockedState::LS_UNLOCKED );
     entry.set_type( Type() == SCH_BUS_BUS_ENTRY_T ? kiapi::schematic::types::BET_BUS_TO_BUS
                                                   : kiapi::schematic::types::BET_WIRE_TO_BUS );
 
-    stroke->mutable_width()->set_value_nm( m_stroke.GetWidth() );
+    PackDistance( *stroke->mutable_width(), m_stroke.GetWidth(), schIUScale );
     stroke->set_style( ToProtoEnum<LINE_STYLE, types::StrokeLineStyle>( m_stroke.GetLineStyle() ) );
 
     if( m_stroke.GetColor() != COLOR4D::UNSPECIFIED )
@@ -156,11 +156,11 @@ bool SCH_BUS_ENTRY_BASE::Deserialize( const google::protobuf::Any& aContainer )
     }
 
     const_cast<KIID&>( m_Uuid ) = KIID( entry.id().value() );
-    m_pos = UnpackVector2( entry.position() );
-    m_size = UnpackVector2( entry.size() );
+    m_pos = UnpackVector2( entry.position(), schIUScale );
+    m_size = UnpackVector2( entry.size(), schIUScale );
     SetLocked( entry.locked() == types::LockedState::LS_LOCKED );
 
-    m_stroke.SetWidth( entry.stroke().width().value_nm() );
+    m_stroke.SetWidth( UnpackDistance( entry.stroke().width(), schIUScale ) );
     m_stroke.SetLineStyle( FromProtoEnum<LINE_STYLE, types::StrokeLineStyle>( entry.stroke().style() ) );
 
     if( entry.stroke().has_color() )

@@ -65,8 +65,8 @@ void SCH_NO_CONNECT::Serialize( google::protobuf::Any& aContainer ) const
     kiapi::schematic::types::NoConnectMarker marker;
 
     marker.mutable_id()->set_value( m_Uuid.AsStdString() );
-    PackVector2( *marker.mutable_position(), m_pos );
-    marker.mutable_size()->set_value_nm( m_size );
+    PackVector2( *marker.mutable_position(), m_pos, schIUScale );
+    PackDistance( *marker.mutable_size(), m_size, schIUScale );
     marker.set_locked( IsLocked() ? types::LockedState::LS_LOCKED
                                   : types::LockedState::LS_UNLOCKED );
 
@@ -84,8 +84,8 @@ bool SCH_NO_CONNECT::Deserialize( const google::protobuf::Any& aContainer )
         return false;
 
     const_cast<KIID&>( m_Uuid ) = KIID( marker.id().value() );
-    m_pos = UnpackVector2( marker.position() );
-    m_size = marker.size().value_nm();
+    m_pos = UnpackVector2( marker.position(), schIUScale );
+    m_size = UnpackDistance( marker.size(), schIUScale );
     SetLocked( marker.locked() == types::LockedState::LS_LOCKED );
     return true;
 }

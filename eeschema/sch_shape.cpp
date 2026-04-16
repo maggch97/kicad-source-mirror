@@ -64,7 +64,7 @@ void SCH_SHAPE::Serialize( google::protobuf::Any& aContainer ) const
     msg.mutable_id()->set_value( m_Uuid.AsStdString() );
     msg.set_locked( IsLocked() ? types::LockedState::LS_LOCKED : types::LockedState::LS_UNLOCKED );
 
-    EDA_SHAPE::Serialize( any );
+    EDA_SHAPE::Serialize( any, schIUScale );
     any.UnpackTo( msg.mutable_shape() );
 
     aContainer.PackFrom( msg );
@@ -85,7 +85,7 @@ bool SCH_SHAPE::Deserialize( const google::protobuf::Any& aContainer )
 
     google::protobuf::Any any;
     any.PackFrom( msg.shape() );
-    return EDA_SHAPE::Deserialize( any );
+    return EDA_SHAPE::Deserialize( any, schIUScale );
 }
 
 

@@ -88,10 +88,10 @@ void SCH_TEXT::Serialize( google::protobuf::Any& aContainer ) const
     text.set_exclude_from_sim( GetExcludedFromSim() );
 
     google::protobuf::Any any;
-    EDA_TEXT::Serialize( any );
+    EDA_TEXT::Serialize( any, schIUScale );
     any.UnpackTo( text.mutable_text() );
 
-    PackVector2( *text.mutable_text()->mutable_position(), GetPosition() );
+    PackVector2( *text.mutable_text()->mutable_position(), GetPosition(), schIUScale );
 
     aContainer.PackFrom( text );
 }
@@ -113,10 +113,10 @@ bool SCH_TEXT::Deserialize( const google::protobuf::Any& aContainer )
     google::protobuf::Any any;
     any.PackFrom( text.text() );
 
-    if( !EDA_TEXT::Deserialize( any ) )
+    if( !EDA_TEXT::Deserialize( any, schIUScale ) )
         return false;
 
-    SetPosition( UnpackVector2( text.text().position() ) );
+    SetPosition( UnpackVector2( text.text().position(), schIUScale ) );
     return true;
 }
 

@@ -27,6 +27,7 @@
 
 #include <eda_shape.h>
 
+#include <base_units.h>
 #include <bezier_curves.h>
 #include <convert_basic_shapes_to_polygon.h>
 #include <eda_draw_frame.h>
@@ -212,13 +213,19 @@ EDA_SHAPE& EDA_SHAPE::operator=( const EDA_SHAPE& aOther )
 
 void EDA_SHAPE::Serialize( google::protobuf::Any &aContainer ) const
 {
+    Serialize( aContainer, pcbIUScale );
+}
+
+
+void EDA_SHAPE::Serialize( google::protobuf::Any &aContainer, const EDA_IU_SCALE &aScale ) const
+{
     using namespace kiapi::common;
     types::GraphicShape shape;
 
     types::StrokeAttributes* stroke = shape.mutable_attributes()->mutable_stroke();
     types::GraphicFillAttributes* fill = shape.mutable_attributes()->mutable_fill();
 
-    stroke->mutable_width()->set_value_nm( GetWidth() );
+    PackDistance( *stroke->mutable_width(), GetWidth(), aScale );
     stroke->set_style( ToProtoEnum<LINE_STYLE, types::StrokeLineStyle>( m_stroke.GetLineStyle() ) );
 
     if( m_stroke.GetColor() != COLOR4D::UNSPECIFIED )
@@ -234,50 +241,50 @@ void EDA_SHAPE::Serialize( google::protobuf::Any &aContainer ) const
     case SHAPE_T::SEGMENT:
     {
         types::GraphicSegmentAttributes* segment = shape.mutable_segment();
-        PackVector2( *segment->mutable_start(), GetStart() );
-        PackVector2( *segment->mutable_end(), GetEnd() );
+        PackVector2( *segment->mutable_start(), GetStart(), aScale );
+        PackVector2( *segment->mutable_end(), GetEnd(), aScale );
         break;
     }
 
     case SHAPE_T::RECTANGLE:
     {
         types::GraphicRectangleAttributes* rectangle = shape.mutable_rectangle();
-        PackVector2( *rectangle->mutable_top_left(), GetStart() );
-        PackVector2( *rectangle->mutable_bottom_right(), GetEnd() );
-        rectangle->mutable_corner_radius()->set_value_nm( GetCornerRadius() );
+        PackVector2( *rectangle->mutable_top_left(), GetStart(), aScale );
+        PackVector2( *rectangle->mutable_bottom_right(), GetEnd(), aScale );
+        PackDistance( *rectangle->mutable_corner_radius(), GetCornerRadius(), aScale );
         break;
     }
 
     case SHAPE_T::ARC:
     {
         types::GraphicArcAttributes* arc = shape.mutable_arc();
-        PackVector2( *arc->mutable_start(), GetStart() );
-        PackVector2( *arc->mutable_mid(), GetArcMid() );
-        PackVector2( *arc->mutable_end(), GetEnd() );
+        PackVector2( *arc->mutable_start(), GetStart(), aScale );
+        PackVector2( *arc->mutable_mid(), GetArcMid(), aScale );
+        PackVector2( *arc->mutable_end(), GetEnd(), aScale );
         break;
     }
 
     case SHAPE_T::CIRCLE:
     {
         types::GraphicCircleAttributes* circle = shape.mutable_circle();
-        PackVector2( *circle->mutable_center(), GetStart() );
-        PackVector2( *circle->mutable_radius_point(), GetEnd() );
+        PackVector2( *circle->mutable_center(), GetStart(), aScale );
+        PackVector2( *circle->mutable_radius_point(), GetEnd(), aScale );
         break;
     }
 
     case SHAPE_T::POLY:
     {
-        PackPolySet( *shape.mutable_polygon(), GetPolyShape() );
+        PackPolySet( *shape.mutable_polygon(), GetPolyShape(), aScale );
         break;
     }
 
     case SHAPE_T::BEZIER:
     {
         types::GraphicBezierAttributes* bezier = shape.mutable_bezier();
-        PackVector2( *bezier->mutable_start(), GetStart() );
-        PackVector2( *bezier->mutable_control1(), GetBezierC1() );
-        PackVector2( *bezier->mutable_control2(), GetBezierC2() );
-        PackVector2( *bezier->mutable_end(), GetEnd() );
+        PackVector2( *bezier->mutable_start(), GetStart(), aScale );
+        PackVector2( *bezier->mutable_control1(), GetBezierC1(), aScale );
+        PackVector2( *bezier->mutable_control2(), GetBezierC2(), aScale );
+        PackVector2( *bezier->mutable_end(), GetEnd(), aScale );
         break;
     }
 
@@ -292,6 +299,12 @@ void EDA_SHAPE::Serialize( google::protobuf::Any &aContainer ) const
 
 
 bool EDA_SHAPE::Deserialize( const google::protobuf::Any &aContainer )
+{
+    return Deserialize( aContainer, pcbIUScale );
+}
+
+
+bool EDA_SHAPE::Deserialize( const google::protobuf::Any &aContainer, const EDA_IU_SCALE &aScale )
 {
     using namespace kiapi::common;
 
@@ -323,7 +336,7 @@ bool EDA_SHAPE::Deserialize( const google::protobuf::Any &aContainer )
 
     if( shape.attributes().has_stroke() )
     {
-        SetWidth( shape.attributes().stroke().width().value_nm() );
+        SetWidth( UnpackDistance( shape.attributes().stroke().width(), aScale ) );
         SetLineStyle( FromProtoEnum<LINE_STYLE, types::StrokeLineStyle>( shape.attributes().stroke().style() ) );
     }
 
@@ -333,41 +346,41 @@ bool EDA_SHAPE::Deserialize( const google::protobuf::Any &aContainer )
     if( shape.has_segment() )
     {
         SetShape( SHAPE_T::SEGMENT );
-        SetStart( UnpackVector2( shape.segment().start() ) );
-        SetEnd( UnpackVector2( shape.segment().end() ) );
+        SetStart( UnpackVector2( shape.segment().start(), aScale ) );
+        SetEnd( UnpackVector2( shape.segment().end(), aScale ) );
     }
     else if( shape.has_rectangle() )
     {
         SetShape( SHAPE_T::RECTANGLE );
-        SetStart( UnpackVector2( shape.rectangle().top_left() ) );
-        SetEnd( UnpackVector2( shape.rectangle().bottom_right() ) );
-        SetCornerRadius( shape.rectangle().corner_radius().value_nm() );
+        SetStart( UnpackVector2( shape.rectangle().top_left(), aScale ) );
+        SetEnd( UnpackVector2( shape.rectangle().bottom_right(), aScale ) );
+        SetCornerRadius( UnpackDistance( shape.rectangle().corner_radius(), aScale ) );
     }
     else if( shape.has_arc() )
     {
         SetShape( SHAPE_T::ARC );
-        SetArcGeometry( UnpackVector2( shape.arc().start() ),
-                        UnpackVector2( shape.arc().mid() ),
-                        UnpackVector2( shape.arc().end() ) );
+        SetArcGeometry( UnpackVector2( shape.arc().start(), aScale ),
+                        UnpackVector2( shape.arc().mid(), aScale ),
+                        UnpackVector2( shape.arc().end(), aScale ) );
     }
     else if( shape.has_circle() )
     {
         SetShape( SHAPE_T::CIRCLE );
-        SetStart( UnpackVector2( shape.circle().center() ) );
-        SetEnd( UnpackVector2( shape.circle().radius_point() ) );
+        SetStart( UnpackVector2( shape.circle().center(), aScale ) );
+        SetEnd( UnpackVector2( shape.circle().radius_point(), aScale ) );
     }
     else if( shape.has_polygon() )
     {
         SetShape( SHAPE_T::POLY );
-        SetPolyShape( UnpackPolySet( shape.polygon() ) );
+        SetPolyShape( UnpackPolySet( shape.polygon(), aScale ) );
     }
     else if( shape.has_bezier() )
     {
         SetShape( SHAPE_T::BEZIER );
-        SetStart( UnpackVector2( shape.bezier().start() ) );
-        SetBezierC1( UnpackVector2( shape.bezier().control1() ) );
-        SetBezierC2( UnpackVector2( shape.bezier().control2() ) );
-        SetEnd( UnpackVector2( shape.bezier().end() ) );
+        SetStart( UnpackVector2( shape.bezier().start(), aScale ) );
+        SetBezierC1( UnpackVector2( shape.bezier().control1(), aScale ) );
+        SetBezierC2( UnpackVector2( shape.bezier().control2(), aScale ) );
+        SetEnd( UnpackVector2( shape.bezier().end(), aScale ) );
         RebuildBezierToSegmentsPointsList( getMaxError() );
     }
 

@@ -128,9 +128,8 @@ void SCH_BITMAP::Serialize( google::protobuf::Any& aContainer ) const
     kiapi::schematic::types::SchematicImage image;
 
     image.mutable_id()->set_value( m_Uuid.AsStdString() );
-    PackVector2( *image.mutable_position(), m_referenceImage.GetPosition() );
-    PackVector2( *image.mutable_transform_origin_offset(),
-                 m_referenceImage.GetTransformOriginOffset() );
+    PackVector2( *image.mutable_position(), m_referenceImage.GetPosition(), schIUScale );
+    PackVector2( *image.mutable_transform_origin_offset(), m_referenceImage.GetTransformOriginOffset(), schIUScale );
 
     image.mutable_image_scale()->set_value( m_referenceImage.GetImageScale() );
     image.set_locked( IsLocked() ? types::LockedState::LS_LOCKED : types::LockedState::LS_UNLOCKED );
@@ -161,8 +160,8 @@ bool SCH_BITMAP::Deserialize( const google::protobuf::Any& aContainer )
     if( image.has_image_scale() )
         m_referenceImage.SetImageScale( image.image_scale().value() );
 
-    SetPosition( UnpackVector2( image.position() ) );
-    m_referenceImage.SetTransformOriginOffset( UnpackVector2( image.transform_origin_offset() ) );
+    SetPosition( UnpackVector2( image.position(), schIUScale ) );
+    m_referenceImage.SetTransformOriginOffset( UnpackVector2( image.transform_origin_offset(), schIUScale ) );
 
     SetLocked( image.locked() == types::LockedState::LS_LOCKED );
     return true;

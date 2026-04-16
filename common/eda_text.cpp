@@ -174,12 +174,18 @@ EDA_TEXT& EDA_TEXT::operator=( const EDA_TEXT& aText )
 
 void EDA_TEXT::Serialize( google::protobuf::Any& aContainer ) const
 {
+    Serialize( aContainer, pcbIUScale );
+}
+
+
+void EDA_TEXT::Serialize( google::protobuf::Any& aContainer, const EDA_IU_SCALE& aScale ) const
+{
     using namespace kiapi::common;
     types::Text text;
 
     text.set_text( GetText().ToUTF8() );
     text.set_hyperlink( GetHyperlink().ToUTF8() );
-    PackVector2( *text.mutable_position(), GetTextPos() );
+    PackVector2( *text.mutable_position(), GetTextPos(), aScale );
 
     types::TextAttributes* attrs = text.mutable_attributes();
 
@@ -192,7 +198,7 @@ void EDA_TEXT::Serialize( google::protobuf::Any& aContainer ) const
 
     attrs->mutable_angle()->set_value_degrees( GetTextAngleDegrees() );
     attrs->set_line_spacing( GetLineSpacing() );
-    attrs->mutable_stroke_width()->set_value_nm( GetTextThickness() );
+    PackDistance( *attrs->mutable_stroke_width(), GetTextThickness(), aScale );
     attrs->set_italic( IsItalic() );
     attrs->set_bold( IsBold() );
     attrs->set_underlined( GetAttributes().m_Underlined );
@@ -200,7 +206,7 @@ void EDA_TEXT::Serialize( google::protobuf::Any& aContainer ) const
     attrs->set_mirrored( IsMirrored() );
     attrs->set_multiline( IsMultilineAllowed() );
     attrs->set_keep_upright( IsKeepUpright() );
-    PackVector2( *attrs->mutable_size(), GetTextSize() );
+    PackVector2( *attrs->mutable_size(), GetTextSize(), aScale );
 
     if( GetTextColor() != COLOR4D::UNSPECIFIED )
         PackColor( *attrs->mutable_color(), GetTextColor() );
@@ -211,6 +217,12 @@ void EDA_TEXT::Serialize( google::protobuf::Any& aContainer ) const
 
 bool EDA_TEXT::Deserialize( const google::protobuf::Any& aContainer )
 {
+    return Deserialize( aContainer, pcbIUScale );
+}
+
+
+bool EDA_TEXT::Deserialize( const google::protobuf::Any& aContainer, const EDA_IU_SCALE& aScale )
+{
     using namespace kiapi::common;
     types::Text text;
 
@@ -219,7 +231,7 @@ bool EDA_TEXT::Deserialize( const google::protobuf::Any& aContainer )
 
     SetText( wxString( text.text().c_str(), wxConvUTF8 ) );
     SetHyperlink( wxString( text.hyperlink().c_str(), wxConvUTF8 ) );
-    SetTextPos( UnpackVector2( text.position() ) );
+    SetTextPos( UnpackVector2( text.position(), aScale ) );
 
     if( text.has_attributes() )
     {
@@ -231,7 +243,7 @@ bool EDA_TEXT::Deserialize( const google::protobuf::Any& aContainer )
         attrs.m_Mirrored = text.attributes().mirrored();
         attrs.m_Multiline = text.attributes().multiline();
         attrs.m_KeepUpright = text.attributes().keep_upright();
-        attrs.m_Size = UnpackVector2( text.attributes().size() );
+        attrs.m_Size = UnpackVector2( text.attributes().size(), aScale );
 
         if( text.attributes().has_color() )
             attrs.m_Color = UnpackColor( text.attributes().color() );
@@ -246,7 +258,7 @@ bool EDA_TEXT::Deserialize( const google::protobuf::Any& aContainer )
 
         attrs.m_Angle = EDA_ANGLE( text.attributes().angle().value_degrees(), DEGREES_T );
         attrs.m_LineSpacing = text.attributes().line_spacing();
-        attrs.m_StrokeWidth = text.attributes().stroke_width().value_nm();
+        attrs.m_StrokeWidth = UnpackDistance( text.attributes().stroke_width(), aScale );
         attrs.m_Halign = FromProtoEnum<GR_TEXT_H_ALIGN_T, types::HorizontalAlignment>(
                 text.attributes().horizontal_alignment() );
 

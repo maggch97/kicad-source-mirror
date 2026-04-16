@@ -221,7 +221,7 @@ void SCH_SYMBOL::Serialize( google::protobuf::Any& aContainer ) const
     SchematicSymbolInstance symbol;
 
     symbol.mutable_id()->set_value( m_Uuid.AsStdString() );
-    PackVector2( *symbol.mutable_position(), GetPosition() );
+    PackVector2( *symbol.mutable_position(), GetPosition(), schIUScale );
     symbol.set_locked( IsLocked() ? types::LockedState::LS_LOCKED : types::LockedState::LS_UNLOCKED );
 
     SchematicSymbolTransform* transform = symbol.mutable_transform();
@@ -298,8 +298,7 @@ void SCH_SYMBOL::Serialize( google::protobuf::Any& aContainer ) const
     symbol.set_show_pin_names( GetShowPinNames() );
     symbol.set_show_pin_numbers( GetShowPinNumbers() );
 
-    // TODO(JE) comment says this is in mils; convert to nm
-    symbol.mutable_pin_name_offset()->set_value_nm( GetPinNameOffset() );
+    PackDistance( *symbol.mutable_pin_name_offset(), GetPinNameOffset(), schIUScale );
 
     aContainer.PackFrom( symbol );
 }
@@ -317,7 +316,7 @@ bool SCH_SYMBOL::Deserialize( const google::protobuf::Any& aContainer )
         return false;
 
     const_cast<::KIID&>( m_Uuid ) = ::KIID( symbol.id().value() );
-    SetPosition( UnpackVector2( symbol.position() ) );
+    SetPosition( UnpackVector2( symbol.position(), schIUScale ) );
     SetLocked( symbol.locked() == LockedState::LS_LOCKED );
 
     SetOrientationProp( FromProtoEnum<SYMBOL_ORIENTATION_PROP>( symbol.transform().orientation() ) );
@@ -428,7 +427,7 @@ bool SCH_SYMBOL::Deserialize( const google::protobuf::Any& aContainer )
 
     SetShowPinNames( symbol.show_pin_names() );
     SetShowPinNumbers( symbol.show_pin_numbers() );
-    SetPinNameOffset( symbol.pin_name_offset().value_nm() );
+    SetPinNameOffset( UnpackDistance( symbol.pin_name_offset(), schIUScale ) );
 
     // The proto is storing a single pin struct that has the UUID and alternate selection
     // as well as the library pin definition.  Deserializing the pin will have set up most
