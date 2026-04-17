@@ -57,6 +57,7 @@
 #include <dialogs/dialog_find_by_properties.h>
 #include <dialog_footprint_properties.h>
 #include <dialogs/dialog_exchange_footprints.h>
+#include <dialogs/dialog_migrate_3d_models.h>
 #include <dialog_board_setup.h>
 #include <dialogs/dialog_dimension_properties.h>
 #include <dialogs/dialog_table_properties.h>
@@ -1899,6 +1900,17 @@ void PCB_EDIT_FRAME::OnBoardLoaded()
     }
 
     GetBoard()->InitializeClearanceCache();
+
+    // Offer to migrate obsolete WRL 3D model references to current STEP models.
+    // Shown only when unresolvable WRL paths are present and the user hasn't
+    // opted out of the prompt; the Tools menu exposes the dialog on demand.
+    if( COMMON_SETTINGS* commonSettings = Pgm().GetCommonSettings();
+        commonSettings && !commonSettings->m_DoNotShowAgain.migrate_wrl_prompt
+        && DIALOG_MIGRATE_3D_MODELS::BoardHasUnresolvedWrlReferences( this ) )
+    {
+        DIALOG_MIGRATE_3D_MODELS dlg( this );
+        dlg.ShowModal();
+    }
 
     UpdateTitle();
 

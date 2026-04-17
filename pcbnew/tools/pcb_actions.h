@@ -460,6 +460,7 @@ public:
     static TOOL_ACTION cleanupGraphics;
     static TOOL_ACTION updateFootprint;
     static TOOL_ACTION updateFootprints;
+    static TOOL_ACTION migrate3DModels;
     static TOOL_ACTION changeFootprint;
     static TOOL_ACTION changeFootprints;
     static TOOL_ACTION swapLayers;
