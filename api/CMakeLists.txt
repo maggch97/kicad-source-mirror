@@ -76,7 +76,7 @@ target_compile_definitions( kiapi INTERFACE KIAPI_IMPORTEXPORT=APIIMPORT )
 
 # https://groups.google.com/g/protobuf/c/PDR1bqRazts
 if(MSVC)
-    target_compile_options( kiapi PRIVATE /FI${CMAKE_CURRENT_SOURCE_DIR}/../include/import_export.h )
+    target_compile_options( kiapi PUBLIC /FI${CMAKE_CURRENT_SOURCE_DIR}/../include/import_export.h )
 else()
     add_definitions( -include ${CMAKE_CURRENT_SOURCE_DIR}/../include/import_export.h )
 endif()
