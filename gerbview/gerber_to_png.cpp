@@ -178,6 +178,13 @@ void RenderItem( GERBER_DRAW_ITEM* aItem, PNG_PLOTTER& aPlotter, const KIGFX::CO
 
 GERBER_PLOTTER_VIEWPORT CalculatePlotterViewport( const BOX2I& aBBox, int aDpi, int aWidth, int aHeight )
 {
+    return CalculatePlotterViewport( aBBox, aDpi, aDpi, aWidth, aHeight );
+}
+
+
+GERBER_PLOTTER_VIEWPORT CalculatePlotterViewport( const BOX2I& aBBox, int aDpiX, int aDpiY,
+                                                  int aWidth, int aHeight )
+{
     GERBER_PLOTTER_VIEWPORT vp;
     vp.width = aWidth;
     vp.height = aHeight;
@@ -188,8 +195,8 @@ GERBER_PLOTTER_VIEWPORT CalculatePlotterViewport( const BOX2I& aBBox, int aDpi, 
         double widthInches = static_cast<double>( aBBox.GetWidth() ) / iuPerInch;
         double heightInches = static_cast<double>( aBBox.GetHeight() ) / iuPerInch;
 
-        vp.width = static_cast<int>( std::ceil( widthInches * aDpi ) );
-        vp.height = static_cast<int>( std::ceil( heightInches * aDpi ) );
+        vp.width = static_cast<int>( std::ceil( widthInches * aDpiX ) );
+        vp.height = static_cast<int>( std::ceil( heightInches * aDpiY ) );
 
         if( vp.width < MIN_PIXEL_SIZE )
             vp.width = MIN_PIXEL_SIZE;
@@ -210,9 +217,13 @@ GERBER_PLOTTER_VIEWPORT CalculatePlotterViewport( const BOX2I& aBBox, int aDpi, 
 
     vp.iuPerDecimil = gerbIUScale.IU_PER_MILS / 10.0;
 
-    double scaleX = static_cast<double>( vp.width ) * vp.iuPerDecimil * 10000.0 / ( aBBox.GetWidth() * aDpi );
-    double scaleY = static_cast<double>( vp.height ) * vp.iuPerDecimil * 10000.0 / ( aBBox.GetHeight() * aDpi );
+    double scaleX = static_cast<double>( vp.width ) * vp.iuPerDecimil * 10000.0
+                    / ( aBBox.GetWidth() * aDpiX );
+    double scaleY = static_cast<double>( vp.height ) * vp.iuPerDecimil * 10000.0
+                    / ( aBBox.GetHeight() * aDpiY );
     vp.plotScale = std::min( scaleX, scaleY );
+    vp.plotScaleX = scaleX;
+    vp.plotScaleY = scaleY;
     vp.offset = aBBox.GetOrigin();
 
     return vp;
@@ -271,18 +282,19 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
     if( aOptions.HasViewportOverride() && reqWidth == 0 && reqHeight == 0 )
     {
         double mmPerInch = 25.4;
-        reqWidth = static_cast<int>( std::ceil( aOptions.windowWidthMm / mmPerInch * aOptions.dpi ) );
-        reqHeight = static_cast<int>( std::ceil( aOptions.windowHeightMm / mmPerInch * aOptions.dpi ) );
+        reqWidth = static_cast<int>( std::ceil( aOptions.windowWidthMm / mmPerInch * aOptions.GetDpiX() ) );
+        reqHeight = static_cast<int>( std::ceil( aOptions.windowHeightMm / mmPerInch * aOptions.GetDpiY() ) );
     }
 
-    GERBER_PLOTTER_VIEWPORT vp = CalculatePlotterViewport( bbox, aOptions.dpi, reqWidth, reqHeight );
+    GERBER_PLOTTER_VIEWPORT vp = CalculatePlotterViewport( bbox, aOptions.GetDpiX(), aOptions.GetDpiY(),
+                                                           reqWidth, reqHeight );
 
     PNG_PLOTTER plotter;
     plotter.SetPixelSize( vp.width, vp.height );
-    plotter.SetResolution( aOptions.dpi );
+    plotter.SetResolution( aOptions.GetDpiX(), aOptions.GetDpiY() );
     plotter.SetAntialias( aOptions.antialias );
     plotter.SetBackgroundColor( aOptions.backgroundColor );
-    plotter.SetViewport( vp.offset, vp.iuPerDecimil, vp.plotScale, false );
+    plotter.SetViewport( vp.offset, vp.iuPerDecimil, vp.plotScaleX, vp.plotScaleY, false );
 
     // Start plotting
     if( !plotter.StartPlot( wxEmptyString ) )
@@ -333,6 +345,8 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
 {
     GERBER_RENDER_OPTIONS options;
     options.dpi = aJob.m_dpi;
+    options.dpiX = aJob.m_dpiX;
+    options.dpiY = aJob.m_dpiY;
     options.width = aJob.m_width;
     options.height = aJob.m_height;
     options.antialias = aJob.m_antialias;

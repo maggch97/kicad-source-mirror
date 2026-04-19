@@ -18,6 +18,7 @@
  */
 
 #include "command_gerber_convert_png.h"
+#include "command_gerber_convert_dpi.h"
 #include <cli/exit_codes.h>
 #include <jobs/job_gerber_export_png.h>
 #include <kiface_base.h>
@@ -50,9 +51,8 @@ CLI::GERBER_CONVERT_PNG_COMMAND::GERBER_CONVERT_PNG_COMMAND() :
     m_argParser.add_description( UTF8STDSTR( _( "Convert a Gerber or Excellon file to 1-bit BMP image" ) ) );
 
     m_argParser.add_argument( ARG_DPI )
-            .default_value( 300 )
-            .scan<'i', int>()
-            .help( UTF8STDSTR( _( "Resolution in DPI (default: 300)" ) ) )
+            .default_value( std::string( "300" ) )
+            .help( UTF8STDSTR( _( "Resolution in DPI. Use N or XxY (default: 300)" ) ) )
             .metavar( "DPI" );
 
     m_argParser.add_argument( ARG_WIDTH )
@@ -119,9 +119,19 @@ CLI::GERBER_CONVERT_PNG_COMMAND::GERBER_CONVERT_PNG_COMMAND() :
 int CLI::GERBER_CONVERT_PNG_COMMAND::doPerform( KIWAY& aKiway )
 {
     std::unique_ptr<JOB_GERBER_EXPORT_PNG> pngJob = std::make_unique<JOB_GERBER_EXPORT_PNG>();
+    GERBER_DPI_SPEC                        dpiSpec;
+    wxString                               dpiError;
+
+    if( !ParseGerberDpiSpec( m_argParser.get<std::string>( ARG_DPI ), dpiSpec, &dpiError ) )
+    {
+        wxFprintf( stderr, wxS( "%s\n" ), dpiError );
+        return CLI::EXIT_CODES::ERR_ARGS;
+    }
 
     pngJob->m_inputFile = m_argInput;
-    pngJob->m_dpi = m_argParser.get<int>( ARG_DPI );
+    pngJob->m_dpi = dpiSpec.x;
+    pngJob->m_dpiX = dpiSpec.x;
+    pngJob->m_dpiY = dpiSpec.y;
     pngJob->m_width = m_argParser.get<int>( ARG_WIDTH );
     pngJob->m_height = m_argParser.get<int>( ARG_HEIGHT );
     pngJob->m_antialias = !m_argParser.get<bool>( ARG_NO_ANTIALIAS );

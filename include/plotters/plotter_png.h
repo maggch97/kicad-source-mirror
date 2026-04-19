@@ -48,7 +48,19 @@ public:
      * Set the output resolution in dots per inch.
      * @param aDPI resolution value (default 300)
      */
-    void SetResolution( int aDPI ) { m_dpi = aDPI; }
+    void SetResolution( int aDPI )
+    {
+        m_dpi = aDPI;
+        m_dpiX = aDPI;
+        m_dpiY = aDPI;
+    }
+
+    void SetResolution( int aDPIX, int aDPIY )
+    {
+        m_dpi = aDPIX;
+        m_dpiX = aDPIX;
+        m_dpiY = aDPIY;
+    }
     int  GetResolution() const { return m_dpi; }
 
     /**
@@ -95,7 +107,10 @@ public:
      */
     void SetClearCompositing( bool aClear );
 
-    virtual void SetViewport( const VECTOR2I& aOffset, double aIusPerDecimil, double aScale, bool aMirror ) override;
+    virtual void SetViewport( const VECTOR2I& aOffset, double aIusPerDecimil, double aScale,
+                              bool aMirror ) override;
+    void SetViewport( const VECTOR2I& aOffset, double aIusPerDecimil, double aScaleX, double aScaleY,
+                      bool aMirror );
 
     // Primitive drawing operations
     virtual void Rect( const VECTOR2I& p1, const VECTOR2I& p2, FILL_T aFill, int aWidth,
@@ -165,8 +180,14 @@ private:
     cairo_t*         m_context;
 
     int     m_dpi;
+    int     m_dpiX;
+    int     m_dpiY;
     int     m_width;
     int     m_height;
+    double  m_plotScaleX;
+    double  m_plotScaleY;
+    double  m_iuPerDeviceUnitX;
+    double  m_iuPerDeviceUnitY;
     bool    m_antialias;
     COLOR4D m_backgroundColor;
     COLOR4D m_currentColor;
