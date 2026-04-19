@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from PIL import Image, ImageOps
+from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -268,7 +268,7 @@ def make_report(results: Iterable[dict], report_path: Path) -> None:
             "## Notes",
             "",
             "- PNG is used as the reference image.",
-            "- Before comparing pixels, the PNG is vertically flipped to match the BMP workaround path.",
+            "- PNG and BMP are compared directly without an extra vertical flip.",
             "- PNG is rendered with white background and no antialiasing so it matches BMP conditions as closely as possible.",
             "",
             "## Results",
@@ -330,7 +330,7 @@ def main() -> int:
                 continue
 
             with Image.open(png_path) as png_image:
-                png_reference = ImageOps.flip(png_image.convert("RGB"))
+                png_reference = png_image.convert("RGB")
 
             png_bits = image_to_bits(png_reference)
 
