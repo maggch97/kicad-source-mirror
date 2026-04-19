@@ -58,6 +58,8 @@ std::unique_ptr<GERBER_FILE_IMAGE> LoadGerberOrExcellon( const wxString& aPath, 
 struct GERBER_RENDER_OPTIONS
 {
     int            dpi = 300;
+    int            dpiX = 0;
+    int            dpiY = 0;
     int            width = 0;  ///< 0 = calculate from DPI
     int            height = 0; ///< 0 = calculate from DPI
     bool           antialias = true;
@@ -73,6 +75,9 @@ struct GERBER_RENDER_OPTIONS
     {
         return windowWidthMm > 0.0 && windowHeightMm > 0.0;
     }
+
+    int GetDpiX() const { return dpiX > 0 ? dpiX : dpi; }
+    int GetDpiY() const { return dpiY > 0 ? dpiY : dpi; }
 };
 
 
@@ -84,6 +89,8 @@ struct GERBER_PLOTTER_VIEWPORT
     int      width;
     int      height;
     double   plotScale;
+    double   plotScaleX;
+    double   plotScaleY;
     double   iuPerDecimil;
     VECTOR2I offset;
 };
@@ -99,6 +106,8 @@ static constexpr int MIN_PIXEL_SIZE = 10;
  * @param aHeight Requested height (0 = auto from DPI)
  */
 GERBER_PLOTTER_VIEWPORT CalculatePlotterViewport( const BOX2I& aBBox, int aDpi, int aWidth, int aHeight );
+GERBER_PLOTTER_VIEWPORT CalculatePlotterViewport( const BOX2I& aBBox, int aDpiX, int aDpiY,
+                                                  int aWidth, int aHeight );
 
 
 /**

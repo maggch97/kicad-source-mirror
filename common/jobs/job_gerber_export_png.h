@@ -45,6 +45,8 @@ public:
 
     wxString m_inputFile;
     int      m_dpi = 300;
+    int      m_dpiX = 0;
+    int      m_dpiY = 0;
     int      m_width = 0;
     int      m_height = 0;
     bool     m_antialias = true;

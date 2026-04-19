@@ -29,8 +29,14 @@ PNG_PLOTTER::PNG_PLOTTER() :
         m_surface( nullptr ),
         m_context( nullptr ),
         m_dpi( 300 ),
+        m_dpiX( 300 ),
+        m_dpiY( 300 ),
         m_width( 0 ),
         m_height( 0 ),
+        m_plotScaleX( 1.0 ),
+        m_plotScaleY( 1.0 ),
+        m_iuPerDeviceUnitX( 1.0 ),
+        m_iuPerDeviceUnitY( 1.0 ),
         m_antialias( false ),
         m_backgroundColor( COLOR4D( 0, 0, 0, 0 ) ),
         m_currentColor( COLOR4D::BLACK )
@@ -180,14 +186,25 @@ void PNG_PLOTTER::SetDash( int aLineWidth, LINE_STYLE aLineStyle )
 
 void PNG_PLOTTER::SetViewport( const VECTOR2I& aOffset, double aIusPerDecimil, double aScale, bool aMirror )
 {
+    SetViewport( aOffset, aIusPerDecimil, aScale, aScale, aMirror );
+}
+
+
+void PNG_PLOTTER::SetViewport( const VECTOR2I& aOffset, double aIusPerDecimil, double aScaleX,
+                               double aScaleY, bool aMirror )
+{
     m_plotOffset = aOffset;
     m_IUsPerDecimil = aIusPerDecimil;
-    m_plotScale = aScale;
+    m_plotScale = std::min( aScaleX, aScaleY );
+    m_plotScaleX = aScaleX;
+    m_plotScaleY = aScaleY;
     m_plotMirror = aMirror;
 
     // Calculate device scale factor
     // DPI defines pixels per inch, and there are 10000 decimils per inch
     m_iuPerDeviceUnit = m_IUsPerDecimil * 10000.0 / m_dpi;
+    m_iuPerDeviceUnitX = m_IUsPerDecimil * 10000.0 / m_dpiX;
+    m_iuPerDeviceUnitY = m_IUsPerDecimil * 10000.0 / m_dpiY;
 }
 
 
@@ -481,8 +498,8 @@ VECTOR2D PNG_PLOTTER::userToDeviceCoordinates( const VECTOR2I& aCoordinate )
     pos.y -= m_plotOffset.y;
 
     // Apply scale
-    pos.x = pos.x * m_plotScale / m_iuPerDeviceUnit;
-    pos.y = pos.y * m_plotScale / m_iuPerDeviceUnit;
+    pos.x = pos.x * m_plotScaleX / m_iuPerDeviceUnitX;
+    pos.y = pos.y * m_plotScaleY / m_iuPerDeviceUnitY;
 
     // Handle mirroring
     if( m_plotMirror )
@@ -497,14 +514,16 @@ VECTOR2D PNG_PLOTTER::userToDeviceCoordinates( const VECTOR2I& aCoordinate )
 
 VECTOR2D PNG_PLOTTER::userToDeviceSize( const VECTOR2I& aSize )
 {
-    return VECTOR2D( userToDeviceSize( static_cast<double>( aSize.x ) ),
-                     userToDeviceSize( static_cast<double>( aSize.y ) ) );
+    return VECTOR2D( std::abs( aSize.x * m_plotScaleX / m_iuPerDeviceUnitX ),
+                     std::abs( aSize.y * m_plotScaleY / m_iuPerDeviceUnitY ) );
 }
 
 
 double PNG_PLOTTER::userToDeviceSize( double aSize ) const
 {
-    return std::abs( aSize * m_plotScale / m_iuPerDeviceUnit );
+    double scaleX = std::abs( m_plotScaleX / m_iuPerDeviceUnitX );
+    double scaleY = std::abs( m_plotScaleY / m_iuPerDeviceUnitY );
+    return std::abs( aSize * std::min( scaleX, scaleY ) );
 }
 
 

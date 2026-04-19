@@ -29,9 +29,11 @@ NLOHMANN_JSON_SERIALIZE_ENUM( JOB_GERBER_EXPORT_PNG::UNITS,
 
 
 JOB_GERBER_EXPORT_PNG::JOB_GERBER_EXPORT_PNG() :
-        JOB( "gerber_export_png", false )
+    JOB( "gerber_export_png", false )
 {
     m_params.emplace_back( new JOB_PARAM<int>( "dpi", &m_dpi, m_dpi ) );
+    m_params.emplace_back( new JOB_PARAM<int>( "dpi_x", &m_dpiX, m_dpiX ) );
+    m_params.emplace_back( new JOB_PARAM<int>( "dpi_y", &m_dpiY, m_dpiY ) );
     m_params.emplace_back( new JOB_PARAM<int>( "width", &m_width, m_width ) );
     m_params.emplace_back( new JOB_PARAM<int>( "height", &m_height, m_height ) );
     m_params.emplace_back( new JOB_PARAM<bool>( "antialias", &m_antialias, m_antialias ) );
