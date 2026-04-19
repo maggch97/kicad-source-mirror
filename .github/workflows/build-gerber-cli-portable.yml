@@ -80,6 +80,36 @@ jobs:
           git -C "$env:GITHUB_WORKSPACE\vcpkg" checkout "$env:VCPKG_COMMIT"
           & "$env:GITHUB_WORKSPACE\vcpkg\bootstrap-vcpkg.bat"
 
+      - name: Initialize vcpkg cache directories
+        shell: pwsh
+        run: |
+          $downloads = "$env:GITHUB_WORKSPACE\vcpkg-downloads"
+          $binaryCache = "$env:GITHUB_WORKSPACE\vcpkg-binary-cache"
+
+          New-Item -ItemType Directory -Path $downloads -Force | Out-Null
+          New-Item -ItemType Directory -Path $binaryCache -Force | Out-Null
+
+          "VCPKG_DOWNLOADS=$downloads" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_DEFAULT_BINARY_CACHE=$binaryCache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_BINARY_SOURCES=clear;files,$binaryCache,readwrite" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Restore vcpkg downloads cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_DOWNLOADS }}
+          key: v1-${{ runner.os }}-vcpkg-downloads-${{ env.VCPKG_COMMIT }}
+          restore-keys: |
+            v1-${{ runner.os }}-vcpkg-downloads-
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: v1-${{ runner.os }}-vcpkg-bincache-${{ env.VCPKG_COMMIT }}-x64-msvc
+          restore-keys: |
+            v1-${{ runner.os }}-vcpkg-bincache-${{ env.VCPKG_COMMIT }}-
+            v1-${{ runner.os }}-vcpkg-bincache-
+
       - name: Configure KiCad NuGet source
         shell: pwsh
         run: |
@@ -105,7 +135,10 @@ jobs:
       - name: Build KiCad
         shell: pwsh
         working-directory: ${{ github.workspace }}\kicad-source-mirror
-        run: cmake --build build\msvc-win64-release -j
+        run: |
+          $env:VCPKG_ROOT = "$env:GITHUB_WORKSPACE\vcpkg"
+
+          cmake --build build\msvc-win64-release -j
 
       - name: Show disk space after build
         shell: pwsh
