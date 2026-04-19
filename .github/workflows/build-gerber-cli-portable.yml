@@ -1,0 +1,135 @@
+name: Build Gerber CLI Portable
+
+on:
+  workflow_dispatch:
+    inputs:
+      onebit_canvas_ref:
+        description: onebit_canvas ref to checkout
+        required: false
+        default: master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout kicad-source-mirror
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: kicad-source-mirror
+
+      - name: Checkout onebit_canvas
+        uses: actions/checkout@v4
+        with:
+          repository: maggch97/onebit_canvas
+          ref: ${{ inputs.onebit_canvas_ref }}
+          fetch-depth: 1
+          path: onebit_canvas
+
+      - name: Enable Windows long paths
+        shell: pwsh
+        run: git config --global core.longpaths true
+
+      - name: Show initial disk space
+        shell: pwsh
+        run: Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free
+
+      - name: Setup MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Resolve KiCad vcpkg commit
+        shell: pwsh
+        run: |
+          $url = "https://gitlab.com/kicad/packaging/kicad-win-builder/-/raw/master/build.ps1"
+          $content = (Invoke-WebRequest -Uri $url).Content
+
+          $patterns = @(
+            '\$vcpkgCommit\s*=\s*"([^"]+)"',
+            "\$vcpkgCommit\s*=\s*'([^']+)'"
+          )
+
+          $commit = $null
+
+          foreach( $pattern in $patterns )
+          {
+              if( $content -match $pattern )
+              {
+                  $commit = $matches[1]
+                  break
+              }
+          }
+
+          if( -not $commit )
+          {
+              throw "Failed to resolve vcpkg commit from $url"
+          }
+
+          "VCPKG_COMMIT=$commit" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prepare vcpkg
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$env:GITHUB_WORKSPACE\vcpkg"
+          git -C "$env:GITHUB_WORKSPACE\vcpkg" checkout "$env:VCPKG_COMMIT"
+          & "$env:GITHUB_WORKSPACE\vcpkg\bootstrap-vcpkg.bat"
+
+      - name: Configure KiCad NuGet source
+        shell: pwsh
+        run: |
+          $name = "kicad-gitlab"
+          $source = "https://gitlab.com/api/v4/projects/27426693/packages/nuget/index.json"
+
+          & nuget sources remove -Name $name | Out-Null
+          & nuget sources add -Name $name -Source $source
+
+      - name: Configure CMake
+        shell: pwsh
+        working-directory: ${{ github.workspace }}\kicad-source-mirror
+        run: |
+          $env:VCPKG_ROOT = "$env:GITHUB_WORKSPACE\vcpkg"
+
+          cmake -S . -B build\msvc-win64-release -G Ninja `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DCMAKE_INSTALL_PREFIX="$PWD\build\install\msvc-win64-release" `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DKICAD_BUILD_QA_TESTS=OFF `
+            -DKICAD_WIN32_DPI_AWARE=ON
+
+      - name: Build KiCad
+        shell: pwsh
+        working-directory: ${{ github.workspace }}\kicad-source-mirror
+        run: cmake --build build\msvc-win64-release -j
+
+      - name: Show disk space after build
+        shell: pwsh
+        run: Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free
+
+      - name: Install KiCad
+        shell: pwsh
+        working-directory: ${{ github.workspace }}\kicad-source-mirror
+        run: cmake --install build\msvc-win64-release
+
+      - name: Package portable gerber CLI
+        shell: pwsh
+        working-directory: ${{ github.workspace }}\kicad-source-mirror
+        run: .\tools\package-gerber-cli-portable.ps1 -Zip
+
+      - name: Smoke test packaged CLI
+        shell: pwsh
+        working-directory: ${{ github.workspace }}\kicad-source-mirror
+        run: .\out\gerber-cli-portable\run-kicad-cli.cmd gerber convert --help
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gerber-cli-portable-${{ github.ref_name }}-${{ github.run_number }}
+          path: kicad-source-mirror/out/gerber-cli-portable.zip
+          if-no-files-found: error
+          retention-days: 14
