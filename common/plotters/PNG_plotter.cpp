@@ -141,7 +141,8 @@ bool PNG_PLOTTER::SaveFile( const wxString& aPath )
 
     cairo_status_t status = cairo_surface_write_to_bmp( m_surface,
                                                         std::filesystem::path( aPath.ToStdWstring() ),
-                                                        m_dpiX, m_dpiY );
+                                                        m_dpiX, m_dpiY,
+                                                        true );
 
     return status == CAIRO_STATUS_SUCCESS;
 }
