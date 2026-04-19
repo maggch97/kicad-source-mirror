@@ -319,7 +319,7 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
     if( !plotter.SaveFile( aOutputPath ) )
     {
         if( aErrorMsg )
-            *aErrorMsg = wxString::Format( wxS( "Failed to save PNG file: %s" ), aOutputPath );
+            *aErrorMsg = wxString::Format( wxS( "Failed to save BMP file: %s" ), aOutputPath );
 
         return false;
     }

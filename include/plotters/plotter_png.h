@@ -22,13 +22,13 @@
 
 #include "plotter.h"
 
-#include <cairo.h>
+#include <onebit_canvas_cairo_shim.hpp>
 
 /**
- * PNG rasterization plotter using Cairo graphics library.
+ * Bitmap rasterization plotter using onebit_canvas cairo-like shim.
  *
- * This plotter creates PNG images from KiCad drawings, primarily used for
- * Gerber file visualization and diff output in kicad-cli.
+ * This plotter creates 1-bit BMP images from KiCad drawings for the
+ * gerber conversion CLI path on this branch.
  */
 class PNG_PLOTTER : public PLOTTER
 {
@@ -42,7 +42,7 @@ public:
         return PLOT_FORMAT::UNDEFINED;
     }
 
-    static wxString GetDefaultFileExtension() { return wxString( wxT( "png" ) ); }
+    static wxString GetDefaultFileExtension() { return wxString( wxT( "bmp" ) ); }
 
     /**
      * Set the output resolution in dots per inch.
@@ -133,7 +133,7 @@ public:
                                       const EDA_ANGLE& aOrient, void* aData ) override;
 
     /**
-     * Save the rendered image to a PNG file.
+     * Save the rendered image to a BMP file.
      * @param aPath output file path
      * @return true on success, false on failure
      */

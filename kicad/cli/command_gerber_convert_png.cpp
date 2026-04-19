@@ -43,11 +43,11 @@
 
 
 CLI::GERBER_CONVERT_PNG_COMMAND::GERBER_CONVERT_PNG_COMMAND() :
-        COMMAND( "png" )
+        COMMAND( "bmp" )
 {
     addCommonArgs( true, true, IO_TYPE::FILE, IO_TYPE::FILE );
 
-    m_argParser.add_description( UTF8STDSTR( _( "Convert a Gerber or Excellon file to PNG image" ) ) );
+    m_argParser.add_description( UTF8STDSTR( _( "Convert a Gerber or Excellon file to 1-bit BMP image" ) ) );
 
     m_argParser.add_argument( ARG_DPI )
             .default_value( 300 )
@@ -70,7 +70,7 @@ CLI::GERBER_CONVERT_PNG_COMMAND::GERBER_CONVERT_PNG_COMMAND() :
     m_argParser.add_argument( ARG_NO_ANTIALIAS ).help( UTF8STDSTR( _( "Disable anti-aliasing" ) ) ).flag();
 
     m_argParser.add_argument( ARG_TRANSPARENT )
-            .help( UTF8STDSTR( _( "Use transparent background (default)" ) ) )
+            .help( UTF8STDSTR( _( "Use transparent background (exported as white)" ) ) )
             .flag();
 
     m_argParser.add_argument( ARG_STRICT ).help( UTF8STDSTR( _( "Fail on any parse warnings or errors" ) ) ).flag();
@@ -167,7 +167,7 @@ int CLI::GERBER_CONVERT_PNG_COMMAND::doPerform( KIWAY& aKiway )
     {
         wxFileName inputFn( m_argInput );
         pngJob->SetConfiguredOutputPath( inputFn.GetPath() + wxFileName::GetPathSeparator() + inputFn.GetName()
-                                         + wxS( ".png" ) );
+                                         + wxS( ".bmp" ) );
     }
     else
     {

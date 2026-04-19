@@ -226,7 +226,7 @@ int GERBVIEW_JOBS_HANDLER::JobGerberExportPng( JOB* aJob )
 
     if( m_reporter )
     {
-        m_reporter->Report( wxString::Format( wxS( "Exported PNG to: %s" ), pngJob->GetConfiguredOutputPath() ),
+        m_reporter->Report( wxString::Format( wxS( "Exported BMP to: %s" ), pngJob->GetConfiguredOutputPath() ),
                             RPT_SEVERITY_INFO );
     }
 

@@ -930,6 +930,7 @@ target_include_directories( common
         ${CMAKE_BINARY_DIR}
         $<TARGET_PROPERTY:argparse::argparse,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:kiapi,INTERFACE_INCLUDE_DIRECTORIES>
+        ${CMAKE_SOURCE_DIR}/../onebit_canvas/include
     )
 
 # text markup support

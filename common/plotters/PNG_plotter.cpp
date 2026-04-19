@@ -23,6 +23,7 @@
 #include <trigo.h>
 
 #include <cmath>
+#include <filesystem>
 
 
 PNG_PLOTTER::PNG_PLOTTER() :
@@ -72,7 +73,7 @@ bool PNG_PLOTTER::StartPlot( const wxString& aPageNumber )
         m_surface = nullptr;
     }
 
-    // Create Cairo image surface with ARGB32 format for transparency support
+    // Create onebit surface through the cairo-like shim
     m_surface = cairo_image_surface_create( CAIRO_FORMAT_ARGB32, m_width, m_height );
 
     if( cairo_surface_status( m_surface ) != CAIRO_STATUS_SUCCESS )
@@ -132,7 +133,9 @@ bool PNG_PLOTTER::SaveFile( const wxString& aPath )
     if( !m_surface )
         return false;
 
-    cairo_status_t status = cairo_surface_write_to_png( m_surface, aPath.ToUTF8().data() );
+    cairo_status_t status = cairo_surface_write_to_bmp( m_surface,
+                                                        std::filesystem::path( aPath.ToStdWstring() ),
+                                                        m_dpi, m_dpi );
 
     return status == CAIRO_STATUS_SUCCESS;
 }

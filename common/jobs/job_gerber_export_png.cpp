@@ -49,14 +49,14 @@ JOB_GERBER_EXPORT_PNG::JOB_GERBER_EXPORT_PNG() :
 
 wxString JOB_GERBER_EXPORT_PNG::GetDefaultDescription() const
 {
-    return _( "Gerber Export PNG" );
+    return _( "Gerber Export BMP" );
 }
 
 
 wxString JOB_GERBER_EXPORT_PNG::GetSettingsDialogTitle() const
 {
-    return _( "Gerber Export PNG Job Settings" );
+    return _( "Gerber Export BMP Job Settings" );
 }
 
 
-REGISTER_JOB( gerber_export_png, _HKI( "Gerber: Export PNG" ), KIWAY::FACE_GERBVIEW, JOB_GERBER_EXPORT_PNG );
+REGISTER_JOB( gerber_export_png, _HKI( "Gerber: Export BMP" ), KIWAY::FACE_GERBVIEW, JOB_GERBER_EXPORT_PNG );
