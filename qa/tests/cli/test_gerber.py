@@ -28,8 +28,11 @@ from pathlib import Path
 import pytest
 import json
 import re
+import xml.etree.ElementTree as ET
 from conftest import KiTestFixture
+import cairosvg
 from PIL import Image
+from PIL import ImageChops
 import numpy as np
 
 
@@ -39,6 +42,7 @@ GERBER_FILE_BCU = "cli/artwork_generation_regressions/ZoneFill-4.0.7-B_Cu.gbr"
 GERBER_FILE_LEGACY_FCU = "cli/artwork_generation_regressions/ZoneFill-Legacy-F_Cu.gbr"
 GERBER_FILE_DRILL = "cli/basic_test/basic_test-PTH-drl.gbr"
 EXCELLON_FILE = "cli/basic_test/basic_test_excellon_default.drl"
+GERBER_FILE_SVG_RECT_CLEAR = "cli/gerber_svg/rect_clear.gbr"
 
 
 def get_output_path( kitest: KiTestFixture, test_name: str, filename: str ) -> Path:
@@ -108,6 +112,27 @@ def get_png_colors( png_path: str ) -> dict:
             "has_white": bool( has_white ),
             "has_transparent": bool( has_transparent ),
         }
+
+
+def parse_svg_dimensions( svg_path: Path ) -> tuple[float, float, list[float]]:
+    """Return SVG width/height in mm and viewBox values."""
+    root = ET.parse( svg_path ).getroot()
+    assert root.tag.endswith( "svg" )
+
+    width = root.attrib["width"]
+    height = root.attrib["height"]
+    assert width.endswith( "mm" )
+    assert height.endswith( "mm" )
+
+    viewbox = [float( value ) for value in root.attrib["viewBox"].split()]
+
+    return float( width[:-2] ), float( height[:-2] ), viewbox
+
+
+def image_to_1bit_luma( image_path: Path ) -> Image.Image:
+    """Load an image and threshold it to a comparable 1-bit luma image."""
+    with Image.open( image_path ) as image:
+        return image.convert( "L" ).point( lambda p: 255 if p > 127 else 0, "1" )
 
 
 # ==============================================================================
@@ -426,6 +451,122 @@ class TestGerberConvertPng:
 
         command = [utils.kicad_cli(), "gerber", "convert", "png",
                    "-o", str( output_file ), "/nonexistent/file.gbr"]
+        stdout, stderr, exitcode = utils.run_and_capture( command )
+
+        assert exitcode != 0
+        assert not output_file.exists()
+
+
+# ==============================================================================
+# gerber convert svg command tests
+# ==============================================================================
+
+@pytest.mark.skipif(not utils.is_gerbview_available(), reason="Requires gerbview kiface to be built")
+class TestGerberConvertSvg:
+    """Tests for kicad-cli gerber convert svg command."""
+
+    def test_export_basic_svg( self, kitest: KiTestFixture ):
+        """Test basic SVG export and XML structure."""
+        input_file = kitest.get_data_file_path( GERBER_FILE_FCU )
+        output_file = get_output_path( kitest, "svg_export_basic", "output.svg" )
+
+        command = [utils.kicad_cli(), "gerber", "convert", "svg",
+                   "-o", str( output_file ), input_file]
+        stdout, stderr, exitcode = utils.run_and_capture( command )
+
+        assert exitcode == 0
+        assert output_file.exists()
+        assert "Exported SVG to:" in stdout
+
+        width_mm, height_mm, viewbox = parse_svg_dimensions( output_file )
+        assert width_mm > 0
+        assert height_mm > 0
+        assert viewbox[0] == 0
+        assert viewbox[1] == 0
+        assert viewbox[2] > 0
+        assert viewbox[3] > 0
+
+        root = ET.parse( output_file ).getroot()
+        path_count = len( root.findall( ".//{http://www.w3.org/2000/svg}path" ) )
+        assert path_count > 0
+
+        kitest.add_attachment( str( output_file ) )
+
+    def test_export_viewport_dimensions( self, kitest: KiTestFixture ):
+        """Test SVG viewport arguments set physical dimensions and viewBox."""
+        input_file = kitest.get_data_file_path( GERBER_FILE_SVG_RECT_CLEAR )
+        output_file = get_output_path( kitest, "svg_viewport", "viewport.svg" )
+
+        command = [utils.kicad_cli(), "gerber", "convert", "svg",
+                   "--units", "mm",
+                   "--origin-x", "0",
+                   "--origin-y", "0",
+                   "--window-width", "10",
+                   "--window-height", "10",
+                   "-o", str( output_file ), input_file]
+        stdout, stderr, exitcode = utils.run_and_capture( command )
+
+        assert exitcode == 0
+        assert output_file.exists()
+
+        width_mm, height_mm, viewbox = parse_svg_dimensions( output_file )
+        assert abs( width_mm - 10.0 ) < 0.001
+        assert abs( height_mm - 10.0 ) < 0.001
+        assert viewbox == [0.0, 0.0, 10.0, 10.0]
+
+    def test_export_svg_matches_bmp_for_aligned_rectangles( self, kitest: KiTestFixture ):
+        """Compare SVG output to the existing BMP path on pixel-aligned geometry."""
+        input_file = kitest.get_data_file_path( GERBER_FILE_SVG_RECT_CLEAR )
+        svg_file = get_output_path( kitest, "svg_bmp_compare", "rect.svg" )
+        bmp_file = get_output_path( kitest, "svg_bmp_compare", "rect.bmp" )
+        svg_png_file = get_output_path( kitest, "svg_bmp_compare", "rect_svg.png" )
+
+        viewport_args = ["--units", "mm",
+                         "--origin-x", "0",
+                         "--origin-y", "0",
+                         "--window-width", "10",
+                         "--window-height", "10",
+                         "--foreground", "#000000",
+                         "--background", "#FFFFFF"]
+
+        svg_command = [utils.kicad_cli(), "gerber", "convert", "svg",
+                       *viewport_args, "-o", str( svg_file ), input_file]
+        stdout, stderr, exitcode = utils.run_and_capture( svg_command )
+        assert exitcode == 0
+        assert svg_file.exists()
+
+        # 254 DPI makes 1 mm exactly 10 pixels, keeping the Gerber rectangle edges pixel-aligned.
+        bmp_command = [utils.kicad_cli(), "gerber", "convert", "bmp",
+                       "--dpi", "254", *viewport_args, "-o", str( bmp_file ), input_file]
+        stdout, stderr, exitcode = utils.run_and_capture( bmp_command )
+        assert exitcode == 0
+        assert bmp_file.exists()
+
+        cairosvg.svg2png( url=str( svg_file ), write_to=str( svg_png_file ), dpi=254 )
+
+        svg_img = image_to_1bit_luma( svg_png_file )
+        bmp_img = image_to_1bit_luma( bmp_file )
+
+        try:
+            assert svg_img.size == bmp_img.size
+            diff = ImageChops.difference( svg_img.convert( "L" ), bmp_img.convert( "L" ) )
+            assert diff.getbbox() is None
+        finally:
+            svg_img.close()
+            bmp_img.close()
+
+        kitest.add_attachment( str( svg_file ) )
+        kitest.add_attachment( str( bmp_file ) )
+        kitest.add_attachment( str( svg_png_file ) )
+
+    def test_export_svg_invalid_viewport( self, kitest: KiTestFixture ):
+        """Test SVG export rejects incomplete viewport arguments."""
+        input_file = kitest.get_data_file_path( GERBER_FILE_SVG_RECT_CLEAR )
+        output_file = get_output_path( kitest, "svg_invalid_viewport", "invalid.svg" )
+
+        command = [utils.kicad_cli(), "gerber", "convert", "svg",
+                   "--window-width", "10",
+                   "-o", str( output_file ), input_file]
         stdout, stderr, exitcode = utils.run_and_capture( command )
 
         assert exitcode != 0

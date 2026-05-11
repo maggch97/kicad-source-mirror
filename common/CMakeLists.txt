@@ -156,6 +156,7 @@ set( KICOMMON_SRCS
     jobs/job_fp_upgrade.cpp
     jobs/job_gerber_diff.cpp
     jobs/job_gerber_export_png.cpp
+    jobs/job_gerber_export_svg.cpp
     jobs/job_gerber_info.cpp
     jobs/job_pcb_import.cpp
     jobs/job_pcb_render.cpp

@@ -21,10 +21,12 @@
 #include "gerber_file_image.h"
 #include "excellon_image.h"
 #include "gerber_to_png.h"
+#include "gerber_to_svg.h"
 #include "gerber_to_polyset.h"
 #include "gerber_diff.h"
 #include <jobs/job_gerber_info.h>
 #include <jobs/job_gerber_export_png.h>
+#include <jobs/job_gerber_export_svg.h>
 #include <jobs/job_gerber_diff.h>
 #include <cli/exit_codes.h>
 #include <reporter.h>
@@ -44,6 +46,12 @@ GERBVIEW_JOBS_HANDLER::GERBVIEW_JOBS_HANDLER( KIWAY* aKiway ) :
               } );
 
     Register( "gerber_export_png", std::bind( &GERBVIEW_JOBS_HANDLER::JobGerberExportPng, this, std::placeholders::_1 ),
+              []( JOB* job, wxWindow* aParent ) -> bool
+              {
+                  return true;
+              } );
+
+    Register( "gerber_export_svg", std::bind( &GERBVIEW_JOBS_HANDLER::JobGerberExportSvg, this, std::placeholders::_1 ),
               []( JOB* job, wxWindow* aParent ) -> bool
               {
                   return true;
@@ -227,6 +235,37 @@ int GERBVIEW_JOBS_HANDLER::JobGerberExportPng( JOB* aJob )
     if( m_reporter )
     {
         m_reporter->Report( wxString::Format( wxS( "Exported BMP to: %s" ), pngJob->GetConfiguredOutputPath() ),
+                            RPT_SEVERITY_INFO );
+    }
+
+    return CLI::EXIT_CODES::OK;
+}
+
+
+int GERBVIEW_JOBS_HANDLER::JobGerberExportSvg( JOB* aJob )
+{
+    JOB_GERBER_EXPORT_SVG* svgJob = dynamic_cast<JOB_GERBER_EXPORT_SVG*>( aJob );
+
+    if( !svgJob )
+        return CLI::EXIT_CODES::ERR_UNKNOWN;
+
+    wxString      errorMsg;
+    wxArrayString messages;
+
+    if( !RenderGerberToSvg( svgJob->m_inputFile, svgJob->GetConfiguredOutputPath(), *svgJob, &errorMsg, &messages ) )
+    {
+        if( m_reporter )
+            m_reporter->Report( errorMsg, RPT_SEVERITY_ERROR );
+
+        return CLI::EXIT_CODES::ERR_UNKNOWN;
+    }
+
+    if( !checkStrictMode( messages, svgJob->m_strict ) )
+        return CLI::EXIT_CODES::ERR_INVALID_INPUT_FILE;
+
+    if( m_reporter )
+    {
+        m_reporter->Report( wxString::Format( wxS( "Exported SVG to: %s" ), svgJob->GetConfiguredOutputPath() ),
                             RPT_SEVERITY_INFO );
     }
 

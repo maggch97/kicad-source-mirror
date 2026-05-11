@@ -90,6 +90,7 @@
 #include "cli/command_gerber.h"
 #include "cli/command_gerber_convert.h"
 #include "cli/command_gerber_convert_png.h"
+#include "cli/command_gerber_convert_svg.h"
 #include "cli/command_gerber_info.h"
 #include "cli/command_gerber_diff.h"
 #include "cli/command_version.h"
@@ -201,6 +202,7 @@ static CLI::SYM_UPGRADE_COMMAND     symUpgradeCmd{};
 static CLI::GERBER_COMMAND          gerberCmd{};
 static CLI::GERBER_CONVERT_COMMAND  gerberConvertCmd{};
 static CLI::GERBER_CONVERT_PNG_COMMAND gerberConvertPngCmd{};
+static CLI::GERBER_CONVERT_SVG_COMMAND gerberConvertSvgCmd{};
 static CLI::GERBER_INFO_COMMAND        gerberInfoCmd{};
 static CLI::GERBER_DIFF_COMMAND        gerberDiffCmd{};
 static CLI::VERSION_COMMAND            versionCmd{};
@@ -324,6 +326,9 @@ static std::vector<COMMAND_ENTRY> commandStack = {
                 {
                     {
                         &gerberConvertPngCmd
+                    },
+                    {
+                        &gerberConvertSvgCmd
                     }
                 }
             },

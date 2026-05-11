@@ -20,6 +20,8 @@
 #ifndef GERBER_TO_PNG_H
 #define GERBER_TO_PNG_H
 
+#include "gerber_render.h"
+
 #include <wx/string.h>
 #include <wx/arrstr.h>
 #include <gal/color4d.h>
@@ -27,29 +29,7 @@
 #include <math/vector2d.h>
 #include <memory>
 
-class GERBER_FILE_IMAGE;
 class JOB_GERBER_EXPORT_PNG;
-
-
-/**
- * Determine if a file is an Excellon drill file based on extension.
- */
-bool IsExcellonFile( const wxString& aPath );
-
-
-/**
- * Calculate bounding box for all draw items in a gerber image.
- */
-BOX2I CalculateGerberBoundingBox( GERBER_FILE_IMAGE* aImage );
-
-
-/**
- * Load a Gerber or Excellon file, auto-detecting by extension.
- *
- * @return Loaded image, or nullptr on failure
- */
-std::unique_ptr<GERBER_FILE_IMAGE> LoadGerberOrExcellon( const wxString& aPath, wxString* aErrorMsg,
-                                                         wxArrayString* aMessages = nullptr );
 
 
 /**

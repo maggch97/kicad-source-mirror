@@ -73,9 +73,11 @@ set( GERBVIEW_SRCS
     tools/gerbview_selection_tool.cpp
     tools/gerbview_control.cpp
     gerber_collectors.cpp
+    gerber_render.cpp
     gerber_to_polyset.cpp
     gerber_diff.cpp
     gerber_to_png.cpp
+    gerber_to_svg.cpp
     gerbview_jobs_handler.cpp
     )
 

@@ -17,28 +17,23 @@
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef GERBVIEW_JOBS_HANDLER_H
-#define GERBVIEW_JOBS_HANDLER_H
+#ifndef COMMAND_GERBER_CONVERT_SVG_H
+#define COMMAND_GERBER_CONVERT_SVG_H
 
-#include <jobs/job_dispatcher.h>
-#include <wx/arrstr.h>
+#include "command.h"
 
-class KIWAY;
+namespace CLI
+{
 
-
-class GERBVIEW_JOBS_HANDLER : public JOB_DISPATCHER
+class GERBER_CONVERT_SVG_COMMAND : public COMMAND
 {
 public:
-    GERBVIEW_JOBS_HANDLER( KIWAY* aKiway );
+    GERBER_CONVERT_SVG_COMMAND();
 
-private:
-    int JobGerberInfo( JOB* aJob );
-    int JobGerberExportPng( JOB* aJob );
-    int JobGerberExportSvg( JOB* aJob );
-    int JobGerberDiff( JOB* aJob );
-
-    bool checkStrictMode( const wxArrayString& aMessages, bool aStrict );
+protected:
+    int doPerform( KIWAY& aKiway ) override;
 };
 
+} // namespace CLI
 
-#endif // GERBVIEW_JOBS_HANDLER_H
+#endif

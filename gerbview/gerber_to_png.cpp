@@ -19,210 +19,12 @@
 
 #include "gerber_to_png.h"
 #include "gerber_file_image.h"
-#include "gerber_draw_item.h"
-#include "dcode.h"
-#include "aperture_macro.h"
-#include "excellon_image.h"
-#include "excellon_defaults.h"
-#include <convert_basic_shapes_to_polygon.h>
+#include "gerber_render.h"
+
 #include <jobs/job_gerber_export_png.h>
 #include <plotters/plotter_png.h>
-#include <geometry/shape_poly_set.h>
 #include <base_units.h>
-#include <trigo.h>
 #include <cmath>
-#include <wx/filename.h>
-
-
-bool IsExcellonFile( const wxString& aPath )
-{
-    wxFileName fn( aPath );
-    wxString   ext = fn.GetExt().Lower();
-    return ext == wxS( "drl" ) || ext == wxS( "xln" ) || ext == wxS( "exc" ) || ext == wxS( "ncd" );
-}
-
-
-BOX2I CalculateGerberBoundingBox( GERBER_FILE_IMAGE* aImage )
-{
-    BOX2I bbox;
-    bool  first = true;
-
-    for( GERBER_DRAW_ITEM* item : aImage->GetItems() )
-    {
-        BOX2I itemBox = item->GetBoundingBox();
-
-        if( first )
-        {
-            bbox = itemBox;
-            first = false;
-        }
-        else
-        {
-            bbox.Merge( itemBox );
-        }
-    }
-
-    return bbox;
-}
-
-
-std::unique_ptr<GERBER_FILE_IMAGE> LoadGerberOrExcellon( const wxString& aPath, wxString* aErrorMsg,
-                                                         wxArrayString* aMessages )
-{
-    std::unique_ptr<GERBER_FILE_IMAGE> image;
-
-    if( IsExcellonFile( aPath ) )
-    {
-        auto              excellon = std::make_unique<EXCELLON_IMAGE>( 0 );
-        EXCELLON_DEFAULTS defaults;
-
-        if( !excellon->LoadFile( aPath, &defaults ) )
-        {
-            if( aErrorMsg )
-                *aErrorMsg = wxString::Format( wxS( "Failed to load Excellon file: %s" ), aPath );
-
-            return nullptr;
-        }
-
-        image = std::move( excellon );
-    }
-    else
-    {
-        image = std::make_unique<GERBER_FILE_IMAGE>( 0 );
-
-        if( !image->LoadGerberFile( aPath ) )
-        {
-            if( aErrorMsg )
-                *aErrorMsg = wxString::Format( wxS( "Failed to load Gerber file: %s" ), aPath );
-
-            return nullptr;
-        }
-    }
-
-    if( aMessages )
-        *aMessages = image->GetMessages();
-
-    return image;
-}
-
-
-namespace
-{
-
-/**
- * Render a single draw item to the plotter.
- */
-void RenderItem( GERBER_DRAW_ITEM* aItem, PNG_PLOTTER& aPlotter, const KIGFX::COLOR4D& aColor )
-{
-    SHAPE_POLY_SET itemPoly;
-    bool           needsFlashOffset = false;
-    bool           alreadyInABCoordinates = false;
-
-    if( aItem->m_ShapeAsPolygon.OutlineCount() > 0 )
-    {
-        itemPoly = aItem->m_ShapeAsPolygon;
-    }
-    else if( aItem->m_ShapeType == GBR_SEGMENT )
-    {
-        D_CODE* dcode = aItem->GetDcodeDescr();
-
-        if( dcode && dcode->m_ApertType != APT_RECT )
-        {
-            int arcError = static_cast<int>( gerbIUScale.IU_PER_MM * ARC_LOW_DEF_MM );
-            TransformOvalToPolygon( itemPoly, aItem->m_Start, aItem->m_End,
-                                    aItem->m_Size.x, arcError, ERROR_INSIDE );
-        }
-        else
-        {
-            aItem->ConvertSegmentToPolygon( &itemPoly );
-        }
-    }
-    else if( aItem->m_ShapeType == GBR_ARC )
-    {
-        const int arcError = gerbIUScale.mmToIU( 0.005 );
-
-        if( aItem->m_Start == aItem->m_End )
-        {
-            int radius = KiROUND( aItem->m_Start.Distance( aItem->m_ArcCentre ) );
-            TransformRingToPolygon( itemPoly, aItem->m_ArcCentre, radius, aItem->m_Size.x,
-                                    arcError, ERROR_INSIDE );
-        }
-        else
-        {
-            double startAngle = atan2( static_cast<double>( aItem->m_Start.y - aItem->m_ArcCentre.y ),
-                                       static_cast<double>( aItem->m_Start.x - aItem->m_ArcCentre.x ) );
-            double endAngle = atan2( static_cast<double>( aItem->m_End.y - aItem->m_ArcCentre.y ),
-                                     static_cast<double>( aItem->m_End.x - aItem->m_ArcCentre.x ) );
-
-            if( startAngle > endAngle )
-                endAngle += 2.0 * M_PI;
-
-            VECTOR2I mid = GetRotated( aItem->m_Start, aItem->m_ArcCentre,
-                                       -EDA_ANGLE( ( endAngle - startAngle ) / 2.0, RADIANS_T ) );
-
-            TransformArcToPolygon( itemPoly, aItem->m_Start, mid, aItem->m_End, aItem->m_Size.x,
-                                   arcError, ERROR_INSIDE );
-        }
-    }
-    else if( aItem->m_Flashed )
-    {
-        D_CODE* dcode = aItem->GetDcodeDescr();
-
-        if( dcode )
-        {
-            if( dcode->m_ApertType == APT_MACRO )
-            {
-                APERTURE_MACRO* macro = dcode->GetMacro();
-
-                if( macro )
-                {
-                    // Aperture macro polygons are returned in absolute AB coordinates, matching
-                    // GERBVIEW_PAINTER::drawApertureMacro().  Do not offset/transform them again.
-                    if( aItem->m_AbsolutePolygon.OutlineCount() == 0 )
-                        aItem->m_AbsolutePolygon = *macro->GetApertureMacroShape( aItem, aItem->m_Start );
-
-                    itemPoly = aItem->m_AbsolutePolygon;
-                    alreadyInABCoordinates = true;
-                }
-            }
-            else
-            {
-                dcode->ConvertShapeToPolygon( aItem );
-                itemPoly = dcode->m_Polygon;
-                needsFlashOffset = true;
-            }
-        }
-    }
-
-    if( itemPoly.OutlineCount() == 0 )
-        return;
-
-    // Flashed shapes from ConvertShapeToPolygon are centered at (0,0).
-    // Offset by the item's position before applying the AB transform.
-    VECTOR2I offset = needsFlashOffset ? VECTOR2I( aItem->m_Start ) : VECTOR2I( 0, 0 );
-
-    aPlotter.SetColor( aColor );
-
-    for( int i = 0; i < itemPoly.OutlineCount(); i++ )
-    {
-        const SHAPE_LINE_CHAIN& outline = itemPoly.COutline( i );
-        std::vector<VECTOR2I>   pts;
-        pts.reserve( outline.PointCount() );
-
-        for( int j = 0; j < outline.PointCount(); j++ )
-        {
-            if( alreadyInABCoordinates )
-                pts.push_back( outline.CPoint( j ) );
-            else
-                pts.push_back( aItem->GetABPosition( outline.CPoint( j ) + offset ) );
-        }
-
-        if( pts.size() >= 3 )
-            aPlotter.PlotPoly( pts, FILL_T::FILLED_SHAPE, 0 );
-    }
-}
-
-} // anonymous namespace
 
 
 GERBER_PLOTTER_VIEWPORT CalculatePlotterViewport( const BOX2I& aBBox, int aDpi, int aWidth, int aHeight )
@@ -299,17 +101,8 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
 
     if( aOptions.HasViewportOverride() )
     {
-        // Viewport is specified in Gerber-native coordinates (Y increases upward).
-        // KiCad stores gerber items with Y negated (Y increases downward), so
-        // negate the origin Y and flip the window vertically.
-        double iuPerMm = gerbIUScale.IU_PER_MM;
-        int    ox = static_cast<int>( std::round( aOptions.originXMm * iuPerMm ) );
-        int    oy = static_cast<int>( std::round(
-                -( aOptions.originYMm + aOptions.windowHeightMm ) * iuPerMm ) );
-        int    w = static_cast<int>( std::round( aOptions.windowWidthMm * iuPerMm ) );
-        int    h = static_cast<int>( std::round( aOptions.windowHeightMm * iuPerMm ) );
-
-        bbox = BOX2I( VECTOR2I( ox, oy ), VECTOR2I( w, h ) );
+        bbox = CalculateGerberViewportBoundingBox( aOptions.originXMm, aOptions.originYMm,
+                                                   aOptions.windowWidthMm, aOptions.windowHeightMm );
     }
     else
     {
@@ -354,25 +147,11 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
         return false;
     }
 
-    // Render all items with proper polarity handling.
-    // Negative (clear) polarity items erase copper by drawing with the background color.
-    // On transparent exports the background is alpha=0, so source-over is a no-op.
-    // Switch to CAIRO_OPERATOR_CLEAR so those regions become fully transparent.
-    bool transparentBg = ( aOptions.backgroundColor.a == 0 );
-
-    for( GERBER_DRAW_ITEM* item : image->GetItems() )
-    {
-        if( item->GetLayerPolarity() )
-        {
-            plotter.SetClearCompositing( transparentBg );
-            RenderItem( item, plotter, aOptions.backgroundColor );
-            plotter.SetClearCompositing( false );
-        }
-        else
-        {
-            RenderItem( item, plotter, aOptions.foregroundColor );
-        }
-    }
+    RenderGerberImageToPlotter( image.get(), plotter, aOptions.foregroundColor, aOptions.backgroundColor,
+                                [&]( bool aClear )
+                                {
+                                    plotter.SetClearCompositing( aClear );
+                                } );
 
     plotter.EndPlot();
 
