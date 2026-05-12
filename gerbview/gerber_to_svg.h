@@ -51,7 +51,7 @@ struct GERBER_SVG_RENDER_OPTIONS
 /**
  * Render a Gerber or Excellon file to SVG.
  *
- * Loads the file, converts all draw items to polygons, and renders using SVG_PLOTTER.
+ * Loads the file, converts all draw items to polygons, and renders using Cairo's SVG surface.
  */
 bool RenderGerberToSvg( const wxString& aInputPath, const wxString& aOutputPath,
                         const GERBER_SVG_RENDER_OPTIONS& aOptions, wxString* aErrorMsg = nullptr,
