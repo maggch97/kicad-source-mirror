@@ -257,7 +257,7 @@ bool SCH_LABEL_BASE::IsType( const std::vector<KICAD_T>& aScanTypes ) const
     if( m_connected_items.find( Schematic()->CurrentSheet() ) == m_connected_items.end() )
         return false;
 
-    const SCH_ITEM_VEC& item_set = m_connected_items.at( Schematic()->CurrentSheet() );
+    const std::vector<SCH_ITEM*>& item_set = m_connected_items.at( Schematic()->CurrentSheet() );
 
     for( KICAD_T scanType : aScanTypes )
     {
@@ -777,10 +777,12 @@ void SCH_LABEL_BASE::GetContextualTextVars( wxArrayString* aVars ) const
 
 bool SCH_LABEL_BASE::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* token, int aDepth ) const
 {
-    static wxRegEx operatingPoint( wxT( "^"
-                                        "OP"
-                                        "(.([0-9])?([a-zA-Z]*))?"
-                                        "$" ) );
+    // Per-thread regex.  CONNECTION_GRAPH::resolveAllDrivers calls this from worker
+    // threads, and wxRegEx::Matches is not safe to call concurrently on one instance.
+    thread_local wxRegEx operatingPoint( wxT( "^"
+                                              "OP"
+                                              "(.([0-9])?([a-zA-Z]*))?"
+                                              "$" ) );
 
     wxCHECK( aPath, false );
 
@@ -923,8 +925,14 @@ bool SCH_LABEL_BASE::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* toke
     {
         SCH_SHEET* sheet = static_cast<SCH_SHEET*>( m_parent );
 
+        // aPath is expected to be either the sheet pin's owner-screen path (parent sheet as
+        // Last()) or the already-extended path whose Last() is the owning sheet itself.
+        // Only push the owner sheet when it isn't already at the end; a double-push produces
+        // a nonsense path and breaks lookups keyed on the instance (e.g. ${#} page number).
         SCH_SHEET_PATH path = *aPath;
-        path.push_back( sheet );
+
+        if( path.Last() != sheet )
+            path.push_back( sheet );
 
         if( sheet->ResolveTextVar( &path, token, aDepth + 1 ) )
             return true;

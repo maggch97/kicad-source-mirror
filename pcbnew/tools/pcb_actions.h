@@ -84,6 +84,9 @@ public:
     /// Remove all connections belonging to a single net from the active selection
     static TOOL_ACTION deselectNet;
 
+    /// Select all connections belonging to every net in the current item's net chain.
+    static TOOL_ACTION selectNetChain;
+
     /// Select unconnected footprints from ratsnest of selection
     static TOOL_ACTION selectUnconnected;
 
@@ -196,6 +199,8 @@ public:
     static TOOL_ACTION drawPolygon;
     static TOOL_ACTION drawRectangle;
     static TOOL_ACTION drawCircle;
+    static TOOL_ACTION drawEllipse;
+    static TOOL_ACTION drawEllipseArc;
     static TOOL_ACTION drawArc;
     static TOOL_ACTION drawBezier;
     static TOOL_ACTION placePoint;
@@ -215,6 +220,7 @@ public:
     static TOOL_ACTION drawLeader;
     static TOOL_ACTION placeBarcode;
     static TOOL_ACTION drawZone;
+    static TOOL_ACTION drawCopperThievingZone;
     static TOOL_ACTION drawVia;
     static TOOL_ACTION drawRuleArea;
     static TOOL_ACTION drawZoneCutout;
@@ -590,6 +596,8 @@ public:
     static TOOL_ACTION toggleNetHighlight;      // Toggles between highlight off and highlight on
     static TOOL_ACTION highlightNetSelection;   // Turns on highlight and takes net from selection
     static TOOL_ACTION highlightItem;           // Select component via cross-probe
+    static TOOL_ACTION highlightNetChain;
+    static TOOL_ACTION setTerminalPad;
 
     // Ratsnest
     static TOOL_ACTION hideNetInRatsnest;

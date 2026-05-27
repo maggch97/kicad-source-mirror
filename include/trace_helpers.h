@@ -38,6 +38,10 @@
 #include <stdarg.h>
 #include <map>
 
+#ifdef KICAD_GAL_PROFILE
+#include <core/profile.h>
+#endif
+
 /**
  * @defgroup trace_env_vars Trace Environment Variables
  *
@@ -345,6 +349,13 @@ extern KICOMMON_API const wxChar* const traceSchMove;
  */
 extern KICOMMON_API const wxChar* const traceSymbolInheritance;
 
+/**
+ * Flag to enable tracing of schematic net chain rebuild and ERC cross-chain checks.
+ *
+ * Use "KICAD_SCH_NETCHAIN" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceSchNetChain;
+
 ///@}
 
 /**
@@ -363,5 +374,10 @@ extern KICOMMON_API wxString dump( const wxKeyEvent& aEvent );
  */
 extern KICOMMON_API wxString dump( const wxArrayString& aArray );
 
+
+#ifdef KICAD_GAL_PROFILE
+extern KICOMMON_API LATENCY_PROBE latencyProbeZoomToRender;
+extern KICOMMON_API LATENCY_PROBE latencyProbeRepaintToMotion;
+#endif
 
 #endif    // _TRACE_HELPERS_H_

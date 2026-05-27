@@ -42,6 +42,7 @@
 #include <connectivity/connectivity_data.h>
 #include <convert_shape_list_to_polygon.h>
 #include <footprint.h>
+#include <board_text_var_adapter.h>
 #include <font/outline_font.h>
 #include <length_delay_calculation/length_delay_calculation.h>
 #include <lset.h>
@@ -157,6 +158,13 @@ BOARD::BOARD() :
     // Set flag bits on these that will only be cleared if these are loaded from a legacy file
     m_LegacyVisibleLayers.reset().set( Rescue );
     m_LegacyVisibleItems.reset().set( GAL_LAYER_INDEX( GAL_LAYER_ID_BITMASK_END ) );
+
+    // Install the text-variable dependency adapter as a listener so subsequent
+    // BOARD_COMMIT pushes and undo/redo events reach the tracker. No items
+    // exist yet — RebuildIndex is invoked after load by callers that bypass
+    // per-item notifications.
+    m_textVarAdapter = std::make_unique<BOARD_TEXT_VAR_ADAPTER>( *this );
+    AddListener( m_textVarAdapter.get() );
 }
 
 
@@ -1481,7 +1489,8 @@ void BOARD::Remove( BOARD_ITEM* aBoardItem, REMOVE_MODE aRemoveMode )
 
 void BOARD::RemoveAll( std::initializer_list<KICAD_T> aTypes )
 {
-    std::vector<BOARD_ITEM*> removed;
+    std::vector<BOARD_ITEM*>   removed;
+    std::vector<NETINFO_ITEM*> removedNets;
 
     for( const KICAD_T& type : aTypes )
     {
@@ -1489,9 +1498,14 @@ void BOARD::RemoveAll( std::initializer_list<KICAD_T> aTypes )
         {
         case PCB_NETINFO_T:
             for( NETINFO_ITEM* item : m_NetInfo )
+            {
                 removed.emplace_back( item );
+                removedNets.emplace_back( item );
+            }
 
-            m_NetInfo.clear();
+            // Listeners must observe live pointers during FinalizeBulkRemove;
+            // free after notification (issue 24100).
+            m_NetInfo.detachAll();
             break;
 
         case PCB_MARKER_T:
@@ -1560,6 +1574,9 @@ void BOARD::RemoveAll( std::initializer_list<KICAD_T> aTypes )
     IncrementTimeStamp();
 
     FinalizeBulkRemove( removed );
+
+    for( NETINFO_ITEM* item : removedNets )
+        delete item;
 }
 
 
@@ -1842,6 +1859,12 @@ BOARD_ITEM* BOARD::ResolveItem( const KIID& aID, bool aAllowNullptrReturn ) cons
         {
             if( group->m_Uuid == aID )
                 return CacheAndReturnItemById( aID, group );
+        }
+
+        for( PCB_POINT* point : footprint->Points() )
+        {
+            if( point->m_Uuid == aID )
+                return CacheAndReturnItemById( aID, point );
         }
     }
 
@@ -2686,6 +2709,38 @@ FOOTPRINT* BOARD::FindFootprintByPath( const KIID_PATH& aPath ) const
 }
 
 
+PAD* BOARD::FindPadByUuid( const KIID& aUuid ) const
+{
+    for( FOOTPRINT* footprint : m_footprints )
+    {
+        if( PAD* pad = footprint->FindPadByUuid( aUuid ) )
+            return pad;
+    }
+
+    return nullptr;
+}
+
+
+void BOARD::ReplaceNetChainTerminalPad( const wxString& aNetChain, const KIID& aPrev, const KIID& aNew )
+{
+    PAD* newPad = FindPadByUuid( aNew );
+
+    for( NETINFO_ITEM* net : m_NetInfo )
+    {
+        if( net->GetNetChain() == aNetChain )
+        {
+            for( int i = 0; i < 2; ++i )
+            {
+                PAD* pad = net->GetTerminalPad( i );
+
+                if( pad && pad->m_Uuid == aPrev )
+                    net->SetTerminalPad( i, newPad );
+            }
+        }
+    }
+}
+
+
 std::set<wxString> BOARD::GetNetClassAssignmentCandidates() const
 {
     std::set<wxString> names;
@@ -2722,18 +2777,27 @@ static wxString FindVariantNameCaseInsensitive( const std::vector<wxString>& aNa
 
 void BOARD::SetCurrentVariant( const wxString& aVariant )
 {
+    const wxString previous = m_currentVariant;
+
     if( aVariant.IsEmpty() || aVariant.CmpNoCase( GetDefaultVariantName() ) == 0 )
     {
         m_currentVariant.Clear();
-        return;
+    }
+    else
+    {
+        wxString actualName = FindVariantNameCaseInsensitive( m_variantNames, aVariant );
+
+        if( actualName.IsEmpty() )
+            m_currentVariant.Clear();
+        else
+            m_currentVariant = actualName;
     }
 
-    wxString actualName = FindVariantNameCaseInsensitive( m_variantNames, aVariant );
-
-    if( actualName.IsEmpty() )
-        m_currentVariant.Clear();
-    else
-        m_currentVariant = actualName;
+    // Variant overrides on footprint fields change `${REFDES:FIELD}` resolution,
+    // so every cross-ref dependent must repaint on switch. Skip the fan-out if
+    // the active variant did not actually change (e.g. redundant UI callback).
+    if( previous != m_currentVariant && m_textVarAdapter )
+        m_textVarAdapter->Tracker().InvalidateVariantScoped();
 }
 
 
@@ -3488,7 +3552,9 @@ void BOARD::ResetNetHighLight()
 
 void BOARD::SetHighLightNet( int aNetCode, bool aMulti )
 {
-    if( !m_highLight.m_netCodes.count( aNetCode ) )
+    bool already = m_highLight.m_netCodes.count( aNetCode );
+
+    if( !already )
     {
         if( !aMulti )
             m_highLight.m_netCodes.clear();
@@ -3935,18 +4001,6 @@ void BOARD::SaveToHistory( const wxString& aProjectPath, std::vector<HISTORY_FIL
 
     wxString rel = boardPath.Mid( projPath.length() );
 
-    // Build destination path inside .history mirror.
-    wxFileName historyRoot( projPath, wxEmptyString );
-    historyRoot.AppendDir( wxS( ".history" ) );
-    wxFileName dst( historyRoot.GetPath(), rel );
-
-    // Ensure destination directories exist on the UI thread so the background task can write.
-    wxFileName dstDir( dst );
-    dstDir.SetFullName( wxEmptyString );
-
-    if( !dstDir.DirExists() )
-        wxFileName::Mkdir( dstDir.GetPath(), 0777, wxPATH_MKDIR_FULL );
-
     try
     {
         PCB_IO_KICAD_SEXPR pi;
@@ -3955,7 +4009,7 @@ void BOARD::SaveToHistory( const wxString& aProjectPath, std::vector<HISTORY_FIL
         pi.FormatBoardToFormatter( &formatter, this, nullptr );
 
         HISTORY_FILE_DATA entry;
-        entry.path = dst.GetFullPath();
+        entry.relativePath = rel;
         entry.content = std::move( formatter.MutableString() );
         entry.prettify = true;
 
@@ -3965,7 +4019,7 @@ void BOARD::SaveToHistory( const wxString& aProjectPath, std::vector<HISTORY_FIL
         aFileData.push_back( std::move( entry ) );
 
         wxLogTrace( traceAutoSave, wxS( "[history] pcb saver serialized %zu bytes for '%s'" ),
-                    aFileData.back().content.size(), dst.GetFullPath() );
+                    aFileData.back().content.size(), rel );
     }
     catch( const IO_ERROR& ioe )
     {

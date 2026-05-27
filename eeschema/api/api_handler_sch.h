@@ -50,6 +50,8 @@ protected:
         return kiapi::common::types::DOCTYPE_SCHEMATIC;
     }
 
+    const EDA_IU_SCALE& getIuScale() const override { return schIUScale; }
+
     tl::expected<bool, ApiResponseStatus> validateDocumentInternal( const DocumentSpecifier& aDocument ) const override;
 
     std::optional<SCH_ITEM*> getItemById( const KIID& aId, SCH_SHEET_PATH* aPathOut = nullptr ) const;
@@ -71,6 +73,14 @@ protected:
                                                   const KIID& aId ) override;
 
     std::optional<TITLE_BLOCK*> getTitleBlock() override;
+
+    std::optional<PAGE_INFO> getPageSettings() override;
+
+    bool setPageSettings( const PAGE_INFO& aPageInfo ) override;
+
+    wxString getDrawingSheetFileName() override;
+
+    void setDrawingSheetFileName( const wxString& aFileName ) override;
 
     void onModified() override;
 
@@ -106,6 +116,9 @@ private:
 
     void packSheetInstance( kiapi::schematic::types::SheetInstance* aInstance, SCH_SHEET_PATH& aPath,
                             SCH_SHEET* aSheet );
+
+    HANDLER_RESULT<kiapi::schematic::types::SchematicNetlistResponse>
+    handleGetSchematicNetlist( const HANDLER_CONTEXT<kiapi::schematic::types::GetSchematicNetlist>& aCtx );
 
     SCHEMATIC* schematic() const;
 

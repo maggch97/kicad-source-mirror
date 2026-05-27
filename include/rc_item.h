@@ -192,6 +192,18 @@ public:
 protected:
     static wxString getSeverityString( SEVERITY aSeverity );
 
+    /**
+     * Resolve the description string used for an affected item in ShowReport and
+     * GetJsonViolation.  Subclasses that need per-context formatting (e.g. ERC's
+     * per-sheet-instance symbol references) override this rather than reimplementing
+     * the surrounding report layout.
+     *
+     * @param aItem is the affected item being described
+     * @param aIndex is 0 for the main item and 1 for the aux item
+     */
+    virtual wxString getItemDescription( EDA_ITEM* aItem, int aIndex,
+                                         UNITS_PROVIDER* aUnitsProvider ) const;
+
     int           m_errorCode;         ///< The error code's numeric value
     wxString      m_errorMessage;      ///< A message describing the details of this specific error
     wxString      m_errorTitle;        ///< The string describing the type of error
@@ -277,6 +289,10 @@ public:
 
     void Update( std::shared_ptr<RC_ITEMS_PROVIDER> aProvider, int aSeverities );
 
+    /// Render [label](url) markup as clickable links.  Must be called before
+    /// any rows are added.
+    void EnableHyperlinks( bool aEnable );
+
     void ExpandAll();
 
     void PrevMarker();
@@ -345,9 +361,13 @@ protected:
     void          deleteNodeTree( RC_TREE_NODE* aNode );
     void     rebuildModel( std::shared_ptr<RC_ITEMS_PROVIDER> aProvider, int aSeverities );
 
+    void onViewSize( wxSizeEvent& aEvent );
+
     EDA_DRAW_FRAME*                    m_editFrame;
     wxDataViewCtrl*                    m_view;
     int                                m_severities;
+    bool                               m_enableHyperlinks = false;
+    wxDataViewColumn*                  m_hyperlinkColumn = nullptr;
     std::shared_ptr<RC_ITEMS_PROVIDER> m_rcItemsProvider;
 
     std::vector<std::unique_ptr<RC_TREE_NODE::HANDLE>> m_handles;   // Stable wx item IDs

@@ -23,8 +23,10 @@
  */
 
 #include "sch_sheet_path.h"
+#include <limits>
 #include <memory>
 #include <set>
+#include <unordered_set>
 
 #include <kiplatform/ui.h>
 #include <optional>
@@ -74,6 +76,36 @@
 #include <wildcards_and_files_ext.h>
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
+
+
+namespace
+{
+// Returns aBaseName, or aBaseName + smallest free integer if already used on aScreen.
+wxString uniqueGroupName( SCH_SCREEN* aScreen, const wxString& aBaseName )
+{
+    if( !aScreen )
+        return aBaseName;
+
+    std::unordered_set<wxString> existing;
+
+    for( SCH_ITEM* item : aScreen->Items().OfType( SCH_GROUP_T ) )
+        existing.insert( static_cast<SCH_GROUP*>( item )->GetName() );
+
+    if( !existing.count( aBaseName ) )
+        return aBaseName;
+
+    for( int n = 1; n < std::numeric_limits<int>::max(); ++n )
+    {
+        wxString candidate = aBaseName + wxString::Format( wxT( "%d" ), n );
+
+        if( !existing.count( candidate ) )
+            return candidate;
+    }
+
+    return aBaseName;
+}
+} // namespace
+
 
 SCH_DRAWING_TOOLS::SCH_DRAWING_TOOLS() :
         SCH_TOOL_BASE<SCH_EDIT_FRAME>( "eeschema.InteractiveDrawing" ),
@@ -363,6 +395,9 @@ int SCH_DRAWING_TOOLS::PlaceSymbol( const TOOL_EVENT& aEvent )
 
                         if( libSymbol )
                         {
+                            if( libSymbol->IsPower() != filter.GetFilterPowerSymbols() )
+                                continue;
+
                             PICKED_SYMBOL pickedSymbol;
                             pickedSymbol.LibId = libSymbol->GetLibId();
                             alreadyPlaced.push_back( pickedSymbol );
@@ -489,8 +524,32 @@ int SCH_DRAWING_TOOLS::PlaceSymbol( const TOOL_EVENT& aEvent )
 
                     if( placeAllUnits )
                     {
+                        // For unannotated references all U?-prefix symbols share the same ref
+                        // string regardless of the library symbol they originate from. Only
+                        // consider units already used by THIS library symbol when stepping
+                        // through units, so different multi-unit parts that share a reference
+                        // prefix do not collide pre-annotation.
+                        const wxString currentRefStr = currentReference.GetRef();
+                        const bool     isUnannotated = !currentRefStr.IsEmpty()
+                                                       && currentRefStr.Last() == '?';
+                        const LIB_ID   symLibId = symbol->GetLibId();
+
+                        auto unitOccupied =
+                                [&]( int aUnit ) -> bool
+                                {
+                                    if( !isUnannotated )
+                                    {
+                                        SCH_REFERENCE candidate = currentReference;
+                                        candidate.SetUnit( aUnit );
+                                        return schematic.Contains( candidate );
+                                    }
+
+                                    return IsUnannotatedUnitOccupied( existingRefs, currentRefStr,
+                                                                      symLibId, aUnit );
+                                };
+
                         while( currentReference.GetUnit() <= symbol->GetUnitCount()
-                               && schematic.Contains( currentReference ) )
+                               && unitOccupied( currentReference.GetUnit() ) )
                         {
                             currentReference.SetUnit( currentReference.GetUnit() + 1 );
                         }
@@ -732,7 +791,6 @@ int SCH_DRAWING_TOOLS::ImportSheet( const TOOL_EVENT& aEvent )
 
     std::unique_ptr<DESIGN_BLOCK> designBlock;
     wxString                      sheetFileName = wxEmptyString;
-    int                           suffix = 1;
 
     if( placingDesignBlock )
     {
@@ -785,7 +843,6 @@ int SCH_DRAWING_TOOLS::ImportSheet( const TOOL_EVENT& aEvent )
                 EDA_ITEMS newItems;
                 bool      keepAnnotations = cfg->m_DesignBlockChooserPanel.keep_annotations;
                 bool      placeAsGroup = cfg->m_DesignBlockChooserPanel.place_as_group;
-                bool      repeatPlacement = cfg->m_DesignBlockChooserPanel.repeated_placement;
 
                 selectionTool->ClearSelection();
 
@@ -811,18 +868,19 @@ int SCH_DRAWING_TOOLS::ImportSheet( const TOOL_EVENT& aEvent )
                 {
                     group = new SCH_GROUP( screen );
 
+                    wxString baseName;
+
                     if( designBlock )
                     {
-                        group->SetName( designBlock->GetLibId().GetLibItemName() );
+                        baseName = designBlock->GetLibId().GetLibItemName().wx_str();
                         group->SetDesignBlockLibId( designBlock->GetLibId() );
                     }
                     else
                     {
-                        group->SetName( wxFileName( sheetFileName ).GetName() );
+                        baseName = wxFileName( sheetFileName ).GetName();
                     }
 
-                    if( repeatPlacement )
-                        group->SetName( group->GetName() + wxString::Format( "%d", suffix++ ) );
+                    group->SetName( uniqueGroupName( screen, baseName ) );
                 }
 
                 bool autoAnnotate = !keepAnnotations && cfg->m_AnnotatePanel.automatic;
@@ -1633,7 +1691,19 @@ int SCH_DRAWING_TOOLS::SingleClickPlace( const TOOL_EVENT& aEvent )
         else if( evt->IsClick( BUT_LEFT ) || evt->IsDblClick( BUT_LEFT )
                 || evt->IsAction( &ACTIONS::cursorClick ) || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
-            if( !screen->GetItem( cursorPos, 0, type ) )
+            if( SCH_ITEM* existingItem = screen->GetItem( cursorPos, 0, type ) )
+            {
+                // No connects can be "toggled"/removed by clicking on them again
+                // It helps with not having to fight pin selection ambiguity
+                if( type == SCH_NO_CONNECT_T )
+                {
+                    SCH_COMMIT commit( m_toolMgr );
+                    commit.Removed( existingItem, screen );
+                    m_frame->RemoveFromScreen( existingItem, screen );
+                    commit.Push( _( "Remove No Connect Flag" ) );
+                }
+            }
+            else
             {
                 if( type == SCH_JUNCTION_T )
                 {
@@ -2432,12 +2502,10 @@ int SCH_DRAWING_TOOLS::TwoClickPlace( const TOOL_EVENT& aEvent )
         }
         else if( item && ( evt->IsAction( &ACTIONS::refreshPreview ) || evt->IsMotion() ) )
         {
-            item->SetPosition( cursorPos );
-
-            // Not placed yet, so pass a nullptr screen reference
-            item->AutoplaceFields( nullptr, AUTOPLACE_AUTO );
-
-            updatePreview();
+            item->CalcEdit( cursorPos );
+            m_view->ClearPreview();
+            m_view->AddToPreview( item->Clone() );
+            m_frame->SetMsgPanel( item );
         }
         else if( item && evt->IsAction( &ACTIONS::doDelete ) )
         {
@@ -2723,6 +2791,37 @@ int SCH_DRAWING_TOOLS::DrawShape( const TOOL_EVENT& aEvent )
             item->CalcEdit( cursorPos );
             m_view->ClearPreview();
             m_view->AddToPreview( item->Clone() );
+
+            if( type == SHAPE_T::ELLIPSE_ARC && item->GetEllipseMajorRadius() > 100
+                && item->GetEllipseMinorRadius() > 100 )
+            {
+                const VECTOR2I  center = item->GetEllipseCenter();
+                const double    a = item->GetEllipseMajorRadius();
+                const double    b = item->GetEllipseMinorRadius();
+                const EDA_ANGLE rot = item->GetEllipseRotation();
+                const double    cosRot = rot.Cos();
+                const double    sinRot = rot.Sin();
+
+                const double dx = cursorPos.x - center.x;
+                const double dy = cursorPos.y - center.y;
+                const double lx = dx * cosRot + dy * sinRot;
+                const double ly = -dx * sinRot + dy * cosRot;
+
+                const EDA_ANGLE t( std::atan2( ly / b, lx / a ), RADIANS_T );
+                const double    px = a * t.Cos();
+                const double    py = b * t.Sin();
+
+                VECTOR2I markerPos =
+                        center + VECTOR2I( KiROUND( px * cosRot - py * sinRot ), KiROUND( px * sinRot + py * cosRot ) );
+
+                SCH_SHAPE* dot = new SCH_SHAPE( SHAPE_T::CIRCLE, LAYER_NOTES );
+                int        radius = schIUScale.MilsToIU( 20 );
+                dot->SetStart( markerPos );
+                dot->SetEnd( markerPos + VECTOR2I( radius, 0 ) );
+                dot->SetFillMode( FILL_T::FILLED_SHAPE );
+                m_view->AddToPreview( dot );
+            }
+
             m_frame->SetMsgPanel( item );
         }
         else if( evt->IsDblClick( BUT_LEFT ) && !item )
@@ -3398,27 +3497,7 @@ int SCH_DRAWING_TOOLS::DrawSheet( const TOOL_EVENT& aEvent )
             SCH_SHEET_LIST hierarchy = m_frame->Schematic().Hierarchy();
             SCH_SHEET_PATH instance = m_frame->GetCurrentSheet();
             instance.push_back( sheet );
-            wxString pageNumber;
-
-            // Find the next available page number by checking all existing page numbers
-            std::set<int> usedPageNumbers;
-
-            for( const SCH_SHEET_PATH& path : hierarchy )
-            {
-                wxString existingPageNum = path.GetPageNumber();
-                long pageNum = 0;
-
-                if( existingPageNum.ToLong( &pageNum ) && pageNum > 0 )
-                    usedPageNumbers.insert( static_cast<int>( pageNum ) );
-            }
-
-            // Find the first available number starting from 1
-            int nextAvailable = 1;
-
-            while( usedPageNumbers.count( nextAvailable ) > 0 )
-                nextAvailable++;
-
-            pageNumber.Printf( wxT( "%d" ), nextAvailable );
+            wxString pageNumber = hierarchy.GetNextPageNumber();
             instance.SetPageNumber( pageNumber );
 
             m_view->ClearPreview();
@@ -3492,11 +3571,13 @@ int SCH_DRAWING_TOOLS::DrawSheet( const TOOL_EVENT& aEvent )
 
                 if( isDrawSheetFromDesignBlock && cfg->m_DesignBlockChooserPanel.place_as_group )
                 {
-                    sheetGroup = new SCH_GROUP( m_frame->GetScreen() );
-                    sheetGroup->SetName( designBlock->GetLibId().GetLibItemName() );
+                    SCH_SCREEN* screen = m_frame->GetScreen();
+
+                    sheetGroup = new SCH_GROUP( screen );
+                    sheetGroup->SetName( uniqueGroupName( screen, designBlock->GetLibId().GetLibItemName() ) );
                     sheetGroup->SetDesignBlockLibId( designBlock->GetLibId() );
-                    c.Add( sheetGroup, m_frame->GetScreen() );
-                    c.Modify( sheet, m_frame->GetScreen(), RECURSE_MODE::NO_RECURSE );
+                    c.Add( sheetGroup, screen );
+                    c.Modify( sheet, screen, RECURSE_MODE::NO_RECURSE );
                     sheetGroup->AddItem( sheet );
                 }
 
@@ -3915,6 +3996,8 @@ void SCH_DRAWING_TOOLS::setTransitions()
     Go( &SCH_DRAWING_TOOLS::TwoClickPlace,         SCH_ACTIONS::placeSchematicText.MakeEvent() );
     Go( &SCH_DRAWING_TOOLS::DrawShape,             SCH_ACTIONS::drawRectangle.MakeEvent() );
     Go( &SCH_DRAWING_TOOLS::DrawShape,             SCH_ACTIONS::drawCircle.MakeEvent() );
+    Go( &SCH_DRAWING_TOOLS::DrawShape,             SCH_ACTIONS::drawEllipse.MakeEvent() );
+    Go( &SCH_DRAWING_TOOLS::DrawShape,             SCH_ACTIONS::drawEllipseArc.MakeEvent() );
     Go( &SCH_DRAWING_TOOLS::DrawShape,             SCH_ACTIONS::drawArc.MakeEvent() );
     Go( &SCH_DRAWING_TOOLS::DrawShape,             SCH_ACTIONS::drawBezier.MakeEvent() );
     Go( &SCH_DRAWING_TOOLS::DrawShape,             SCH_ACTIONS::drawTextBox.MakeEvent() );

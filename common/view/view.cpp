@@ -46,6 +46,7 @@
 
 #ifdef KICAD_GAL_PROFILE
 #include <wx/log.h>
+#include <trace_helpers.h>
 #endif
 
 namespace KIGFX {
@@ -243,6 +244,8 @@ VIEW::VIEW() :
     m_scale( 4.0 ),
     m_minScale( 0.2 ), m_maxScale( 50000.0 ),
     m_mirrorX( false ), m_mirrorY( false ),
+    m_layerVisibilityCache( VIEW_MAX_LAYERS ),
+    m_layerCachedFlagCache( VIEW_MAX_LAYERS ),
     m_painter( nullptr ),
     m_gal( nullptr ),
     m_useDrawPriority( false ),
@@ -1079,8 +1082,14 @@ struct VIEW::DRAW_ITEM_VISITOR
 
 void VIEW::redrawRect( const BOX2I& aRect )
 {
+
+    syncLayerVisibilityCache();
+
     for( VIEW_LAYER* l : m_orderedLayers )
     {
+        if( l->items->IsEmpty() )
+            continue;
+
         if( l->visible && IsTargetDirty( l->target ) && areRequiredLayersEnabled( l->id ) )
         {
             DRAW_ITEM_VISITOR drawFunc( this, l->id, m_useDrawPriority, m_reverseDrawOrder );
@@ -1127,7 +1136,7 @@ void VIEW::draw( VIEW_ITEM* aItem, int aLayer, bool aImmediate )
     if( !viewData )
         return;
 
-    if( IsCached( aLayer ) && !aImmediate )
+    if( m_layerCachedFlagCache[ aLayer ] && !aImmediate )
     {
         // Draw using cached information or create one
         int group = viewData->getGroup( aLayer );
@@ -1257,7 +1266,8 @@ void VIEW::ClearTargets()
 void VIEW::Redraw()
 {
 #ifdef KICAD_GAL_PROFILE
-    PROF_TIMER totalRealTime;
+    PROF_TIMER totalRealTime("view-redraw-total");
+    latencyProbeZoomToRender.Checkpoint("view-redraw-start");
 #endif /* KICAD_GAL_PROFILE */
 
     VECTOR2D screenSize = m_gal->GetScreenPixelSize();
@@ -1275,6 +1285,9 @@ void VIEW::Redraw()
 #ifdef KICAD_GAL_PROFILE
     totalRealTime.Stop();
     wxLogTrace( traceGalProfile, wxS( "VIEW::Redraw(): %.1f ms" ), totalRealTime.msecs() );
+    latencyProbeZoomToRender.AddTimer( totalRealTime );
+    latencyProbeZoomToRender.Checkpoint("view-redraw-end");
+    
 #endif /* KICAD_GAL_PROFILE */
 }
 
@@ -1557,6 +1570,10 @@ void VIEW::UpdateItems()
     if( !m_gal->IsVisible() || !m_gal->IsInitialized() )
         return;
 
+#ifdef KICAD_GAL_PROFILE
+    latencyProbeZoomToRender.Checkpoint("view-update-items");
+#endif
+
     if( !m_hasPendingItemUpdates )
         return;
 
@@ -1656,8 +1673,10 @@ void VIEW::UpdateItems()
         }
     }
 
+#ifdef KICAD_GAL_PROFILE
     wxLogTrace( traceGalProfile, wxS( "View update: total items %u, geom %u anyUpdated %u" ),
               cntTotal, cntGeomUpdate, (unsigned) anyUpdated );
+#endif
 
     m_hasPendingItemUpdates = false;
 }
@@ -1870,6 +1889,14 @@ void VIEW::ShowPreview( bool aShow )
    SetVisible( m_preview.get(), aShow );
 }
 
+void VIEW::syncLayerVisibilityCache()
+{
+    for( const auto& layer : m_layers )
+    {
+        m_layerVisibilityCache[ layer.first ] = layer.second.visible;
+        m_layerCachedFlagCache[ layer.first ] = (layer.second.target == TARGET_CACHED);
+    }
+}
 
 } // namespace KIGFX
 

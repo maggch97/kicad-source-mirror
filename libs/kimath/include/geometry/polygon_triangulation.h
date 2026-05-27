@@ -126,7 +126,10 @@ public:
             VERTEX* holeRing = createRing( aPolygon[i], baseIndex, false );
             baseIndex += aPolygon[i].PointCount();
 
-            if( holeRing && holeRing->next != holeRing )
+            // Reject rings collapsed below 3 vertices.  Match the outer-ring guard at
+            // line 119 so degenerate holes (single point or two-vertex sliver) cannot
+            // reach eliminateHoles().
+            if( holeRing && holeRing->prev != holeRing->next )
                 holeRings.push_back( holeRing );
         }
 
@@ -842,7 +845,10 @@ private:
                 addVertex( i );
         }
 
-        if( tail && ( *tail == *tail->next ) )
+        // Collapse a final duplicate, but never on a single-vertex ring.  When the
+        // simplification pass leaves only one vertex, tail->next == tail and removing
+        // it would leave the caller holding a vertex with null next/prev pointers.
+        if( tail && tail->next != tail && ( *tail == *tail->next ) )
             tail->next->remove();
 
         return tail;
@@ -890,8 +896,8 @@ private:
             if( bridge )
             {
                 VERTEX* bridgeReverse = bridge->split( hi.leftmost );
-                filterPoints( aOuterRing, aOuterRing->next );
                 filterPoints( bridgeReverse, bridgeReverse->next );
+                aOuterRing = filterPoints( bridge, bridge->next );
             }
             else
             {
@@ -906,10 +912,10 @@ private:
     /**
      * Remove consecutive duplicate vertices from the linked list.
      */
-    void filterPoints( VERTEX* aStart, VERTEX* aEnd = nullptr )
+    VERTEX* filterPoints( VERTEX* aStart, VERTEX* aEnd = nullptr )
     {
         if( !aStart )
-            return;
+            return aStart;
 
         if( !aEnd )
             aEnd = aStart;
@@ -923,10 +929,15 @@ private:
 
             if( *p == *p->next )
             {
-                p->next->remove();
+                VERTEX* toRemove = p->next;
+                
+                if( toRemove == aEnd )
+                    aEnd = p;
+
+                toRemove->remove();
 
                 if( p == p->next )
-                    return;
+                    return p;
 
                 p = p->prev;
                 again = true;
@@ -936,7 +947,10 @@ private:
                 p = p->next;
             }
         } while( again || p != aEnd );
+
+        return aEnd;
     }
+
 
     /**
      * Find a vertex on the outer ring visible from the hole's leftmost vertex

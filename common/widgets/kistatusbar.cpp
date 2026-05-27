@@ -109,12 +109,16 @@ KISTATUSBAR::KISTATUSBAR( int aNumberFields, wxWindow* parent, wxWindowID id, ST
 
     m_fieldWidths.assign( aNumberFields + extraFields, -1 );
 
+    // Make the first pane wider.
+    if( aNumberFields )
+        m_fieldWidths[0] = -2;
+
+    int padding = KIUI::GetTextSize( wxT( "M" ), this ).x;
+
 #ifdef __WXOSX__
     // offset from the right edge
-    m_fieldWidths[aNumberFields + extraFields - 1] = 10;
+    m_fieldWidths[aNumberFields + extraFields - 1] = padding;
 #endif
-
-    SetStatusWidths( aNumberFields + extraFields, m_fieldWidths.data() );
 
     int* styles = new int[aNumberFields + extraFields];
 
@@ -132,8 +136,7 @@ KISTATUSBAR::KISTATUSBAR( int aNumberFields, wxWindow* parent, wxWindowID id, ST
 
     if( showCancel )
     {
-        m_backgroundStopButton = new wxButton( this, wxID_ANY, "X", wxDefaultPosition,
-                                               wxDefaultSize, wxBU_EXACTFIT );
+        m_backgroundStopButton = new wxButton( this, wxID_ANY, "X", wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT );
     }
 
     if( showNotification )
@@ -160,8 +163,46 @@ KISTATUSBAR::KISTATUSBAR( int aNumberFields, wxWindow* parent, wxWindowID id, ST
         m_warningButton->SetToolTip( _( "View load messages" ) );
         m_warningButton->Hide();
 
+
         m_warningButton->Bind( wxEVT_BUTTON, &KISTATUSBAR::onLoadWarningsIconClick, this );
     }
+
+    if( std::optional<int> idx = fieldIndex( FIELD::BGJOB_LABEL ) )
+        m_fieldWidths[m_normalFieldsCount + *idx] = -1;
+
+    if( std::optional<int> idx = fieldIndex( FIELD::BGJOB_GAUGE ) )
+    {
+        if( m_backgroundProgressBar )
+            m_fieldWidths[m_normalFieldsCount + *idx] = m_backgroundProgressBar->GetSize().x + padding;
+        else
+            m_fieldWidths[m_normalFieldsCount + *idx] = 0;
+    }
+
+    if( std::optional<int> idx = fieldIndex( FIELD::BGJOB_CANCEL ) )
+    {
+        if( m_backgroundStopButton )
+            m_fieldWidths[m_normalFieldsCount + *idx] = m_backgroundStopButton->GetSize().x + padding;
+        else
+            m_fieldWidths[m_normalFieldsCount + *idx] = 0;
+    }
+
+    if( std::optional<int> idx = fieldIndex( FIELD::WARNING ) )
+    {
+        if( m_warningButton )
+            m_fieldWidths[m_normalFieldsCount + *idx] = m_warningButton->GetSize().x + padding;
+        else
+            m_fieldWidths[m_normalFieldsCount + *idx] = 0;
+    }
+
+    if( std::optional<int> idx = fieldIndex( FIELD::NOTIFICATION ) )
+    {
+        if( m_notificationsButton )
+            m_fieldWidths[m_normalFieldsCount + *idx] = m_notificationsButton->GetSize().x + padding;
+        else
+            m_fieldWidths[m_normalFieldsCount + *idx] = 0;
+    }
+
+    SetStatusWidths( aNumberFields + extraFields, m_fieldWidths.data() );
 
     Bind( wxEVT_SIZE, &KISTATUSBAR::onSize, this );
     m_backgroundProgressBar->Bind( wxEVT_LEFT_DOWN, &KISTATUSBAR::onBackgroundProgressClick, this );
@@ -227,56 +268,76 @@ void KISTATUSBAR::layoutControls()
     constexpr int padding = 5;
 
     wxRect r;
-    GetFieldRect( m_normalFieldsCount + *fieldIndex( FIELD::BGJOB_LABEL ), r );
-    int x = r.GetLeft();
-    int y = r.GetTop();
-    int textHeight = KIUI::GetTextSize( wxT( "bp" ), this ).y;
+    int sbField = m_normalFieldsCount + *fieldIndex( FIELD::BGJOB_LABEL );
 
-    if( r.GetHeight() > textHeight )
-        y += ( r.GetHeight() - textHeight ) / 2;
-
-    m_backgroundTxt->SetPosition( { x, y } );
-    m_backgroundTxt->SetSize( r.GetWidth(), textHeight );
-    updateBackgroundText();
-
-    GetFieldRect( m_normalFieldsCount + *fieldIndex( FIELD::BGJOB_GAUGE ), r );
-    x = r.GetLeft();
-    y = r.GetTop();
-    int           w = r.GetWidth();
-    int           h = r.GetHeight();
-    wxSize buttonSize( 0, 0 );
-
-    if( m_backgroundStopButton )
+    if( sbField >= 0 && sbField < GetFieldsCount() )
     {
-        buttonSize = m_backgroundStopButton->GetEffectiveMinSize();
-        m_backgroundStopButton->SetPosition( { x + w - buttonSize.GetWidth(), y } );
-        m_backgroundStopButton->SetSize( buttonSize.GetWidth(), h );
-        buttonSize.x += padding;
+        GetFieldRect( m_normalFieldsCount + *fieldIndex( FIELD::BGJOB_LABEL ), r );
+        int x = r.GetLeft();
+        int y = r.GetTop();
+        int textHeight = KIUI::GetTextSize( wxT( "bp" ), this ).y;
+
+        if( r.GetHeight() > textHeight )
+            y += ( r.GetHeight() - textHeight ) / 2;
+
+        m_backgroundTxt->SetPosition( { x, y } );
+        m_backgroundTxt->SetSize( r.GetWidth(), textHeight );
+        updateBackgroundText();
     }
 
-    m_backgroundProgressBar->SetPosition( { x + padding, y } );
-    m_backgroundProgressBar->SetSize( w - buttonSize.GetWidth() - padding, h );
+    sbField = m_normalFieldsCount + *fieldIndex( FIELD::BGJOB_GAUGE );
 
-    if( m_notificationsButton )
+    if( sbField >= 0 && sbField < GetFieldsCount() )
     {
-        GetFieldRect( m_normalFieldsCount + *fieldIndex( FIELD::NOTIFICATION ), r );
-        x = r.GetLeft();
-        y = r.GetTop();
-        h = r.GetHeight();
-        buttonSize = m_notificationsButton->GetEffectiveMinSize();
-        m_notificationsButton->SetPosition( { x, y } );
-        m_notificationsButton->SetSize( buttonSize.GetWidth() + 6, h );
+        GetFieldRect( m_normalFieldsCount + *fieldIndex( FIELD::BGJOB_GAUGE ), r );
+        int x = r.GetLeft();
+        int y = r.GetTop();
+        int w = r.GetWidth();
+        int h = r.GetHeight();
+        wxSize buttonSize( 0, 0 );
+
+        if( m_backgroundStopButton )
+        {
+            buttonSize = m_backgroundStopButton->GetEffectiveMinSize();
+            m_backgroundStopButton->SetPosition( { x + w - buttonSize.GetWidth(), y } );
+            m_backgroundStopButton->SetSize( buttonSize.GetWidth(), h );
+            buttonSize.x += padding;
+        }
+
+        m_backgroundProgressBar->SetPosition( { x + padding, y } );
+        m_backgroundProgressBar->SetSize( w - buttonSize.GetWidth() - padding, h );
+
+        if( m_notificationsButton )
+        {
+            sbField = m_normalFieldsCount + *fieldIndex( FIELD::NOTIFICATION );
+
+            if( sbField >= 0 && sbField < GetFieldsCount() )
+            {
+                GetFieldRect( m_normalFieldsCount + *fieldIndex( FIELD::NOTIFICATION ), r );
+                x = r.GetLeft();
+                y = r.GetTop();
+                h = r.GetHeight();
+                buttonSize = m_notificationsButton->GetEffectiveMinSize();
+                m_notificationsButton->SetPosition( { x, y } );
+                m_notificationsButton->SetSize( buttonSize.GetWidth() + 6, h );
+            }
+        }
     }
 
     if( m_warningButton )
     {
-        GetFieldRect( m_normalFieldsCount + *fieldIndex( FIELD::WARNING ), r );
-        x = r.GetLeft();
-        y = r.GetTop();
-        h = r.GetHeight();
-        buttonSize = m_warningButton->GetEffectiveMinSize();
-        m_warningButton->SetPosition( { x, y } );
-        m_warningButton->SetSize( buttonSize.GetWidth() + 6, h );
+        sbField = m_normalFieldsCount + *fieldIndex( FIELD::WARNING );
+
+        if( sbField >= 0 && sbField < GetFieldsCount() )
+        {
+            GetFieldRect( m_normalFieldsCount + *fieldIndex( FIELD::WARNING ), r );
+            int x = r.GetLeft();
+            int y = r.GetTop();
+            int h = r.GetHeight();
+            wxSize buttonSize = m_warningButton->GetEffectiveMinSize();
+            m_warningButton->SetPosition( { x, y } );
+            m_warningButton->SetSize( buttonSize.GetWidth() + 6, h );
+        }
     }
 }
 
@@ -352,28 +413,36 @@ void KISTATUSBAR::updateAuxFieldWidths()
     if( m_fieldWidths.empty() )
         return;
 
+    int padding = KIUI::GetTextSize( wxT( "M" ), this ).x;
+
     if( std::optional<int> idx = fieldIndex( FIELD::BGJOB_LABEL ) )
-        m_fieldWidths[m_normalFieldsCount + *idx] = -2;
+        m_fieldWidths[m_normalFieldsCount + *idx] = -1;
 
     if( std::optional<int> idx = fieldIndex( FIELD::BGJOB_GAUGE ) )
         m_fieldWidths[m_normalFieldsCount + *idx] = 75;
 
     if( std::optional<int> idx = fieldIndex( FIELD::BGJOB_CANCEL ) )
     {
-        m_fieldWidths[m_normalFieldsCount + *idx] =
-                m_backgroundStopButton && m_backgroundStopButton->IsShown() ? 20 : 0;
+        if( m_backgroundStopButton && m_backgroundStopButton->IsShown() )
+            m_fieldWidths[m_normalFieldsCount + *idx] = m_backgroundStopButton->GetSize().x + padding;
+        else
+            m_fieldWidths[m_normalFieldsCount + *idx] = 0;
     }
 
     if( std::optional<int> idx = fieldIndex( FIELD::WARNING ) )
     {
-        m_fieldWidths[m_normalFieldsCount + *idx] =
-                m_warningButton && m_warningButton->IsShown() ? 20 : 0;
+        if( m_warningButton && m_warningButton->IsShown() )
+            m_fieldWidths[m_normalFieldsCount + *idx] = m_warningButton->GetSize().x + padding;
+        else
+            m_fieldWidths[m_normalFieldsCount + *idx] = 0;
     }
 
     if( std::optional<int> idx = fieldIndex( FIELD::NOTIFICATION ) )
     {
-        m_fieldWidths[m_normalFieldsCount + *idx] =
-                m_notificationsButton && m_notificationsButton->IsShown() ? 20 : 0;
+        if( m_notificationsButton && m_notificationsButton->IsShown() )
+            m_fieldWidths[m_normalFieldsCount + *idx] = m_notificationsButton->GetSize().x + padding;
+        else
+            m_fieldWidths[m_normalFieldsCount + *idx] = 0;
     }
 
     SetStatusWidths( static_cast<int>( m_fieldWidths.size() ), m_fieldWidths.data() );
@@ -635,4 +704,13 @@ std::optional<int> KISTATUSBAR::fieldIndex( FIELD aField ) const
     }
 
     return std::nullopt;
+}
+
+
+void KISTATUSBAR::SetStatusWidths( int aSize, const int* aWidths )
+{
+    wxStatusBar::SetStatusWidths( aSize, aWidths );
+
+    for( int i = 0; ( i < aSize ) && ( i < static_cast<int>( m_fieldWidths.size() ) ); i++ )
+        m_fieldWidths[i] = *( aWidths + i );
 }

@@ -23,9 +23,11 @@
 
 #include <api/api_handler.h>
 #include <api/common/commands/editor_commands.pb.h>
+#include <base_units.h>
 #include <commit.h>
 #include <google/protobuf/empty.pb.h>
 #include <kiid.h>
+#include <page_info.h>
 
 using namespace kiapi::common;
 using kiapi::common::types::DocumentSpecifier;
@@ -84,6 +86,12 @@ protected:
     HANDLER_RESULT<google::protobuf::Empty> handleSetTitleBlockInfo(
             const HANDLER_CONTEXT<commands::SetTitleBlockInfo>& aCtx );
 
+    HANDLER_RESULT<types::PageSettings> handleGetPageSettings(
+            const HANDLER_CONTEXT<commands::GetPageSettings>& aCtx );
+
+    HANDLER_RESULT<types::PageSettings> handleSetPageSettings(
+            const HANDLER_CONTEXT<commands::SetPageSettings>& aCtx );
+
     /**
      * Override this to create an appropriate COMMIT subclass for the frame in question
      * @return a new COMMIT, bound to the editor frame
@@ -100,6 +108,13 @@ protected:
      */
     virtual tl::expected<bool, ApiResponseStatus> validateDocumentInternal( const DocumentSpecifier& aDocument ) const = 0;
 
+    /**
+     * Returns the internal-unit scale that the concrete editor uses. API wire coordinates
+     * are always in nanometers, so this scale drives conversion to the editor's native IU.
+     * Defaults to pcbIUScale; schematic-like editors must override.
+     */
+    virtual const EDA_IU_SCALE& getIuScale() const { return pcbIUScale; }
+
     virtual HANDLER_RESULT<ItemRequestStatus> handleCreateUpdateItemsInternal( bool aCreate,
         const std::string& aClientName,
         const types::ItemHeader &aHeader,
@@ -115,6 +130,14 @@ protected:
     static std::vector<KICAD_T> parseRequestedItemTypes( const google::protobuf::RepeatedField<int>& aTypes );
 
     virtual std::optional<TITLE_BLOCK*> getTitleBlock() { return std::nullopt; }
+
+    virtual std::optional<PAGE_INFO> getPageSettings() { return std::nullopt; }
+
+    virtual bool setPageSettings( const PAGE_INFO& aPageInfo ) { return false; }
+
+    virtual wxString getDrawingSheetFileName() { return wxEmptyString; }
+
+    virtual void setDrawingSheetFileName( const wxString& aFileName ) {}
 
     virtual void onModified() {}
 

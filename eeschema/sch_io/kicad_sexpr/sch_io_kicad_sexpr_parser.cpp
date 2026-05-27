@@ -48,6 +48,7 @@
 #include <sch_bitmap.h>
 #include <sch_bus_entry.h>
 #include <sch_symbol.h>
+#include <sch_netchain.h>
 #include <sch_edit_frame.h>          // SYM_ORIENT_XXX
 #include <sch_field.h>
 #include <sch_group.h>
@@ -557,6 +558,8 @@ LIB_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol( LIB_SYMBOL_MAP& aSymbolLi
                 case T_arc:
                 case T_bezier:
                 case T_circle:
+                case T_ellipse:
+                case T_ellipse_arc:
                 case T_pin:
                 case T_polyline:
                 case T_rectangle:
@@ -571,7 +574,8 @@ LIB_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol( LIB_SYMBOL_MAP& aSymbolLi
                     break;
 
                 default:
-                    Expecting( "arc, bezier, circle, pin, polyline, rectangle, or text" );
+                    Expecting( "arc, bezier, circle, ellipse, ellipse_arc, pin, polyline, "
+                               "rectangle, or text" );
                 };
             }
 
@@ -583,6 +587,8 @@ LIB_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol( LIB_SYMBOL_MAP& aSymbolLi
         case T_arc:
         case T_bezier:
         case T_circle:
+        case T_ellipse:
+        case T_ellipse_arc:
         case T_pin:
         case T_polyline:
         case T_rectangle:
@@ -634,8 +640,8 @@ LIB_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol( LIB_SYMBOL_MAP& aSymbolLi
         }
 
         default:
-            Expecting( "pin_names, pin_numbers, arc, bezier, circle, pin, polyline, "
-                       "rectangle, or text" );
+            Expecting( "pin_names, pin_numbers, arc, bezier, circle, ellipse, ellipse_arc, "
+                       "pin, polyline, rectangle, or text" );
         }
     }
 
@@ -667,15 +673,19 @@ SCH_ITEM* SCH_IO_KICAD_SEXPR_PARSER::ParseSymbolDrawItem()
 {
     switch( CurTok() )
     {
-    case T_arc:       return parseSymbolArc();       break;
-    case T_bezier:    return parseSymbolBezier();    break;
-    case T_circle:    return parseSymbolCircle();    break;
-    case T_pin:       return parseSymbolPin();       break;
-    case T_polyline:  return parseSymbolPolyLine();  break;
+    case T_arc: return parseSymbolArc(); break;
+    case T_bezier: return parseSymbolBezier(); break;
+    case T_circle: return parseSymbolCircle(); break;
+    case T_ellipse: return parseSymbolEllipse(); break;
+    case T_ellipse_arc: return parseSymbolEllipseArc(); break;
+    case T_pin: return parseSymbolPin(); break;
+    case T_polyline: return parseSymbolPolyLine(); break;
     case T_rectangle: return parseSymbolRectangle(); break;
-    case T_text:      return parseSymbolText();      break;
-    case T_text_box:  return parseSymbolTextBox();   break;
-    default:          Expecting( "arc, bezier, circle, pin, polyline, rectangle, or text" );
+    case T_text: return parseSymbolText(); break;
+    case T_text_box: return parseSymbolTextBox(); break;
+    default:
+        Expecting( "arc, bezier, circle, ellipse, ellipse_arc, pin, "
+                   "polyline, rectangle, or text" );
     }
 
     return nullptr;
@@ -1593,6 +1603,50 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSymbolCircle()
 }
 
 
+SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSymbolEllipse()
+{
+    wxCHECK_MSG( CurTok() == T_ellipse, nullptr,
+                 wxT( "Cannot parse " ) + GetTokenString( CurTok() ) + wxT( " as an ellipse." ) );
+
+    auto ellipse = std::make_unique<SCH_SHAPE>( SHAPE_T::ELLIPSE, LAYER_DEVICE );
+    ellipse->SetUnit( m_unit );
+    ellipse->SetBodyStyle( m_bodyStyle );
+
+    T token = NextTok();
+
+    if( token == T_private )
+    {
+        ellipse->SetPrivate( true );
+        token = NextTok();
+    }
+
+    parseEllipseBody( ellipse.get(), /*isArc*/ false, /*isSchematic*/ false, token );
+    return ellipse.release();
+}
+
+
+SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSymbolEllipseArc()
+{
+    wxCHECK_MSG( CurTok() == T_ellipse_arc, nullptr,
+                 wxT( "Cannot parse " ) + GetTokenString( CurTok() ) + wxT( " as an elliptical arc." ) );
+
+    auto arc = std::make_unique<SCH_SHAPE>( SHAPE_T::ELLIPSE_ARC, LAYER_DEVICE );
+    arc->SetUnit( m_unit );
+    arc->SetBodyStyle( m_bodyStyle );
+
+    T token = NextTok();
+
+    if( token == T_private )
+    {
+        arc->SetPrivate( true );
+        token = NextTok();
+    }
+
+    parseEllipseBody( arc.get(), /*isArc*/ true, /*isSchematic*/ false, token );
+    return arc.release();
+}
+
+
 SCH_PIN* SCH_IO_KICAD_SEXPR_PARSER::parseSymbolPin()
 {
     auto parseType =
@@ -2318,6 +2372,13 @@ SCH_FIELD* SCH_IO_KICAD_SEXPR_PARSER::parseSchField( SCH_ITEM* aParent )
                            CurOffset() );
     }
 
+    // Normalise legacy/cross-locale directive-label net class field names to the canonical
+    // "Netclass" token as early as possible so every downstream consumer (including ones that
+    // call GetName() directly instead of GetCanonicalName()) sees a consistent in-memory model.
+    // See issue #24403.
+    if( dynamic_cast<SCH_LABEL_BASE*>( aParent ) && SCH_FIELD::IsNetclassLabelFieldName( name ) )
+        name = wxT( "Netclass" );
+
     token = NextTok();
 
     if( !IsSymbol( token ) )
@@ -2990,6 +3051,10 @@ void SCH_IO_KICAD_SEXPR_PARSER::ParseSchematic( SCH_SHEET* aSheet, bool aIsCopya
             screen->Append( parseSchBezier() );
             break;
 
+        case T_ellipse: screen->Append( parseSchEllipse() ); break;
+
+        case T_ellipse_arc: screen->Append( parseSchEllipseArc() ); break;
+
         case T_rule_area:
             screen->Append( parseSchRuleArea() );
             break;
@@ -3003,6 +3068,10 @@ void SCH_IO_KICAD_SEXPR_PARSER::ParseSchematic( SCH_SHEET* aSheet, bool aIsCopya
         case T_hierarchical_label:
         case T_directive_label:
             screen->Append( parseSchText() );
+            break;
+
+        case T_net_chain:
+            parseSchNetChain();
             break;
 
         case T_text_box:
@@ -3079,9 +3148,12 @@ void SCH_IO_KICAD_SEXPR_PARSER::ParseSchematic( SCH_SHEET* aSheet, bool aIsCopya
 
 
         default:
-            Expecting( "bitmap, bus, bus_alias, bus_entry, class_label, embedded_files, global_label, "
-                       "hierarchical_label, junction, label, line, no_connect, page, paper, rule_area, "
-                       "sheet, symbol, symbol_instances, text, title_block" );
+            Expecting( "arc, bezier, bitmap, bus, bus_alias, bus_entry, circle, class_label, "
+                       "directive_label, ellipse, ellipse_arc, embedded_fonts, embedded_files, "
+                       "global_label, hierarchical_label, image, junction, lib_symbols, "
+                       "netclass_flag, no_connect, polyline, rectangle, rule_area, sheet, "
+                       "sheet_instances, signal, symbol, symbol_instances, table, text, "
+                       "text_box, title_block, uuid, wire" );
         }
     }
 
@@ -3266,6 +3338,30 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
             symbol->SetLocked( parseBool() );
             NeedRIGHT();
             break;
+
+        case T_passthrough:
+        {
+            // (passthrough default|block|force)
+            T t = NextTok();
+
+            // Expect a string-like token
+            if( !IsSymbol( t ) )
+                Expecting( "default, block or force" );
+
+            wxString mode = FromUTF8();
+
+            if( mode.IsSameAs( wxT("default"), false ) )
+                symbol->SetPassthroughMode( SCH_SYMBOL::PASSTHROUGH_MODE::DEFAULT );
+            else if( mode.IsSameAs( wxT("block"), false ) )
+                symbol->SetPassthroughMode( SCH_SYMBOL::PASSTHROUGH_MODE::BLOCK );
+            else if( mode.IsSameAs( wxT("force"), false ) )
+                symbol->SetPassthroughMode( SCH_SYMBOL::PASSTHROUGH_MODE::FORCE );
+            else
+                Expecting( "default, block or force" );
+
+            NeedRIGHT();
+            break;
+        }
 
         case T_fields_autoplaced:
             if( parseMaybeAbsentBool( true ) )
@@ -3605,7 +3701,7 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
         }
 
         default:
-            Expecting( "lib_id, lib_name, at, mirror, uuid, exclude_from_sim, on_board, in_bom, dnp, "
+            Expecting( "lib_id, lib_name, at, mirror, uuid, exclude_from_sim, on_board, in_bom, dnp, passthrough, "
                        "default_instance, property, pin, or instances" );
         }
     }
@@ -4391,7 +4487,7 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchArc()
 
         case T_uuid:
             NeedSYMBOL();
-            const_cast<KIID&>( arc->m_Uuid ) = KIID( FromUTF8() );
+            const_cast<KIID&>( arc->m_Uuid ) = parseKIID();
             NeedRIGHT();
             break;
 
@@ -4456,7 +4552,7 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchCircle()
 
         case T_uuid:
             NeedSYMBOL();
-            const_cast<KIID&>( circle->m_Uuid ) = KIID( FromUTF8() );
+            const_cast<KIID&>( circle->m_Uuid ) = parseKIID();
             NeedRIGHT();
             break;
 
@@ -4525,7 +4621,7 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchRectangle()
 
         case T_uuid:
             NeedSYMBOL();
-            const_cast<KIID&>( rectangle->m_Uuid ) = KIID( FromUTF8() );
+            const_cast<KIID&>( rectangle->m_Uuid ) = parseKIID();
             NeedRIGHT();
             break;
 
@@ -4676,7 +4772,7 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchBezier()
 
         case T_uuid:
             NeedSYMBOL();
-            const_cast<KIID&>( bezier->m_Uuid ) = KIID( FromUTF8() );
+            const_cast<KIID&>( bezier->m_Uuid ) = parseKIID();
             NeedRIGHT();
             break;
 
@@ -4693,6 +4789,134 @@ SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchBezier()
     bezier->RebuildBezierToSegmentsPointsList( m_maxError );
 
     return bezier.release();
+}
+
+
+void SCH_IO_KICAD_SEXPR_PARSER::parseEllipseBody( SCH_SHAPE* aShape, bool aIsArc, bool aIsSchematic,
+                                                  TSCHEMATIC_T::T aFirstTok )
+{
+    // Defaults for optional/missing fields.  All fields are expected in a well-formed
+    // file, but we fall back to safe defaults rather than rejecting on missing fields
+    // to be forward-compatible with future format additions.
+    VECTOR2I      center( 0, 0 );
+    int           majorRadius = 1;
+    int           minorRadius = 1;
+    EDA_ANGLE     rotation = ANGLE_0;
+    EDA_ANGLE     startAngle = ANGLE_0;
+    EDA_ANGLE     endAngle = ANGLE_90;
+    STROKE_PARAMS stroke( schIUScale.MilsToIU( DEFAULT_LINE_WIDTH_MILS ), LINE_STYLE::DEFAULT );
+    FILL_PARAMS   fill;
+
+    for( T token = aFirstTok; token != T_RIGHT; token = NextTok() )
+    {
+        if( token != T_LEFT )
+            Expecting( T_LEFT );
+
+        token = NextTok();
+
+        switch( token )
+        {
+        case T_center:
+            // symbol parsers called parseXY( true ); sch parsers used the default.
+            center = parseXY( !aIsSchematic );
+            NeedRIGHT();
+            break;
+
+        case T_major_radius:
+            majorRadius = parseInternalUnits( "major radius" );
+            NeedRIGHT();
+            break;
+
+        case T_minor_radius:
+            minorRadius = parseInternalUnits( "minor radius" );
+            NeedRIGHT();
+            break;
+
+        case T_rotation_angle:
+            rotation = EDA_ANGLE( parseDouble( "rotation angle" ), DEGREES_T );
+            NeedRIGHT();
+            break;
+
+        case T_start_angle:
+            if( !aIsArc )
+                Expecting( "start_angle only valid inside ellipse_arc" );
+            startAngle = EDA_ANGLE( parseDouble( "start angle" ), DEGREES_T );
+            NeedRIGHT();
+            break;
+
+        case T_end_angle:
+            if( !aIsArc )
+                Expecting( "end_angle only valid inside ellipse_arc" );
+            endAngle = EDA_ANGLE( parseDouble( "end angle" ), DEGREES_T );
+            NeedRIGHT();
+            break;
+
+        case T_stroke:
+            parseStroke( stroke );
+            aShape->SetStroke( stroke );
+            break;
+
+        case T_fill:
+            parseFill( fill );
+            aShape->SetFillMode( fill.m_FillType );
+            aShape->SetFillColor( fill.m_Color );
+            if( aIsSchematic )
+                fixupSchFillMode( aShape );
+            break;
+
+        case T_uuid:
+            if( !aIsSchematic )
+                Expecting( "uuid only valid in schematic context" );
+            NeedSYMBOL();
+            const_cast<KIID&>( aShape->m_Uuid ) = KIID( FromUTF8() );
+            NeedRIGHT();
+            break;
+
+        case T_locked:
+            if( !aIsSchematic )
+                Expecting( "locked only valid in schematic context" );
+            aShape->SetLocked( parseBool() );
+            NeedRIGHT();
+            break;
+
+        default:
+            Expecting( "center, major_radius, minor_radius, rotation_angle, "
+                       "start_angle, end_angle, stroke, fill, uuid, or locked" );
+        }
+    }
+
+    aShape->SetEllipseCenter( center );
+    aShape->SetEllipseMajorRadius( majorRadius );
+    aShape->SetEllipseMinorRadius( minorRadius );
+    aShape->SetEllipseRotation( rotation );
+
+    if( aIsArc )
+    {
+        aShape->SetEllipseStartAngle( startAngle );
+        aShape->SetEllipseEndAngle( endAngle );
+    }
+}
+
+
+SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchEllipse()
+{
+    wxCHECK_MSG( CurTok() == T_ellipse, nullptr,
+                 wxT( "Cannot parse " ) + GetTokenString( CurTok() ) + wxT( " as an ellipse." ) );
+
+    auto ellipse = std::make_unique<SCH_SHAPE>( SHAPE_T::ELLIPSE );
+    parseEllipseBody( ellipse.get(), /*isArc*/ false, /*isSchematic*/ true, NextTok() );
+    return ellipse.release();
+}
+
+
+SCH_SHAPE* SCH_IO_KICAD_SEXPR_PARSER::parseSchEllipseArc()
+{
+    wxCHECK_MSG( CurTok() == T_ellipse_arc, nullptr,
+                 wxT( "Cannot parse " ) + GetTokenString( CurTok() ) + wxT( " as an elliptical arc." ) );
+
+    auto arc = std::make_unique<SCH_SHAPE>( SHAPE_T::ELLIPSE_ARC );
+    parseEllipseBody( arc.get(), /*isArc*/ true, /*isSchematic*/ true, NextTok() );
+    return arc.release();
 }
 
 
@@ -4992,7 +5216,7 @@ void SCH_IO_KICAD_SEXPR_PARSER::parseSchTextBoxContent( SCH_TEXTBOX* aTextBox )
 
         case T_uuid:
             NeedSYMBOL();
-            const_cast<KIID&>( aTextBox->m_Uuid ) = KIID( FromUTF8() );
+            const_cast<KIID&>( aTextBox->m_Uuid ) = parseKIID();
             NeedRIGHT();
             break;
 
@@ -5228,6 +5452,100 @@ void SCH_IO_KICAD_SEXPR_PARSER::parseBusAlias( SCH_SCREEN* aScreen )
     NeedRIGHT();
 
     aScreen->AddBusAlias( busAlias );
+}
+
+
+void SCH_IO_KICAD_SEXPR_PARSER::parseSchNetChain()
+{
+    // (net_chain "name" [(from "ref" "pin")] [(to "ref" "pin")]
+    //   [(net_class "...")] [(color R G B A)] [(nets "n1" "n2" ...)])
+    NeedSYMBOL();
+    wxString name = FromUTF8();
+
+    wxString netClass;
+    COLOR4D  color = COLOR4D::UNSPECIFIED;
+    wxString fromRef, fromPin, toRef, toPin;
+    std::set<wxString> memberNets;
+
+    for( T tok = NextTok(); tok != T_RIGHT; tok = NextTok() )
+    {
+        if( tok == T_LEFT )
+            tok = NextTok();
+
+        if( tok == T_from )
+        {
+            NeedSYMBOLorNUMBER();
+            fromRef = From_UTF8( CurText() );
+            NeedSYMBOLorNUMBER();
+            fromPin = From_UTF8( CurText() );
+            NeedRIGHT();
+        }
+        else if( tok == T_to )
+        {
+            NeedSYMBOLorNUMBER();
+            toRef = From_UTF8( CurText() );
+            NeedSYMBOLorNUMBER();
+            toPin = From_UTF8( CurText() );
+            NeedRIGHT();
+        }
+        else if( tok == T_net_class )
+        {
+            NeedSYMBOLorNUMBER();
+            netClass = FromUTF8();
+            NeedRIGHT();
+        }
+        else if( tok == T_color )
+        {
+            int    r = parseInt( "red" );
+            int    g = parseInt( "green" );
+            int    b = parseInt( "blue" );
+            double al = parseDouble( "alpha" );
+            color = COLOR4D( r / 255.0, g / 255.0, b / 255.0, al );
+            NeedRIGHT();
+        }
+        else if( tok == T_nets )
+        {
+            for( T inner = NextTok(); inner != T_RIGHT; inner = NextTok() )
+            {
+                if( !IsSymbol( inner ) && inner != T_NUMBER )
+                    Expecting( "net name" );
+
+                memberNets.insert( FromUTF8() );
+            }
+        }
+        else
+        {
+            // Skip unknown subsections
+            int depth = 1;
+
+            while( depth > 0 )
+            {
+                T inner = NextTok();
+
+                if( inner == T_EOF )
+                    break;
+
+                if( inner == T_LEFT )
+                    ++depth;
+                else if( inner == T_RIGHT )
+                    --depth;
+            }
+        }
+    }
+
+    if( !fromRef.IsEmpty() && !toRef.IsEmpty() )
+    {
+        m_netChainTerminalRefs[name] = { { fromRef, fromPin }, { toRef, toPin } };
+    }
+
+    if( !netClass.IsEmpty() )
+        m_netChainNetClasses[name] = netClass;
+
+    if( color != KIGFX::COLOR4D::UNSPECIFIED )
+        m_netChainColors[name] = color;
+
+    if( !memberNets.empty() )
+        m_netChainMemberNets[name] = std::move( memberNets );
 }
 
 

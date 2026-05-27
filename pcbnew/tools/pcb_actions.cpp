@@ -141,6 +141,24 @@ TOOL_ACTION PCB_ACTIONS::drawCircle( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::add_circle )
         .Flags( AF_ACTIVATE ) );
 
+TOOL_ACTION PCB_ACTIONS::drawEllipse( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.ellipse" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Ellipse" ) )
+        .Tooltip( _( "Draw an ellipse" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_ellipse )
+        .Flags( AF_ACTIVATE ) );
+
+TOOL_ACTION PCB_ACTIONS::drawEllipseArc( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.ellipseArc" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Elliptical Arcs" ) )
+        .Tooltip( _( "Draw an elliptical arc" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_ellipse_arc )
+        .Flags( AF_ACTIVATE ) );
+
 TOOL_ACTION PCB_ACTIONS::drawArc( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveDrawing.arc" )
         .Scope( AS_GLOBAL )
@@ -322,6 +340,16 @@ TOOL_ACTION PCB_ACTIONS::drawZone( TOOL_ACTION_ARGS()
 #endif
         .LegacyHotkeyName( "Add Filled Zone" )
         .FriendlyName( _( "Draw Filled Zones" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_zone )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ZONE_MODE::ADD ) );
+
+TOOL_ACTION PCB_ACTIONS::drawCopperThievingZone( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.copperThievingZone" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Copper Thieving Zone" ) )
+        .Tooltip( _( "Add a non-electrical thieving zone for plating-balance copper" ) )
         .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::add_zone )
         .Flags( AF_ACTIVATE )
@@ -1433,7 +1461,7 @@ TOOL_ACTION PCB_ACTIONS::zonePriorityMoveToTop( TOOL_ACTION_ARGS()
         .Name( "pcbnew.EditorControl.zonePriorityMoveToTop" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Move to Top" ) )
-        .Icon( BITMAPS::go_up ) );
+        .Icon( BITMAPS::small_up ) );
 
 TOOL_ACTION PCB_ACTIONS::zonePriorityRaise( TOOL_ACTION_ARGS()
         .Name( "pcbnew.EditorControl.zonePriorityRaise" )
@@ -1451,7 +1479,7 @@ TOOL_ACTION PCB_ACTIONS::zonePriorityMoveToBottom( TOOL_ACTION_ARGS()
         .Name( "pcbnew.EditorControl.zonePriorityMoveToBottom" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Move to Bottom" ) )
-        .Icon( BITMAPS::go_down ) );
+        .Icon( BITMAPS::small_down ) );
 
 TOOL_ACTION PCB_ACTIONS::placeFootprint( TOOL_ACTION_ARGS()
         .Name( "pcbnew.EditorControl.placeFootprint" )
@@ -1586,6 +1614,19 @@ TOOL_ACTION PCB_ACTIONS::highlightNetSelection( TOOL_ACTION_ARGS()
         .Tooltip( _( "Highlight all copper items on the selected net(s)" ) )
         .Icon( BITMAPS::net_highlight )
         .Parameter<int>( 0 ) );
+
+TOOL_ACTION PCB_ACTIONS::highlightNetChain( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.EditorControl.highlightNetChain" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Highlight Net Chain" ) )
+        .Tooltip( _( "Highlight every net in the net chain" ) )
+        .Icon( BITMAPS::net_highlight ) );
+
+TOOL_ACTION PCB_ACTIONS::setTerminalPad( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.EditorControl.setTerminalPad" )
+        .Scope( AS_GLOBAL )
+        .Parameter<std::pair<KIID, KIID>>( { niluuid, niluuid } )
+        .FriendlyName( _( "Set Terminal Pad" ) ) );
 
 TOOL_ACTION PCB_ACTIONS::highlightItem( TOOL_ACTION_ARGS()
         .Name( "pcbnew.EditorControl.highlightItem" )
@@ -2417,6 +2458,13 @@ TOOL_ACTION PCB_ACTIONS::deselectNet( TOOL_ACTION_ARGS()
         .Tooltip( _( "Deselects all tracks & vias belonging to the same net." ) )
         .Parameter<int>( 0 ) );
 
+TOOL_ACTION PCB_ACTIONS::selectNetChain( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveSelection.SelectNetChain" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Select All Tracks in Net Chain" ) )
+        .Tooltip( _( "Selects all tracks & vias belonging to every net in the same net "
+                     "chain (nets joined through series passives)." ) ) );
+
 TOOL_ACTION PCB_ACTIONS::selectUnconnected( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveSelection.SelectUnconnected" )
         .Scope( AS_GLOBAL )
@@ -2793,10 +2841,12 @@ TOOL_ACTION PCB_ACTIONS::generatorsShowManager( TOOL_ACTION_ARGS()
 //
 TOOL_ACTION PCB_ACTIONS::lengthTunerSettings( TOOL_ACTION_ARGS()
         .Name( "pcbnew.LengthTuner.Settings" )
+        .ToolbarState( TOOLBAR_STATE::HIDDEN )
         .Scope( AS_GLOBAL )
         .DefaultHotkey( MD_CTRL + 'L' )
         // Don't be tempted to remove "Modern Toolset only".  It's in the legacy property name.
         .LegacyHotkeyName( "Length Tuning Settings (Modern Toolset only)" )
+        .FriendlyName( _( "Length Tuning Settings" ) )
         .MenuText( _( "Length Tuning Settings..." ) )
         .Tooltip( _( "Displays tuning pattern properties dialog" ) )
         .Icon( BITMAPS::router_len_tuner_setup ) );

@@ -598,6 +598,10 @@ SCH_EDIT_FRAME::~SCH_EDIT_FRAME()
     if( m_schematic )
         m_schematic->RemoveAllListeners();
 
+    // Canvas outlives m_schematic; detach tracker consumers before delete.
+    if( GetCanvas() && GetCanvas()->GetView() )
+        GetCanvas()->GetView()->DetachTextVarTracker();
+
     // Delete all items not in draw list before deleting schematic
     // to avoid dangling pointers stored in these items
     ClearUndoRedoList();
@@ -973,6 +977,8 @@ void SCH_EDIT_FRAME::setupUIConditions()
     CURRENT_TOOL( SCH_ACTIONS::drawSheetFromDesignBlock );
     CURRENT_TOOL( SCH_ACTIONS::drawRectangle );
     CURRENT_TOOL( SCH_ACTIONS::drawCircle );
+    CURRENT_TOOL( SCH_ACTIONS::drawEllipse );
+    CURRENT_TOOL( SCH_ACTIONS::drawEllipseArc );
     CURRENT_TOOL( SCH_ACTIONS::drawArc );
     CURRENT_TOOL( SCH_ACTIONS::drawBezier );
     CURRENT_TOOL( SCH_ACTIONS::drawLines );
@@ -1221,6 +1227,25 @@ void SCH_EDIT_FRAME::doCloseWindow()
     SCH_BASE_FRAME::doCloseWindow();
 
     SCH_SHEET_LIST sheetlist = Schematic().Hierarchy();
+
+    if( !Prj().IsNullProject() )
+    {
+        std::vector<wxString> sheetSrcs;
+        sheetSrcs.reserve( sheetlist.size() );
+
+        for( const SCH_SHEET_PATH& path : sheetlist )
+        {
+            SCH_SCREEN* screen = path.LastScreen();
+
+            // Only sweep autosaves for sheets actually dirtied in this session.
+            // A clean sheet's autosave, if any, is a previous-session leftover the
+            // user explicitly deferred in the recovery dialog.
+            if( screen && screen->IsContentModified() )
+                sheetSrcs.push_back( Prj().AbsolutePath( screen->GetFileName() ) );
+        }
+
+        Kiway().LocalHistory().RemoveAutosaveFiles( Prj().GetProjectPath(), sheetSrcs );
+    }
 
 #ifdef KICAD_IPC_API
     Pgm().GetApiServer().DeregisterHandler( m_apiHandler.get() );
@@ -1705,8 +1730,8 @@ void SCH_EDIT_FRAME::RefreshOperatingPointDisplay()
                 for( const auto& modelPin : model.GetPins() )
                 {
                     SCH_PIN* symbolPin = symbol->GetPin( modelPin.get().symbolPinNumber );
-                    wxString signalName = ref + wxS( ":" ) + modelPin.get().modelPinName;
-                    wxString op = m_schematic->GetOperatingPoint( signalName, settings.m_OPO_IPrecision,
+                    wxString netChainName = ref + wxS( ":" ) + modelPin.get().modelPinName;
+                    wxString op = m_schematic->GetOperatingPoint( netChainName, settings.m_OPO_IPrecision,
                                                                   settings.m_OPO_IRange );
 
                     if( symbolPin && !op.IsEmpty() && op != wxS( "--" ) && op != wxS( "?" ) )
@@ -2065,6 +2090,27 @@ void SCH_EDIT_FRAME::ShowChangedLanguage()
 
 void SCH_EDIT_FRAME::UpdateNetHighlightStatus()
 {
+    if( !GetHighlightedNetChain().IsEmpty() )
+    {
+        if( CONNECTION_GRAPH* graph = m_schematic->ConnectionGraph() )
+        {
+            if( SCH_NETCHAIN* sig = graph->GetNetChainByName( GetHighlightedNetChain() ) )
+            {
+                wxString nets;
+
+                for( const wxString& n : sig->GetNets() )
+                {
+                    if( !nets.IsEmpty() )
+                        nets += wxT( ", " );
+                    nets += n;
+                }
+
+                SetStatusText( wxString::Format( _( "Net chain members: %s" ), nets ) );
+                return;
+            }
+        }
+    }
+
     if( !GetHighlightedConnection().IsEmpty() )
     {
         SetStatusText( wxString::Format( _( "Highlighted net: %s" ),
@@ -2435,7 +2481,17 @@ void SCH_EDIT_FRAME::onCloseErcDialog( wxCommandEvent& aEvent )
 DIALOG_SYMBOL_FIELDS_TABLE* SCH_EDIT_FRAME::GetSymbolFieldsTableDialog()
 {
     if( !m_symbolFieldsTableDialog )
-        m_symbolFieldsTableDialog = new DIALOG_SYMBOL_FIELDS_TABLE( this );
+    {
+        auto* dlg = new DIALOG_SYMBOL_FIELDS_TABLE( this );
+
+        if( dlg->WasAborted() )
+        {
+            dlg->Destroy();
+            return nullptr;
+        }
+
+        m_symbolFieldsTableDialog = dlg;
+    }
 
     return m_symbolFieldsTableDialog;
 }
@@ -2547,7 +2603,12 @@ void SCH_EDIT_FRAME::SetHighlightedConnection( const wxString& aConnection,
     m_highlightedConn = aConnection;
 
     if( refreshNetNavigator )
+    {
         RefreshNetNavigator( aSelection );
+
+        if( m_hierarchy )
+            m_hierarchy->UpdateNetHighlight( aConnection );
+    }
 }
 
 
@@ -2998,7 +3059,15 @@ void SCH_EDIT_FRAME::SetSchematic( SCHEMATIC* aSchematic )
     wxCHECK( aSchematic, /* void */ );
 
     if( m_schematic )
+    {
         m_schematic->SetProject( nullptr );
+
+        // Detach before the outgoing schematic (and its tracker) is freed.
+        if( GetCanvas() && GetCanvas()->GetView() )
+            GetCanvas()->GetView()->DetachTextVarTracker();
+
+        Kiway().LocalHistory().UnregisterSaver( m_schematic );
+    }
 
     aSchematic->SetProject( &Prj() );
     delete m_schematic;

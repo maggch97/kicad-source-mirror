@@ -26,12 +26,14 @@
 #include <wx/dataview.h>
 #include <wx/settings.h>
 #include <widgets/ui_common.h>
+#include <widgets/wx_data_view_hyperlink_renderer.h>
 #include <marker_base.h>
 #include <eda_draw_frame.h>
 #include <rc_item.h>
 #include <rc_json_schema.h>
 #include <eda_item.h>
 #include <base_units.h>
+#include <units_provider.h>
 
 #define WX_DATAVIEW_WINDOW_PADDING 6
 
@@ -78,6 +80,13 @@ void RC_ITEM::SetItems( const EDA_ITEM* aItem, const EDA_ITEM* bItem,
 }
 
 
+wxString RC_ITEM::getItemDescription( EDA_ITEM* aItem, int /*aIndex*/,
+                                      UNITS_PROVIDER* aUnitsProvider ) const
+{
+    return aItem->GetItemDescription( aUnitsProvider, true );
+}
+
+
 wxString RC_ITEM::getSeverityString( SEVERITY aSeverity )
 {
     wxString severity;
@@ -101,8 +110,9 @@ wxString RC_ITEM::ShowReport( UNITS_PROVIDER* aUnitsProvider, SEVERITY aSeverity
                               const std::map<KIID, EDA_ITEM*>& aItemMap ) const
 {
     wxString severity = getSeverityString( aSeverity );
+    bool     excluded = m_parent && m_parent->IsTreatedAsExcluded();
 
-    if( m_parent && m_parent->IsExcluded() )
+    if( excluded )
         severity += wxT( " (excluded)" );
 
     EDA_ITEM* mainItem = nullptr;
@@ -118,6 +128,9 @@ wxString RC_ITEM::ShowReport( UNITS_PROVIDER* aUnitsProvider, SEVERITY aSeverity
     if( ii != aItemMap.end() )
         auxItem = ii->second;
 
+    wxString errorMessage = HYPERLINK_DV_RENDERER::StripMarkup( GetErrorMessage( false ) );
+    wxString ruleDesc = HYPERLINK_DV_RENDERER::StripMarkup( GetViolatingRuleDesc( false ) );
+
     // Note: some customers machine-process these.  So:
     // 1) don't translate
     // 2) try not to re-order or change syntax
@@ -127,36 +140,24 @@ wxString RC_ITEM::ShowReport( UNITS_PROVIDER* aUnitsProvider, SEVERITY aSeverity
 
     if( mainItem && auxItem )
     {
-        msg.Printf( wxT( "[%s]: %s\n    %s; %s\n    %s: %s\n    %s: %s\n" ),
-                    GetSettingsKey(),
-                    GetErrorMessage( false ),
-                    GetViolatingRuleDesc( false ),
-                    severity,
-                    showCoord( aUnitsProvider, mainItem->GetPosition()),
-                    mainItem->GetItemDescription( aUnitsProvider, true ),
-                    showCoord( aUnitsProvider, auxItem->GetPosition()),
-                    auxItem->GetItemDescription( aUnitsProvider, true ) );
+        msg.Printf( wxT( "[%s]: %s\n    %s; %s\n    %s: %s\n    %s: %s\n" ), GetSettingsKey(), errorMessage, ruleDesc,
+                    severity, showCoord( aUnitsProvider, mainItem->GetPosition() ),
+                    getItemDescription( mainItem, 0, aUnitsProvider ),
+                    showCoord( aUnitsProvider, auxItem->GetPosition() ),
+                    getItemDescription( auxItem, 1, aUnitsProvider ) );
     }
     else if( mainItem )
     {
-        msg.Printf( wxT( "[%s]: %s\n    %s; %s\n    %s: %s\n" ),
-                    GetSettingsKey(),
-                    GetErrorMessage( false ),
-                    GetViolatingRuleDesc( false ),
-                    severity,
-                    showCoord( aUnitsProvider, mainItem->GetPosition()),
-                    mainItem->GetItemDescription( aUnitsProvider, true ) );
+        msg.Printf( wxT( "[%s]: %s\n    %s; %s\n    %s: %s\n" ), GetSettingsKey(), errorMessage, ruleDesc, severity,
+                    showCoord( aUnitsProvider, mainItem->GetPosition() ),
+                    getItemDescription( mainItem, 0, aUnitsProvider ) );
     }
     else
     {
-        msg.Printf( wxT( "[%s]: %s\n    %s; %s\n" ),
-                    GetSettingsKey(),
-                    GetErrorMessage( false ),
-                    GetViolatingRuleDesc( false ),
-                    severity );
+        msg.Printf( wxT( "[%s]: %s\n    %s; %s\n" ), GetSettingsKey(), errorMessage, ruleDesc, severity );
     }
 
-    if( m_parent && m_parent->IsExcluded() && !m_parent->GetComment().IsEmpty() )
+    if( excluded && m_parent && !m_parent->GetComment().IsEmpty() )
         msg += wxString::Format( wxS( "    %s\n" ), m_parent->GetComment() );
 
     return msg;
@@ -167,10 +168,10 @@ void RC_ITEM::GetJsonViolation( RC_JSON::VIOLATION& aViolation, UNITS_PROVIDER* 
                                 SEVERITY aSeverity, const std::map<KIID, EDA_ITEM*>& aItemMap ) const
 {
     aViolation.severity = getSeverityString( aSeverity );
-    aViolation.description = GetErrorMessage( false );
+    aViolation.description = HYPERLINK_DV_RENDERER::StripMarkup( GetErrorMessage( false ) );
     aViolation.type = GetSettingsKey();
 
-    if( m_parent && m_parent->IsExcluded() )
+    if( m_parent && m_parent->IsTreatedAsExcluded() )
     {
         aViolation.excluded = true;
         aViolation.comment = m_parent->GetComment();
@@ -196,7 +197,7 @@ void RC_ITEM::GetJsonViolation( RC_JSON::VIOLATION& aViolation, UNITS_PROVIDER* 
     if( mainItem )
     {
         RC_JSON::AFFECTED_ITEM item;
-        item.description = mainItem->GetItemDescription( aUnitsProvider, true );
+        item.description = getItemDescription( mainItem, 0, aUnitsProvider );
         item.uuid = mainItem->m_Uuid.AsString();
         item.pos.x = EDA_UNIT_UTILS::UI::ToUserUnit( aUnitsProvider->GetIuScale(),
                                                      aUnitsProvider->GetUserUnits(),
@@ -210,7 +211,7 @@ void RC_ITEM::GetJsonViolation( RC_JSON::VIOLATION& aViolation, UNITS_PROVIDER* 
     if( auxItem )
     {
         RC_JSON::AFFECTED_ITEM item;
-        item.description = auxItem->GetItemDescription( aUnitsProvider, true );
+        item.description = getItemDescription( auxItem, 1, aUnitsProvider );
         item.uuid = auxItem->m_Uuid.AsString();
         item.pos.x = EDA_UNIT_UTILS::UI::ToUserUnit( aUnitsProvider->GetIuScale(),
                                                      aUnitsProvider->GetUserUnits(),
@@ -388,8 +389,11 @@ void RC_TREE_MODEL::rebuildModel( std::shared_ptr<RC_ITEMS_PROVIDER> aProvider, 
     m_view->AssociateModel( this );
 #endif
 
-    m_view->ClearColumns();
-    m_view->AppendTextColumn( wxEmptyString, 0, wxDATAVIEW_CELL_INERT, wxCOL_WIDTH_AUTOSIZE );
+    if( !m_enableHyperlinks )
+    {
+        m_view->ClearColumns();
+        m_view->AppendTextColumn( wxEmptyString, 0, wxDATAVIEW_CELL_INERT, wxCOL_WIDTH_AUTOSIZE );
+    }
 
     ExpandAll();
 
@@ -413,6 +417,31 @@ void RC_TREE_MODEL::rebuildModel( std::shared_ptr<RC_ITEMS_PROVIDER> aProvider, 
 void RC_TREE_MODEL::Update( std::shared_ptr<RC_ITEMS_PROVIDER> aProvider, int aSeverities )
 {
     rebuildModel( aProvider, aSeverities );
+}
+
+
+void RC_TREE_MODEL::EnableHyperlinks( bool aEnable )
+{
+    m_enableHyperlinks = aEnable;
+
+    if( !aEnable || !m_view || m_view->GetColumnCount() > 0 )
+        return;
+
+    HYPERLINK_DV_RENDERER* renderer = new HYPERLINK_DV_RENDERER();
+    m_hyperlinkColumn =
+            new wxDataViewColumn( wxEmptyString, renderer, 0, std::max( 200, m_view->GetClientSize().GetWidth() ),
+                                  wxALIGN_LEFT, wxDATAVIEW_COL_RESIZABLE );
+    m_view->AppendColumn( m_hyperlinkColumn );
+    m_view->Bind( wxEVT_SIZE, &RC_TREE_MODEL::onViewSize, this );
+}
+
+
+void RC_TREE_MODEL::onViewSize( wxSizeEvent& aEvent )
+{
+    aEvent.Skip();
+
+    if( m_view && m_hyperlinkColumn )
+        m_hyperlinkColumn->SetWidth( std::max( 200, m_view->GetClientSize().GetWidth() ) );
 }
 
 

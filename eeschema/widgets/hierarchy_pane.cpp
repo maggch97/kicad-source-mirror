@@ -26,6 +26,10 @@
 #include <bitmaps.h>
 #include <sch_edit_frame.h>
 #include <sch_commit.h>
+#include <connection_graph.h>
+#include <schematic.h>
+#include <gal/color4d.h>
+#include <layer_ids.h>
 #include <tool/tool_manager.h>
 #include <tools/sch_actions.h>
 #include <hierarchy_pane.h>
@@ -82,6 +86,7 @@ HIERARCHY_PANE::HIERARCHY_PANE( SCH_EDIT_FRAME* aParent ) :
     sizer->Add( m_tree, 1, wxEXPAND, wxBORDER_NONE );
 
     m_events_bound = false;
+    m_contextMenuOpen = false;
 
     PROJECT_LOCAL_SETTINGS& localSettings = m_frame->Prj().GetLocalSettings();
 
@@ -361,6 +366,9 @@ void HIERARCHY_PANE::UpdateHierarchyTree( bool aClear )
     collapseNodes( projectRoot );
     m_collapsedPaths = std::move( collapsedNodes );
 
+    if( !m_highlightedNet.IsEmpty() )
+        UpdateNetHighlight( m_highlightedNet );
+
     if( eventsWereBound )
     {
         // Enable selection events
@@ -475,13 +483,22 @@ std::vector<wxString> HIERARCHY_PANE::GetCollapsedPaths() const
 
 void HIERARCHY_PANE::onTreeItemRightClick( wxTreeEvent& aEvent )
 {
+    // wxEVT_CONTEXT_MENU fires after wxEVT_TREE_ITEM_RIGHT_CLICK for the same right-click,
+    // so set a guard to prevent showing the context menu twice.
+    m_contextMenuOpen = true;
     onRightClick( aEvent.GetItem() );
+    m_contextMenuOpen = false;
 }
 
 
 void HIERARCHY_PANE::onContextMenu( wxContextMenuEvent& aEvent )
 {
-    // Handle right-click in empty space - treat as if clicking on an invalid item
+    // wxEVT_CONTEXT_MENU fires after wxEVT_TREE_ITEM_RIGHT_CLICK for the same right-click.
+    // Skip if the tree item handler already showed the menu.
+    if( m_contextMenuOpen )
+        return;
+
+    // Handle right-click in empty space
     onRightClick( wxTreeItemId() );
 }
 
@@ -827,6 +844,56 @@ wxString HIERARCHY_PANE::getRootString()
 wxString HIERARCHY_PANE::formatPageString( const wxString& aName, const wxString& aPage )
 {
     return aName + wxT( " " ) + wxString::Format( _( "(page %s)" ), aPage );
+}
+
+
+void HIERARCHY_PANE::UpdateNetHighlight( const wxString& aNetName )
+{
+    m_highlightedNet = aNetName;
+
+    KIGFX::COLOR4D netColor = m_frame->GetRenderSettings()->GetLayerColor( LAYER_BRIGHTENED );
+    const wxColour markText = netColor.ToColour();
+
+    std::set<wxString> sheetsWithNet;
+
+    if( !aNetName.IsEmpty() && m_frame->Schematic().IsValid() )
+    {
+        CONNECTION_GRAPH* graph = m_frame->Schematic().ConnectionGraph();
+
+        if( graph )
+        {
+            for( const CONNECTION_SUBGRAPH* sg : graph->GetAllSubgraphs( aNetName ) )
+            {
+                if( sg && sg->GetSheet().Last() )
+                    sheetsWithNet.insert( sg->GetSheet().PathAsString() );
+            }
+        }
+    }
+
+    std::function<void( const wxTreeItemId& )> recurse = [&]( const wxTreeItemId& id )
+    {
+        wxCHECK_RET( id.IsOk(), wxT( "Invalid tree item" ) );
+
+        TREE_ITEM_DATA* data = static_cast<TREE_ITEM_DATA*>( m_tree->GetItemData( id ) );
+
+        if( data )
+        {
+            bool mark = sheetsWithNet.count( data->m_SheetPath.PathAsString() ) > 0;
+            m_tree->SetItemTextColour( id, mark ? markText : wxNullColour );
+        }
+
+        wxTreeItemIdValue cookie;
+        wxTreeItemId      child = m_tree->GetFirstChild( id, cookie );
+
+        while( child.IsOk() )
+        {
+            recurse( child );
+            child = m_tree->GetNextChild( id, cookie );
+        }
+    };
+
+    if( m_tree->GetRootItem().IsOk() )
+        recurse( m_tree->GetRootItem() );
 }
 
 void HIERARCHY_PANE::setIdenticalSheetsHighlighted( const SCH_SHEET_PATH& path, bool highLighted )

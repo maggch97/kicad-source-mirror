@@ -18,7 +18,7 @@ PANEL_FP_PROPERTIES_3D_MODEL_BASE::PANEL_FP_PROPERTIES_3D_MODEL_BASE( wxWindow* 
 	bSizerMain3D = new wxBoxSizer( wxVERTICAL );
 
 	m_splitter1 = new wxSplitterWindow( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxSP_3DSASH|wxSP_LIVE_UPDATE );
-	m_splitter1->SetSashGravity( 0.5 );
+	m_splitter1->SetSashGravity( 0.7 );
 	m_splitter1->Connect( wxEVT_IDLE, wxIdleEventHandler( PANEL_FP_PROPERTIES_3D_MODEL_BASE::m_splitter1OnIdle ), NULL, this );
 	m_splitter1->SetMinimumPaneSize( 300 );
 
@@ -140,7 +140,7 @@ PANEL_FP_PROPERTIES_3D_MODEL_BASE::PANEL_FP_PROPERTIES_3D_MODEL_BASE( wxWindow* 
 	m_extrusionLayerLabel->Wrap( -1 );
 	fgSizer1->Add( m_extrusionLayerLabel, 0, wxALL, 5 );
 
-	wxString m_extrusionLayerChoiceChoices[] = { _("Auto"), _("Courtyard layer"), _("Fabrication layer") };
+	wxString m_extrusionLayerChoiceChoices[] = { _("Auto"), _("Courtyard layer"), _("Fabrication layer"), _("Silkscreen layer"), _("Pin bounding box") };
 	int m_extrusionLayerChoiceNChoices = sizeof( m_extrusionLayerChoiceChoices ) / sizeof( wxString );
 	m_extrusionLayerChoice = new wxChoice( m_extrusionSizer->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, m_extrusionLayerChoiceNChoices, m_extrusionLayerChoiceChoices, 0 );
 	m_extrusionLayerChoice->SetSelection( 0 );
@@ -206,7 +206,7 @@ PANEL_FP_PROPERTIES_3D_MODEL_BASE::PANEL_FP_PROPERTIES_3D_MODEL_BASE( wxWindow* 
 	m_lowerPanel->SetSizer( m_LowerSizer3D );
 	m_lowerPanel->Layout();
 	m_LowerSizer3D->Fit( m_lowerPanel );
-	m_splitter1->SplitHorizontally( m_upperPanel, m_lowerPanel, 400 );
+	m_splitter1->SplitHorizontally( m_upperPanel, m_lowerPanel, 300 );
 	bSizerMain3D->Add( m_splitter1, 0, wxEXPAND, 5 );
 
 

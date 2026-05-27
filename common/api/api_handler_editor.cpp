@@ -366,7 +366,11 @@ HANDLER_RESULT<HitTestResponse> API_HANDLER_EDITOR::handleHitTest(
         return tl::unexpected( e );
     }
 
-    if( ( *item )->HitTest( UnpackVector2( aCtx.Request.position() ), aCtx.Request.tolerance() ) )
+    const EDA_IU_SCALE& scale = getIuScale();
+    VECTOR2I posIu = UnpackVector2( aCtx.Request.position(), scale );
+    int toleranceIu = scale.NmToIU( aCtx.Request.tolerance() );
+
+    if( ( *item )->HitTest( posIu, toleranceIu ) )
         response.set_result( HitTestResult::HTR_HIT );
     else
         response.set_result( HitTestResult::HTR_NO_HIT );
@@ -478,4 +482,118 @@ API_HANDLER_EDITOR::handleSetTitleBlockInfo( const HANDLER_CONTEXT<SetTitleBlock
     onModified();
 
     return google::protobuf::Empty();
+}
+
+
+HANDLER_RESULT<types::PageSettings> API_HANDLER_EDITOR::handleGetPageSettings(
+        const HANDLER_CONTEXT<commands::GetPageSettings>& aCtx)
+{
+    HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.document() );
+
+    if( !documentValidation )
+        return tl::unexpected( documentValidation.error() );
+
+    std::optional<PAGE_INFO> optPageInfo = getPageSettings();
+
+    if( !optPageInfo )
+    {
+        ApiResponseStatus e;
+        e.set_status( AS_BAD_REQUEST );
+        e.set_error_message( "this editor does not support page settings" );
+        return tl::unexpected( e );
+    }
+
+    PAGE_INFO& pageInfo = *optPageInfo;
+
+    types::PageSettings response;
+    response.set_page_size( ToProtoEnum<PAGE_SIZE_TYPE, types::PageSize>( pageInfo.GetType() ) );
+
+    if( pageInfo.IsCustom() )
+        PackVector2( *response.mutable_user_page_size(), pageInfo.GetSizeIU( pcbIUScale.IU_PER_MILS ) );
+
+    response.set_orientation( pageInfo.IsPortrait() ? types::PageOrientation::PO_PORTRAIT
+                                                    : types::PageOrientation::PO_LANDSCAPE );
+    response.set_drawing_sheet( getDrawingSheetFileName().ToUTF8() );
+
+    return response;
+}
+
+
+HANDLER_RESULT<types::PageSettings> API_HANDLER_EDITOR::handleSetPageSettings(
+        const HANDLER_CONTEXT<commands::SetPageSettings>& aCtx )
+{
+    HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.document() );
+
+    if( !documentValidation )
+        return tl::unexpected( documentValidation.error() );
+
+    if( !aCtx.Request.has_page_settings() )
+    {
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+        e.set_error_message( "SetPageSettings requires page_settings" );
+        return tl::unexpected( e );
+    }
+
+    std::optional<PAGE_INFO> optPageInfo = getPageSettings();
+
+    if( !optPageInfo )
+    {
+        ApiResponseStatus e;
+        e.set_status( AS_BAD_REQUEST );
+        e.set_error_message( "this editor does not support page settings" );
+        return tl::unexpected( e );
+    }
+
+    const types::PageSettings& request = aCtx.Request.page_settings();
+
+    PAGE_INFO pageInfo = *optPageInfo;
+    PAGE_SIZE_TYPE pageSizeType = FromProtoEnum<PAGE_SIZE_TYPE>( request.page_size() );
+
+    if( pageSizeType == PAGE_SIZE_TYPE::User )
+    {
+        if( !request.has_user_page_size() )
+        {
+            ApiResponseStatus e;
+            e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+            e.set_error_message( "custom page size requires user_page_size" );
+            return tl::unexpected( e );
+        }
+
+        VECTOR2D sizeIu = UnpackVector2( request.user_page_size() );
+        PAGE_INFO::SetCustomWidthMils( pcbIUScale.IUToMils( sizeIu.x ) );
+        PAGE_INFO::SetCustomHeightMils( pcbIUScale.IUToMils( sizeIu.y ) );
+
+        pageInfo.SetType( PAGE_SIZE_TYPE::User );
+    }
+    else
+    {
+        bool portrait = ( request.orientation() == types::PageOrientation::PO_PORTRAIT );
+        pageInfo.SetType( pageSizeType, portrait );
+    }
+
+    if( !setPageSettings( pageInfo ) )
+    {
+        ApiResponseStatus e;
+        e.set_status( AS_BAD_REQUEST );
+        e.set_error_message( "this editor does not support page settings" );
+        return tl::unexpected( e );
+    }
+
+    wxString drawingSheet( wxString::FromUTF8( request.drawing_sheet() ) );
+    setDrawingSheetFileName( drawingSheet );
+
+    onModified();
+
+    types::PageSettings response;
+    response.set_page_size( ToProtoEnum<PAGE_SIZE_TYPE, types::PageSize>( pageInfo.GetType() ) );
+
+    if( pageInfo.IsCustom() )
+        PackVector2( *response.mutable_user_page_size(), pageInfo.GetSizeIU( pcbIUScale.IU_PER_MILS ) );
+
+    response.set_orientation( pageInfo.IsPortrait() ? types::PageOrientation::PO_PORTRAIT
+                                                    : types::PageOrientation::PO_LANDSCAPE );
+    response.set_drawing_sheet( getDrawingSheetFileName().ToUTF8() );
+
+    return response;
 }

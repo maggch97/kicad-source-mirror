@@ -23,7 +23,6 @@
  */
 
 #include <api/api_enums.h>
-#include <api/api_sch_utils.h>
 #include <api/api_utils.h>
 #include <sch_collectors.h>
 #include <sch_commit.h>
@@ -46,6 +45,7 @@
 #include <string_utils.h>
 #include <geometry/geometry_utils.h>
 #include <sch_rule_area.h>
+#include <api/api_sch_utils.h>
 #include <api/schematic/schematic_types.pb.h>
 
 #include <utility>
@@ -79,6 +79,8 @@ SCH_SYMBOL::SCH_SYMBOL() :
         SYMBOL( nullptr, SCH_SYMBOL_T )
 {
     Init( VECTOR2I( 0, 0 ) );
+    m_passthroughMode = PASSTHROUGH_MODE::DEFAULT;
+    m_signalName.clear();
 }
 
 
@@ -116,6 +118,8 @@ SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& aSymbol, const LIB_ID& aLibId, const S
     m_excludedFromBOM = m_part->GetExcludedFromBOM();
     m_excludedFromBoard = m_part->GetExcludedFromBoard();
     m_excludedFromPosFiles = m_part->GetExcludedFromPosFiles();
+    m_passthroughMode = PASSTHROUGH_MODE::DEFAULT;
+    m_signalName.clear();
 }
 
 
@@ -151,6 +155,8 @@ SCH_SYMBOL::SCH_SYMBOL( const SCH_SYMBOL& aSymbol ) :
     m_prefix = aSymbol.m_prefix;
     m_instances = aSymbol.m_instances;
     m_fields = aSymbol.m_fields;
+    m_passthroughMode = aSymbol.m_passthroughMode;
+    m_signalName = aSymbol.m_signalName;
 
     // Re-parent the fields, which before this had aSymbol as parent
     for( SCH_FIELD& field : m_fields )
@@ -204,6 +210,8 @@ void SCH_SYMBOL::Init( const VECTOR2I& pos )
 
     m_prefix = wxString( wxT( "U" ) );
     m_isInNetlist = true;
+    m_passthroughMode = PASSTHROUGH_MODE::DEFAULT;
+    m_signalName.clear();
 }
 
 
@@ -1123,6 +1131,29 @@ void SCH_SYMBOL::UpdatePrefix()
 
 wxString SCH_SYMBOL::SubReference( int aUnit, bool aAddSeparator ) const
 {
+    // A custom unit display name overrides the default A/B/C (or numeric) suffix.
+    if( m_part )
+    {
+        const std::map<int, wxString>& names = m_part->GetUnitDisplayNames();
+        auto                           it = names.find( aUnit );
+
+        if( it != names.end() && !it->second.IsEmpty() )
+        {
+            wxString subRef;
+
+            if( SCHEMATIC* schematic = Schematic() )
+            {
+                int sep = schematic->Settings().m_SubpartIdSeparator;
+
+                if( sep != 0 && aAddSeparator )
+                    subRef << wxChar( sep );
+            }
+
+            subRef << it->second;
+            return subRef;
+        }
+    }
+
     if( SCHEMATIC* schematic = Schematic() )
         return schematic->Settings().SubReference( aUnit, aAddSeparator );
 
@@ -1609,6 +1640,18 @@ SCH_FIELD* SCH_SYMBOL::FindFieldCaseInsensitive( const wxString& aFieldName )
 }
 
 
+const SCH_FIELD* SCH_SYMBOL::FindFieldCaseInsensitive( const wxString& aFieldName ) const
+{
+    for( const SCH_FIELD& field : m_fields )
+    {
+        if( field.GetName().IsSameAs( aFieldName, false ) )
+            return &field;
+    }
+
+    return nullptr;
+}
+
+
 void SCH_SYMBOL::UpdateFields( const SCH_SHEET_PATH* aPath, bool aUpdateStyle, bool aUpdateRef, bool aUpdateOtherFields,
                                bool aResetRef, bool aResetOtherFields )
 {
@@ -2030,12 +2073,14 @@ bool SCH_SYMBOL::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* token, i
 bool SCH_SYMBOL::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* token,
                                  const wxString& aVariantName, int aDepth ) const
 {
-    static wxRegEx operatingPoint( wxT( "^"
-                                        "OP"
-                                        "(:[^.]*)?"     // pin
-                                        "(.([0-9])?"    // precisionStr
-                                        "([a-zA-Z]*))?" // rangeStr
-                                        "$" ) );
+    // Per-thread regex.  CONNECTION_GRAPH::resolveAllDrivers calls this from worker
+    // threads, and wxRegEx::Matches is not safe to call concurrently on one instance.
+    thread_local wxRegEx operatingPoint( wxT( "^"
+                                              "OP"
+                                              "(:[^.]*)?"     // pin
+                                              "(.([0-9])?"    // precisionStr
+                                              "([a-zA-Z]*))?" // rangeStr
+                                              "$" ) );
 
     if( !aPath )
         return false;
@@ -2104,8 +2149,8 @@ bool SCH_SYMBOL::ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* token,
                     }
                     else
                     {
-                        wxString signalName = spiceRef + wxS( ":" ) + modelPin.get().modelPinName;
-                        *token = schematic->GetOperatingPoint( signalName, precision, range );
+                        wxString netChainName = spiceRef + wxS( ":" ) + modelPin.get().modelPinName;
+                        *token = schematic->GetOperatingPoint( netChainName, precision, range );
                     }
 
                     return true;

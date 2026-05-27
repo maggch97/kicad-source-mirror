@@ -229,6 +229,7 @@ private:
     void parseDefaultTextDims( BOARD_DESIGN_SETTINGS& aSettings, int aLayer );
     void parseNETINFO_ITEM();
     void parseNETCLASS();
+    void parseNET_CHAINS_SECTION();
 
     void parseTEARDROP_PARAMETERS( TEARDROP_PARAMETERS* tdParams );
 

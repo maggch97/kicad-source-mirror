@@ -130,6 +130,7 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_pad_properties.cpp
     dialogs/dialog_pad_properties_base.cpp
     dialogs/dialog_fp_edit_pad_table.cpp
+    dialogs/dialog_fp_edit_pad_table_base.cpp
     dialogs/dialog_plot.cpp
     dialogs/dialog_plot_base.cpp
     dialogs/dialog_pns_diff_pair_dimensions.cpp
@@ -286,6 +287,7 @@ set( PCBNEW_GENERATORS_SRCS
     )
 
 set( PCBNEW_DRC_SRCS
+    drc/drc_chain_topology.cpp
     drc/drc_interactive_courtyard_clearance.cpp
     drc/drc_creepage_utils.cpp
     drc/drc_report.cpp
@@ -409,6 +411,7 @@ set( PCBNEW_CLASS_SRCS
     initpcb.cpp
     layer_pairs.cpp
     load_select_footprint.cpp
+    net_chain_bridging.cpp
     menubar_footprint_editor.cpp
     menubar_pcb_editor.cpp
     padstack.cpp

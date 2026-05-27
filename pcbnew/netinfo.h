@@ -112,6 +112,32 @@ public:
      */
     const wxString& GetDisplayNetname() const { return m_displayNetname; }
 
+    const wxString& GetNetChain() const { return m_netChain; }
+    void SetNetChain( const wxString& aNetChain ) { m_netChain = aNetChain; }
+
+    PAD* GetTerminalPad( int aIndex ) const { return m_terminalPads[aIndex]; }
+    void SetTerminalPad( int aIndex, PAD* aPad ) { m_terminalPads[aIndex] = aPad; }
+    void SetTerminalPadUuid( int aIndex, const KIID& aUuid ) { m_terminalPadUuids[aIndex] = aUuid; }
+    const KIID& GetTerminalPadUuid( int aIndex ) const { return m_terminalPadUuids[aIndex]; }
+
+    /**
+     * Reset the terminal-pad pointer and UUID at @p aIndex to their empty state so the
+     * pair stays in lockstep.
+     */
+    void ClearTerminalPad( int aIndex )
+    {
+        m_terminalPads[aIndex] = nullptr;
+        m_terminalPadUuids[aIndex] = niluuid;
+    }
+
+    /**
+     * Set the terminal-pad pointer and the persisted UUID at @p aIndex from a single pad,
+     * keeping the two views consistent.
+     */
+    void SetTerminal( int aIndex, PAD* aPad );
+
+    void ResolveTerminalPads( BOARD* aBoard );
+
     /**
      * @return true if the net was not labelled by the user.
      */
@@ -169,9 +195,14 @@ private:
     wxString    m_shortNetname;    ///< Short net name, like vout from /sheet/subsheet/vout.
 
     wxString    m_displayNetname;  ///< Unescaped netname for display.  Usually the short netname,
-                                   ///< but will be the full netname if disambiguation required.
-                                   ///< The NETINFO_LIST is repsonsible for the management of when
-                                   ///< these need to be updated/disambiguated.
+                                  ///< but will be the full netname if disambiguation required.
+                                  ///< The NETINFO_LIST is repsonsible for the management of when
+                                  ///< these need to be updated/disambiguated.
+
+    wxString    m_netChain;
+
+    PAD*        m_terminalPads[2];
+    KIID        m_terminalPadUuids[2];
 
     std::shared_ptr<NETCLASS> m_netClass;
 
@@ -328,6 +359,16 @@ private:
      * Delete the list of nets (and free memory).
      */
     void clear();
+
+    /**
+     * Drop all entries from the lookup maps without freeing the items.
+     *
+     * Used when ownership of the contained NETINFO_ITEMs is being transferred
+     * to a caller that will free them after some intermediate operation (for
+     * example, after dispatching listener notifications that need live
+     * pointers).
+     */
+    void detachAll();
 
     /**
      * Rebuild the list of NETINFO_ITEMs
