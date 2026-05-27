@@ -130,7 +130,7 @@ void RenderItem( GERBER_DRAW_ITEM* aItem, PNG_PLOTTER& aPlotter, const KIGFX::CO
         {
             int arcError = static_cast<int>( gerbIUScale.IU_PER_MM * ARC_LOW_DEF_MM );
             TransformOvalToPolygon( itemPoly, aItem->m_Start, aItem->m_End,
-                                    aItem->m_Size.x, arcError, ERROR_INSIDE );
+                                    aItem->m_Size.x, arcError, ERROR_INSIDE, 0, true );
         }
         else
         {

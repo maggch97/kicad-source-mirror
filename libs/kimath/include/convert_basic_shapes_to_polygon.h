@@ -120,11 +120,13 @@ void TransformCircleToPolygon( SHAPE_POLY_SET& aBuffer, const VECTOR2I& aCenter,
  * @param aWidth is the width of the segment.
  * @param aError is the internal units allowed for error in approximation.
  * @param aErrorLoc determines if the approximation error be placed outside or inside the polygon.
- * @param aMinSegCount is the min count of segments to approximate.
- * Default = 0 to do not force a min count.
+ * @param aMinSegCount is the min count of segments to approximate. 0 does not force a min count.
+ * @param aSkipBoundingBoxIntersection skips the final clipping pass. Only set this when the
+ * caller knows the generated polygon does not need bbox clipping, such as ERROR_INSIDE rendering.
  */
 void TransformOvalToPolygon( SHAPE_POLY_SET& aBuffer, const VECTOR2I& aStart, const VECTOR2I& aEnd,
-                             int aWidth, int aError, ERROR_LOC aErrorLoc, int aMinSegCount = 0 );
+                             int aWidth, int aError, ERROR_LOC aErrorLoc, int aMinSegCount = 0,
+                             bool aSkipBoundingBoxIntersection = false );
 
 /**
  * Convert a rectangle or trapezoid to a polygon.

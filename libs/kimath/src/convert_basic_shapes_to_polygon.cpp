@@ -120,7 +120,8 @@ void TransformCircleToPolygon( SHAPE_POLY_SET& aBuffer, const VECTOR2I& aCenter,
 
 
 void TransformOvalToPolygon( SHAPE_POLY_SET& aBuffer, const VECTOR2I& aStart, const VECTOR2I& aEnd,
-                             int aWidth, int aError, ERROR_LOC aErrorLoc, int aMinSegCount )
+                             int aWidth, int aError, ERROR_LOC aErrorLoc, int aMinSegCount,
+                             bool aSkipBoundingBoxIntersection )
 {
     // To build the polygonal shape outside the actual shape, we use a bigger
     // radius to build rounded ends.
@@ -221,7 +222,9 @@ void TransformOvalToPolygon( SHAPE_POLY_SET& aBuffer, const VECTOR2I& aStart, co
     bbox.Append( corner.x, corner.y );
 
     // Now, clamp the shape
-    polyshape.BooleanIntersection( bbox );
+    if( !aSkipBoundingBoxIntersection )
+        polyshape.BooleanIntersection( bbox );
+
     // Note the final polygon is a simple, convex polygon with no hole
     // due to the shape of initial polygons
 
