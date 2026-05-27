@@ -75,6 +75,9 @@ enum DRC_CONSTRAINT_T
     DISALLOW_CONSTRAINT,
     VIA_DIAMETER_CONSTRAINT,
     LENGTH_CONSTRAINT,
+    NET_CHAIN_LENGTH_CONSTRAINT,
+    NET_CHAIN_STUB_LENGTH_CONSTRAINT,
+    NET_CHAIN_RETURN_PATH_CONSTRAINT,
     SKEW_CONSTRAINT,
     DIFF_PAIR_GAP_CONSTRAINT,
     MAX_UNCOUPLED_CONSTRAINT,
@@ -150,6 +153,7 @@ public:
 public:
     bool                        m_Unary;
     KIID                        m_ImplicitItemId;
+    BOARD_ITEM*                 m_ImplicitItem;
     wxString                    m_Name;
     wxString                    m_LayerSource;
     LSET                        m_LayerCondition;
@@ -242,6 +246,16 @@ public:
     ZONE_CONNECTION     m_ZoneConnection;
     DRC_RULE_CONDITION* m_Test;
     bool                m_ImplicitMin;
+
+    // Reference layer for NET_CHAIN_RETURN_PATH_CONSTRAINT.  Empty means "no
+    // reference layer specified".  Stored as a user-visible layer name so it
+    // can survive save/load without layer-id renumbering.
+    wxString            m_ReferenceLayer;
+
+    // Optional reference-zone net for NET_CHAIN_RETURN_PATH_CONSTRAINT.  Empty
+    // accepts any zone on the reference layer; non-empty filters zones by net
+    // name (wildcards via WildCompareString).
+    wxString            m_ReferenceNet;
 
 private:
     wxString            m_name;          // For just-in-time constraints

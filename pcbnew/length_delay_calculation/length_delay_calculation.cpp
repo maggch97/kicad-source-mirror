@@ -291,8 +291,9 @@ LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector
         if( doTrace )
             wxLogTrace( wxT( "PNS_TUNE" ), wxT( "CalculateLengthDetails: inferring vias in pads" ) );
 
-        inferViaInPad( aStartPad, aItems.front(), details );
-        inferViaInPad( aEndPad, aItems.back(), details );
+        const bool withDelayDetail = aDomain == LENGTH_DELAY_DOMAIN_OPT::WITH_DELAY_DETAIL;
+        inferViaInPad( aStartPad, aItems.front(), details, withDelayDetail );
+        inferViaInPad( aEndPad, aItems.back(), details, withDelayDetail );
     }
 
     // Add stats for each item
@@ -330,7 +331,7 @@ LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector
         {
             const auto [layerStart, layerEnd] = item.GetLayers();
             int64_t viaHeight = StackupHeight( layerStart, layerEnd );
-            details.ViaLength += viaHeight;
+            details.ViaLength += static_cast<int>( viaHeight );
             details.NumVias += 1;
             processedVias++;
 
@@ -341,7 +342,7 @@ LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector
         else if( item.Type() == LENGTH_DELAY_CALCULATION_ITEM::TYPE::PAD )
         {
             int64_t padToDie = item.GetPad()->GetPadToDieLength();
-            details.PadToDieLength += padToDie;
+            details.PadToDieLength += static_cast<int>( padToDie );
             details.NumPads += 1;
             processedPads++;
 
@@ -375,6 +376,12 @@ LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector
         for( size_t i = 0; i < aItems.size(); ++i )
         {
             const LENGTH_DELAY_CALCULATION_ITEM& item = aItems[i];
+
+            if( item.GetMergeStatus() == LENGTH_DELAY_CALCULATION_ITEM::MERGE_STATUS::MERGED_RETIRED
+                || item.Type() == LENGTH_DELAY_CALCULATION_ITEM::TYPE::UNKNOWN )
+            {
+                continue;
+            }
 
             if( item.Type() == LENGTH_DELAY_CALCULATION_ITEM::TYPE::LINE )
             {
@@ -414,7 +421,7 @@ LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector
 
 
 void LENGTH_DELAY_CALCULATION::inferViaInPad( const PAD* aPad, const LENGTH_DELAY_CALCULATION_ITEM& aItem,
-                                              LENGTH_DELAY_STATS& aDetails ) const
+                                              LENGTH_DELAY_STATS& aDetails, const bool aWithDelayDetail ) const
 {
     if( aPad && aItem.Type() == LENGTH_DELAY_CALCULATION_ITEM::TYPE::LINE )
     {
@@ -428,6 +435,16 @@ void LENGTH_DELAY_CALCULATION::inferViaInPad( const PAD* aPad, const LENGTH_DELA
 
             aDetails.NumVias += 1;
             aDetails.ViaLength += StackupHeight( startBottomLayer, padLayer );
+
+            // Look up via delay details if required
+            if( aWithDelayDetail )
+            {
+                TUNING_PROFILE_GEOMETRY_CONTEXT ctx;
+                ctx.NetClass = aItem.GetEffectiveNetClass();
+                const int64_t delay = m_tuningProfileParameters->GetViaPropagationDelay( startBottomLayer, padLayer,
+                                                                                         F_Cu, B_Cu, ctx );
+                aDetails.ViaDelay += delay;
+            }
         }
     }
 }

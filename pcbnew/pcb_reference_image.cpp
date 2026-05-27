@@ -44,7 +44,6 @@
 #include <trigo.h>
 
 #include <string>
-#include <wx/mstream.h>
 #include <google/protobuf/any.pb.h>
 #include <properties/property.h>
 #include <properties/property_mgr.h>
@@ -192,21 +191,7 @@ void PCB_REFERENCE_IMAGE::Serialize( google::protobuf::Any& aContainer ) const
     refImage.set_locked( IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
                                     : kiapi::common::types::LockedState::LS_UNLOCKED );
 
-    wxMemoryOutputStream imageStream;
-
-    if( m_referenceImage.GetImage().GetImageData()
-        && m_referenceImage.GetImage().SaveImageData( imageStream ) )
-    {
-        size_t size = imageStream.GetSize();
-
-        if( size > 0 )
-        {
-            std::string encoded;
-            encoded.resize( size );
-            imageStream.CopyTo( encoded.data(), size );
-            refImage.set_image_data( encoded );
-        }
-    }
+    m_referenceImage.PackToBytes( *refImage.mutable_image_data() );
 
     aContainer.PackFrom( refImage );
 }
@@ -228,10 +213,7 @@ bool PCB_REFERENCE_IMAGE::Deserialize( const google::protobuf::Any& aContainer )
 
     if( !refImage.image_data().empty() )
     {
-        wxMemoryBuffer imageBuffer;
-        imageBuffer.AppendData( refImage.image_data().data(), refImage.image_data().size() );
-
-        if( !m_referenceImage.ReadImageFile( imageBuffer ) )
+        if( !m_referenceImage.UnpackFromBytes( refImage.image_data() ) )
             return false;
     }
 

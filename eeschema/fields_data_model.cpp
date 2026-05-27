@@ -17,6 +17,7 @@
  * You should have received a copy of the GNU General Public License along
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+#include <nlohmann/json.hpp>
 #include <wx/string.h>
 #include <wx/debug.h>
 #include <wx/grid.h>
@@ -270,7 +271,7 @@ void FIELDS_EDITOR_GRID_DATA_MODEL::updateDataStoreSymbolField( const SCH_REFERE
     {
         m_dataStore[key][aFieldName] = getAttributeValue( aSymbolRef, aFieldName, aVariantName );
     }
-    else if( const SCH_FIELD* field = symbol->GetField( aFieldName ) )
+    else if( const SCH_FIELD* field = symbol->FindFieldCaseInsensitive( aFieldName ) )
     {
         if( field->IsPrivate() )
         {
@@ -662,6 +663,9 @@ void FIELDS_EDITOR_GRID_DATA_MODEL::SetValue( int aRow, int aCol, const wxString
     {
         return;
     }
+
+    if( aValue == INDETERMINATE_STATE )
+        return;
 
     DATA_MODEL_ROW& rowGroup = m_rows[aRow];
 
@@ -1070,7 +1074,7 @@ void FIELDS_EDITOR_GRID_DATA_MODEL::RebuildRows()
             {
                 for( const wxString& variantName : m_variantNames )
                 {
-                    if( ref.GetSymbol()->GetDNP( &ref.GetSheetPath(), variantName )
+                    if( ref.GetSymbol()->ResolveDNP( &ref.GetSheetPath(), variantName )
                         || ref.GetSheetPath().GetDNP( variantName ) )
                     {
                         isDNP = true;
@@ -1080,7 +1084,7 @@ void FIELDS_EDITOR_GRID_DATA_MODEL::RebuildRows()
             }
             else
             {
-                isDNP = ref.GetSymbol()->GetDNP( &ref.GetSheetPath(), m_currentVariant )
+                isDNP = ref.GetSymbol()->ResolveDNP( &ref.GetSheetPath(), m_currentVariant )
                         || ref.GetSheetPath().GetDNP( m_currentVariant );
             }
 
@@ -1297,7 +1301,13 @@ void FIELDS_EDITOR_GRID_DATA_MODEL::ApplyData( SCH_COMMIT& aCommit, TEMPLATES& a
             if( IsGeneratedField( srcName ) )
                 continue;
 
-            SCH_FIELD* destField = symbol->GetField( srcName );
+            SCH_FIELD* destField = symbol->FindFieldCaseInsensitive( srcName );
+
+            if( destField && !destField->IsMandatory() && destField->GetName() != srcName )
+            {
+                destField->SetName( srcName );
+                symbolModified = true;
+            }
 
             if( destField && destField->IsPrivate() )
             {
@@ -1348,7 +1358,15 @@ void FIELDS_EDITOR_GRID_DATA_MODEL::ApplyData( SCH_COMMIT& aCommit, TEMPLATES& a
             if( symbol->GetFields()[ii].IsMandatory() || symbol->GetFields()[ii].IsPrivate() )
                 continue;
 
-            if( fieldStore.count( symbol->GetFields()[ii].GetName() ) == 0 )
+            const wxString& existingName = symbol->GetFields()[ii].GetName();
+
+            bool stillTracked = std::any_of( fieldStore.begin(), fieldStore.end(),
+                                             [&]( const auto& kv )
+                                             {
+                                                 return kv.first.IsSameAs( existingName, false );
+                                             } );
+
+            if( !stillTracked )
             {
                 symbol->GetFields().erase( symbol->GetFields().begin() + ii );
                 symbolModified = true;
@@ -1584,6 +1602,9 @@ void FIELDS_EDITOR_GRID_DATA_MODEL::AddReferences( const SCH_REFERENCE_LIST& aRe
                 }
             }
 
+            for( const DATA_MODEL_COL& col : m_cols )
+                m_dataStore[key].try_emplace( col.m_fieldName, wxEmptyString );
+
             refListChanged = true;
         }
     }
@@ -1668,6 +1689,51 @@ void FIELDS_EDITOR_GRID_DATA_MODEL::UpdateReferences( const SCH_REFERENCE_LIST& 
 }
 
 
+wxString FIELDS_EDITOR_GRID_DATA_MODEL::SerializeUndoState() const
+{
+    // Serialize the un-applied edit store keyed by symbol identity (sheet path + UUID), so that
+    // restoring it is independent of the current row grouping/order.
+    nlohmann::json j = nlohmann::json::object();
+
+    for( const auto& [key, fields] : m_dataStore )
+    {
+        nlohmann::json jfields = nlohmann::json::object();
+
+        for( const auto& [name, value] : fields )
+            jfields[std::string( name.ToUTF8() )] = std::string( value.ToUTF8() );
+
+        j[std::string( key.AsString().ToUTF8() )] = jfields;
+    }
+
+    return wxString( j.dump() );
+}
+
+
+void FIELDS_EDITOR_GRID_DATA_MODEL::RestoreUndoState( const wxString& aState )
+{
+    nlohmann::json j = nlohmann::json::parse( aState.ToStdString(), nullptr, false );
+
+    if( !j.is_object() )
+        return;
+
+    for( auto it = j.begin(); it != j.end(); ++it )
+    {
+        KIID_PATH                     key( wxString::FromUTF8( it.key().c_str() ) );
+        std::map<wxString, wxString>& fields = m_dataStore[key];
+
+        for( auto fit = it.value().begin(); fit != it.value().end(); ++fit )
+            fields[wxString::FromUTF8( fit.key().c_str() )] =
+                    wxString::FromUTF8( fit.value().get<std::string>().c_str() );
+    }
+
+    m_edited = true;
+    RebuildRows();
+
+    if( GetView() )
+        GetView()->ForceRefresh();
+}
+
+
 bool FIELDS_EDITOR_GRID_DATA_MODEL::DeleteRows( size_t aPosition, size_t aNumRows )
 {
     size_t curNumRows = m_rows.size();
@@ -1709,4 +1775,44 @@ bool FIELDS_EDITOR_GRID_DATA_MODEL::DeleteRows( size_t aPosition, size_t aNumRow
     }
 
     return true;
+}
+
+
+std::vector<FIELD_CASE_CONFLICT> DetectFieldCaseConflicts( const SCH_REFERENCE_LIST& aSymbols )
+{
+    std::vector<FIELD_CASE_CONFLICT> conflicts;
+
+    for( unsigned i = 0; i < aSymbols.GetCount(); ++i )
+    {
+        SCH_SYMBOL* symbol = aSymbols[i].GetSymbol();
+
+        if( !symbol )
+            continue;
+
+        std::map<wxString, std::vector<std::pair<wxString, wxString>>> groups;
+
+        for( const SCH_FIELD& field : symbol->GetFields() )
+        {
+            if( field.IsMandatory() || field.IsPrivate() )
+                continue;
+
+            groups[field.GetName().Lower()].emplace_back( field.GetName(), field.GetText() );
+        }
+
+        for( const auto& [key, members] : groups )
+        {
+            if( members.size() < 2 )
+                continue;
+
+            FIELD_CASE_CONFLICT c;
+            c.symbol = symbol;
+            c.sheetPath = aSymbols[i].GetSheetPath();
+            c.reference = symbol->GetRef( &c.sheetPath );
+            c.caseFoldedKey = key;
+            c.variants = members;
+            conflicts.push_back( std::move( c ) );
+        }
+    }
+
+    return conflicts;
 }

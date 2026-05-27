@@ -24,6 +24,12 @@
 
 #include <onebit_canvas_cairo_shim.hpp>
 
+
+constexpr int DEFAULT_PNG_DPI = 300;
+constexpr int MIN_PNG_DPI = 72;
+constexpr int MAX_PNG_DPI = 2400;
+
+
 /**
  * Bitmap rasterization plotter using onebit_canvas cairo-like shim.
  *
@@ -38,8 +44,7 @@ public:
 
     virtual PLOT_FORMAT GetPlotterType() const override
     {
-        // PNG is not in the standard PLOT_FORMAT enum, but we need to return something
-        return PLOT_FORMAT::UNDEFINED;
+        return PLOT_FORMAT::PNG;
     }
 
     static wxString GetDefaultFileExtension() { return wxString( wxT( "bmp" ) ); }
@@ -91,7 +96,19 @@ public:
     void SetAntialias( bool aEnable ) { m_antialias = aEnable; }
     bool GetAntialias() const { return m_antialias; }
 
+    /**
+     * Set whether the Y axis is reversed (Y-up vs Y-down).
+     *
+     * pcbnew uses Y-up coordinates while gerbview/Cairo use Y-down.
+     * Default is false (Y-down, matching Cairo).
+     *
+     * Note: uses the base class PLOTTER::m_yaxisReversed member.
+     */
+    void SetYAxisReversed( bool aReversed ) { m_yaxisReversed = aReversed; }
+    bool GetYAxisReversed() const { return m_yaxisReversed; }
+
     // PLOTTER interface implementation
+    virtual bool OpenFile( const wxString& aFullFilename ) override;
     virtual bool StartPlot( const wxString& aPageNumber ) override;
     virtual bool EndPlot() override;
 
@@ -125,6 +142,8 @@ public:
 
     virtual void PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFill, int aWidth,
                            void* aData = nullptr ) override;
+
+    virtual void PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double aScaleFactor ) override;
 
     // Flash pad operations
     virtual void FlashPadCircle( const VECTOR2I& aPadPos, int aDiameter, void* aData ) override;

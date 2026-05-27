@@ -23,6 +23,7 @@
 #include <algorithm>
 
 #include <fmt/format.h>
+#include <magic_enum.hpp>
 
 #include <wx/dir.h>
 #include <wx/log.h>
@@ -54,6 +55,7 @@
 #include <sch_rule_area.h>
 #include <sch_screen.h>
 #include <sch_shape.h>
+#include <sch_netchain.h>
 #include <sch_sheet.h>
 #include <sch_sheet_pin.h>
 #include <sch_symbol.h>
@@ -64,6 +66,7 @@
 #include <string_utils.h>
 #include <trace_helpers.h>
 #include <reporter.h>
+#include <connection_graph.h>
 
 using namespace TSCHEMATIC_T;
 
@@ -333,6 +336,24 @@ void SCH_IO_KICAD_SEXPR::loadFile( const wxString& aFileName, SCH_SHEET* aSheet 
                                       m_appending );
 
     parser.ParseSchematic( aSheet );
+
+    // Net chains live at the root-sheet level. Sub-sheet parses always produce empty maps,
+    // so applying them would wipe the chains restored from the root file.
+    if( m_schematic && m_schematic->ConnectionGraph() && aSheet == m_rootSheet )
+    {
+        m_schematic->ConnectionGraph()->SetNetChainNetClassOverrides( parser.GetNetChainNetClasses() );
+        m_schematic->ConnectionGraph()->SetNetChainColorOverrides( parser.GetNetChainColors() );
+
+        std::map<wxString, CONNECTION_GRAPH::CHAIN_TERMINAL_REFS> termRefs;
+
+        for( const auto& [name, terms] : parser.GetNetChainTerminalRefs() )
+        {
+            termRefs[name] = { { terms.first.ref, terms.first.pin }, { terms.second.ref, terms.second.pin } };
+        }
+
+        m_schematic->ConnectionGraph()->SetNetChainTerminalRefOverrides( termRefs );
+        m_schematic->ConnectionGraph()->SetNetChainMemberNetOverrides( parser.GetNetChainMemberNets() );
+    }
 }
 
 
@@ -343,6 +364,22 @@ void SCH_IO_KICAD_SEXPR::LoadContent( LINE_READER& aReader, SCH_SHEET* aSheet, i
     SCH_IO_KICAD_SEXPR_PARSER parser( &aReader );
 
     parser.ParseSchematic( aSheet, true, aFileVersion );
+
+    if( m_schematic && m_schematic->ConnectionGraph() && aSheet == m_rootSheet )
+    {
+        m_schematic->ConnectionGraph()->SetNetChainNetClassOverrides( parser.GetNetChainNetClasses() );
+        m_schematic->ConnectionGraph()->SetNetChainColorOverrides( parser.GetNetChainColors() );
+
+        std::map<wxString, CONNECTION_GRAPH::CHAIN_TERMINAL_REFS> termRefs;
+
+        for( const auto& [name, terms] : parser.GetNetChainTerminalRefs() )
+        {
+            termRefs[name] = { { terms.first.ref, terms.first.pin }, { terms.second.ref, terms.second.pin } };
+        }
+
+        m_schematic->ConnectionGraph()->SetNetChainTerminalRefOverrides( termRefs );
+        m_schematic->ConnectionGraph()->SetNetChainMemberNetOverrides( parser.GetNetChainMemberNets() );
+    }
 }
 
 
@@ -375,6 +412,7 @@ void SCH_IO_KICAD_SEXPR::SaveSchematicFile( const wxString& aFileName, SCH_SHEET
 
     PRETTIFIED_FILE_OUTPUTFORMATTER formatter( fn.GetFullPath() );
     FormatSchematicToFormatter( &formatter, aSheet, aSchematic, aProperties );
+    formatter.Finish();
 
     if( aSheet->GetScreen() )
         aSheet->GetScreen()->SetFileExists( true );
@@ -517,16 +555,81 @@ void SCH_IO_KICAD_SEXPR::Format( SCH_SHEET* aSheet )
         }
     }
 
+    // Net chains are schematic-wide state owned by the connection graph, so they must be written
+    // by exactly one sheet file.  Anchor the write to the schematic's first top-level sheet to
+    // match the embedded files convention below.
+    if( m_schematic->GetTopLevelSheet( 0 ) == aSheet )
+    {
+        for( const auto& sigPtr : m_schematic->ConnectionGraph()->GetCommittedNetChains() )
+        {
+            if( !sigPtr )
+                continue;
+
+            const SCH_NETCHAIN& sig = *sigPtr;
+
+            if( sig.GetTerminalRef( 0 ).IsEmpty() || sig.GetTerminalRef( 1 ).IsEmpty() )
+                continue;
+
+            m_out->Print( "(net_chain %s", m_out->Quotew( sig.GetName() ).c_str() );
+
+            m_out->Print( " (from %s %s)", m_out->Quotew( sig.GetTerminalRef( 0 ) ).c_str(),
+                          m_out->Quotew( sig.GetTerminalPinNum( 0 ) ).c_str() );
+            m_out->Print( " (to %s %s)", m_out->Quotew( sig.GetTerminalRef( 1 ) ).c_str(),
+                          m_out->Quotew( sig.GetTerminalPinNum( 1 ) ).c_str() );
+
+            if( !sig.GetNetClass().IsEmpty() )
+                m_out->Print( " (net_class %s)", m_out->Quotew( sig.GetNetClass() ).c_str() );
+
+            if( sig.GetColor() != KIGFX::COLOR4D::UNSPECIFIED )
+            {
+                const KIGFX::COLOR4D& c = sig.GetColor();
+                m_out->Print( " (color %d %d %d %s)",
+                              KiROUND( c.r * 255.0 ),
+                              KiROUND( c.g * 255.0 ),
+                              KiROUND( c.b * 255.0 ),
+                              FormatDouble2Str( c.a ).c_str() );
+            }
+
+            // Synthetic subgraph names are not stable across runs, so they are
+            // skipped when persisting the member-net list.
+            std::vector<wxString> persistableNets;
+
+            for( const wxString& n : sig.GetNets() )
+            {
+                if( !n.IsEmpty() && !n.StartsWith( SCH_NETCHAIN::SYNTHETIC_NET_PREFIX ) )
+                    persistableNets.push_back( n );
+            }
+
+            if( !persistableNets.empty() )
+            {
+                m_out->Print( " (nets" );
+
+                for( const wxString& n : persistableNets )
+                    m_out->Print( " %s", m_out->Quotew( n ).c_str() );
+
+                m_out->Print( ")" );
+            }
+
+            m_out->Print( ")" );
+        }
+    }
+
     if( aSheet->HasRootInstance() )
     {
         std::vector< SCH_SHEET_INSTANCE> instances;
 
         instances.emplace_back( aSheet->GetRootInstance() );
         saveInstances( instances );
+    }
 
+    // Embedded fonts and files belong to the schematic, not to any individual sheet, so they
+    // must round-trip independently of per-sheet root-instance bookkeeping (which can legitimately
+    // be missing for some top-level sheets in flat hierarchies).  Anchor the write to the
+    // schematic's first top-level sheet so a single, predictable file owns the data.
+    if( m_schematic->GetTopLevelSheet( 0 ) == aSheet )
+    {
         KICAD_FORMAT::FormatBool( m_out, "embedded_fonts", m_schematic->GetAreFontsEmbedded() );
 
-        // Save any embedded files
         if( !m_schematic->GetEmbeddedFiles()->IsEmpty() )
             m_schematic->WriteEmbeddedFiles( *m_out, true );
     }
@@ -766,6 +869,16 @@ void SCH_IO_KICAD_SEXPR::saveSymbol( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSche
     KICAD_FORMAT::FormatBool( m_out, "on_board", !aSymbol->GetExcludedFromBoard() );
     KICAD_FORMAT::FormatBool( m_out, "in_pos_files", !aSymbol->GetExcludedFromPosFiles() );
     KICAD_FORMAT::FormatBool( m_out, "dnp", aSymbol->GetDNP() );
+    // Persist passthrough mode as enum string for tri-state support, but omit when DEFAULT
+    // to avoid file churn and keep files compact/back-compatible.
+    if( aSymbol->GetPassthroughMode() != SCH_SYMBOL::PASSTHROUGH_MODE::DEFAULT )
+    {
+        using magic_enum::enum_name;
+        std::string name = std::string( enum_name( aSymbol->GetPassthroughMode() ) );
+        // enum names are UPPER_CASE; write lowercase tokens
+        std::transform( name.begin(), name.end(), name.begin(), []( unsigned char c ){ return (char) std::tolower( c ); } );
+        m_out->Print( "(passthrough %s)", name.c_str() );
+    }
 
     if( aSymbol->IsLocked() )
         KICAD_FORMAT::FormatBool( m_out, "locked", true );
@@ -991,12 +1104,11 @@ void SCH_IO_KICAD_SEXPR::saveField( SCH_FIELD* aField )
 {
     wxCHECK_RET( aField != nullptr && m_out != nullptr, "" );
 
-    wxString fieldName;
-
-    if( aField->IsMandatory() )
-        fieldName = aField->GetCanonicalName();
-    else
-        fieldName = aField->GetName();
+    // Always write the canonical, language-neutral name. SCH_FIELD::GetCanonicalName() returns
+    // the mandatory-field token, the well-known directive-label token ("Netclass"), or the raw
+    // user-supplied name. Using GetName() here would emit the translated form for label fields,
+    // which broke cross-language collaboration (issue #24403).
+    wxString fieldName = aField->GetCanonicalName();
 
     m_out->Print( "(property %s %s %s (at %s %s %s)",
                   aField->IsPrivate() ? "private" : "",
@@ -1355,6 +1467,16 @@ void SCH_IO_KICAD_SEXPR::saveShape( SCH_SHAPE* aShape )
     case SHAPE_T::POLY:
         formatPoly( m_out, aShape, false, aShape->GetStroke(), aShape->GetFillMode(),
                     aShape->GetFillColor(), false, aShape->m_Uuid, writeLocked );
+        break;
+
+    case SHAPE_T::ELLIPSE:
+        formatEllipse( m_out, aShape, false, aShape->GetStroke(), aShape->GetFillMode(), aShape->GetFillColor(), false,
+                       aShape->m_Uuid, writeLocked );
+        break;
+
+    case SHAPE_T::ELLIPSE_ARC:
+        formatEllipseArc( m_out, aShape, false, aShape->GetStroke(), aShape->GetFillMode(), aShape->GetFillColor(),
+                          false, aShape->m_Uuid, writeLocked );
         break;
 
     default:

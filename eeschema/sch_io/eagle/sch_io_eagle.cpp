@@ -751,8 +751,9 @@ void SCH_IO_EAGLE::loadSchematic( const ESCHEMATIC& aSchematic )
         m_pi->SaveLibrary( getLibFileName().GetFullPath() );
     }
 
-    // find all nets and count how many sheets they appear on.
-    // local labels will be used for nets found only on that sheet.
+    // Count how many sheets each named net appears on.  Used by the fallback-label path
+    // in loadSegments to decide whether to add an extra label on otherwise-unlabelled
+    // segments of nets that span multiple sheets.
     countNets( aSchematic );
 
     // Create all Eagle pages as top-level sheets (direct children of the virtual root).
@@ -979,7 +980,7 @@ void SCH_IO_EAGLE::loadSheet( const std::unique_ptr<ESHEET>& aSheet )
         wxString busName = translateEagleBusName( ebus->name );
 
         // Load segments of this bus
-        loadSegments( ebus->segments, busName, wxString() );
+        loadSegments( ebus->segments, busName, wxString(), /* aIsBus */ true );
     }
 
     for( const std::unique_ptr<ENET>& enet : aSheet->nets )
@@ -1436,7 +1437,8 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
 
 void SCH_IO_EAGLE::loadSegments( const std::vector<std::unique_ptr<ESEGMENT>>& aSegments,
                                  const wxString& netName,
-                                 const wxString& aNetClass )
+                                 const wxString& aNetClass,
+                                 bool aIsBus )
 {
     // Loop through all segments
     SCH_SCREEN* screen         = getCurrentScreen();
@@ -1493,7 +1495,7 @@ void SCH_IO_EAGLE::loadSegments( const std::vector<std::unique_ptr<ESEGMENT>>& a
 
         for( const std::unique_ptr<ELABEL>& elabel : esegment->labels )
         {
-            SCH_TEXT* label = loadLabel( elabel, netName );
+            SCH_LABEL_BASE* label = loadLabel( elabel, netName, aIsBus );
             screen->Append( label );
 
             wxASSERT( segDesc.labels.empty()
@@ -1524,11 +1526,23 @@ void SCH_IO_EAGLE::loadSegments( const std::vector<std::unique_ptr<ESEGMENT>>& a
         {
             std::unique_ptr<SCH_LABEL_BASE> label;
 
-            // Add a global label if the net appears on more than one Eagle sheet
-            if( m_netCounts[netName.ToStdString()] > 1 )
-                label.reset( new SCH_GLOBALLABEL );
-            else if( segmentCount > 1 )
-                label.reset( new SCH_LABEL );
+            // Eagle uses a flat net namespace, so a named net should retain its name across
+            // every segment and every sheet.  The PCB importer carries Eagle signal names
+            // through verbatim, so we must use a global label here too: a local SCH_LABEL
+            // would prepend the sheet path (e.g. "/+24V_SWD") and split the net from the
+            // matching PCB signal on net update.
+            //
+            // Two exceptions: (1) buses are conceptual groupings in Eagle, not electrical
+            // signals, so a global bus label would join same-named buses project-wide where
+            // Eagle only had visual grouping; (2) nets inside module instances are scoped
+            // by the module's ports, so a global label would punch through the hierarchy.
+            if( segmentCount > 1 || m_netCounts[netName] > 1 )
+            {
+                if( aIsBus || !m_modules.empty() )
+                    label.reset( new SCH_LABEL );
+                else
+                    label.reset( new SCH_GLOBALLABEL );
+            }
 
             if( label )
             {
@@ -1537,10 +1551,20 @@ void SCH_IO_EAGLE::loadSegments( const std::vector<std::unique_ptr<ESEGMENT>>& a
                 label->SetTextSize( VECTOR2I( schIUScale.MilsToIU( 40 ),
                                               schIUScale.MilsToIU( 40 ) ) );
 
-                if( firstWire.B.x > firstWire.A.x )
-                    label->SetSpinStyle( SPIN_STYLE::LEFT );
-                else
-                    label->SetSpinStyle( SPIN_STYLE::RIGHT );
+                if( firstWire.A.y == firstWire.B.y )         // Horizontal wire.
+                {
+                    if( firstWire.B.x > firstWire.A.x )
+                        label->SetSpinStyle( SPIN_STYLE::LEFT );
+                    else
+                        label->SetSpinStyle( SPIN_STYLE::RIGHT );
+                }
+                else if( firstWire.A.x == firstWire.B.x )    // Vertical wire.
+                {
+                    if( firstWire.B.y > firstWire.A.y )
+                        label->SetSpinStyle( SPIN_STYLE::BOTTOM );
+                    else
+                        label->SetSpinStyle( SPIN_STYLE::UP );
+                }
 
                 screen->Append( label.release() );
             }
@@ -1682,78 +1706,93 @@ SCH_JUNCTION* SCH_IO_EAGLE::loadJunction( const std::unique_ptr<EJUNCTION>&  aJu
 }
 
 
-SCH_TEXT* SCH_IO_EAGLE::loadLabel( const std::unique_ptr<ELABEL>& aLabel,
-                                   const wxString& aNetName )
+SCH_LABEL_BASE* SCH_IO_EAGLE::loadLabel( const std::unique_ptr<ELABEL>& aLabel,
+                                         const wxString& aNetName, bool aIsBus )
 {
     VECTOR2I elabelpos( aLabel->x.ToSchUnits(), -aLabel->y.ToSchUnits() );
 
-    // Determine if the label is local or global depending on
-    // the number of sheets the net appears in
-    bool                            global = m_netCounts[aNetName] > 1;
+    // Label-kind decision mirrors loadSegments(): SCH_HIERLABEL for module ports,
+    // SCH_LABEL for buses and module-internal nets, SCH_GLOBALLABEL otherwise so the
+    // Eagle flat net namespace round-trips through the matching PCB signal name.
     std::unique_ptr<SCH_LABEL_BASE> label;
 
     VECTOR2I textSize = KiROUND( aLabel->size.ToSchUnits() * 0.7, aLabel->size.ToSchUnits() * 0.7 );
 
-    if( m_modules.size() )
+    auto findModulePort =
+            [&]() -> const EPORT*
+            {
+                if( m_modules.empty() )
+                    return nullptr;
+
+                const auto& ports = m_modules.back()->ports;
+                const auto  it    = ports.find( aNetName );
+                return it == ports.end() ? nullptr : it->second.get();
+            };
+
+    const EPORT* port = findModulePort();
+
+    if( port )
     {
-        if(  m_modules.back()->ports.find( aNetName ) != m_modules.back()->ports.end() )
+        auto hierLabel = std::make_unique<SCH_HIERLABEL>();
+
+        if( port->direction )
         {
-            label = std::make_unique<SCH_HIERLABEL>();
-            label->SetText( escapeName( aNetName ) );
-
-            const auto it = m_modules.back()->ports.find( aNetName );
-
+            wxString direction = *port->direction;
             LABEL_SHAPE type;
 
-            if( it->second->direction )
-            {
-                wxString direction = *it->second->direction;
+            if( direction == "in" )
+                type = LABEL_SHAPE::LABEL_INPUT;
+            else if( direction == "out" )
+                type = LABEL_SHAPE::LABEL_OUTPUT;
+            else if( direction == "io" )
+                type = LABEL_SHAPE::LABEL_BIDI;
+            else if( direction == "hiz" )
+                type = LABEL_SHAPE::LABEL_TRISTATE;
+            else
+                type = LABEL_SHAPE::LABEL_PASSIVE;
 
-                if( direction == "in" )
-                    type = LABEL_SHAPE::LABEL_INPUT;
-                else if( direction == "out" )
-                    type = LABEL_SHAPE::LABEL_OUTPUT;
-                else if( direction == "io" )
-                    type = LABEL_SHAPE::LABEL_BIDI;
-                else if( direction == "hiz" )
-                    type = LABEL_SHAPE::LABEL_TRISTATE;
-                else
-                    type = LABEL_SHAPE::LABEL_PASSIVE;
+            // KiCad does not support passive, power, open collector, or no-connect sheet
+            // pins that Eagle ports support.  They are set to unspecified to minimize
+            // ERC issues.
+            hierLabel->SetLabelShape( type );
+        }
 
-                // KiCad does not support passive, power, open collector, or no-connect sheet
-                // pins that Eagle ports support.  They are set to unspecified to minimize
-                // ERC issues.
-                label->SetLabelShape( type );
-            }
-        }
-        else
-        {
-            label = std::make_unique<SCH_LABEL>();
-            label->SetText( escapeName( aNetName ) );
-        }
+        label = std::move( hierLabel );
     }
-    else if( global )
+    else if( aIsBus || !m_modules.empty() )
     {
-        label = std::make_unique<SCH_GLOBALLABEL>();
-        label->SetText( escapeName( aNetName ) );
+        label = std::make_unique<SCH_LABEL>();
     }
     else
     {
-        label = std::make_unique<SCH_LABEL>();
-        label->SetText( escapeName( aNetName ) );
+        label = std::make_unique<SCH_GLOBALLABEL>();
     }
 
+    label->SetText( escapeName( aNetName ) );
     label->SetPosition( elabelpos );
     label->SetTextSize( textSize );
     label->SetSpinStyle( SPIN_STYLE::RIGHT );
 
     if( aLabel->rot )
     {
-        for( int i = 0; i < KiROUND( aLabel->rot->degrees / 90.0 ) %4; ++i )
-            label->Rotate90( false );
+        // According to the Eagle DTD, labels can only be rotated in 90 degree increments.
+        int angle = KiROUND( aLabel->rot->degrees );
 
-        if( aLabel->rot->mirror )
-            label->MirrorSpinStyle( false );
+        switch( angle )
+        {
+        case 90:
+            label->SetSpinStyle( aLabel->rot->mirror ? SPIN_STYLE::BOTTOM : SPIN_STYLE::UP );
+            break;
+        case 180:
+            label->SetSpinStyle( aLabel->rot->mirror ? SPIN_STYLE::RIGHT : SPIN_STYLE::LEFT );
+            break;
+        case 270:
+            label->SetSpinStyle( aLabel->rot->mirror ? SPIN_STYLE::UP : SPIN_STYLE::BOTTOM );
+            break;
+        default:
+            label->SetSpinStyle( aLabel->rot->mirror ? SPIN_STYLE::LEFT : SPIN_STYLE::RIGHT );
+            break;
+        }
     }
 
     return label.release();
@@ -1926,19 +1965,33 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
     std::vector<SCH_FIELD*> partFields;
     part->GetFields( partFields );
 
+    VECTOR2I nextFieldPosition = getLastSymbolFieldPosition( part ) + symbol->GetPosition();
+
     for( const SCH_FIELD* partField : partFields )
     {
-        SCH_FIELD* symbolField;
+        SCH_FIELD* symbolField = nullptr;
 
         if( partField->IsMandatory() )
             symbolField = symbol->GetField( partField->GetId() );
         else
             symbolField = symbol->GetField( partField->GetName() );
 
-        wxCHECK2( symbolField, continue );
+        if( !symbolField )
+        {
+            SCH_FIELD newField( symbol.get(), FIELD_T::USER, partField->GetName() );
 
-        symbolField->ImportValues( *partField );
-        symbolField->SetTextPos( symbol->GetPosition() + partField->GetTextPos() );
+            newField.SetVisible( false );
+            newField.SetText( partField->GetText() );
+
+            nextFieldPosition.y += newField.GetTextHeight() + schIUScale.MilsToIU( 10 );
+            newField.SetPosition( nextFieldPosition );
+            symbol->AddField( newField );
+        }
+        else
+        {
+            symbolField->ImportValues( *partField );
+            symbolField->SetTextPos( symbol->GetPosition() + partField->GetTextPos() );
+        }
     }
 
     // If there is no footprint assigned, then prepend the reference value
@@ -2033,13 +2086,11 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
         else
         {
             field = symbol->GetField( eattr->name );
-
-            if( field )
-                field->SetVisible( false );
         }
 
         if( field )
         {
+            field->SetVisible( true );
             field->SetPosition( VECTOR2I( eattr->x->ToSchUnits(), -eattr->y->ToSchUnits() ) );
             int  align      = eattr->align ? *eattr->align : ETEXT::BOTTOM_LEFT;
             int  absdegrees = eattr->rot ? eattr->rot->degrees : 0;
@@ -2170,6 +2221,34 @@ EAGLE_LIBRARY* SCH_IO_EAGLE::loadLibrary( const ELIBRARY* aLibrary, EAGLE_LIBRAR
                 ispower = loadSymbol( it->second, libSymbol, edevice, gateindex, egate->name );
 
                 gateindex++;
+            }
+
+            VECTOR2I nextFieldPosition = getLastSymbolFieldPosition( libSymbol.get() );
+
+            for( const std::unique_ptr<ETECHNOLOGY>& technology : edevice->technologies )
+            {
+                for( const std::unique_ptr<EATTR>& attr : technology->attributes )
+                {
+                    if( !attr->value )
+                        continue;
+
+                    SCH_FIELD* field = libSymbol->FindFieldCaseInsensitive( attr->name );
+
+                    if( field )
+                    {
+                        field->SetText( *attr->value );
+                    }
+                    else
+                    {
+                        SCH_FIELD* newField = new SCH_FIELD( libSymbol.get(), FIELD_T::USER, attr->name );
+
+                        nextFieldPosition.y += newField->GetTextHeight() + schIUScale.MilsToIU( 10 );
+                        newField->SetText( *attr->value );
+                        newField->SetVisible( false );
+                        newField->SetPosition( nextFieldPosition );
+                        libSymbol->AddField( newField );
+                    }
+                }
             }
 
             libSymbol->SetUnitCount( gate_count, true );
@@ -2344,6 +2423,23 @@ bool SCH_IO_EAGLE::loadSymbol( const std::unique_ptr<ESYMBOL>& aEsymbol,
 
             // Show Value field if Eagle reference was uppercase
             showValue = etext->text == wxT( ">VALUE" );
+        }
+        else if( etext->text.StartsWith( ">" ) )
+        {
+            // Text values that start with '>' are place holders for fields defined later
+            // in library deviceset objects.
+            wxString fieldName = etext->text.Mid( 1 );
+
+            if( !fieldName.IsEmpty() )
+            {
+                SCH_FIELD* field = new SCH_FIELD( aSymbol.get(), FIELD_T::USER, fieldName );
+
+                loadFieldAttributes( field, libtext.get() );
+
+                // Field visibility is determined by the symbol instance attributes.
+                field->SetVisible( false );
+                aSymbol->AddField( field );
+            }
         }
         else
         {
@@ -2735,7 +2831,7 @@ void SCH_IO_EAGLE::adjustNetLabels()
 
     for( SEG_DESC& segDesc : m_segments )
     {
-        for( SCH_TEXT* label : segDesc.labels )
+        for( SCH_LABEL_BASE* label : segDesc.labels )
         {
             VECTOR2I   labelPos( label->GetPosition() );
             const SEG* segAttached = segDesc.LabelAttached( label );
@@ -2755,11 +2851,17 @@ void SCH_IO_EAGLE::adjustNetLabels()
 
             // Create a vector pointing in the direction of the wire, 50 mils long
             VECTOR2I wireDirection( segAttached->B - segAttached->A );
+
+            if( ( wireDirection.x == 0 ) && (wireDirection.y == 0 ) )
+                continue;
+
             wireDirection = wireDirection.Resize( schIUScale.MilsToIU( 50 ) );
             const VECTOR2I origPos( labelPos );
 
             // Flags determining the search direction
-            bool checkPositive = true, checkNegative = true, move = false;
+            bool checkPositive = true;
+            bool checkNegative = true;
+            bool move = false;
             int  trial = 0;
 
             // Be sure the label is not placed on a wire intersection
@@ -2783,7 +2885,24 @@ void SCH_IO_EAGLE::adjustNetLabels()
             }
 
             if( move )
+            {
                 label->SetPosition( VECTOR2I( labelPos ) );
+
+                if( wireDirection.x == 0 )        // Moved vertically
+                {
+                    if( wireDirection.y < 0 )
+                        label->SetSpinStyle( SPIN_STYLE::UP );
+                    else
+                        label->SetSpinStyle( SPIN_STYLE::BOTTOM );
+                }
+                else if( wireDirection.y == 0 )   // Moved horizontally
+                {
+                    if( wireDirection.x < 0 )
+                        label->SetSpinStyle( SPIN_STYLE::LEFT );
+                    else
+                        label->SetSpinStyle( SPIN_STYLE::RIGHT );
+                }
+            }
         }
     }
 
@@ -3393,7 +3512,7 @@ void SCH_IO_EAGLE::addBusEntries()
 }
 
 
-const SEG* SCH_IO_EAGLE::SEG_DESC::LabelAttached( const SCH_TEXT* aLabel ) const
+const SEG* SCH_IO_EAGLE::SEG_DESC::LabelAttached( const SCH_LABEL_BASE* aLabel ) const
 {
     wxCHECK( aLabel, nullptr );
 
@@ -3624,4 +3743,29 @@ void SCH_IO_EAGLE::getEagleSymbolFieldAttributes( const std::unique_ptr<EINSTANC
             }
         }
     }
+}
+
+
+VECTOR2I SCH_IO_EAGLE::getLastSymbolFieldPosition( const LIB_SYMBOL* aPart )
+{
+    VECTOR2I retv;
+
+    std::vector<SCH_FIELD*> fields;
+    aPart->GetFields( fields );
+
+    if( fields.size() )
+    {
+        retv = fields[0]->GetPosition();
+
+        for( size_t i = 1; i < fields.size(); i++ )
+        {
+            if( fields[i]->GetPosition().x > retv.x )
+                retv.x = fields[i]->GetPosition().x;
+
+            if( fields[i]->GetPosition().y > retv.y )
+                retv.y = fields[i]->GetPosition().y;
+        }
+    }
+
+    return retv;
 }

@@ -121,6 +121,7 @@ set( KICOMMON_SRCS
     git/kicad_git_common.cpp
     git/kicad_git_errors.cpp
     git/git_backend.cpp
+    git/kigit_orphan_registry.cpp
     git/libgit_backend.cpp
 
     # Jobs
@@ -138,6 +139,7 @@ set( KICOMMON_SRCS
     jobs/job_export_pcb_ipcd356.cpp
     jobs/job_export_pcb_odb.cpp
     jobs/job_export_pcb_pdf.cpp
+    jobs/job_export_pcb_png.cpp
     jobs/job_export_pcb_stats.cpp
     jobs/job_export_pcb_plot.cpp
     jobs/job_export_pcb_pos.cpp
@@ -231,6 +233,7 @@ set( KICOMMON_SRCS
     widgets/ui_common.cpp
     widgets/up_down_tree.cpp
     widgets/wx_grid.cpp
+    widgets/wx_data_view_hyperlink_renderer.cpp
     widgets/wx_html_report_panel.cpp
     widgets/wx_html_report_panel_base.cpp
     widgets/wx_html_report_box.cpp
@@ -253,6 +256,7 @@ set( KICOMMON_SRCS
     build_version.cpp
     cli_progress_reporter.cpp
     common.cpp
+    text_var_dependency.cpp
     config_params.cpp
     confirm.cpp
     dialog_shim.cpp
@@ -456,6 +460,7 @@ target_include_directories( kicommon
         $<TARGET_PROPERTY:picosha2,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:nlohmann_json_schema_validator,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:thread-pool,INTERFACE_INCLUDE_DIRECTORIES>
+        ${CMAKE_SOURCE_DIR}/../onebit_canvas/include
     )
 
 add_dependencies( kicommon pegtl version_header )
@@ -477,7 +482,8 @@ set( COMMON_ABOUT_DLG_SRCS
 set( COMMON_GIT_DLG_SRCS
     dialogs/git/dialog_git_commit.cpp
     dialogs/git/dialog_git_switch.cpp
-    dialogs/git/dialog_git_auth.cpp
+    dialogs/git/dialog_git_credentials.cpp
+    dialogs/git/dialog_git_credentials_base.cpp
     dialogs/git/dialog_git_repository.cpp
     dialogs/git/dialog_git_repository_base.cpp
     dialogs/git/panel_git_repos.cpp
@@ -489,6 +495,8 @@ set( COMMON_DLG_SRCS
     ${COMMON_GIT_DLG_SRCS}
     dialogs/dialog_assign_netclass.cpp
     dialogs/dialog_assign_netclass_base.cpp
+    dialogs/dialog_autosave_recovery.cpp
+    dialogs/dialog_autosave_recovery_base.cpp
     dialogs/dialog_book_reporter.cpp
     dialogs/dialog_book_reporter_base.cpp
     dialogs/dialog_color_picker.cpp
@@ -704,10 +712,15 @@ set( COMMON_IO_SRCS
 
 set ( COMMON_TRANSLINE_CALCULATION_SRCS
     transline_calculations/transline_calculation_base.cpp
+    transline_calculations/dielectric_djordjevic_sarkar.cpp
     transline_calculations/microstrip.cpp
     transline_calculations/coupled_microstrip.cpp
     transline_calculations/stripline.cpp
     transline_calculations/coupled_stripline.cpp
+    transline_calculations/coax.cpp
+    transline_calculations/coplanar.cpp
+    transline_calculations/rectwaveguide.cpp
+    transline_calculations/twistedpair.cpp
     )
 
 set( COMMON_IMPORT_GFX_SRCS
@@ -956,6 +969,7 @@ set( PCB_COMMON_SRCS
     ${CMAKE_SOURCE_DIR}/pcbnew/teardrop/teardrop_parameters.cpp     #needed by board_design_settings.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/router/pns_meander.cpp               #needed by board_design_settings.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/board.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/board_text_var_adapter.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/component_classes/component_class.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/component_classes/component_class_assignment_rule.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/component_classes/component_class_cache_proxy.cpp

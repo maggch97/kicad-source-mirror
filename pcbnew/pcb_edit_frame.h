@@ -61,6 +61,7 @@ class ACTION_MENU;
 class TOOL_ACTION;
 class DIALOG_BOARD_SETUP;
 class PCB_DESIGN_BLOCK_PANE;
+class WX_INFOBAR;
 
 #ifdef KICAD_IPC_API
 class KICAD_API_SERVER;
@@ -817,6 +818,21 @@ public:
 
     bool      m_ProbingSchToPcb;         // Recursion guard when synchronizing selection from schematic
 
+    /// Reactive text-var invalidation listener state. The handle alone is
+    /// ambiguous across board/project swaps — the tracker it belongs to must
+    /// be remembered so the destructor (and tracker-change detection)
+    /// removes from the correct tracker, not whatever GetBoard() points at
+    /// post-swap. Handle == 0 means not installed.
+    std::size_t             m_textVarListenerHandle = 0;
+    class TEXT_VAR_TRACKER* m_textVarListenerTracker = nullptr;
+
+    /**
+     * Drop every cached reference into the current BOARD's text-var tracker.
+     * Must run before the BOARD is freed (SetBoard replacement or frame
+     * teardown).
+     */
+    void detachTextVarTracker();
+
     void StartCrossProbeFlash( const std::vector<BOARD_ITEM*>& aItems );
     void OnCrossProbeFlashTimer( wxTimerEvent& aEvent );
     void UpdateProperties() override;
@@ -844,6 +860,12 @@ private:
 
     std::vector<LIB_ID>    m_designBlockHistoryList;
     PCB_DESIGN_BLOCK_PANE* m_designBlocksPane;
+
+    /// Secondary infobar that stacks above the main one; reserved for load-time
+    /// notices (currently the WRL -> STEP migration prompt) that must not be
+    /// stomped by later infobar messages such as read-only warnings or DRC
+    /// rule errors.
+    WX_INFOBAR*            m_loadNoticeInfoBar = nullptr;
 
     const std::map<std::string, UTF8>* m_importProperties; // Properties used for non-KiCad import.
 

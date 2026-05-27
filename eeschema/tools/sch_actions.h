@@ -94,6 +94,8 @@ public:
     static TOOL_ACTION drawTable;
     static TOOL_ACTION drawRectangle;
     static TOOL_ACTION drawCircle;
+    static TOOL_ACTION drawEllipse;
+    static TOOL_ACTION drawEllipseArc;
     static TOOL_ACTION drawArc;
     static TOOL_ACTION drawBezier;
     static TOOL_ACTION drawLines;
@@ -318,6 +320,12 @@ public:
     static TOOL_ACTION clearHighlight;
     static TOOL_ACTION updateNetHighlighting;
     static TOOL_ACTION highlightNetTool;
+    static TOOL_ACTION highlightNetChain;
+    static TOOL_ACTION removeFromNetChain;
+    static TOOL_ACTION replaceTerminalPin;
+    static TOOL_ACTION nameNetChain;
+    static TOOL_ACTION createNetChainBetweenPins;
+    static TOOL_ACTION createNetChain;
     static TOOL_ACTION showNetNavigator;
 
     // Drag and drop

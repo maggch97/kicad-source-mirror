@@ -288,6 +288,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     placeMenu->Add( PCB_ACTIONS::placeFootprint );
     placeMenu->Add( PCB_ACTIONS::drawVia );
     placeMenu->Add( PCB_ACTIONS::drawZone );
+    placeMenu->Add( PCB_ACTIONS::drawCopperThievingZone );
     placeMenu->Add( PCB_ACTIONS::drawRuleArea );
 
     ACTION_MENU* muwaveSubmenu = new ACTION_MENU( false, selTool );
@@ -305,6 +306,8 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     placeMenu->Add( PCB_ACTIONS::drawArc );
     placeMenu->Add( PCB_ACTIONS::drawRectangle );
     placeMenu->Add( PCB_ACTIONS::drawCircle );
+    placeMenu->Add( PCB_ACTIONS::drawEllipse );
+    placeMenu->Add( PCB_ACTIONS::drawEllipseArc );
     placeMenu->Add( PCB_ACTIONS::drawPolygon );
     placeMenu->Add( PCB_ACTIONS::drawBezier );
     placeMenu->Add( PCB_ACTIONS::placeReferenceImage );
@@ -402,6 +405,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     toolsMenu->AppendSeparator();
     toolsMenu->Add( ACTIONS::showFootprintEditor );
     toolsMenu->Add( PCB_ACTIONS::updateFootprints );
+    toolsMenu->Add( PCB_ACTIONS::migrate3DModels );
 
     //Zones management
     toolsMenu->AppendSeparator();

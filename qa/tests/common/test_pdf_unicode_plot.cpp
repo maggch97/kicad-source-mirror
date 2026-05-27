@@ -544,4 +544,239 @@ BOOST_AUTO_TEST_CASE( PlotTextWithTabs )
     MaybeRemoveFile( pdfPath );
 }
 
+// Regression test for GitLab issue 23740: stroke-font Type3 glyphs in the PDF output were
+// plotted above and to the left of where they should have been.  The old code derived the
+// vertical anchor from StringBoundaryLimits (which inflates by 3*thickness) and forgot to
+// cancel the m_PDFStrokeFontYOffset baked into every Type3 glyph, so character placement
+// varied with the caller's pen width and with the stroke-font Y offset.
+//
+// The test plots the same character with V_TOP, V_CENTER and V_BOTTOM alignments at the same
+// anchor, parses the text-matrix ctm_f value out of the content stream, then verifies that
+// ctm_f corresponds to the positions that FONT::getLinePositions would produce for GAL,
+// translated to PDF device coordinates (with the stroke-font yOffset applied so glyph ink
+// lands where screen rendering would).
+BOOST_AUTO_TEST_CASE( StrokeFontVerticalAlignmentMatchesScreen )
+{
+    wxString pdfPath = getTempPdfPath( "kicad_pdf_valign" );
+
+    PDF_PLOTTER plotter;
+    SIMPLE_RENDER_SETTINGS renderSettings;
+    plotter.SetRenderSettings( &renderSettings );
+    BOOST_REQUIRE( plotter.OpenFile( pdfPath ) );
+    plotter.SetViewport( VECTOR2I( 0, 0 ), 1.0, 1.0, false );
+    BOOST_REQUIRE( plotter.StartPlot( wxT( "1" ), wxT( "VAlignTest" ) ) );
+
+    const int anchorY = 60000;
+    const int sizeIU  = 3000;
+    const int strokeW = 300;
+
+    auto plotAt = [&]( GR_TEXT_V_ALIGN_T aVJustify, bool aItalic )
+    {
+        TEXT_ATTRIBUTES attrs = BuildTextAttributes( sizeIU, strokeW, false, aItalic );
+        attrs.m_Valign = aVJustify;
+        auto strokeFont = LoadStrokeFontUnique();
+        KIFONT::METRICS metrics;
+        plotter.PlotText( VECTOR2I( 50000, anchorY ), COLOR4D( 0, 0, 0, 1 ), wxT( "T" ), attrs,
+                          strokeFont.get(), metrics );
+    };
+
+    plotAt( GR_TEXT_V_ALIGN_TOP, false );
+    plotAt( GR_TEXT_V_ALIGN_CENTER, false );
+    plotAt( GR_TEXT_V_ALIGN_BOTTOM, false );
+    plotAt( GR_TEXT_V_ALIGN_TOP, true );
+    plotAt( GR_TEXT_V_ALIGN_CENTER, true );
+    plotter.EndPlot();
+
+    std::string buffer;
+    BOOST_REQUIRE( ReadPdfWithDecompressedStreams( pdfPath, buffer ) );
+
+    // Capture the full text matrix for every `q ... cm BT ... Tj ET Q` block.
+    struct MATRIX_SAMPLE { double a, b, c, d, e, f; };
+    std::vector<MATRIX_SAMPLE> matrices;
+    std::string::size_type pos = 0;
+
+    while( ( pos = buffer.find( "cm BT", pos ) ) != std::string::npos )
+    {
+        std::string::size_type lineStart = buffer.rfind( '\n', pos );
+        lineStart = ( lineStart == std::string::npos ) ? 0 : lineStart + 1;
+
+        std::string cmLine = buffer.substr( lineStart, pos - lineStart );
+        MATRIX_SAMPLE m{};
+
+        if( sscanf( cmLine.c_str(), "q %lf %lf %lf %lf %lf %lf", &m.a, &m.b, &m.c, &m.d, &m.e,
+                    &m.f ) == 6 )
+        {
+            matrices.push_back( m );
+        }
+
+        pos += 5;
+    }
+
+    BOOST_REQUIRE_EQUAL( matrices.size(), 5u );
+
+    const double fontSize  = (double) sizeIU;
+    const double thickness = (double) strokeW;
+
+    // GAL cursor offsets from FONT::getLinePositions (single line, height = 1.17 * size):
+    //     V_TOP    = size                (+ size.y below anchor)
+    //     V_CENTER = 0.415 * size        (size - height/2)
+    //     V_BOTTOM = -0.17  * size       (size - height)
+    // The PDF stroke path applies a constant yOffset on top of these, which drops out of the
+    // deltas between alignments, so we check those deltas directly.  PDF device Y decreases
+    // as IU Y increases, so ctm_f_TOP < ctm_f_CENTER < ctm_f_BOTTOM.
+    const double expected_delta_top_center = ( 1.000 - 0.415 ) * fontSize;
+    const double expected_delta_center_bot = ( 0.415 - ( -0.17 ) ) * fontSize;
+
+    const double observed_delta_top_center = matrices[1].f - matrices[0].f;
+    const double observed_delta_center_bot = matrices[2].f - matrices[1].f;
+
+    BOOST_CHECK_CLOSE( observed_delta_top_center, expected_delta_top_center, 1.0 );
+    BOOST_CHECK_CLOSE( observed_delta_center_bot, expected_delta_center_bot, 1.0 );
+
+    BOOST_CHECK_MESSAGE( matrices[0].f < matrices[1].f && matrices[1].f < matrices[2].f,
+                         "Expected ctm_f to decrease from V_BOTTOM to V_CENTER to V_TOP, got "
+                             << matrices[0].f << ", " << matrices[1].f << ", " << matrices[2].f );
+
+    // The uncorrected formula (pre-fix) would give 0.5 * (size + 3*thickness) for the V_TOP
+    // to V_CENTER delta.  Ensure the observed delta does not match that, which would mean
+    // the alignment fix is inactive.
+    const double uncorrectedDelta = 0.5 * ( fontSize + 3.0 * thickness );
+    BOOST_CHECK_MESSAGE( std::abs( observed_delta_top_center - uncorrectedDelta ) > 1.0,
+                         "ctm_f delta for V_TOP vs V_CENTER matches the uncorrected formula; "
+                         "the stroke-font alignment fix does not appear to be in effect." );
+
+    // For italic text the Y axis of the text matrix is sheared (adj_c != 0 for horizontal
+    // italic), so the baseline correction has to project onto (adj_c, adj_d) rather than
+    // sin/cos of aOrient.  With the buggy sin/cos formula, italic_delta_e between V_TOP and
+    // V_CENTER at angle 0 would be zero (same as the non-italic case); with the fix the
+    // shear transfers part of the correction into the X direction.
+    const double italic_delta_e = matrices[4].e - matrices[3].e;
+    const double nonitalic_delta_e = matrices[1].e - matrices[0].e;
+
+    BOOST_CHECK_MESSAGE( std::abs( matrices[3].c ) > 0.01,
+                         "Italic text matrix does not show the expected shear (adj_c == "
+                             << matrices[3].c << ")" );
+
+    // Non-italic, horizontal text has adj_c == 0, so delta_e between V-alignments is 0.
+    BOOST_CHECK_SMALL( nonitalic_delta_e, 1.0 );
+
+    // Italic text must show a non-zero delta_e from the shear projection.  The direction
+    // is determined by the sign of the shear: with tilt = -ITALIC_TILT and downward IU Y
+    // correction, italic_delta_e has the opposite sign of adj_c (i.e., negative when the
+    // italic shear leans right).
+    BOOST_CHECK_MESSAGE( std::abs( italic_delta_e ) > 1.0,
+                         "Italic baseline correction did not shear along the text-matrix Y "
+                         "axis; italic_delta_e = "
+                             << italic_delta_e
+                             << " (should be non-zero when adj_c is non-zero)" );
+    BOOST_CHECK_MESSAGE( italic_delta_e * matrices[3].c < 0,
+                         "italic_delta_e should have the opposite sign of adj_c; got "
+                             << italic_delta_e << " vs adj_c=" << matrices[3].c );
+
+    MaybeRemoveFile( pdfPath );
+}
+
+
+// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24419
+// PDF_PLOTTER::renderWord used to advance the per-word cursor by
+// FONT::StringBoundaryLimits, which for stroke fonts inflates the returned
+// bounding box by 3*thickness.  The Tj operator that actually renders the word
+// advances by the sum of glyph widths (no inflation), so successive words were
+// pushed too far apart in the rendered PDF.  The bug was visible on silkscreen
+// text whose width exceeded the board edge in the exported PDF but fit on the
+// PCB editor canvas.
+//
+// The fix is to derive the cursor advance from FONT::GetTextAsGlyphs, which
+// matches exactly what Tj produces.  This test plots a multi-word string and
+// verifies that the gap between word origins corresponds to the actual
+// glyph-width sum rather than the inflated bbox.
+BOOST_AUTO_TEST_CASE( StrokeFontWordSpacingMatchesGlyphAdvance )
+{
+    wxString pdfPath = getTempPdfPath( "kicad_pdf_wordspacing" );
+
+    PDF_PLOTTER plotter;
+    SIMPLE_RENDER_SETTINGS renderSettings;
+    plotter.SetRenderSettings( &renderSettings );
+    BOOST_REQUIRE( plotter.OpenFile( pdfPath ) );
+    plotter.SetViewport( VECTOR2I( 0, 0 ), 1.0, 1.0, false );
+    BOOST_REQUIRE( plotter.StartPlot( wxT( "1" ), wxT( "WordSpacingTest" ) ) );
+
+    const int       sizeIU  = 1900;          // mimics the 1.9mm silk text from issue #24419
+    const int       strokeW = 380;           // bold thickness as in the issue file
+    TEXT_ATTRIBUTES attrs   = BuildTextAttributes( sizeIU, strokeW, true, false );
+    attrs.m_Halign          = GR_TEXT_H_ALIGN_LEFT;
+    attrs.m_Valign          = GR_TEXT_V_ALIGN_BOTTOM;
+
+    auto                  strokeFont = LoadStrokeFontUnique();
+    const KIFONT::METRICS metrics;
+
+    plotter.PlotText( VECTOR2I( 50000, 60000 ), COLOR4D( 0, 0, 0, 1 ),
+                      wxT( "TEST text Silkscreen" ), attrs, strokeFont.get(), metrics );
+    plotter.EndPlot();
+
+    std::string buffer;
+    BOOST_REQUIRE( ReadPdfWithDecompressedStreams( pdfPath, buffer ) );
+
+    // Each word becomes one `q ... cm BT ... Tj ET Q` block.  Capture the X translation (ctm_e)
+    // of each block so we can verify the gap between words.
+    std::vector<double> wordOriginX;
+    std::string::size_type pos = 0;
+
+    while( ( pos = buffer.find( "cm BT", pos ) ) != std::string::npos )
+    {
+        std::string::size_type lineStart = buffer.rfind( '\n', pos );
+        lineStart = ( lineStart == std::string::npos ) ? 0 : lineStart + 1;
+
+        std::string cmLine = buffer.substr( lineStart, pos - lineStart );
+        double a, b, c, d, e, f;
+
+        if( sscanf( cmLine.c_str(), "q %lf %lf %lf %lf %lf %lf", &a, &b, &c, &d, &e, &f ) == 6 )
+            wordOriginX.push_back( e );
+
+        pos += 5;
+    }
+
+    // Expect one block per word: "TEST", "text", "Silkscreen".
+    BOOST_REQUIRE_EQUAL( wordOriginX.size(), 3u );
+
+    // Compute the expected stroke-font cursor advance for "TEST " (word + trailing space) and
+    // "text " in IU.  This is what the Tj operator will move the text cursor by and what the
+    // renderWord cursor should match.  Compare ratios so we don't have to convert to device
+    // units (userToDeviceSize is protected).
+    auto strokeAdvanceIU = [&]( const wxString& aWord )
+    {
+        return strokeFont
+                ->GetTextAsGlyphs( nullptr, nullptr, aWord, VECTOR2I( sizeIU, sizeIU ),
+                                   VECTOR2I(), ANGLE_0, false, VECTOR2I(), TEXT_STYLE::BOLD )
+                .x;
+    };
+
+    const double expectedTestAdvanceIU = (double) strokeAdvanceIU( wxT( "TEST " ) );
+    const double expectedTextAdvanceIU = (double) strokeAdvanceIU( wxT( "text " ) );
+
+    const double observedTestAdvanceDev = wordOriginX[1] - wordOriginX[0];
+    const double observedTextAdvanceDev = wordOriginX[2] - wordOriginX[1];
+
+    // device-per-IU scale factor derived from the first observed gap.
+    const double scale = observedTestAdvanceDev / expectedTestAdvanceIU;
+
+    // The TEST -> text advance and the text -> Silkscreen advance must both follow the
+    // same IU-to-device scale: if the spacing matches glyph metrics, the second observed
+    // gap equals scale * expectedTextAdvanceIU.
+    const double expectedTextAdvanceDev = scale * expectedTextAdvanceIU;
+    BOOST_CHECK_CLOSE( observedTextAdvanceDev, expectedTextAdvanceDev, 0.5 );
+
+    // Sanity guard against regression to the inflated-bbox formula, which adds 3*thickness IU
+    // of slop per word.  Use the second word so this check is independent of the scale derivation
+    // above.
+    const double inflatedTextAdvanceDev = scale * ( expectedTextAdvanceIU + 3.0 * strokeW );
+    BOOST_CHECK_MESSAGE( std::abs( observedTextAdvanceDev - inflatedTextAdvanceDev )
+                                 > 0.5 * ( inflatedTextAdvanceDev - expectedTextAdvanceDev ),
+                         "Word spacing matches the buggy inflated-bbox formula ("
+                                 << observedTextAdvanceDev << " ~= " << inflatedTextAdvanceDev
+                                 << "); the renderWord cursor fix appears inactive." );
+
+    MaybeRemoveFile( pdfPath );
+}
+
 BOOST_AUTO_TEST_SUITE_END()

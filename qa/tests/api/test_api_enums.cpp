@@ -27,6 +27,7 @@
 #include <api/api_enums.h>
 #include <api/board/board.pb.h>
 #include <api/common/types/enums.pb.h>
+#include <eda_shape.h>
 #include <core/typeinfo.h>
 #include <font/text_attributes.h>
 #include <layer_ids.h>
@@ -80,6 +81,11 @@ BOOST_AUTO_TEST_CASE( VerticalAlignment )
 BOOST_AUTO_TEST_CASE( StrokeLineStyle )
 {
     testEnums<LINE_STYLE, types::StrokeLineStyle>();
+}
+
+BOOST_AUTO_TEST_CASE( GraphicFillType )
+{
+    testEnums<FILL_T, types::GraphicFillType>();
 }
 
 BOOST_AUTO_TEST_CASE( KiCadObjectType )

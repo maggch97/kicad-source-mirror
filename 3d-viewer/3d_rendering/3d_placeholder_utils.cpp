@@ -230,6 +230,33 @@ static bool buildFilledPolygonFromShapes( const FOOTPRINT* aFootprint, PCB_LAYER
 }
 
 
+static bool buildPadBoundingBox( const FOOTPRINT* aFootprint, SHAPE_POLY_SET& aOutline )
+{
+    BOX2I padBox = CalcPlaceholderLocalBox( aFootprint );
+
+    if( padBox.GetWidth() <= 0 || padBox.GetHeight() <= 0 )
+        return false;
+
+    VECTOR2I  fpPos = aFootprint->GetPosition();
+    EDA_ANGLE fpAngle = aFootprint->GetOrientation();
+
+    VECTOR2I corners[4] = { padBox.GetOrigin(), VECTOR2I( padBox.GetRight(), padBox.GetTop() ),
+                            VECTOR2I( padBox.GetRight(), padBox.GetBottom() ),
+                            VECTOR2I( padBox.GetLeft(), padBox.GetBottom() ) };
+
+    aOutline.NewOutline();
+
+    for( int i = 0; i < 4; ++i )
+    {
+        RotatePoint( corners[i], fpAngle );
+        corners[i] += fpPos;
+        aOutline.Append( corners[i] );
+    }
+
+    return true;
+}
+
+
 bool GetExtrusionOutline( const FOOTPRINT* aFootprint, SHAPE_POLY_SET& aOutline, PCB_LAYER_ID aLayerOverride )
 {
     aOutline.RemoveAllContours();
@@ -238,11 +265,15 @@ bool GetExtrusionOutline( const FOOTPRINT* aFootprint, SHAPE_POLY_SET& aOutline,
     PCB_LAYER_ID            extLayer =
             ( aLayerOverride != UNDEFINED_LAYER ) ? aLayerOverride : ( body ? body->m_layer : UNDEFINED_LAYER );
 
+    // Explicit pin bounding box mode
+    if( extLayer == UNSELECTED_LAYER )
+        return buildPadBoundingBox( aFootprint, aOutline );
+
     bool isBack = aFootprint->IsFlipped();
 
-    if( isBack && ( extLayer == F_CrtYd || extLayer == F_Fab ) )
+    if( isBack && ( extLayer == F_CrtYd || extLayer == F_Fab || extLayer == F_SilkS ) )
         extLayer = FlipLayer( extLayer );
-    else if( !isBack && ( extLayer == B_CrtYd || extLayer == B_Fab ) )
+    else if( !isBack && ( extLayer == B_CrtYd || extLayer == B_Fab || extLayer == B_SilkS ) )
         extLayer = FlipLayer( extLayer );
 
     if( extLayer != UNDEFINED_LAYER )
@@ -259,6 +290,11 @@ bool GetExtrusionOutline( const FOOTPRINT* aFootprint, SHAPE_POLY_SET& aOutline,
             }
         }
         else if( extLayer == F_Fab || extLayer == B_Fab )
+        {
+            if( buildFilledPolygonFromShapes( aFootprint, extLayer, aOutline ) )
+                return true;
+        }
+        else if( extLayer == F_SilkS || extLayer == B_SilkS )
         {
             if( buildFilledPolygonFromShapes( aFootprint, extLayer, aOutline ) )
                 return true;
@@ -288,31 +324,21 @@ bool GetExtrusionOutline( const FOOTPRINT* aFootprint, SHAPE_POLY_SET& aOutline,
     if( buildFilledPolygonFromShapes( aFootprint, fabLayer, aOutline ) )
         return true;
 
-    wxLogTrace( wxT( "KI_TRACE_3D_RENDER" ), wxT( "Extrusion: fab layer outline failed for '%s', trying pad bbox" ),
+    wxLogTrace( wxT( "KI_TRACE_3D_RENDER" ),
+                wxT( "Extrusion: fab layer outline failed for '%s', trying silkscreen" ),
                 aFootprint->GetReference() );
 
-    BOX2I padBox = CalcPlaceholderLocalBox( aFootprint );
+    PCB_LAYER_ID silkLayer = isBack ? B_SilkS : F_SilkS;
 
-    if( padBox.GetWidth() > 0 && padBox.GetHeight() > 0 )
-    {
-        VECTOR2I  fpPos = aFootprint->GetPosition();
-        EDA_ANGLE fpAngle = aFootprint->GetOrientation();
-
-        VECTOR2I corners[4] = { padBox.GetOrigin(), VECTOR2I( padBox.GetRight(), padBox.GetTop() ),
-                                VECTOR2I( padBox.GetRight(), padBox.GetBottom() ),
-                                VECTOR2I( padBox.GetLeft(), padBox.GetBottom() ) };
-
-        aOutline.NewOutline();
-
-        for( int i = 0; i < 4; ++i )
-        {
-            RotatePoint( corners[i], fpAngle );
-            corners[i] += fpPos;
-            aOutline.Append( corners[i] );
-        }
-
+    if( buildFilledPolygonFromShapes( aFootprint, silkLayer, aOutline ) )
         return true;
-    }
+
+    wxLogTrace( wxT( "KI_TRACE_3D_RENDER" ),
+                wxT( "Extrusion: silkscreen outline failed for '%s', trying pad bbox" ),
+                aFootprint->GetReference() );
+
+    if( buildPadBoundingBox( aFootprint, aOutline ) )
+        return true;
 
     wxLogTrace( wxT( "KI_TRACE_3D_RENDER" ), wxT( "Extrusion: no outline could be generated for '%s'" ),
                 aFootprint->GetReference() );

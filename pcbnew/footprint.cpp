@@ -347,7 +347,7 @@ void FOOTPRINT::Serialize( google::protobuf::Any &aContainer ) const
 
     types::Footprint* def = footprint.mutable_definition();
 
-    def->mutable_id()->CopyFrom( kiapi::common::LibIdToProto( GetFPID() ) );
+    kiapi::common::PackLibId( def->mutable_id(), GetFPID() );
     // anchor?
     def->mutable_attributes()->set_description( GetLibDescription().ToUTF8() );
     def->mutable_attributes()->set_keywords( GetKeywords().ToUTF8() );
@@ -517,7 +517,7 @@ bool FOOTPRINT::Deserialize( const google::protobuf::Any &aContainer )
     SetAllowSolderMaskBridges( footprint.attributes().allow_soldermask_bridges() );
 
     // Definition
-    SetFPID( kiapi::common::LibIdFromProto( footprint.definition().id() ) );
+    SetFPID( kiapi::common::UnpackLibId( footprint.definition().id() ) );
     // TODO: how should anchor be handled?
     SetLibDescription( footprint.definition().attributes().description() );
     SetKeywords( footprint.definition().attributes().keywords() );
@@ -1386,10 +1386,17 @@ wxString FOOTPRINT::GetFieldValueForVariant( const wxString& aVariantName, const
 
 void FOOTPRINT::ClearAllNets()
 {
-    // Force the ORPHANED dummy net info for all pads.
-    // ORPHANED dummy net does not depend on a board
-    for( PAD* pad : m_pads )
-        pad->SetNetCode( NETINFO_LIST::ORPHANED );
+    // Force the ORPHANED dummy net info on every BOARD_CONNECTED_ITEM descendant so that
+    // operations which read through m_netinfo (e.g. library serialization) cannot chase a
+    // dangling pointer when this footprint has been detached from its original parent board.
+    // ORPHANED dummy net does not depend on a board.
+    RunOnChildren(
+            []( BOARD_ITEM* aItem )
+            {
+                if( BOARD_CONNECTED_ITEM* bci = dynamic_cast<BOARD_CONNECTED_ITEM*>( aItem ) )
+                    bci->SetNetCode( NETINFO_LIST::ORPHANED, /* aNoAssert */ true );
+            },
+            RECURSE_MODE::RECURSE );
 }
 
 
@@ -1470,7 +1477,8 @@ void FOOTPRINT::Add( BOARD_ITEM* aBoardItem, ADD_MODE aMode, bool aSkipConnectiv
     aBoardItem->SetParent( this );
 
     // If this footprint is on a board, update the board's item-by-id cache
-    if( BOARD* board = GetBoard() )
+    // Skip caching for copy-constructed footprints (inherited board ptr but not a real member).
+    if( BOARD* board = GetBoard(); board && board->IsItemIndexedById( this ) )
         board->CacheItemSubtreeById( aBoardItem );
 
     InvalidateGeometryCaches();
@@ -1573,7 +1581,7 @@ void FOOTPRINT::Remove( BOARD_ITEM* aBoardItem, REMOVE_MODE aMode )
     }
 
     // If this footprint is on a board, update the board's item-by-id cache
-    if( BOARD* board = GetBoard() )
+    if( BOARD* board = GetBoard(); board && board->IsItemIndexedById( this ) )
         board->UncacheItemSubtreeById( aBoardItem );
 
     aBoardItem->SetFlags( STRUCT_DELETED );
@@ -2433,6 +2441,18 @@ PAD* FOOTPRINT::FindPadByNumber( const wxString& aPadNumber, PAD* aSearchAfterMe
 }
 
 
+PAD* FOOTPRINT::FindPadByUuid( const KIID& aUuid ) const
+{
+    for( PAD* pad : m_pads )
+    {
+        if( pad->m_Uuid == aUuid )
+            return pad;
+    }
+
+    return nullptr;
+}
+
+
 PAD* FOOTPRINT::GetPad( const VECTOR2I& aPosition, const LSET& aLayerMask )
 {
     for( PAD* pad : m_pads )
@@ -2518,6 +2538,63 @@ std::set<wxString> FOOTPRINT::GetUniquePadNumbers( INCLUDE_NPTH_T aIncludeNPTH )
 unsigned FOOTPRINT::GetUniquePadCount( INCLUDE_NPTH_T aIncludeNPTH ) const
 {
     return GetUniquePadNumbers( aIncludeNPTH ).size();
+}
+
+
+unsigned FOOTPRINT::GetNumberedPadCount() const
+{
+    // A pad number is "electrical" (i.e. maps to a schematic pin) when it is either:
+    //   - purely numeric:           "1", "42"
+    //   - BGA / alphanumeric style: up to two leading letters followed by digits, e.g.
+    //                               "A1", "B12", "AA3", "AB10"
+    // Mounting-pad designators such as "MP" do not end in a digit typically
+    // and are intentionally excluded.
+    auto isElectricalPadNumber = []( const wxString& num ) -> bool
+    {
+        if( num.IsEmpty() )
+            return false;
+
+        // Walk past an optional alphabetic prefix of at most two characters.
+        size_t i = 0;
+        while( i < num.size() && wxIsalpha( num[i] ) )
+            ++i;
+
+        // Prefix must be 0–2 letters; anything longer is not a pin number.
+        if( i > 2 )
+            return false;
+
+        // The remainder must be non-empty and consist entirely of digits.
+        if( i == num.size() )
+            return false;   // no digits at all (e.g. "MP", "GND")
+
+        for( size_t j = i; j < num.size(); ++j )
+        {
+            if( !wxIsdigit( num[j] ) )
+                return false;
+        }
+
+        return true;
+    };
+
+    std::set<wxString> counted;
+
+    for( const PAD* pad : m_pads )
+    {
+        // Must be on at least one copper layer.
+        if( ( pad->GetLayerSet() & LSET::AllCuMask() ).none() )
+            continue;
+
+        // Skip NPTH (mechanical holes).
+        if( pad->GetAttribute() == PAD_ATTRIB::NPTH )
+            continue;
+
+        const wxString& num = pad->GetNumber();
+
+        if( isElectricalPadNumber( num ) )
+            counted.insert( num );
+    }
+
+    return static_cast<unsigned>( counted.size() );
 }
 
 
@@ -4340,6 +4417,32 @@ bool FOOTPRINT::cmp_drawings::operator()( const BOARD_ITEM* itemA, const BOARD_I
                 {
                     return *cmp;
                 }
+            }
+        }
+        else if( dwgA->GetShape() == SHAPE_T::ELLIPSE || dwgA->GetShape() == SHAPE_T::ELLIPSE_ARC )
+        {
+            if( std::optional<bool> cmp = cmp_points_opt( dwgA->GetEllipseCenter(), dwgB->GetEllipseCenter() ) )
+                return *cmp;
+
+            if( dwgA->GetEllipseMajorRadius() != dwgB->GetEllipseMajorRadius() )
+                return dwgA->GetEllipseMajorRadius() < dwgB->GetEllipseMajorRadius();
+
+            if( dwgA->GetEllipseMinorRadius() != dwgB->GetEllipseMinorRadius() )
+                return dwgA->GetEllipseMinorRadius() < dwgB->GetEllipseMinorRadius();
+
+            if( dwgA->GetEllipseRotation().AsTenthsOfADegree() != dwgB->GetEllipseRotation().AsTenthsOfADegree() )
+                return dwgA->GetEllipseRotation().AsTenthsOfADegree() < dwgB->GetEllipseRotation().AsTenthsOfADegree();
+
+            if( dwgA->GetShape() == SHAPE_T::ELLIPSE_ARC )
+            {
+                if( dwgA->GetEllipseStartAngle().AsTenthsOfADegree()
+                    != dwgB->GetEllipseStartAngle().AsTenthsOfADegree() )
+                    return dwgA->GetEllipseStartAngle().AsTenthsOfADegree()
+                           < dwgB->GetEllipseStartAngle().AsTenthsOfADegree();
+
+                if( dwgA->GetEllipseEndAngle().AsTenthsOfADegree() != dwgB->GetEllipseEndAngle().AsTenthsOfADegree() )
+                    return dwgA->GetEllipseEndAngle().AsTenthsOfADegree()
+                           < dwgB->GetEllipseEndAngle().AsTenthsOfADegree();
             }
         }
 

@@ -29,6 +29,7 @@ add_compile_definitions( BOOST_TEST_DYN_LINK PCBNEW USE_TOOL_MANAGER)
 
 
 set( COMMON_SRCS
+    ../../../pcbnew/net_chain_bridging.cpp
     ../../../pcbnew/drc/drc_creepage_utils.cpp
     ../../../pcbnew/drc/drc_rule.cpp
     ../../../pcbnew/drc/drc_rule_condition.cpp
@@ -51,6 +52,7 @@ set( COMMON_SRCS
     ../../../pcbnew/drc/drc_test_provider_silk_clearance.cpp
     ../../../pcbnew/drc/drc_test_provider_matched_length.cpp
     ../../../pcbnew/drc/drc_test_provider_diff_pair_coupling.cpp
+    ../../../pcbnew/drc/drc_chain_topology.cpp
     ../../../pcbnew/drc/drc_engine.cpp
     ../../../pcbnew/drc/drc_item.cpp
     ../../../pcbnew/board_stackup_manager/stackup_predefined_prms.cpp

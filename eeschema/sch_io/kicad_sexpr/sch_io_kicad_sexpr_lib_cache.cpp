@@ -262,6 +262,7 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::Save( const std::optional<bool>& aOpt )
             SaveSymbol( symbol, *formatter.get() );
 
         formatter->Print( ")" );
+        formatter->Finish();
         formatter.reset();
     }
     else
@@ -340,6 +341,7 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::Save( const std::optional<bool>& aOpt )
                 SaveSymbol( symbol, *formatter.get() );
 
             formatter->Print( ")" );
+            formatter->Finish();
             formatter.reset();
 
             // Update source file tracking for new symbols
@@ -641,6 +643,12 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::saveSymbolDrawItem( SCH_ITEM* aItem, OUTPUTFO
 
         case SHAPE_T::POLY:
             formatPoly( &aFormatter, shape, isPrivate, stroke, fillMode, fillColor, true );
+            break;
+
+        case SHAPE_T::ELLIPSE: formatEllipse( &aFormatter, shape, isPrivate, stroke, fillMode, fillColor, true ); break;
+
+        case SHAPE_T::ELLIPSE_ARC:
+            formatEllipseArc( &aFormatter, shape, isPrivate, stroke, fillMode, fillColor, true );
             break;
 
         default:

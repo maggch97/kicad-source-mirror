@@ -249,6 +249,37 @@ NET_SETTINGS::NET_SETTINGS( JSON_SETTINGS* aParent, const std::string& aPath ) :
             },
             {} ) );
 
+    m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "net_chain_classes",
+            [&]() -> nlohmann::json
+            {
+                // Force object type so an empty map round-trips as {} rather than null;
+                // the reader rejects non-objects, which would otherwise leave stale
+                // chain assignments in place after the user clears them all.
+                nlohmann::json ret = nlohmann::json::object();
+
+                for( const auto& [chain, className] : m_netChainClasses )
+                    ret[ std::string( chain.ToUTF8() ) ] = std::string( className.ToUTF8() );
+
+                return ret;
+            },
+            [&]( const nlohmann::json& aJson )
+            {
+                if( !aJson.is_object() )
+                    return;
+
+                m_netChainClasses.clear();
+
+                for( const auto& pair : aJson.items() )
+                {
+                    wxString chain( pair.key().c_str(), wxConvUTF8 );
+                    wxString className = pair.value().get<wxString>();
+
+                    if( !className.IsEmpty() )
+                        m_netChainClasses[ std::move( chain ) ] = std::move( className );
+                }
+            },
+            {} ) );
+
     m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "netclass_assignments",
             [&]() -> nlohmann::json
             {
@@ -355,22 +386,44 @@ NET_SETTINGS::~NET_SETTINGS()
 bool NET_SETTINGS::operator==( const NET_SETTINGS& aOther ) const
 {
     if( !std::equal( std::begin( m_netClasses ), std::end( m_netClasses ),
-                     std::begin( aOther.m_netClasses ) ) )
+                     std::begin( aOther.m_netClasses ), std::end( aOther.m_netClasses ) ) )
         return false;
+
+    // m_netClassPatternAssignments stores std::unique_ptr<EDA_COMBINED_MATCHER>, so a naive
+    // std::equal would compare matcher pointer identity and report two settings instances built
+    // from identical input as unequal.  Compare pattern text plus the assigned netclass name.
+    auto patternEqual = []( const auto& aLhs, const auto& aRhs )
+    {
+        if( !aLhs.first || !aRhs.first )
+            return aLhs.first.get() == aRhs.first.get() && aLhs.second == aRhs.second;
+
+        return aLhs.first->GetPattern() == aRhs.first->GetPattern() && aLhs.second == aRhs.second;
+    };
 
     if( !std::equal( std::begin( m_netClassPatternAssignments ),
                      std::end( m_netClassPatternAssignments ),
-                     std::begin( aOther.m_netClassPatternAssignments ) ) )
+                     std::begin( aOther.m_netClassPatternAssignments ),
+                     std::end( aOther.m_netClassPatternAssignments ),
+                     patternEqual ) )
         return false;
+
+    // m_netClassChainPatternAssignments is derived state, rebuilt from m_netChainClasses and
+    // board NETINFO on every netlist update.  Equality is defined by persisted inputs only;
+    // including the derived list here would mark the project dirty whenever a rebuild produced
+    // a transient ordering difference.
 
     if( !std::equal( std::begin( m_netClassLabelAssignments ),
                      std::end( m_netClassLabelAssignments ),
-                     std::begin( aOther.m_netClassLabelAssignments ) ) )
+                     std::begin( aOther.m_netClassLabelAssignments ),
+                     std::end( aOther.m_netClassLabelAssignments ) ) )
         return false;
 
-
     if( !std::equal( std::begin( m_netColorAssignments ), std::end( m_netColorAssignments ),
-                     std::begin( aOther.m_netColorAssignments ) ) )
+                     std::begin( aOther.m_netColorAssignments ),
+                     std::end( aOther.m_netColorAssignments ) ) )
+        return false;
+
+    if( m_netChainClasses != aOther.m_netChainClasses )
         return false;
 
     return true;
@@ -633,6 +686,42 @@ void NET_SETTINGS::ClearNetclassPatternAssignments()
 }
 
 
+void NET_SETTINGS::SetChainPatternAssignment( const wxString& pattern, const wxString& netclass )
+{
+    ForEachBusMember( pattern,
+                      [&]( const wxString& memberPattern )
+                      {
+                          addSingleChainPatternAssignment( memberPattern, netclass );
+                      } );
+
+    ClearAllCaches();
+}
+
+
+void NET_SETTINGS::addSingleChainPatternAssignment( const wxString& pattern,
+                                                    const wxString& netclass )
+{
+    for( auto& assignment : m_netClassChainPatternAssignments )
+    {
+        if( !assignment.first )
+            continue;
+
+        if( assignment.first->GetPattern() == pattern && assignment.second == netclass )
+            return;
+    }
+
+    m_netClassChainPatternAssignments.push_back(
+            { std::make_unique<EDA_COMBINED_MATCHER>( pattern, CTX_NETCLASS ), netclass } );
+}
+
+
+void NET_SETTINGS::ClearChainPatternAssignments()
+{
+    m_netClassChainPatternAssignments.clear();
+    ClearAllCaches();
+}
+
+
 void NET_SETTINGS::ClearCacheForNet( const wxString& netName )
 {
     if( m_effectiveNetclassCache.count( netName ) )
@@ -752,23 +841,27 @@ std::shared_ptr<NETCLASS> NET_SETTINGS::GetEffectiveNetClass( const wxString& aN
         }
     }
 
-    // Now find any pattern-matched netclass assignments
-    for( const auto& [matcher, netclassName] : m_netClassPatternAssignments )
-    {
-        if( matcher->StartsWith( aNetName ) )
-        {
-            std::shared_ptr<NETCLASS> netclass = getExplicitNetclass( netclassName );
+    // Now find any pattern-matched netclass assignments (user + chain-derived)
+    auto applyPatternList =
+            [&]( const std::vector<std::pair<std::unique_ptr<EDA_COMBINED_MATCHER>, wxString>>&
+                         patterns )
+            {
+                for( const auto& [matcher, netclassName] : patterns )
+                {
+                    if( matcher->StartsWith( aNetName ) )
+                    {
+                        std::shared_ptr<NETCLASS> netclass = getExplicitNetclass( netclassName );
 
-            if( netclass )
-            {
-                resolvedNetclasses.insert( std::move( netclass ) );
-            }
-            else
-            {
-                resolvedNetclasses.insert( getOrAddImplicitNetcless( netclassName ) );
-            }
-        }
-    }
+                        if( netclass )
+                            resolvedNetclasses.insert( std::move( netclass ) );
+                        else
+                            resolvedNetclasses.insert( getOrAddImplicitNetcless( netclassName ) );
+                    }
+                }
+            };
+
+    applyPatternList( m_netClassPatternAssignments );
+    applyPatternList( m_netClassChainPatternAssignments );
 
     // Handle zero resolved netclasses
     if( resolvedNetclasses.size() == 0 )

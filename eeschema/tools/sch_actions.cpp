@@ -517,7 +517,7 @@ TOOL_ACTION SCH_ACTIONS::placeNoConnect( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .DefaultHotkey( 'Q' )
         .LegacyHotkeyName( "Add No Connect Flag" )
-        .FriendlyName( _( "Place No Connect Flags" ) )
+        .FriendlyName( _( "Place/Remove No Connect Flags" ) )
         .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::noconn )
         .Flags( AF_ACTIVATE )
@@ -696,6 +696,24 @@ TOOL_ACTION SCH_ACTIONS::drawCircle( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::add_circle )
         .Flags( AF_ACTIVATE )
         .Parameter( SHAPE_T::CIRCLE ) );
+
+TOOL_ACTION SCH_ACTIONS::drawEllipse( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawEllipse" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Ellipses" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_ellipse )
+        .Flags( AF_ACTIVATE )
+        .Parameter( SHAPE_T::ELLIPSE ) );
+
+TOOL_ACTION SCH_ACTIONS::drawEllipseArc( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawEllipseArc" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Elliptical Arcs" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_ellipse_arc )
+        .Flags( AF_ACTIVATE )
+        .Parameter( SHAPE_T::ELLIPSE_ARC ) );
 
 TOOL_ACTION SCH_ACTIONS::drawArc( TOOL_ACTION_ARGS()
         .Name( "eeschema.InteractiveDrawing.drawArc" )
@@ -1078,6 +1096,42 @@ TOOL_ACTION SCH_ACTIONS::highlightNetTool( TOOL_ACTION_ARGS()
         .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::net_highlight_schematic )
         .Flags( AF_ACTIVATE ) );
+
+TOOL_ACTION SCH_ACTIONS::highlightNetChain( TOOL_ACTION_ARGS()
+        .Name( "eeschema.EditorControl.highlightNetChain" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Highlight Net Chain" ) )
+        .Tooltip( _( "Highlight the net chain under the cursor" ) )
+        .Icon( BITMAPS::net_highlight_schematic ) );
+
+TOOL_ACTION SCH_ACTIONS::removeFromNetChain( TOOL_ACTION_ARGS()
+        .Name( "eeschema.EditorControl.removeFromNetChain" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Remove from Net Chain" ) )
+        .Tooltip( _( "Remove the selected net from its net chain by disabling propagation on the bridging component(s)" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::replaceTerminalPin( TOOL_ACTION_ARGS()
+        .Name( "eeschema.EditorControl.replaceTerminalPin" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Replace Terminal Pin" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::nameNetChain( TOOL_ACTION_ARGS()
+        .Name( "eeschema.EditorControl.nameNetChain" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Name Net Chain" ) )
+        .Tooltip( _( "Assign a name to the net chain" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::createNetChainBetweenPins( TOOL_ACTION_ARGS()
+        .Name( "eeschema.EditorControl.createNetChainBetweenPins" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Create Net Chain Between Pins" ) )
+        .Tooltip( _( "Create a new net chain connecting the two selected pins" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::createNetChain( TOOL_ACTION_ARGS()
+        .Name( "eeschema.EditorControl.createNetChain" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Create Net Chain..." ) )
+        .Tooltip( _( "Detect net chain paths through passives and create a named net chain" ) ) );
 
 TOOL_ACTION SCH_ACTIONS::showNetNavigator( TOOL_ACTION_ARGS()
         .Name( "eeschema.EditorControl.showNetNavigator" )
@@ -1802,7 +1856,7 @@ TOOL_ACTION SCH_ACTIONS::removeVariant( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Remove Design Variant..." ) )
         .Tooltip( _( "Remove an existing design variant from the schematic." ) ) );
 
-TOOL_ACTION SCH_ACTIONS::editVariantDescription( TOOL_ACTION_ARGS()                                                   
+TOOL_ACTION SCH_ACTIONS::editVariantDescription( TOOL_ACTION_ARGS()
         .Name( "eeschema.EditorControl.editVariantDescription" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Edit Variant Description..." ) )

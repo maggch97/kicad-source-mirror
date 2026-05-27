@@ -110,8 +110,8 @@
             <property name="pin_button">1</property>
             <property name="pos"></property>
             <property name="resize">Resizable</property>
-            <property name="sashgravity">0.5</property>
-            <property name="sashpos">400</property>
+            <property name="sashgravity">0.7</property>
+            <property name="sashpos">300</property>
             <property name="sashsize">-1</property>
             <property name="show">1</property>
             <property name="size"></property>
@@ -1242,7 +1242,7 @@
                               <property name="caption"></property>
                               <property name="caption_visible">1</property>
                               <property name="center_pane">0</property>
-                              <property name="choices">&quot;Auto&quot; &quot;Courtyard layer&quot; &quot;Fabrication layer&quot;</property>
+                              <property name="choices">&quot;Auto&quot; &quot;Courtyard layer&quot; &quot;Fabrication layer&quot; &quot;Silkscreen layer&quot; &quot;Pin bounding box&quot;</property>
                               <property name="close_button">1</property>
                               <property name="context_help"></property>
                               <property name="context_menu">1</property>

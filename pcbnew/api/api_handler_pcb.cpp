@@ -27,6 +27,7 @@
 #include <api/api_enums.h>
 #include <api/board_context.h>
 #include <api/api_utils.h>
+#include <base_screen.h>
 #include <board_commit.h>
 #include <board_connected_item.h>
 #include <board_design_settings.h>
@@ -128,9 +129,6 @@ API_HANDLER_PCB::API_HANDLER_PCB( std::shared_ptr<BOARD_CONTEXT> aContext,
             &API_HANDLER_PCB::handleGetPadShapeAsPolygon );
     registerHandler<CheckPadstackPresenceOnLayers, PadstackPresenceResponse>(
             &API_HANDLER_PCB::handleCheckPadstackPresenceOnLayers );
-    registerHandler<GetTitleBlockInfo, types::TitleBlockInfo>(
-            &API_HANDLER_PCB::handleGetTitleBlockInfo );
-    registerHandler<SetTitleBlockInfo, Empty>( &API_HANDLER_PCB::handleSetTitleBlockInfo );
     registerHandler<ExpandTextVariables, ExpandTextVariablesResponse>(
             &API_HANDLER_PCB::handleExpandTextVariables );
     registerHandler<GetBoardOrigin, types::Vector2>( &API_HANDLER_PCB::handleGetBoardOrigin );
@@ -163,34 +161,37 @@ API_HANDLER_PCB::API_HANDLER_PCB( std::shared_ptr<BOARD_CONTEXT> aContext,
     registerHandler<InjectDrcError, InjectDrcErrorResponse>(
             &API_HANDLER_PCB::handleInjectDrcError );
 
-        registerHandler<RunBoardJobExport3D, types::RunJobResponse>(
+    registerHandler<RunBoardJobExport3D, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExport3D );
-        registerHandler<RunBoardJobExportRender, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportRender, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportRender );
-        registerHandler<RunBoardJobExportSvg, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportSvg, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportSvg );
-        registerHandler<RunBoardJobExportDxf, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportDxf, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportDxf );
-        registerHandler<RunBoardJobExportPdf, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportPdf, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportPdf );
-        registerHandler<RunBoardJobExportPs, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportPs, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportPs );
-        registerHandler<RunBoardJobExportGerbers, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportGerbers, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportGerbers );
-        registerHandler<RunBoardJobExportDrill, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportDrill, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportDrill );
-        registerHandler<RunBoardJobExportPosition, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportPosition, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportPosition );
-        registerHandler<RunBoardJobExportGencad, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportGencad, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportGencad );
-        registerHandler<RunBoardJobExportIpc2581, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportIpc2581, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportIpc2581 );
-        registerHandler<RunBoardJobExportIpcD356, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportIpcD356, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportIpcD356 );
-        registerHandler<RunBoardJobExportODB, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportODB, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportODB );
-        registerHandler<RunBoardJobExportStats, types::RunJobResponse>(
+    registerHandler<RunBoardJobExportStats, types::RunJobResponse>(
             &API_HANDLER_PCB::handleRunBoardJobExportStats );
+
+    registerHandler<GetPageSettings, types::PageSettings>( &API_HANDLER_PCB::handleGetPageSettings );
+    registerHandler<SetPageSettings, types::PageSettings>( &API_HANDLER_PCB::handleSetPageSettings );
 }
 
 
@@ -388,13 +389,28 @@ std::optional<BOARD_ITEM*> API_HANDLER_PCB::getItemById( const KIID& aId ) const
 }
 
 
-bool API_HANDLER_PCB::validateDocumentInternal( const DocumentSpecifier& aDocument ) const
+tl::expected<bool, ApiResponseStatus> API_HANDLER_PCB::validateDocumentInternal( const DocumentSpecifier& aDocument ) const
 {
     if( aDocument.type() != DocumentType::DOCTYPE_PCB )
-        return false;
+    {
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+        e.set_error_message( "the requested document is not a board" );
+        return tl::unexpected( e );
+    }
 
     wxFileName fn( context()->GetCurrentFileName() );
-    return 0 == aDocument.board_filename().compare( fn.GetFullName() );
+
+    if( aDocument.board_filename().compare( fn.GetFullName() ) != 0 )
+    {
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+        e.set_error_message( fmt::format( "the requested document {} is not open",
+                                          aDocument.board_filename() ) );
+        return tl::unexpected( e );
+    }
+
+    return true;
 }
 
 
@@ -1998,76 +2014,48 @@ HANDLER_RESULT<PadstackPresenceResponse> API_HANDLER_PCB::handleCheckPadstackPre
 }
 
 
-HANDLER_RESULT<types::TitleBlockInfo> API_HANDLER_PCB::handleGetTitleBlockInfo(
-        const HANDLER_CONTEXT<GetTitleBlockInfo>& aCtx )
+std::optional<TITLE_BLOCK*> API_HANDLER_PCB::getTitleBlock()
 {
-    HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.document() );
-
-    if( !documentValidation )
-        return tl::unexpected( documentValidation.error() );
-
-    const TITLE_BLOCK& block = board()->GetTitleBlock();
-
-    types::TitleBlockInfo response;
-
-    response.set_title( block.GetTitle().ToUTF8() );
-    response.set_date( block.GetDate().ToUTF8() );
-    response.set_revision( block.GetRevision().ToUTF8() );
-    response.set_company( block.GetCompany().ToUTF8() );
-    response.set_comment1( block.GetComment( 0 ).ToUTF8() );
-    response.set_comment2( block.GetComment( 1 ).ToUTF8() );
-    response.set_comment3( block.GetComment( 2 ).ToUTF8() );
-    response.set_comment4( block.GetComment( 3 ).ToUTF8() );
-    response.set_comment5( block.GetComment( 4 ).ToUTF8() );
-    response.set_comment6( block.GetComment( 5 ).ToUTF8() );
-    response.set_comment7( block.GetComment( 6 ).ToUTF8() );
-    response.set_comment8( block.GetComment( 7 ).ToUTF8() );
-    response.set_comment9( block.GetComment( 8 ).ToUTF8() );
-
-    return response;
+    return &context()->GetBoard()->GetTitleBlock();
 }
 
 
-HANDLER_RESULT<Empty> API_HANDLER_PCB::handleSetTitleBlockInfo( const HANDLER_CONTEXT<SetTitleBlockInfo>& aCtx )
+std::optional<PAGE_INFO> API_HANDLER_PCB::getPageSettings()
 {
-    HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.document() );
+    return context()->GetBoard()->GetPageSettings();
+}
 
-    if( !documentValidation )
-        return tl::unexpected( documentValidation.error() );
 
-    if( !aCtx.Request.has_title_block() )
-    {
-        ApiResponseStatus e;
-        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
-        e.set_error_message( "SetTitleBlockInfo requires title_block" );
-        return tl::unexpected( e );
-    }
+bool API_HANDLER_PCB::setPageSettings( const PAGE_INFO& aPageInfo )
+{
+    context()->GetBoard()->SetPageSettings( aPageInfo );
+    return true;
+}
 
-    TITLE_BLOCK& block = board()->GetTitleBlock();
 
-    const types::TitleBlockInfo& request = aCtx.Request.title_block();
+wxString API_HANDLER_PCB::getDrawingSheetFileName()
+{
+    return BASE_SCREEN::m_DrawingSheetFileName;
+}
 
-    block.SetTitle( wxString::FromUTF8( request.title() ) );
-    block.SetDate( wxString::FromUTF8( request.date() ) );
-    block.SetRevision( wxString::FromUTF8( request.revision() ) );
-    block.SetCompany( wxString::FromUTF8( request.company() ) );
-    block.SetComment( 0, wxString::FromUTF8( request.comment1() ) );
-    block.SetComment( 1, wxString::FromUTF8( request.comment2() ) );
-    block.SetComment( 2, wxString::FromUTF8( request.comment3() ) );
-    block.SetComment( 3, wxString::FromUTF8( request.comment4() ) );
-    block.SetComment( 4, wxString::FromUTF8( request.comment5() ) );
-    block.SetComment( 5, wxString::FromUTF8( request.comment6() ) );
-    block.SetComment( 6, wxString::FromUTF8( request.comment7() ) );
-    block.SetComment( 7, wxString::FromUTF8( request.comment8() ) );
-    block.SetComment( 8, wxString::FromUTF8( request.comment9() ) );
+
+void API_HANDLER_PCB::setDrawingSheetFileName( const wxString& aFileName )
+{
+    BASE_SCREEN::m_DrawingSheetFileName = aFileName;
 
     if( frame() )
+        frame()->LoadDrawingSheet();
+}
+
+
+void API_HANDLER_PCB::onModified()
+{
+    if( frame() )
     {
+        frame()->Refresh();
         frame()->OnModify();
         frame()->UpdateUserInterface();
     }
-
-    return Empty();
 }
 
 
@@ -2253,23 +2241,6 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_PCB::handleGetConnectedItems(
 
     response.set_status( ItemRequestStatus::IRS_OK );
     return response;
-}
-
-
-std::vector<KICAD_T> API_HANDLER_PCB::parseRequestedItemTypes( const google::protobuf::RepeatedField<int>& aTypes )
-{
-    std::vector<KICAD_T> types;
-
-    for( int typeRaw : aTypes )
-    {
-        auto typeMessage = static_cast<common::types::KiCadObjectType>( typeRaw );
-        KICAD_T type = FromProtoEnum<KICAD_T>( typeMessage );
-
-        if( type != TYPE_NOT_INIT )
-            types.emplace_back( type );
-    }
-
-    return types;
 }
 
 

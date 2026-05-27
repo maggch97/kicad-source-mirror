@@ -489,8 +489,22 @@ wxString SCH_SHEET_PATH::PathHumanReadable( bool aUseShortRootName,
         s = fn.GetName() + wxS( "/" );
     }
 
-    // Start at startIdx + 1 since we've already processed the root sheet.
-    for( unsigned i = startIdx + 1; i < size(); i++ )
+    // When the schematic has multiple top-level sheets, the top-level sheet
+    // belongs in the path: otherwise sibling top-level sheets collapse to the
+    // same prefix (just "/") and local labels with identical text on different
+    // top-level sheets end up sharing a net.
+    size_t loopStart = startIdx + 1;
+
+    if( aUseShortRootName && size() > startIdx )
+    {
+        SCH_SHEET* first = at( startIdx );
+        SCHEMATIC* schem = first ? first->Schematic() : nullptr;
+
+        if( schem && schem->GetTopLevelSheets().size() > 1 && first->IsTopLevelSheet() )
+            loopStart = startIdx;
+    }
+
+    for( unsigned i = loopStart; i < size(); i++ )
     {
         wxString sheetName = at( i )->GetField( FIELD_T::SHEET_NAME )->GetShownText( false );
 
@@ -887,16 +901,27 @@ void SCH_SHEET_PATH::CheckForMissingSymbolInstances( const wxString& aProjectNam
             }
             else if( !symbol->GetInstances().empty() )
             {
-                // When a schematic is opened as a different project (e.g., a subsheet opened
-                // directly from File Browser), use the first available instance data.
-                // This provides better UX than showing unannotated references.
-                const SCH_SYMBOL_INSTANCE& firstInstance = symbol->GetInstances()[0];
-                symbolInstance.m_Reference = firstInstance.m_Reference;
-                symbolInstance.m_Unit = firstInstance.m_Unit;
+                // Prefer an instance from the current project; shared schematics may carry
+                // instance data for several projects.  Copying the full instance carries
+                // variant DNP / value / field overrides across when v9-imported files have
+                // been re-rooted and their stored paths no longer match.
+                const std::vector<SCH_SYMBOL_INSTANCE>& instances = symbol->GetInstances();
+
+                auto sourceIt = std::find_if( instances.begin(), instances.end(),
+                        [&aProjectName]( const SCH_SYMBOL_INSTANCE& aInstance )
+                        {
+                            return aInstance.m_ProjectName == aProjectName;
+                        } );
+
+                if( sourceIt == instances.end() )
+                    sourceIt = instances.begin();
+
+                symbolInstance = *sourceIt;
 
                 wxLogTrace( traceSchSheetPaths,
-                           "  Using first available instance: ref=%s, unit=%d",
-                           symbolInstance.m_Reference, symbolInstance.m_Unit );
+                           "  Using available instance (project '%s'): ref=%s, unit=%d, variants=%zu",
+                           sourceIt->m_ProjectName, symbolInstance.m_Reference,
+                           symbolInstance.m_Unit, symbolInstance.m_Variants.size() );
             }
             else
             {
@@ -1192,6 +1217,33 @@ void SCH_SHEET_LIST::TrimToPageNumbers( const std::vector<wxString>& aPageInclus
                               } );
 
     erase( it, end() );
+}
+
+
+wxString SCH_SHEET_LIST::GetNextPageNumber() const
+{
+    wxString pageNumber;
+
+    // Find the next available page number by checking all existing page numbers
+    std::set<int> usedPageNumbers;
+
+    for( const SCH_SHEET_PATH& path : *this )
+    {
+        wxString existingPageNum = path.GetPageNumber();
+        long pageNum = 0;
+
+        if( existingPageNum.ToLong( &pageNum ) && pageNum > 0 )
+            usedPageNumbers.insert( static_cast<int>( pageNum ) );
+    }
+
+    // Find the first available number starting from 1
+    int nextAvailable = 1;
+
+    while( usedPageNumbers.count( nextAvailable ) > 0 )
+        nextAvailable++;
+
+    pageNumber.Printf( wxT( "%d" ), nextAvailable );
+    return pageNumber;
 }
 
 

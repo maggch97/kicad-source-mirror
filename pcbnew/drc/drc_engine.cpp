@@ -620,6 +620,7 @@ void DRC_ENGINE::loadImplicitRules()
                 }
 
                 rule->m_ImplicitItemId = zone->m_Uuid;
+                rule->m_ImplicitItem = zone;
 
                 rule->m_Condition = new DRC_RULE_CONDITION( wxString::Format( wxT( "A.intersectsArea('%s')" ),
                                                                               zone->m_Uuid.AsString() ) );
@@ -1058,6 +1059,8 @@ DRC_CONSTRAINT DRC_ENGINE::EvalRules( DRC_CONSTRAINT_T aConstraintType, const BO
                 {
                     if( c->parentRule && c->parentRule->IsImplicit() )
                         constraint.m_ImplicitMin = true;
+                    else
+                        constraint.m_ImplicitMin = false;
 
                     constraint.m_Value.SetMin( c->constraint.m_Value.Min() );
                 }
@@ -1459,6 +1462,9 @@ DRC_CONSTRAINT DRC_ENGINE::EvalRules( DRC_CONSTRAINT_T aConstraintType, const BO
                 case TEXT_THICKNESS_CONSTRAINT:
                 case DIFF_PAIR_GAP_CONSTRAINT:
                 case LENGTH_CONSTRAINT:
+                case NET_CHAIN_LENGTH_CONSTRAINT:
+                case NET_CHAIN_STUB_LENGTH_CONSTRAINT:
+                case NET_CHAIN_RETURN_PATH_CONSTRAINT:
                 case CONNECTION_WIDTH_CONSTRAINT:
                 case HOLE_TO_HOLE_CONSTRAINT:
                 {

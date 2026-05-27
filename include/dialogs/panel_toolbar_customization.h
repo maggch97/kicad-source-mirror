@@ -114,7 +114,10 @@ protected:
     void onListItemActivated( wxListEvent& event ) override;
     void onActionFilterText( wxCommandEvent& event );
     void onActionListMouseMove( wxMouseEvent& event );
+    void onTreeItemActivated( wxTreeEvent& event );
 
+    void removeControlFromOtherToolbars( const std::string& aControlName );
+    void removeControlFromCurrentTree( const std::string& aControlName );
 protected:
     wxVector<wxBitmapBundle>   m_actionImageBundleVector;
     std::map<std::string, int> m_actionImageListMap;

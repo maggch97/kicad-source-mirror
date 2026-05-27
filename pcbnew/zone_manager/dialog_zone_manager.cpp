@@ -67,57 +67,24 @@ DIALOG_ZONE_MANAGER::DIALOG_ZONE_MANAGER( PCB_BASE_FRAME* aParent ) :
     m_btnAutoAssign->SetBitmap( KiBitmapBundle( BITMAPS::small_sort_desc ) );
 
     m_panelZoneProperties = new PANEL_ZONE_PROPERTIES( m_zonePanel, aParent, m_zoneSettingsBag );
-    m_sizerProperties->Add( m_panelZoneProperties, 0,  wxEXPAND, 5 );
+    m_sizerProperties->Add( m_panelZoneProperties, 1,  wxEXPAND, 5 );
 
     m_zonePreviewNotebook = new ZONE_PREVIEW_NOTEBOOK( m_zonePanel, aParent );
     m_sizerPreview->Add( m_zonePreviewNotebook, 1, wxBOTTOM | wxLEFT | wxRIGHT | wxEXPAND, 5 );
+    m_sizerPreview->Layout();
 
     for( const auto& [k, v] : MODEL_ZONES_OVERVIEW::GetColumnNames() )
     {
         if( k == MODEL_ZONES_OVERVIEW::LAYERS )
-            m_viewZonesOverview->AppendIconTextColumn( v, k, wxDATAVIEW_CELL_INERT, 140 );
+            m_viewZonesOverview->AppendIconTextColumn( v, k, wxDATAVIEW_CELL_INERT, wxCOL_WIDTH_DEFAULT );
         else
-            m_viewZonesOverview->AppendTextColumn( v, k, wxDATAVIEW_CELL_INERT, 160 );
+            m_viewZonesOverview->AppendTextColumn( v, k, wxDATAVIEW_CELL_INERT, wxCOL_WIDTH_DEFAULT );
     }
 
     m_modelZonesOverview = new MODEL_ZONES_OVERVIEW( this, m_pcbFrame, m_zoneSettingsBag );
     m_viewZonesOverview->AssociateModel( m_modelZonesOverview.get() );
     m_viewZonesOverview->SetLayoutDirection( wxLayout_LeftToRight );
 
-#if wxUSE_DRAG_AND_DROP
-    m_viewZonesOverview->EnableDragSource( wxDF_UNICODETEXT );
-    m_viewZonesOverview->EnableDropTarget( wxDF_UNICODETEXT );
-
-    int id = m_viewZonesOverview->GetId();
-    Bind( wxEVT_DATAVIEW_ITEM_BEGIN_DRAG, &DIALOG_ZONE_MANAGER::OnBeginDrag, this, id );
-    Bind( wxEVT_DATAVIEW_ITEM_DROP_POSSIBLE, &DIALOG_ZONE_MANAGER::OnDropPossible, this, id );
-    Bind( wxEVT_DATAVIEW_ITEM_DROP, &DIALOG_ZONE_MANAGER::OnDrop, this, id );
-#endif // wxUSE_DRAG_AND_DROP
-
-    Bind( EVT_ZONE_NAME_UPDATE, &DIALOG_ZONE_MANAGER::OnZoneNameUpdate, this );
-    Bind( EVT_ZONE_NET_UPDATE, &DIALOG_ZONE_MANAGER::OnZoneNetUpdate, this );
-    Bind( EVT_ZONES_OVERVIEW_COUNT_CHANGE, &DIALOG_ZONE_MANAGER::OnZonesTableRowCountChange, this );
-    Bind( wxEVT_CHECKBOX, &DIALOG_ZONE_MANAGER::OnCheckBoxClicked, this );
-    Bind( wxEVT_IDLE, &DIALOG_ZONE_MANAGER::OnIdle, this );
-    Bind( wxEVT_CHAR_HOOK, &DIALOG_ZONE_MANAGER::OnDialogCharHook, this );
-    Bind( wxEVT_BOOKCTRL_PAGE_CHANGED,
-          [this]( wxNotebookEvent& aEvent )
-          {
-              Layout();
-          },
-          m_zonePreviewNotebook->GetId() );
-
-    Layout();
-    m_MainBoxSizer->Fit( this );
-    finishDialogSettings();
-}
-
-
-DIALOG_ZONE_MANAGER::~DIALOG_ZONE_MANAGER() = default;
-
-
-bool DIALOG_ZONE_MANAGER::TransferDataToWindow()
-{
     m_layerFilter->Clear();
     m_layerFilter->Append( _( "All Layers" ) );
 
@@ -141,6 +108,40 @@ bool DIALOG_ZONE_MANAGER::TransferDataToWindow()
     if( m_modelZonesOverview->GetCount() )
         SelectZoneTableItem( m_modelZonesOverview->GetItem( 0 ) );
 
+    Layout();
+    m_MainBoxSizer->Fit( this );
+    finishDialogSettings();
+
+#if wxUSE_DRAG_AND_DROP
+    m_viewZonesOverview->EnableDragSource( wxDF_UNICODETEXT );
+    m_viewZonesOverview->EnableDropTarget( wxDF_UNICODETEXT );
+
+    int id = m_viewZonesOverview->GetId();
+    Bind( wxEVT_DATAVIEW_ITEM_BEGIN_DRAG, &DIALOG_ZONE_MANAGER::OnBeginDrag, this, id );
+    Bind( wxEVT_DATAVIEW_ITEM_DROP_POSSIBLE, &DIALOG_ZONE_MANAGER::OnDropPossible, this, id );
+    Bind( wxEVT_DATAVIEW_ITEM_DROP, &DIALOG_ZONE_MANAGER::OnDrop, this, id );
+#endif // wxUSE_DRAG_AND_DROP
+
+    Bind( EVT_ZONE_NAME_UPDATE, &DIALOG_ZONE_MANAGER::OnZoneNameUpdate, this );
+    Bind( EVT_ZONE_NET_UPDATE, &DIALOG_ZONE_MANAGER::OnZoneNetUpdate, this );
+    Bind( EVT_ZONES_OVERVIEW_COUNT_CHANGE, &DIALOG_ZONE_MANAGER::OnZonesTableRowCountChange, this );
+    Bind( wxEVT_CHECKBOX, &DIALOG_ZONE_MANAGER::OnCheckBoxClicked, this );
+    Bind( wxEVT_IDLE, &DIALOG_ZONE_MANAGER::OnIdle, this );
+    Bind( wxEVT_CHAR_HOOK, &DIALOG_ZONE_MANAGER::OnDialogCharHook, this );
+    Bind( wxEVT_BOOKCTRL_PAGE_CHANGED,
+          [this]( wxNotebookEvent& aEvent )
+          {
+              Layout();
+          },
+          m_zonePreviewNotebook->GetId() );
+}
+
+
+DIALOG_ZONE_MANAGER::~DIALOG_ZONE_MANAGER() = default;
+
+
+bool DIALOG_ZONE_MANAGER::TransferDataToWindow()
+{
     return true;
 }
 

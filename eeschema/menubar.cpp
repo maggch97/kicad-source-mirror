@@ -260,6 +260,8 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     placeMenu->Add( SCH_ACTIONS::drawTable );
     placeMenu->Add( SCH_ACTIONS::drawRectangle );
     placeMenu->Add( SCH_ACTIONS::drawCircle );
+    placeMenu->Add( SCH_ACTIONS::drawEllipse );
+    placeMenu->Add( SCH_ACTIONS::drawEllipseArc );
     placeMenu->Add( SCH_ACTIONS::drawArc );
     placeMenu->Add( SCH_ACTIONS::drawBezier );
     placeMenu->Add( SCH_ACTIONS::drawLines );
@@ -320,6 +322,9 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
 
     toolsMenu->AppendSeparator();
     toolsMenu->Add( ACTIONS::updateSchematicFromPcb )->Enable( !Kiface().IsSingle() );
+
+    toolsMenu->AppendSeparator();
+    toolsMenu->Add( SCH_ACTIONS::createNetChain );
 
     toolsMenu->AppendSeparator();
     ACTION_MENU* submenuVariants = new ACTION_MENU( false, selTool );

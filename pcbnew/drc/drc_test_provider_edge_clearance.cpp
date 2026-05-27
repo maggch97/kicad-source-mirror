@@ -29,6 +29,7 @@
 #include <footprint.h>
 #include <pad.h>
 #include <pcb_track.h>
+#include <zone.h>
 #include <geometry/seg.h>
 #include <geometry/shape_segment.h>
 #include <drc/drc_engine.h>
@@ -38,6 +39,8 @@
 #include <drc/drc_rtree.h>
 #include <thread_pool.h>
 #include <mutex>
+#include <set>
+#include <tuple>
 
 /*
     Board edge clearance test. Checks all items for their mechanical clearances against the board
@@ -85,6 +88,13 @@ private:
 
     std::map<BOARD_ITEM*, SILK_DISPOSITION> m_silkDisposition;
     std::mutex                             m_silkMutex;
+
+    // Pads/vias with non-uniform padstacks generate one work unit per unique
+    // copper layer. For edge clearance, EvalRules is layer-agnostic
+    // (UNDEFINED_LAYER), so per-layer reports for the same (item, edge, pos)
+    // are redundant. Dedup at emission time.
+    std::set<std::tuple<KIID, KIID, VECTOR2I>> m_emittedEdgeReports;
+    std::mutex                                 m_emittedMutex;
 };
 
 
@@ -214,6 +224,19 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::testAgainstEdge( BOARD_ITEM* item, SHAPE*
                 }
             }
 
+            {
+                std::lock_guard<std::mutex> lock( m_emittedMutex );
+
+                if( !m_emittedEdgeReports.insert( { item->m_Uuid, edge->m_Uuid, pos } ).second )
+                {
+                    // Same (item, edge, pos) already reported from another work unit.
+                    if( item->Type() == PCB_TRACE_T || item->Type() == PCB_ARC_T )
+                        return m_drcEngine->GetReportAllTrackErrors();
+                    else
+                        return false;
+                }
+            }
+
             std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( aErrorCode );
 
             // Only report clearance info if there is any; otherwise it's just a straight collision
@@ -269,6 +292,7 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::Run()
     m_epsilon = m_board->GetDesignSettings().GetDRCEpsilon();
     m_edgesTree.clear();
     m_silkDisposition.clear();
+    m_emittedEdgeReports.clear();
 
     DRC_CONSTRAINT worstClearanceConstraint;
 
@@ -412,6 +436,13 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::Run()
             {
                 if( isInvisibleText( item ) )
                     return true;
+
+                if( item->Type() == PCB_ZONE_T )
+                {
+                    // Rule areas have no copper and are purely logical -- skip edge clearance.
+                    if( static_cast<ZONE*>( item )->GetIsRuleArea() )
+                        return true;
+                }
 
                 if( item->Type() == PCB_PAD_T )
                 {
