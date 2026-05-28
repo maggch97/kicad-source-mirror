@@ -152,16 +152,44 @@ jobs:
         run: |
           $env:VCPKG_ROOT = "$env:GITHUB_WORKSPACE\vcpkg"
 
-          cmake --build build\msvc-win64-release -j
+          cmake --build build\msvc-win64-release --target _gerbview.dll kicad-cli.exe -j
 
       - name: Show disk space after build
         shell: pwsh
         run: Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free
 
-      - name: Install KiCad
+      - name: Stage portable gerber CLI inputs
         shell: pwsh
         working-directory: ${{ github.workspace }}\kicad-source-mirror
-        run: cmake --install build\msvc-win64-release
+        run: |
+          $installRoot = Join-Path $PWD "build\install\msvc-win64-release"
+          $installBin = Join-Path $installRoot "bin"
+          $installShare = Join-Path $installRoot "share\kicad"
+
+          if( Test-Path -LiteralPath $installRoot )
+          {
+              Remove-Item -LiteralPath $installRoot -Recurse -Force
+          }
+
+          cmake -DCMAKE_INSTALL_PREFIX="$installRoot" -DCMAKE_INSTALL_LOCAL_ONLY=TRUE -P build\msvc-win64-release\cmake_install.cmake
+
+          New-Item -ItemType Directory -Path $installBin, $installShare -Force | Out-Null
+
+          $binaries = @(
+              "build\msvc-win64-release\kicad\kicad-cli.exe",
+              "build\msvc-win64-release\gerbview\_gerbview.dll",
+              "build\msvc-win64-release\common\kicommon.dll",
+              "build\msvc-win64-release\common\gal\kigal.dll",
+              "build\msvc-win64-release\api\kiapi.dll"
+          )
+
+          foreach( $binary in $binaries )
+          {
+              Copy-Item -LiteralPath $binary -Destination $installBin -Force
+          }
+
+          Copy-Item -LiteralPath "build\msvc-win64-release\resources" -Destination ( Join-Path $installShare "resources" ) -Recurse -Force
+          Copy-Item -LiteralPath "build\msvc-win64-release\schemas" -Destination ( Join-Path $installShare "schemas" ) -Recurse -Force
 
       - name: Package portable gerber CLI
         shell: pwsh
