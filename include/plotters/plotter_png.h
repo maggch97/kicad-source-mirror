@@ -22,7 +22,11 @@
 
 #include "plotter.h"
 
+#if defined( KICAD_PNG_PLOTTER_USE_ONEBIT_CANVAS )
 #include <onebit_canvas_cairo_shim.hpp>
+#else
+#include <cairo.h>
+#endif
 
 
 constexpr int DEFAULT_PNG_DPI = 300;

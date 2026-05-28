@@ -683,6 +683,11 @@ set( PLOTTERS_CONTROL_SRCS
     plotters/common_plot_functions.cpp
     )
 
+set_source_files_properties( plotters/PNG_plotter.cpp PROPERTIES
+    COMPILE_DEFINITIONS KICAD_PNG_PLOTTER_USE_ONEBIT_CANVAS
+    SKIP_PRECOMPILE_HEADERS ON
+    )
+
 set( COMMON_IO_SRCS
 
     # Altium

@@ -75,13 +75,18 @@ bool PNG_PLOTTER::OpenFile( const wxString& aFullFilename )
 
 bool PNG_PLOTTER::StartPlot( const wxString& aPageNumber )
 {
+    if( m_width <= 0 || m_height <= 0 )
+        return false;
+
+#if !defined( KICAD_PNG_PLOTTER_USE_ONEBIT_CANVAS )
     // Cairo image surfaces are limited to INT16_MAX in either dimension. Beyond that, surface
     // creation returns CAIRO_STATUS_INVALID_SIZE. Reject up front rather than risking a silent
     // multi-gigabyte allocation that fails late.
     constexpr int MAX_PNG_DIMENSION = 32767;
 
-    if( m_width <= 0 || m_height <= 0 || m_width > MAX_PNG_DIMENSION || m_height > MAX_PNG_DIMENSION )
+    if( m_width > MAX_PNG_DIMENSION || m_height > MAX_PNG_DIMENSION )
         return false;
+#endif
 
     if( m_context )
     {
