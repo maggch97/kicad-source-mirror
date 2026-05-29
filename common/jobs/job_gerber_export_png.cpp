@@ -39,6 +39,7 @@ JOB_GERBER_EXPORT_PNG::JOB_GERBER_EXPORT_PNG() :
     m_params.emplace_back( new JOB_PARAM<bool>( "antialias", &m_antialias, m_antialias ) );
     m_params.emplace_back(
             new JOB_PARAM<bool>( "transparent_background", &m_transparentBackground, m_transparentBackground ) );
+    m_params.emplace_back( new JOB_PARAM<bool>( "deferred_viewport", &m_deferredViewport, m_deferredViewport ) );
     m_params.emplace_back( new JOB_PARAM<UNITS>( "units", &m_units, m_units ) );
     m_params.emplace_back( new JOB_PARAM<double>( "origin_x", &m_originX, m_originX ) );
     m_params.emplace_back( new JOB_PARAM<double>( "origin_y", &m_originY, m_originY ) );

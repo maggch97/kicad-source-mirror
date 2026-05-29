@@ -70,6 +70,7 @@ struct GERBER_RENDER_OPTIONS
     double originYMm = 0.0;        ///< Viewport origin Y in mm
     double windowWidthMm = 0.0;    ///< Viewport width in mm (> 0 enables viewport mode)
     double windowHeightMm = 0.0;   ///< Viewport height in mm (> 0 enables viewport mode)
+    bool   deferredViewport = false; ///< Output polygon bbox in inches, then read inch viewport JSON before plotting.
 
     bool HasViewportOverride() const
     {

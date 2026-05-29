@@ -52,6 +52,7 @@ public:
     bool     m_antialias = true;
     bool     m_transparentBackground = true;
     bool     m_strict = false;
+    bool     m_deferredViewport = false;
 
     // Viewport override. When both window dimensions are > 0, the viewport is
     // defined by origin + window rather than the gerber bounding box.

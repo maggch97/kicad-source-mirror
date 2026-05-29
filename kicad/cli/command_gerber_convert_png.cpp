@@ -34,6 +34,7 @@
 #define ARG_NO_ANTIALIAS "--no-antialias"
 #define ARG_TRANSPARENT "--transparent"
 #define ARG_STRICT "--strict"
+#define ARG_DEFERRED_VIEWPORT "--deferred-viewport"
 #define ARG_UNITS "--units"
 #define ARG_ORIGIN_X "--origin-x"
 #define ARG_ORIGIN_Y "--origin-y"
@@ -74,6 +75,10 @@ CLI::GERBER_CONVERT_PNG_COMMAND::GERBER_CONVERT_PNG_COMMAND() :
             .flag();
 
     m_argParser.add_argument( ARG_STRICT ).help( UTF8STDSTR( _( "Fail on any parse warnings or errors" ) ) ).flag();
+
+    m_argParser.add_argument( ARG_DEFERRED_VIEWPORT )
+            .help( UTF8STDSTR( _( "Build render polygons first, output inch bbox JSON, then read inch viewport JSON from stdin" ) ) )
+            .flag();
 
     m_argParser.add_argument( ARG_UNITS )
             .default_value( std::string( "mm" ) )
@@ -137,6 +142,7 @@ int CLI::GERBER_CONVERT_PNG_COMMAND::doPerform( KIWAY& aKiway )
     pngJob->m_antialias = !m_argParser.get<bool>( ARG_NO_ANTIALIAS );
     pngJob->m_transparentBackground = m_argParser.get<bool>( ARG_TRANSPARENT );
     pngJob->m_strict = m_argParser.get<bool>( ARG_STRICT );
+    pngJob->m_deferredViewport = m_argParser.get<bool>( ARG_DEFERRED_VIEWPORT );
 
     wxString units = From_UTF8( m_argParser.get<std::string>( ARG_UNITS ).c_str() );
 
