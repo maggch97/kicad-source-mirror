@@ -311,6 +311,19 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
     if( !image )
         return false;
 
+    if( image->m_ImageNegative )
+    {
+        if( aErrorMsg )
+        {
+            *aErrorMsg = wxString::Format(
+                    wxS( "Unsupported Gerber command IPNEG in %s: "
+                         "BMP export does not support image negative polarity." ),
+                    aInputPath );
+        }
+
+        return false;
+    }
+
     if( image->GetItemsCount() == 0 )
     {
         if( aErrorMsg )
