@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/dir.h>
@@ -711,4 +711,25 @@ const wxString& PATHS::GetExecutablePath()
     }
 
     return exe_path;
+}
+
+
+wxString PATHS::ResolveSiblingExecutable( const wxString& aBaseName )
+{
+#ifdef __WXMAC__
+    // GetExecutablePath() returns the bundle root on macOS, but sibling binaries
+    // live next to the running executable in Contents/MacOS.
+    wxFileName sibling( wxFileName( wxStandardPaths::Get().GetExecutablePath() ).GetPath(), aBaseName );
+#else
+    wxFileName sibling( GetExecutablePath(), aBaseName );
+#endif
+
+#ifdef _WIN32
+    sibling.SetExt( wxT( "exe" ) );
+#endif
+
+    if( !sibling.FileExists() )
+        return wxEmptyString;
+
+    return sibling.GetFullPath();
 }

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -64,3 +60,9 @@
 // Scale limits for zoom (especially mouse wheel) for Pcbnew
 #define ZOOM_MAX_LIMIT_PCBNEW 50000
 #define ZOOM_MIN_LIMIT_PCBNEW 0.1
+
+// Scale limits for zoom in WIDGET_DIFF_CANVAS. Document bboxes can span PCB
+// (nm-scale) or schematic (mil-scale) coordinates, so the limits sit between
+// the two document type extremes.
+#define ZOOM_MAX_LIMIT_DIFF 200.0
+#define ZOOM_MIN_LIMIT_DIFF 0.001

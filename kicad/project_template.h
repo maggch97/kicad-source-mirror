@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -220,5 +216,22 @@ public:
     size_t GetDestinationFiles( const wxFileName& aNewProjectPath,
                                 std::vector< wxFileName >& aDestFiles );
 };
+
+
+/**
+ * Seed the built-in "default" project template under \a aBaseDir, creating the directory tree
+ * and minimal metadata (meta/info.html) and project (default.kicad_pro) files when they are
+ * missing.
+ *
+ * The default template is always seeded into the stable default user templates path rather than
+ * KICAD_USER_TEMPLATE_DIR so that it remains available regardless of how the user configures that
+ * variable.
+ *
+ * @param aBaseDir is the directory under which the "default" template directory is created.  It
+ *                 must already be expanded (no unresolved environment variable references).
+ * @return the full path of the seeded "default" template directory on success, otherwise an
+ *         invalid wxFileName.
+ */
+wxFileName EnsureDefaultProjectTemplate( const wxString& aBaseDir );
 
 #endif

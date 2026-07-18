@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <common.h>
@@ -1021,20 +1017,21 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testGraphicClearances()
     std::atomic<size_t> done( 1 );
 
     for( FOOTPRINT* footprint : m_board->Footprints() )
-        count += footprint->GraphicalItems().size();
+        count += footprint->GraphicalItems().size() + footprint->GetFields().size();
 
     REPORT_AUX( wxString::Format( wxT( "Testing %d graphics..." ), count ) );
 
     auto isKnockoutText =
             []( BOARD_ITEM* item )
             {
-                return item->Type() == PCB_TEXT_T && static_cast<PCB_TEXT*>( item )->IsKnockout();
+                return ( item->Type() == PCB_TEXT_T || item->Type() == PCB_FIELD_T )
+                        && static_cast<PCB_TEXT*>( item )->IsKnockout();
             };
 
     auto testGraphicAgainstZone =
             [this, isKnockoutText]( BOARD_ITEM* item )
             {
-                if( item->Type() == PCB_REFERENCE_IMAGE_T )
+                if( item->Type() == PCB_REFERENCE_IMAGE_T || isInvisibleText( item ) )
                     return;
 
                 if( !IsCopperLayer( item->GetLayer() ) )
@@ -1162,6 +1159,17 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testGraphicClearances()
                             done.fetch_add( 1 );
                         }
                     }
+
+                    // Fields (reference, value, etc.) live in their own list but render as real
+                    // copper when placed on a copper layer, so they must be tested too.
+                    for( PCB_FIELD* field : footprint->GetFields() )
+                    {
+                        if( !m_drcEngine->IsCancelled() )
+                        {
+                            testGraphicAgainstZone( field );
+                            done.fetch_add( 1 );
+                        }
+                    }
                 } );
     }
 
@@ -1269,7 +1277,10 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testZonesToZones()
 
                 if( sameNet && testIntersects )
                 {
-                    if( zoneA->Outline()->Collide( zoneB->Outline(), 0, &actual, &pt ) )
+                    SHAPE_POLY_SET zoneAOutline = zoneA->GetBoardOutline();
+                    SHAPE_POLY_SET zoneBOutline = zoneB->GetBoardOutline();
+
+                    if( zoneAOutline.Collide( &zoneBOutline, 0, &actual, &pt ) )
                     {
                         done.fetch_add( 1 );
                         reportZoneZoneViolation( zoneA, zoneB, pt, actual, DRC_CONSTRAINT(), layer );
@@ -1415,13 +1426,19 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testZonesToZones()
                     continue;
 
                 // Examine a candidate zone: compare zoneB to zoneA
+                SHAPE_POLY_SET  zoneAOutline;
+                SHAPE_POLY_SET  zoneBOutline;
                 SHAPE_POLY_SET* polyA = nullptr;
                 SHAPE_POLY_SET* polyB = nullptr;
 
                 if( sameNet )
                 {
-                    polyA = zoneA->Outline();
-                    polyB = zoneB->Outline();
+                    zoneAOutline = zoneA->GetBoardOutline();
+                    zoneBOutline = zoneB->GetBoardOutline();
+                    zoneAOutline.BuildBBoxCaches();
+                    zoneBOutline.BuildBBoxCaches();
+                    polyA = &zoneAOutline;
+                    polyB = &zoneBOutline;
                 }
                 else
                 {

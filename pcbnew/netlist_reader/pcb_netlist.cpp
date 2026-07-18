@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "pcb_netlist.h"
@@ -218,12 +214,15 @@ void COMPONENT::Format( OUTPUTFORMATTER* aOut, int aNestLevel, int aCtl )
 
         aOut->Print( 0, ")\n" );
 
-        // Add DNP and Exclude from BOM properties if we have them
+        // Add DNP, Exclude from BOM, and Exclude from Position Files properties if we have them
         if( m_properties.count( "dnp" ) )
             aOut->Print( nl + 1, "(property (name \"dnp\"))\n" );
 
         if( m_properties.count( "exclude_from_bom" ) )
             aOut->Print( nl + 1, "(property (name \"exclude_from_bom\"))\n" );
+
+        if( m_properties.count( "exclude_from_pos_files" ) )
+            aOut->Print( nl + 1, "(property (name \"exclude_from_pos_files\"))\n" );
 
         if( !m_variants.empty() )
         {
@@ -457,9 +456,21 @@ void NETLIST::ApplyGroupMembership()
 {
     for( NETLIST_GROUP& group : m_groups )
     {
-        for( KIID& member : group.members )
+        for( const KIID_PATH& member : group.members )
         {
-            COMPONENT* component = GetComponentByUuid( member );
+            COMPONENT* component = nullptr;
+
+            if( member.size() > 1 )
+            {
+                // Instance path, match the exact instance. The same symbol uuid exists once
+                // per instance of a shared sheet, only the path tells them apart.
+                component = GetComponentByPath( member );
+            }
+            else if( member.size() == 1 )
+            {
+                // Bare symbol uuid
+                component = GetComponentByUuid( member.front() );
+            }
 
             if( component )
                 component->SetGroup( &group );

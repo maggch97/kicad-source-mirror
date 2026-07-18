@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "tools/sch_actions.h"
@@ -63,6 +59,20 @@ TOOL_ACTION SCH_ACTIONS::diffSymbol( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Compare Symbol with Library" ) )
         .Tooltip( _( "Show differences between schematic symbol and its library equivalent" ) )
+        .Icon( BITMAPS::library ) );
+
+TOOL_ACTION SCH_ACTIONS::compareSchematicWithFile( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InspectionTool.CompareSchematicWithFile" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Compare Schematic with File..." ) )
+        .Tooltip( _( "Diff the current schematic against another .kicad_sch file" ) )
+        .Icon( BITMAPS::library ) );
+
+TOOL_ACTION SCH_ACTIONS::compareSchematicWithHistory( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InspectionTool.CompareSchematicWithHistory" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Compare Schematic with Local History..." ) )
+        .Tooltip( _( "Diff the current schematic against the most recent local-history snapshot" ) )
         .Icon( BITMAPS::library ) );
 
 TOOL_ACTION SCH_ACTIONS::showBusSyntaxHelp( TOOL_ACTION_ARGS()
@@ -183,6 +193,13 @@ TOOL_ACTION SCH_ACTIONS::saveLibraryAs( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Save Library As..." ) )
         .Tooltip( _( "Save the current library to a new file" ) ) );
 
+TOOL_ACTION SCH_ACTIONS::compareLibraryWithFile( TOOL_ACTION_ARGS()
+        .Name( "eeschema.SymbolLibraryControl.CompareLibraryWithFile" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Compare Library with File..." ) )
+        .Tooltip( _( "Diff the current symbol library against another .kicad_sym file" ) )
+        .Icon( BITMAPS::library ) );
+
 TOOL_ACTION SCH_ACTIONS::newSymbol( TOOL_ACTION_ARGS()
         .Name( "eeschema.SymbolLibraryControl.newSymbol" )
         .Scope( AS_GLOBAL )
@@ -282,6 +299,25 @@ TOOL_ACTION SCH_ACTIONS::flattenSymbol( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Flatten Symbol" ) )
         .Tooltip( _( "Remove inheritance from symbol" ) ) );
+
+// Not DefaultHotkeys because GTK refuses WXK_TAB as a menu accelerator. Ctrl+Tab uses the char hook.
+TOOL_ACTION SCH_ACTIONS::nextSymbolTab( TOOL_ACTION_ARGS()
+        .Name( "eeschema.SymbolLibraryControl.nextSymbolTab" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Next Symbol Tab" ) )
+        .Tooltip( _( "Switch to the next open symbol tab" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::prevSymbolTab( TOOL_ACTION_ARGS()
+        .Name( "eeschema.SymbolLibraryControl.prevSymbolTab" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Previous Symbol Tab" ) )
+        .Tooltip( _( "Switch to the previous open symbol tab" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::closeSymbolTab( TOOL_ACTION_ARGS()
+        .Name( "eeschema.SymbolLibraryControl.closeSymbolTab" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Close Symbol Tab" ) )
+        .Tooltip( _( "Close the active symbol tab" ) ) );
 
 TOOL_ACTION SCH_ACTIONS::showLibFieldsTable( TOOL_ACTION_ARGS()
         .Name( "eeschema.SymbolLibraryControl.showLibraryFieldsTable" )
@@ -1028,6 +1064,13 @@ TOOL_ACTION SCH_ACTIONS::symbolProperties( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Symbol Properties..." ) )
         .Icon( BITMAPS::part_properties ) );
 
+TOOL_ACTION SCH_ACTIONS::editSymbolPinMaps( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveEdit.editSymbolPinMaps" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Symbol Pin Maps..." ) )
+        .Tooltip( _( "Edit the symbol's pin-to-pad maps and associated footprints" ) )
+        .Icon( BITMAPS::pin_table ) );
+
 TOOL_ACTION SCH_ACTIONS::pinTable( TOOL_ACTION_ARGS()
         .Name( "eeschema.InteractiveEdit.pinTable" )
         .Scope( AS_GLOBAL )
@@ -1165,6 +1208,12 @@ TOOL_ACTION SCH_ACTIONS::setExcludeFromBoard( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Exclude from Board" ) )
         .Tooltip( _( "Set the exclude from board attribute" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::setExcludeFromPosFiles( TOOL_ACTION_ARGS()
+        .Name( "eeschema.EditorControl.setExcludeFromPosFiles" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Exclude from Position Files" ) )
+        .Tooltip( _( "Set the exclude from position files attribute" ) ) );
 
 TOOL_ACTION SCH_ACTIONS::setDNP( TOOL_ACTION_ARGS()
         .Name( "eeschema.EditorControl.setDNP" )
@@ -1861,5 +1910,17 @@ TOOL_ACTION SCH_ACTIONS::editVariantDescription( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Edit Variant Description..." ) )
         .Tooltip( _( "Edit the description of an existing design variant." ) ) );
+
+TOOL_ACTION SCH_ACTIONS::renameVariant( TOOL_ACTION_ARGS()
+        .Name( "eeschema.EditorControl.renameVariant" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Rename Design Variant..." ) )
+        .Tooltip( _( "Rename an existing design variant." ) ) );
+
+TOOL_ACTION SCH_ACTIONS::copyVariant( TOOL_ACTION_ARGS()
+        .Name( "eeschema.EditorControl.copyVariant" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Copy Design Variant..." ) )
+        .Tooltip( _( "Create a copy of an existing design variant." ) ) );
 
 // clang-format on

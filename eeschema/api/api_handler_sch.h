@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef KICAD_API_HANDLER_SCH_H
@@ -24,6 +24,8 @@
 #include <api/api_handler_editor.h>
 #include <api/sch_context.h>
 #include <api/common/commands/editor_commands.pb.h>
+#include <api/common/commands/project_commands.pb.h>
+#include <google/protobuf/empty.pb.h>
 #include <api/schematic/schematic_commands.pb.h>
 #include <api/schematic/schematic_jobs.pb.h>
 #include <kiid.h>
@@ -84,7 +86,19 @@ protected:
 
     void onModified() override;
 
+    SCH_CONTEXT* context() const { return m_context.get(); }
+
+    TOOL_MANAGER* toolManager() const { return context()->GetToolManager(); }
+
+    PROJECT& project() const { return context()->Prj(); }
+
 private:
+    HANDLER_RESULT<google::protobuf::Empty> handleSaveDocument(
+            const HANDLER_CONTEXT<commands::SaveDocument>& aCtx );
+
+    HANDLER_RESULT<google::protobuf::Empty> handleSaveCopyOfDocument(
+            const HANDLER_CONTEXT<commands::SaveCopyOfDocument>& aCtx );
+
     HANDLER_RESULT<commands::GetOpenDocumentsResponse>
     handleGetOpenDocuments( const HANDLER_CONTEXT<commands::GetOpenDocuments>& aCtx );
 

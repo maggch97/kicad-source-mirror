@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  * This file contains file format knowledge derived from the gEDA/pcb project:
  *
@@ -48,6 +44,7 @@
 #include <board_design_settings.h>
 #include <font/fontconfig.h>
 #include <footprint.h>
+#include <gestfich.h>
 #include <netinfo.h>
 #include <pad.h>
 #include <macros.h>
@@ -1005,7 +1002,7 @@ bool PCB_IO_GEDA::DeleteLibrary( const wxString& aLibraryPath, const std::map<st
         wxFileName    tmp;
         wxArrayString files;
 
-        wxDir::GetAllFiles( aLibraryPath, &files );
+        CollectFilesLoopSafe( aLibraryPath, files );
 
         for( i = 0;  i < files.GetCount();  i++ )
         {

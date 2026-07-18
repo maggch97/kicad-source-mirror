@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -51,6 +47,7 @@ Load() TODO's
 */
 
 #include <cerrno>
+#include <set>
 
 #include <wx/string.h>
 #include <wx/xml/xml.h>
@@ -82,6 +79,7 @@ Load() TODO's
 
 #include <pcb_io/pcb_io.h>
 #include <pcb_io/eagle/pcb_io_eagle.h>
+#include <io/eagle/eagle_bin_parser.h>
 
 using namespace std;
 
@@ -279,6 +277,12 @@ bool PCB_IO_EAGLE::checkHeader(const wxString& aFileName) const
     if( !input.IsOk() )
         return false;
 
+    // Pre-v6 boards are a binary stream identified by a two-byte magic.
+    if( EAGLE_BIN_PARSER::IsBinaryEagle( input ) )
+        return true;
+
+    input.SeekI( 0 );
+
     wxTextInputStream text( input );
 
     for( int i = 0; i < 8; i++ )
@@ -354,15 +358,49 @@ BOARD* PCB_IO_EAGLE::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
 
         // Load the document
         wxFFileInputStream stream( fn.GetFullPath() );
-        wxXmlDocument xmlDocument;
 
-        if( !stream.IsOk() || !xmlDocument.Load( stream ) )
+        if( !stream.IsOk() )
         {
             THROW_IO_ERROR( wxString::Format( _( "Unable to read file '%s'" ),
                                               fn.GetFullPath() ) );
         }
 
-        doc = xmlDocument.GetRoot();
+        // The binary parser synthesizes a DOM identical to what the XML loader
+        // produces; both paths then share the common tail below. The document
+        // must outlive loadAllSections(), so keep it in this scope.
+        wxXmlDocument                  xmlDocument;
+        std::unique_ptr<wxXmlDocument> binDocument;
+
+        // IsBinaryEagle consumes the two-byte magic, so rewind before reading on.
+        bool isBinary = EAGLE_BIN_PARSER::IsBinaryEagle( stream );
+        stream.SeekI( 0 );
+
+        if( isBinary )
+        {
+            std::vector<uint8_t> bytes;
+            bytes.resize( static_cast<size_t>( stream.GetLength() ) );
+            stream.Read( bytes.data(), bytes.size() );
+
+            if( stream.LastRead() != bytes.size() )
+            {
+                THROW_IO_ERROR( wxString::Format( _( "Unable to read file '%s'" ),
+                                                  fn.GetFullPath() ) );
+            }
+
+            EAGLE_BIN_PARSER binParser;
+            binDocument = binParser.Parse( bytes );
+            doc = binDocument->GetRoot();
+        }
+        else
+        {
+            if( !xmlDocument.Load( stream ) )
+            {
+                THROW_IO_ERROR( wxString::Format( _( "Unable to read file '%s'" ),
+                                                  fn.GetFullPath() ) );
+            }
+
+            doc = xmlDocument.GetRoot();
+        }
 
         m_min_trace    = INT_MAX;
         m_min_hole     = INT_MAX;
@@ -420,9 +458,15 @@ BOARD* PCB_IO_EAGLE::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
         m_board->m_LegacyNetclassesLoaded = true;
         m_board->m_LegacyDesignSettingsLoaded = true;
 
-        fn.SetExt( wxT( "kicad_dru" ) );
-        wxFile rulesFile( fn.GetFullPath(), wxFile::write );
-        rulesFile.Write( m_customRules );
+        // Only emit a design rules sidecar when the Eagle board carried an actual
+        // clearance matrix. A version-only file has no rules and is just clutter.
+        if( m_customRules.Contains( wxT( "(rule " ) ) )
+        {
+            fn.SetExt( wxT( "kicad_dru" ) );
+
+            wxFile rulesFile( fn.GetFullPath(), wxFile::write );
+            rulesFile.Write( m_customRules );
+        }
 
         // should be empty, else missing m_xpath->pop()
         wxASSERT( m_xpath->Contents().size() == 0 );
@@ -670,6 +714,77 @@ void PCB_IO_EAGLE::loadLayerDefs( wxXmlNode* aLayers )
 #define DIMENSION_PRECISION DIM_PRECISION::X_XX // 0.01 mm
 
 
+std::tuple<GR_TEXT_V_ALIGN_T, GR_TEXT_H_ALIGN_T> KiCadAlignmentFromEagle( int aAlign )
+{
+    std::map<int, std::tuple<GR_TEXT_V_ALIGN_T, GR_TEXT_H_ALIGN_T>> alignmentmap{
+        { ETEXT::BOTTOM_LEFT, { GR_TEXT_V_ALIGN_BOTTOM, GR_TEXT_H_ALIGN_LEFT } },
+        { ETEXT::BOTTOM_RIGHT, { GR_TEXT_V_ALIGN_BOTTOM, GR_TEXT_H_ALIGN_RIGHT } },
+        { ETEXT::BOTTOM_CENTER, { GR_TEXT_V_ALIGN_BOTTOM, GR_TEXT_H_ALIGN_CENTER } },
+        { ETEXT::CENTER_RIGHT, { GR_TEXT_V_ALIGN_CENTER, GR_TEXT_H_ALIGN_RIGHT } },
+        { ETEXT::CENTER, { GR_TEXT_V_ALIGN_CENTER, GR_TEXT_H_ALIGN_CENTER } },
+        { ETEXT::CENTER_LEFT, { GR_TEXT_V_ALIGN_CENTER, GR_TEXT_H_ALIGN_LEFT } },
+        { ETEXT::TOP_CENTER, { GR_TEXT_V_ALIGN_TOP, GR_TEXT_H_ALIGN_CENTER } },
+        { ETEXT::TOP_LEFT, { GR_TEXT_V_ALIGN_TOP, GR_TEXT_H_ALIGN_LEFT } },
+        { ETEXT::TOP_RIGHT, { GR_TEXT_V_ALIGN_TOP, GR_TEXT_H_ALIGN_RIGHT } },
+    };
+    return alignmentmap[aAlign];
+}
+
+
+int EagleAlignmentFromKiCad( std::tuple<GR_TEXT_V_ALIGN_T, GR_TEXT_H_ALIGN_T> aAlign )
+{
+    std::map<std::tuple<GR_TEXT_V_ALIGN_T, GR_TEXT_H_ALIGN_T>, int> alignmentmap{
+        { { GR_TEXT_V_ALIGN_BOTTOM, GR_TEXT_H_ALIGN_LEFT }, ETEXT::BOTTOM_LEFT },
+        { { GR_TEXT_V_ALIGN_BOTTOM, GR_TEXT_H_ALIGN_RIGHT }, ETEXT::BOTTOM_RIGHT },
+        { { GR_TEXT_V_ALIGN_BOTTOM, GR_TEXT_H_ALIGN_CENTER }, ETEXT::BOTTOM_CENTER },
+        { { GR_TEXT_V_ALIGN_CENTER, GR_TEXT_H_ALIGN_RIGHT }, ETEXT::CENTER_RIGHT },
+        { { GR_TEXT_V_ALIGN_CENTER, GR_TEXT_H_ALIGN_CENTER }, ETEXT::CENTER },
+        { { GR_TEXT_V_ALIGN_CENTER, GR_TEXT_H_ALIGN_LEFT }, ETEXT::CENTER_LEFT },
+        { { GR_TEXT_V_ALIGN_TOP, GR_TEXT_H_ALIGN_CENTER }, ETEXT::TOP_CENTER },
+        { { GR_TEXT_V_ALIGN_TOP, GR_TEXT_H_ALIGN_LEFT }, ETEXT::TOP_LEFT },
+        { { GR_TEXT_V_ALIGN_TOP, GR_TEXT_H_ALIGN_RIGHT }, ETEXT::TOP_RIGHT },
+    };
+    return alignmentmap[aAlign];
+}
+
+
+void EaglePcbTextToKiCadAlignment( EDA_TEXT* aTxt, int aTxtAlign, double aTxtDegrees, bool aTxtMirror, bool aTxtSpin,
+                                   double aElementDegrees = 0.0, bool aElementMirror = false,
+                                   bool aElementSpin = false )
+{
+    GR_TEXT_H_ALIGN_T halign{ GR_TEXT_H_ALIGN_INDETERMINATE };
+    GR_TEXT_V_ALIGN_T valign{ GR_TEXT_V_ALIGN_INDETERMINATE };
+    int               align{ aTxtAlign };
+
+    bool   spin = aTxtSpin != aElementSpin;
+    bool   mirror = aTxtMirror != aElementMirror;
+    double textDefDegrees = EDA_ANGLE( aTxtDegrees, DEGREES_T ).Normalize().AsDegrees();
+    double elementDegrees = EDA_ANGLE( aElementDegrees, DEGREES_T ).Normalize().AsDegrees();
+    double degrees = ( aTxtMirror ? -1.0 : 1.0 ) * textDefDegrees + elementDegrees;
+    degrees = EDA_ANGLE( degrees, DEGREES_T ).Normalize().AsDegrees();
+
+    if( !spin )
+    {
+        if( ( !aTxtMirror && degrees > 90 && degrees <= 270 ) || ( aTxtMirror && degrees >= 90 && degrees < 270 ) )
+        {
+            align = -align;
+            degrees = degrees - 180;
+        }
+    }
+
+    if( aElementMirror )
+        degrees = -degrees;
+
+    aTxt->SetTextAngle( EDA_ANGLE( degrees, DEGREES_T ).Normalize() );
+    aTxt->SetMirrored( mirror );
+    aTxt->SetKeepUpright( false ); // we just aligned the text exactly as EAGLE does
+
+    std::tie( valign, halign ) = KiCadAlignmentFromEagle( align );
+    aTxt->SetHorizJustify( halign );
+    aTxt->SetVertJustify( valign );
+}
+
+
 void PCB_IO_EAGLE::loadPlain( wxXmlNode* aGraphics )
 {
     if( !aGraphics )
@@ -752,141 +867,15 @@ void PCB_IO_EAGLE::loadPlain( wxXmlNode* aGraphics )
                 pcbtxt->SetTextSize( kicad_fontsize( t.size, textThickness ) );
                 pcbtxt->SetKeepUpright( false );
 
-                // Eagle's anchor is independent of text justification; KiCad's is not.
                 VECTOR2I eagleAnchor( kicad_x( t.x ), kicad_y( t.y ) );
-                int      align = t.align ? *t.align : ETEXT::BOTTOM_LEFT;
-                BOX2I    textbox = pcbtxt->GetBoundingBox();
-                VECTOR2I offset( 0, 0 );
-                double   degrees = 0;
-                int      signX = 0;
-                int      signY = 0;
+                pcbtxt->SetTextPos( eagleAnchor );
 
-                if( t.rot )
-                {
-                    degrees = t.rot->degrees;
+                int    align = t.align ? *t.align : ETEXT::BOTTOM_LEFT;
+                double degrees = t.rot ? t.rot->degrees : 0.0;
+                bool   mirror = t.rot ? t.rot->mirror : false;
+                bool   spin = t.rot ? t.rot->spin : false;
 
-                    if( t.rot->mirror && !t.rot->spin )
-                        degrees *= -1;
-
-                    if( t.rot->mirror )
-                        pcbtxt->SetMirrored( t.rot->mirror );
-
-                    if( degrees > 90 && degrees <= 270 )
-                    {
-                        if( degrees == 270 && t.rot->mirror )
-                            degrees = 270;          // an odd special-case
-                        else
-                            degrees -= 180;
-
-                        signX = t.rot->mirror ? 1 : -1;
-                        signY = 1;
-                    }
-
-                    pcbtxt->SetTextAngle( EDA_ANGLE( degrees, DEGREES_T ) );
-                }
-
-                switch( align )
-                {
-                case ETEXT::BOTTOM_CENTER:
-                case ETEXT::BOTTOM_LEFT:
-                case ETEXT::BOTTOM_RIGHT:
-                    offset.y = signY * (int) textbox.GetHeight();
-                    break;
-
-                case ETEXT::TOP_CENTER:
-                case ETEXT::TOP_LEFT:
-                case ETEXT::TOP_RIGHT:
-                    offset.y = -signY * (int) textbox.GetHeight();
-                    break;
-
-                default:
-                    break;
-                }
-
-                switch( align )
-                {
-                case ETEXT::TOP_LEFT:
-                case ETEXT::CENTER_LEFT:
-                case ETEXT::BOTTOM_LEFT:
-                    offset.x = signX * (int) textbox.GetWidth();
-                    break;
-
-                case ETEXT::TOP_RIGHT:
-                case ETEXT::CENTER_RIGHT:
-                case ETEXT::BOTTOM_RIGHT:
-                    offset.x = -signX * (int) textbox.GetWidth();
-                    break;
-
-                default:
-                    break;
-                }
-
-                RotatePoint( offset, EDA_ANGLE( degrees, DEGREES_T ) );
-                pcbtxt->SetTextPos( eagleAnchor + offset );
-
-                switch( align )
-                {
-                case ETEXT::CENTER:
-                    pcbtxt->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-                    pcbtxt->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
-                    break;
-
-                case ETEXT::CENTER_LEFT:
-                    pcbtxt->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-                    pcbtxt->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
-                    break;
-
-                case ETEXT::CENTER_RIGHT:
-                    pcbtxt->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-                    pcbtxt->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
-                    break;
-
-                case ETEXT::TOP_CENTER:
-                    pcbtxt->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-                    pcbtxt->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-                    break;
-
-                case ETEXT::TOP_LEFT:
-                    pcbtxt->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-                    pcbtxt->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-                    break;
-
-                case ETEXT::TOP_RIGHT:
-                    pcbtxt->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-                    pcbtxt->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-                    break;
-
-                case ETEXT::BOTTOM_CENTER:
-                    pcbtxt->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-                    pcbtxt->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-                    break;
-
-                case ETEXT::BOTTOM_LEFT:
-                    pcbtxt->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-                    pcbtxt->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-                    break;
-
-                case ETEXT::BOTTOM_RIGHT:
-                    pcbtxt->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-                    pcbtxt->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-                    break;
-                }
-
-                // Refine justification and rotation for mirrored texts
-                if( pcbtxt->IsMirrored() && degrees < -90 && degrees >= -270 )
-                {
-                    pcbtxt->SetTextAngle( EDA_ANGLE( 180+degrees, DEGREES_T ) );
-
-                    if( pcbtxt->GetHorizJustify() == GR_TEXT_H_ALIGN_LEFT )
-                        pcbtxt->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-                    else if( pcbtxt->GetHorizJustify() == GR_TEXT_H_ALIGN_RIGHT )
-                        pcbtxt->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-
-                    if( pcbtxt->GetVertJustify() == GR_TEXT_V_ALIGN_BOTTOM )
-                        pcbtxt->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-                    else if( pcbtxt->GetVertJustify() == GR_TEXT_V_ALIGN_TOP )
-                        pcbtxt->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-               }
+                EaglePcbTextToKiCadAlignment( pcbtxt, align, degrees, mirror, spin );
             }
 
             m_xpath->pop();
@@ -965,15 +954,28 @@ void PCB_IO_EAGLE::loadPlain( wxXmlNode* aGraphics )
 
             ERECT        r( gr );
             PCB_LAYER_ID layer = kicad_layer( r.layer );
+            bool         keepout = ( r.layer == EAGLE_LAYER::TRESTRICT
+                                  || r.layer == EAGLE_LAYER::BRESTRICT
+                                  || r.layer == EAGLE_LAYER::VRESTRICT );
 
-            if( layer != UNDEFINED_LAYER )
+            // A rectangle on a restrict layer is a keepout area, the same as a circle
+            // or polygon there; it takes its layer set from setKeepoutSettingsToZone(),
+            // so an unmapped layer must not drop it.
+            if( keepout || layer != UNDEFINED_LAYER )
             {
                 ZONE* zone = new ZONE( m_board );
 
                 m_board->Add( zone, ADD_MODE::APPEND );
 
-                zone->SetLayer( layer );
-                zone->SetNetCode( NETINFO_LIST::UNCONNECTED );
+                if( keepout )
+                {
+                    setKeepoutSettingsToZone( zone, r.layer );
+                }
+                else
+                {
+                    zone->SetLayer( layer );
+                    zone->SetNetCode( NETINFO_LIST::UNCONNECTED );
+                }
 
                 ZONE_BORDER_DISPLAY_STYLE outline_hatch = ZONE_BORDER_DISPLAY_STYLE::DIAGONAL_EDGE;
 
@@ -1548,7 +1550,10 @@ ZONE* PCB_IO_EAGLE::loadPolygon( wxXmlNode* aPolyNode )
                           || p.layer == EAGLE_LAYER::BRESTRICT
                           || p.layer == EAGLE_LAYER::VRESTRICT );
 
-    if( layer == UNDEFINED_LAYER )
+    // Keepout polygons live on the restrict layers, which have no copper/graphic
+    // KiCad target; they take their layer set from setKeepoutSettingsToZone(), so an
+    // unmapped layer must not drop them.
+    if( !keepout && layer == UNDEFINED_LAYER )
     {
         wxLogMessage( wxString::Format( _( "Ignoring a polygon since Eagle layer '%s' (%d) was not mapped" ),
                                         eagle_layer_name( p.layer ),
@@ -1702,6 +1707,27 @@ ZONE* PCB_IO_EAGLE::loadPolygon( wxXmlNode* aPolyNode )
 void PCB_IO_EAGLE::orientFootprintAndText( FOOTPRINT* aFootprint, const EELEMENT& e,
                                            const EATTR* aNameAttr, const EATTR* aValueAttr )
 {
+    std::vector<std::tuple<PCB_FIELD*, double, bool, bool, const EATTR*>> textRotDefs{};
+
+    std::vector<PCB_FIELD*> fields{};
+    aFootprint->GetFields( fields, false );
+
+    for( PCB_FIELD* field : fields )
+    {
+        double       defDegrees = field->GetLibTextAngle().AsDegrees();
+        bool         defMirror = field->IsMirrored();
+        bool         defSpin = !field->IsKeepUpright();
+        const EATTR* attr = nullptr;
+
+        if( field == &aFootprint->Reference() )
+            attr = aNameAttr;
+        else if( field == &aFootprint->Value() )
+            attr = aValueAttr;
+
+        textRotDefs.push_back( std::tuple<PCB_FIELD*, double, bool, bool, const EATTR*>( field, defDegrees, defMirror,
+                                                                                         defSpin, attr ) );
+    }
+
     if( e.rot )
     {
         if( e.rot->mirror )
@@ -1715,13 +1741,21 @@ void PCB_IO_EAGLE::orientFootprintAndText( FOOTPRINT* aFootprint, const EELEMENT
         }
     }
 
-    orientFPText( aFootprint, e, &aFootprint->Reference(), aNameAttr );
-    orientFPText( aFootprint, e, &aFootprint->Value(), aValueAttr );
+    for( auto textRotDef : textRotDefs )
+    {
+        PCB_FIELD*   field{};
+        double       defDegrees{};
+        bool         defMirror{};
+        bool         defSpin{};
+        const EATTR* attr{};
+        std::tie( field, defDegrees, defMirror, defSpin, attr ) = textRotDef;
+        orientFPText( aFootprint, e, field, attr, defDegrees, defMirror, defSpin );
+    }
 }
 
 
-void PCB_IO_EAGLE::orientFPText( FOOTPRINT* aFootprint, const EELEMENT& e, PCB_TEXT* aFPText,
-                                 const EATTR* aAttr )
+void PCB_IO_EAGLE::orientFPText( FOOTPRINT* aFootprint, const EELEMENT& e, PCB_TEXT* aFPText, const EATTR* aAttr,
+                                 double aTextDefAngle, bool aTextDefMirror, bool aTextDefSpin )
 {
     // Smashed part ?
     if( aAttr )
@@ -1766,120 +1800,27 @@ void PCB_IO_EAGLE::orientFPText( FOOTPRINT* aFootprint, const EELEMENT& e, PCB_T
         // package's text field.  If they did not want zero, they specify
         // what they want explicitly.
         double  degrees  = a.rot ? a.rot->degrees : 0.0;
-        int     sign = 1;
-        bool    spin = false;
+        bool    mirror = a.rot ? a.rot->mirror : false;
+        bool    spin = a.rot ? a.rot->spin : false;
 
-        if( a.rot )
-        {
-            spin = a.rot->spin;
-            sign = a.rot->mirror ? -1 : 1;
-            aFPText->SetMirrored( a.rot->mirror );
-        }
-
-        if( degrees == 90 || degrees == 0 || spin )
-        {
-            degrees *= sign;
-        }
-        else if( degrees == 180 )
-        {
-            degrees = 0;
-            align = -align;
-        }
-        else if( degrees == 270 )
-        {
-            align = -align;
-            degrees = sign * 90;
-        }
-        else
-        {
-            degrees = 90 - (sign * degrees);
-        }
-
-        aFPText->SetTextAngle( EDA_ANGLE( degrees, DEGREES_T ) );
-
-        switch( align )
-        {
-        case ETEXT::TOP_RIGHT:
-            aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-            aFPText->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-            break;
-
-        case ETEXT::BOTTOM_LEFT:
-            aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-            aFPText->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-            break;
-
-        case ETEXT::TOP_LEFT:
-            aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-            aFPText->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-            break;
-
-        case ETEXT::BOTTOM_RIGHT:
-            aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-            aFPText->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-            break;
-
-        case ETEXT::TOP_CENTER:
-            aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-            aFPText->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-            break;
-
-        case ETEXT::BOTTOM_CENTER:
-            aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-            aFPText->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-            break;
-
-        case ETEXT::CENTER:
-            aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-            aFPText->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
-            break;
-
-        case ETEXT::CENTER_LEFT:
-            aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-            aFPText->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
-            break;
-
-        case ETEXT::CENTER_RIGHT:
-            aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-            aFPText->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
-            break;
-
-        default:
-            ;
-        }
-
-        // Refine justification and rotation for mirrored texts
-        if( aFPText->IsMirrored() && degrees < -90 && degrees >= -270 )
-        {
-            aFPText->SetTextAngle( EDA_ANGLE( 180+degrees, DEGREES_T ) );
-
-            if( aFPText->GetHorizJustify() == GR_TEXT_H_ALIGN_LEFT )
-                aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-            else if( aFPText->GetHorizJustify() == GR_TEXT_H_ALIGN_RIGHT )
-                aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-
-            if( aFPText->GetVertJustify() == GR_TEXT_V_ALIGN_BOTTOM )
-                aFPText->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-            else if( aFPText->GetVertJustify() == GR_TEXT_V_ALIGN_TOP )
-                aFPText->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-       }
+        EaglePcbTextToKiCadAlignment( aFPText, align, degrees, mirror, spin );
     }
     else
     {
         // Part is not smash so use Lib default for NAME/VALUE
         // the text is per the original package, sans <attribute>.
-        double degrees = aFPText->GetTextAngle().AsDegrees()
-                            + aFootprint->GetOrientation().AsDegrees();
+        int align = EagleAlignmentFromKiCad( std::tuple<GR_TEXT_V_ALIGN_T, GR_TEXT_H_ALIGN_T>(
+                aFPText->GetVertJustify(), aFPText->GetHorizJustify() ) );
 
-        // bottom-left is eagle default
-        aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-        aFPText->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
+        double elementAngle = e.rot ? e.rot->degrees : 0.0;
+        bool   elementMirror = e.rot ? e.rot->mirror : false;
+        bool   elementSpin = e.rot ? e.rot->spin : false;
 
-        if( !aFPText->IsMirrored() && abs( degrees ) >= 180 )
-        {
-            aFPText->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-            aFPText->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-        }
+        // To mimic EAGLE correctly, we need to know here in addition to the element rotation specification
+        // the rotation specification (i.e. angle, mirror flag and spin flag) of the original <text ...>
+        // definition within the package
+        EaglePcbTextToKiCadAlignment( aFPText, align, aTextDefAngle, aTextDefMirror, aTextDefSpin, elementAngle,
+                                      elementMirror, elementSpin );
     }
 }
 
@@ -2163,69 +2104,30 @@ void PCB_IO_EAGLE::packageText( FOOTPRINT* aFootprint, wxXmlNode* aTree ) const
 
     textItem->SetTextThickness( textThickness );
     textItem->SetTextSize( kicad_fontsize( t.size, textThickness ) );
-    textItem->SetKeepUpright( false );
 
     int align = t.align ? *t.align : ETEXT::BOTTOM_LEFT;  // bottom-left is eagle default
 
     // An eagle package is never rotated, the DTD does not allow it.
     // angle -= aFootprint->GetOrienation();
 
-    if( t.rot )
-    {
-        int sign = t.rot->mirror ? -1 : 1;
-        textItem->SetMirrored( t.rot->mirror );
+    double degrees = t.rot ? t.rot->degrees : 0.0; // range used by EAGLE is [0° ; 360°[
+    bool   mirror = t.rot ? t.rot->mirror : false;
+    bool   spin = t.rot ? t.rot->spin : false;
 
-        double degrees = t.rot->degrees;
-        textItem->SetTextAngle( EDA_ANGLE( sign * degrees, DEGREES_T ) );
-    }
+    textItem->SetKeepUpright( !spin );
 
-    switch( align )
-    {
-    case ETEXT::CENTER:
-        textItem->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-        textItem->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
-        break;
+    if( mirror )
+        textItem->SetMirrored( mirror );
 
-    case ETEXT::CENTER_LEFT:
-        textItem->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-        textItem->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
-        break;
+    GR_TEXT_H_ALIGN_T halign{ GR_TEXT_H_ALIGN_INDETERMINATE };
+    GR_TEXT_V_ALIGN_T valign{ GR_TEXT_V_ALIGN_INDETERMINATE };
+    std::tie( valign, halign ) = KiCadAlignmentFromEagle( align );
+    textItem->SetHorizJustify( halign );
+    textItem->SetVertJustify( valign );
 
-    case ETEXT::CENTER_RIGHT:
-        textItem->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-        textItem->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
-        break;
-
-    case ETEXT::TOP_CENTER:
-        textItem->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-        textItem->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-        break;
-
-    case ETEXT::TOP_LEFT:
-        textItem->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-        textItem->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-        break;
-
-    case ETEXT::TOP_RIGHT:
-        textItem->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-        textItem->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-        break;
-
-    case ETEXT::BOTTOM_CENTER:
-        textItem->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-        textItem->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-        break;
-
-    case ETEXT::BOTTOM_LEFT:
-        textItem->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-        textItem->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-        break;
-
-    case ETEXT::BOTTOM_RIGHT:
-        textItem->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-        textItem->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-        break;
-    }
+    textItem->SetTextAngle( EDA_ANGLE( degrees, DEGREES_T ) );
+    textItem->SetLibTextAngle( EDA_ANGLE( degrees, DEGREES_T ) );
+    // EaglePcbTextToKiCadAlignment (called from orientFPText) will tidy up the final orientation on the PCB
 }
 
 
@@ -2318,6 +2220,17 @@ void PCB_IO_EAGLE::packagePolygon( FOOTPRINT* aFootprint, wxXmlNode* aTree ) con
             vertices.emplace_back( vertex );
 
         vertex = vertex->GetNext();
+    }
+
+    // A polygon needs at least three corners to enclose an area. Degenerate
+    // outlines occur in malformed or partially-decoded sources; skip them rather
+    // than dereferencing an empty vertex list.
+    if( vertices.size() < 3 )
+    {
+        wxLogMessage( wxString::Format( _( "Skipping a polygon on layer '%s' (%d): less than 3 vertices" ),
+                                        eagle_layer_name( p.layer ),
+                                        p.layer ) );
+        return;
     }
 
     vertices.push_back( vertices[0] );
@@ -2692,7 +2605,7 @@ void PCB_IO_EAGLE::loadClasses( wxXmlNode* aClasses )
         classNode = classNode->GetNext();
     }
 
-    m_customRules = wxT( "(version 1)" );
+    m_customRules = wxT( "(version 2)" );
 
     for( ECLASS& eClass : eClasses )
     {
@@ -2731,8 +2644,20 @@ void PCB_IO_EAGLE::loadSignals( wxXmlNode* aSignals )
 
     BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
 
-    ZONES zones;      // per net
     int   netCode = 1;
+
+    // Eagle auto-named nets are stored without a name; we synthesize an N$<n>
+    // fallback for them below. Collect the explicit names first so a fallback can
+    // never collide with a real signal and silently merge two distinct nets.
+    std::set<wxString> usedNetNames;
+
+    for( wxXmlNode* signal = aSignals->GetChildren(); signal; signal = signal->GetNext() )
+    {
+        wxString explicitName = escapeName( signal->GetAttribute( "name" ) );
+
+        if( !explicitName.IsEmpty() )
+            usedNetNames.insert( explicitName );
+    }
 
     m_xpath->push( "signals.signal", "name" );
 
@@ -2743,11 +2668,25 @@ void PCB_IO_EAGLE::loadSignals( wxXmlNode* aSignals )
     {
         checkpoint();
 
-        bool    sawPad = false;
+        wxString                  netName = escapeName( net->GetAttribute( "name" ) );
 
-        zones.clear();
+        // Eagle leaves auto-generated nets unnamed in the binary stream. An empty
+        // name collides with the board's reserved unconnected net (code 0), so
+        // NETINFO_LIST would silently drop the net and orphan every item routed on
+        // it. Synthesize a unique fallback that avoids every explicit signal name,
+        // matching Eagle's own N$x naming without merging distinct nets.
+        if( netName.IsEmpty() )
+        {
+            int candidate = netCode;
 
-        const wxString&           netName = escapeName( net->GetAttribute( "name" ) );
+            do
+            {
+                netName = wxString::Format( wxT( "N$%d" ), candidate++ );
+            } while( usedNetNames.count( netName ) );
+
+            usedNetNames.insert( netName );
+        }
+
         NETINFO_ITEM*             netInfo = new NETINFO_ITEM( m_board, netName, netCode );
         std::shared_ptr<NETCLASS> netclass;
 
@@ -2764,6 +2703,11 @@ void PCB_IO_EAGLE::loadSignals( wxXmlNode* aSignals )
         }
 
         m_board->Add( netInfo );
+
+        // AppendNet deduplicates by name and renumbers to keep net codes
+        // consecutive, so the authoritative code for this signal's items is
+        // whatever the board accepted, not the local request counter.
+        netCode = netInfo->GetNetCode();
 
         m_xpath->Value( netName.c_str() );
 
@@ -2939,8 +2883,6 @@ void PCB_IO_EAGLE::loadSignals( wxXmlNode* aSignals )
                 m_pads_to_nets[ key ] = ENET( netCode, netName );
 
                 m_xpath->pop();
-
-                sawPad = true;
             }
 
             else if( itemName == wxT( "polygon" ) )
@@ -2948,28 +2890,13 @@ void PCB_IO_EAGLE::loadSignals( wxXmlNode* aSignals )
                 m_xpath->push( "polygon" );
                 auto* zone = loadPolygon( netItem );
 
-                if( zone )
-                {
-                    zones.push_back( zone );
-
-                    if( !zone->GetIsRuleArea() )
-                        zone->SetNetCode( netCode );
-                }
+                if( zone && !zone->GetIsRuleArea() )
+                    zone->SetNetCode( netCode );
 
                 m_xpath->pop();     // "polygon"
             }
 
             netItem = netItem->GetNext();
-        }
-
-        if( zones.size() && !sawPad )
-        {
-            // KiCad does not support an unconnected zone with its own non-zero netcode,
-            // but only when assigned netcode = 0 w/o a name...
-            for( ZONE* zone : zones )
-                zone->SetNetCode( NETINFO_LIST::UNCONNECTED );
-
-            // therefore omit this signal/net.
         }
 
         //Next signal needs a new netCode
@@ -3022,6 +2949,16 @@ void PCB_IO_EAGLE::mapEagleLayersToKicad( bool aIsLibraryCache )
         dynamic_cast<wxWindow*>( m_progressReporter )->Hide();
 
     m_layer_map = m_layer_mapping_handler( inputDescs );
+
+    // A layer the handler leaves at UNSELECTED_LAYER has no placement target: the
+    // headless default callback has no user to consult, and the item loaders only
+    // skip UNDEFINED_LAYER. Normalize it so those items are dropped rather than
+    // stranded on an out-of-range layer.
+    for( auto& [name, layer] : m_layer_map )
+    {
+        if( layer == UNSELECTED_LAYER )
+            layer = UNDEFINED_LAYER;
+    }
 
     if( m_progressReporter && dynamic_cast<wxWindow*>( m_progressReporter ))
         dynamic_cast<wxWindow*>( m_progressReporter )->Show();
@@ -3140,6 +3077,41 @@ std::tuple<PCB_LAYER_ID, LSET, bool> PCB_IO_EAGLE::defaultKicadLayer( int aEagle
         kiLayer = Eco2_User;
         break;
 
+    case EAGLE_LAYER::USERDRAWINGS:
+        kiLayer = Dwgs_User;
+        break;
+    case EAGLE_LAYER::USERMARGIN:
+        kiLayer = Margin;
+        break;
+
+    case EAGLE_LAYER::USER1:
+        kiLayer = User_1;
+        break;
+    case EAGLE_LAYER::USER2:
+        kiLayer = User_2;
+        break;
+    case EAGLE_LAYER::USER3:
+        kiLayer = User_3;
+        break;
+    case EAGLE_LAYER::USER4:
+        kiLayer = User_4;
+        break;
+    case EAGLE_LAYER::USER5:
+        kiLayer = User_5;
+        break;
+    case EAGLE_LAYER::USER6:
+        kiLayer = User_6;
+        break;
+    case EAGLE_LAYER::USER7:
+        kiLayer = User_7;
+        break;
+    case EAGLE_LAYER::USER8:
+        kiLayer = User_8;
+        break;
+    case EAGLE_LAYER::USER9:
+        kiLayer = User_9;
+        break;
+
     // these will also appear in the ratsnest, so there's no need for a warning
     case EAGLE_LAYER::UNROUTED:
         kiLayer = Dwgs_User;
@@ -3208,7 +3180,14 @@ void PCB_IO_EAGLE::centerBoard()
             int desired_x = ( w - bbbox.GetWidth() )  / 2;
             int desired_y = ( h - bbbox.GetHeight() ) / 2;
 
-            m_board->Move( VECTOR2I( desired_x - bbbox.GetX(), desired_y - bbbox.GetY() ) );
+            VECTOR2I movementVector{ desired_x - bbbox.GetX(), desired_y - bbbox.GetY() };
+            m_board->Move( movementVector );
+
+            BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
+            bds.SetAuxOrigin( bds.GetAuxOrigin() + movementVector );
+            bds.SetGridOrigin( bds.GetGridOrigin() + movementVector );
+
+            m_board->SetModified();
         }
     }
 }

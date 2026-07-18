@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef SCH_RULE_AREA_H
@@ -161,6 +157,15 @@ public:
     ///
     /// @return The resolved netclass (if any), and the SCH_ITEM providing the declaration.
     const std::vector<std::pair<wxString, SCH_ITEM*>> GetResolvedNetclasses( const SCH_SHEET_PATH* aSheetPath ) const;
+
+    /// Return true when the rule area exists only as a container for attached directive labels.
+    /// This requires at least one attached directive and no design effect of its own (no DNP and
+    /// no exclude-from flags set).
+    bool IsDirectiveLabelOnlyArea() const
+    {
+        return !m_directives.empty() && !m_DNP && !m_excludedFromSim && !m_excludedFromBOM
+               && !m_excludedFromBoard;
+    }
 
     /// Get the message panel info for the rule area.
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;

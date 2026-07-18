@@ -12,23 +12,18 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 # General Public License for more details.
 #
-# You should have received a copy of the GNU General Public License along
-# with this program.  If not, see <http://www.gnu.org/licenses/>.
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 set( QA_API_SRCS
     test_api_module.cpp
     test_api_enums.cpp
     test_api_proto.cpp
+    test_api_e2e.cpp
+    test_api_handler_pcb.cpp
+    test_api_jobs.cpp
+    test_api_wizards.cpp
     )
-
-if( KICAD_IPC_API )
-    set( QA_API_SRCS
-        ${QA_API_SRCS}
-        test_api_e2e.cpp
-        test_api_jobs.cpp
-        test_api_wizards.cpp
-    )
-endif()
 
 add_executable( qa_api
     # This is needed for the global mock objects

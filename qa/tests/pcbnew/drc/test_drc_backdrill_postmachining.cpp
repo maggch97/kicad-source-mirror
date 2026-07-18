@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -301,6 +297,36 @@ BOOST_FIXTURE_TEST_CASE( ViaBackdrillLayerDetection, BACKDRILL_TEST_FIXTURE )
 
     // B_Cu should NOT be affected
     BOOST_CHECK( !via->IsBackdrilledOrPostMachined( B_Cu ) );
+}
+
+
+/**
+ * Regression test for GitLab #23902.  Iterating LAYER_RANGE walked PCB_LAYER_ID enum order, so a
+ * bottom-anchored backdrill (B_Cu to In3_Cu) wrongly flagged the top inner layers and skipped the
+ * actually-drilled In4_Cu.  A bottom backdrill must report only the bottom-side copper as machined.
+ */
+BOOST_FIXTURE_TEST_CASE( ViaBottomBackdrillLayerDetection, BACKDRILL_TEST_FIXTURE )
+{
+    int netCode = GetNetCode( "TestNet" );
+
+    // 6-layer stackup top to bottom is F_Cu, In1_Cu, In2_Cu, In3_Cu, In4_Cu, B_Cu.  Back-drilling
+    // from the bottom (B_Cu) up to In3_Cu removes copper on In3_Cu, In4_Cu and B_Cu only.
+    PCB_VIA* via = CreateBackdrilledVia(
+            VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 30 ) ),
+            netCode,
+            F_Cu, B_Cu,          // Primary drill: full through-hole
+            B_Cu, In3_Cu,        // Backdrill from the bottom up to In3_Cu
+            pcbIUScale.mmToIU( 0.5 ) );
+
+    // Top-side layers must NOT be reported as backdrilled.
+    BOOST_CHECK( !via->IsBackdrilledOrPostMachined( F_Cu ) );
+    BOOST_CHECK( !via->IsBackdrilledOrPostMachined( In1_Cu ) );
+    BOOST_CHECK( !via->IsBackdrilledOrPostMachined( In2_Cu ) );
+
+    // The drilled span from In3_Cu down to B_Cu must be reported as backdrilled.
+    BOOST_CHECK( via->IsBackdrilledOrPostMachined( In3_Cu ) );
+    BOOST_CHECK( via->IsBackdrilledOrPostMachined( In4_Cu ) );
+    BOOST_CHECK( via->IsBackdrilledOrPostMachined( B_Cu ) );
 }
 
 

@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef WX_PROGRESS_REPORTERS_H
@@ -31,6 +27,7 @@
 #include <wx/gauge.h>
 #include <wx/appprogress.h>
 
+#include <core/throttle.h>
 #include <widgets/progress_reporter_base.h>
 
 #define PR_NO_ABORT 0
@@ -80,12 +77,25 @@ public:
         WX_PROGRESS_REPORTER_BASE::SetTitle( aTitle );
     }
 
+    ///< Gate expensive dialog work while always allowing the final tick.
+    static bool shouldRefresh( int aProgress, int aMaxProgress, int aPhase, int aNumPhases,
+                               THROTTLE& aThrottle )
+    {
+        bool finalTick = aMaxProgress > 0 && aProgress >= aMaxProgress && aPhase + 1 >= aNumPhases;
+
+        return finalTick || aThrottle.Ready();
+    }
+
 private:
     bool updateUI() override;
 
 private:
     wxAppProgressIndicator m_appProgressIndicator;
     int                    m_messageWidth;
+
+    // Rate-limit expensive dialog repaint and event draining.
+    THROTTLE               m_updateThrottle;
+    std::atomic_bool       m_lastUpdateResult;
 };
 
 

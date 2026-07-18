@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <jobs/jobs_output_folder.h>
@@ -38,7 +38,9 @@ bool JOBS_OUTPUT_FOLDER::HandleOutputs( const wxString&                baseTempP
 {
     aResolvedOutputPath.reset();
 
-    wxString outputPath = ExpandTextVars( m_outputPath, aProject );
+    wxString outputPath = m_outputPath;
+    outputPath.Replace( wxT( "\\" ), wxT( "/" ) );
+    outputPath = ExpandTextVars( outputPath, aProject );
     outputPath = ExpandEnvVarSubstitutions( outputPath, aProject );
 
     if( outputPath.StartsWith( "~" ) )

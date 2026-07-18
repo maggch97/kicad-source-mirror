@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <3d_rendering/opengl/render_3d_opengl.h> // Must be included before any GL header
@@ -28,6 +24,8 @@
 #include <tool/tool_manager.h>
 #include <eda_3d_canvas.h>
 #include <eda_3d_viewer_frame.h>
+#include <eda_3d_viewer_settings.h>
+#include <settings/settings_manager.h>
 #include <id.h>
 #include <kiface_base.h>
 #include <tools/eda_3d_controller.h>
@@ -411,12 +409,11 @@ int EDA_3D_CONTROLLER::ExportImage( const TOOL_EVENT& aEvent )
         return 0;
     }
 
-    static wxSize lastSize( viewer->GetCanvas()->GetClientSize() );
-    static EDA_3D_VIEWER_EXPORT_FORMAT lastFormat = EDA_3D_VIEWER_EXPORT_FORMAT::PNG;
-    DIALOG_EXPORT_3D_IMAGE dlg( viewer, currentSize );
+    EDA_3D_VIEWER_SETTINGS* cfg = GetAppSettings<EDA_3D_VIEWER_SETTINGS>( "3d_viewer" );
+    DIALOG_EXPORT_3D_IMAGE  dlg( viewer, currentSize, cfg ? &cfg->m_ExportImage : nullptr );
 
     if( dlg.ShowModal() == wxID_OK )
-        viewer->ExportImage( lastFormat, dlg.GetSize() );
+        viewer->ExportImage( fmt, dlg.GetSize() );
 
     return 0;
 }

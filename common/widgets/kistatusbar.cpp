@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/button.h>
@@ -415,11 +411,15 @@ void KISTATUSBAR::updateAuxFieldWidths()
 
     int padding = KIUI::GetTextSize( wxT( "M" ), this ).x;
 
+    // The background job label and gauge only carry content while a job is running. When idle
+    // they must collapse to zero so they do not consume stretch reserved for the normal fields.
+    bool jobActive = m_backgroundProgressBar && m_backgroundProgressBar->IsShown();
+
     if( std::optional<int> idx = fieldIndex( FIELD::BGJOB_LABEL ) )
-        m_fieldWidths[m_normalFieldsCount + *idx] = -1;
+        m_fieldWidths[m_normalFieldsCount + *idx] = jobActive ? -1 : 0;
 
     if( std::optional<int> idx = fieldIndex( FIELD::BGJOB_GAUGE ) )
-        m_fieldWidths[m_normalFieldsCount + *idx] = 75;
+        m_fieldWidths[m_normalFieldsCount + *idx] = jobActive ? 75 : 0;
 
     if( std::optional<int> idx = fieldIndex( FIELD::BGJOB_CANCEL ) )
     {

@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef TOOLS_MULTICHANNEL_TOOL_H
@@ -39,6 +35,8 @@
 class wxWindow;
 class EDA_ITEM;
 class FOOTPRINT;
+class PCB_GROUP;
+class NETINFO_ITEM;
 
 struct REPEAT_LAYOUT_OPTIONS
 {
@@ -73,6 +71,7 @@ struct RULE_AREA
     ZONE*                     m_zone = nullptr;
     std::set<FOOTPRINT*>      m_components;
     std::unordered_set<EDA_ITEM*> m_designBlockItems;
+    PCB_GROUP*                    m_group = nullptr;
     bool                      m_existsAlready = false;
     bool                      m_generateEnabled = false;
     wxString                  m_sheetPath;
@@ -103,7 +102,8 @@ public:
 
     int RepeatLayout( const TOOL_EVENT& aEvent, ZONE* aRefZone );
     int RepeatLayout( const TOOL_EVENT& aEvent, RULE_AREA& aRefArea, RULE_AREA& aTargetArea,
-                      REPEAT_LAYOUT_OPTIONS& aOptions );
+                      REPEAT_LAYOUT_OPTIONS& aOptions, BOARD_COMMIT* aExternalCommit = nullptr,
+                      wxString* aErrorOut = nullptr );
     int AutogenerateRuleAreas( const TOOL_EVENT& aEvent );
 
     void UpdatePickedPoint( const std::optional<VECTOR2I>& aPoint ) override {};
@@ -117,6 +117,16 @@ public:
     void GeneratePotentialRuleAreas();
     void FindExistingRuleAreas();
     int  CheckRACompatibility( ZONE* aRefZone );
+
+    /**
+     * Remap auto-generated nets (Net-(...), unconnected-...) of a design block that was appended
+     * for layout matching onto fresh private nets, so they cannot fuse by name with same-named
+     * nets that belong to different parts on the board (issue 24767). Returns the created nets so
+     * the caller can remove them after the temporary block is reverted.
+     */
+    static std::vector<NETINFO_ITEM*> IsolateDesignBlockAutoNets( BOARD*                               aBoard,
+                                                                  const std::set<FOOTPRINT*>&          aFootprints,
+                                                                  const std::unordered_set<EDA_ITEM*>& aItems );
 
 private:
     void setTransitions() override;

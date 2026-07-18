@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef _SCH_IO_LIB_CACHE_H_
@@ -104,6 +104,9 @@ public:
     wxString GetFileName() const { return m_libFileName.GetFullPath(); }
 
     const LIB_SYMBOL_MAP& GetSymbolMap() const { return m_symbols; }
+
+    /// For folder-based libraries, the source file each symbol was loaded from (by name).
+    const std::map<wxString, wxString>& GetSymbolSourceFiles() const { return m_symbolSourceFiles; }
 
 protected:
     LIB_SYMBOL* removeSymbol( LIB_SYMBOL* aAlias );

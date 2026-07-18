@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -46,15 +42,21 @@ static const int EDA_PATTERN_NOT_FOUND = wxNOT_FOUND;
  */
 struct KICOMMON_API SEARCH_TERM
 {
-    SEARCH_TERM( const wxString& aText, int aScore ) :
+    SEARCH_TERM( const wxString& aText, int aScore, bool aIsName = false ) :
             Text( aText ),
             Score( aScore ),
-            Normalized( false )
+            Normalized( false ),
+            IsName( aIsName )
     {}
 
     wxString Text;
     int      Score;
     bool     Normalized;
+
+    /// True if this term is the item's own name or LIB_ID rather than an incidental field
+    /// (keyword, description, footprint, etc).  Only these terms can promote a node into the
+    /// exact-match sort tier; see EDA_COMBINED_MATCHER::ScoreTerms.
+    bool     IsName;
 };
 
 

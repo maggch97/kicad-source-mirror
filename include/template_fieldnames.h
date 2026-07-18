@@ -15,14 +15,12 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
+
+#include <initializer_list>
 
 #include <wx/string.h>
 
@@ -86,6 +84,29 @@ inline wxString GetCanonicalFieldName( FIELD_T aFieldType )
 {
     return GetDefaultFieldName( aFieldType, !DO_TRANSLATE );
 }
+
+
+/**
+ * Test whether two field names should be treated as duplicates for the purposes of field
+ * name uniqueness within a given parent (symbol, sheet, or global label).
+ *
+ * Mandatory field names in the supplied set are matched case-insensitively because the
+ * s-expression parser folds case variants onto the canonical mandatory field on load.
+ * User-defined field names retain their original case in storage, so two user fields that
+ * differ only in case (e.g. "Manufacturer" vs "MANUFACTURER") are considered distinct.
+ *
+ * Pass MANDATORY_FIELDS for symbol contexts, SHEET_MANDATORY_FIELDS for sheets, or
+ * GLOBALLABEL_MANDATORY_FIELDS for global labels.  Each parent has its own canonical
+ * folding domain in the parser.
+ */
+bool FieldNamesAreDuplicates( const wxString& aLhs, const wxString& aRhs,
+                              std::initializer_list<FIELD_T> aMandatoryFields );
+
+
+/**
+ * Convenience overload defaulting to symbol mandatory fields.
+ */
+bool FieldNamesAreDuplicates( const wxString& aLhs, const wxString& aRhs );
 
 
 /**

@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <bitmaps.h>
@@ -110,7 +106,11 @@ DIALOG_EXCHANGE_FOOTPRINTS::DIALOG_EXCHANGE_FOOTPRINTS( PCB_EDIT_FRAME* aParent,
     m_resetFabricationAttrs->SetValue(   m_updateMode ? false : true  );
     m_resetClearanceOverrides->SetValue( true );
     m_reset3DModels->SetValue(           true );
+    m_resetTransform->SetValue(          m_updateMode ? false : true );
     m_matchPadPositions->SetValue(       true );
+
+    if( m_updateMode )
+        m_resetTransform->Show( false );
 
     // initialize match-mode
     if( m_updateMode )
@@ -294,6 +294,7 @@ void DIALOG_EXCHANGE_FOOTPRINTS::checkAll( bool aCheck )
         m_resetFabricationAttrs->SetValue( aCheck );
         m_resetClearanceOverrides->SetValue( aCheck );
         m_reset3DModels->SetValue( aCheck );
+        m_resetTransform->SetValue( aCheck );
         m_matchPadPositions->SetValue( aCheck );
 }
 
@@ -381,17 +382,18 @@ void DIALOG_EXCHANGE_FOOTPRINTS::processFootprint( FOOTPRINT* aFootprint, const 
 
     bool updated = !m_updateMode || aFootprint->FootprintNeedsUpdate( newFootprint );
 
-    m_parent->ExchangeFootprint( aFootprint, newFootprint, m_commit,
-                                 m_matchPadPositions->GetValue(),
-                                 m_removeExtraBox->GetValue(),
-                                 m_resetTextItemLayers->GetValue(),
-                                 m_resetTextItemEffects->GetValue(),
-                                 m_resetTextItemPositions->GetValue(),
-                                 m_resetTextItemContent->GetValue(),
-                                 m_resetFabricationAttrs->GetValue(),
-                                 m_resetClearanceOverrides->GetValue(),
-                                 m_reset3DModels->GetValue(),
-                                 &updated );
+    m_parent->GetBoard()->ExchangeFootprint( aFootprint, newFootprint, m_commit,
+                                             m_matchPadPositions->GetValue(),
+                                             m_removeExtraBox->GetValue(),
+                                             m_resetTextItemLayers->GetValue(),
+                                             m_resetTextItemEffects->GetValue(),
+                                             m_resetTextItemPositions->GetValue(),
+                                             m_resetTextItemContent->GetValue(),
+                                             m_resetFabricationAttrs->GetValue(),
+                                             m_resetClearanceOverrides->GetValue(),
+                                             m_reset3DModels->GetValue(),
+                                             m_resetTransform->GetValue(),
+                                             &updated );
 
     if( aFootprint == m_currentFootprint )
         m_currentFootprint = newFootprint;

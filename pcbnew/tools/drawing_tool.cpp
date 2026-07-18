@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "drawing_tool.h"
@@ -1598,6 +1594,10 @@ int DRAWING_TOOL::DrawDimension( const TOOL_EVENT& aEvent )
                 preview.Clear();
                 m_view->Update( &preview );
 
+                // Snap guides persist in the grid helper until the tool exits, so abandoning the
+                // dimension mid-draw must clear them or they linger on screen.
+                grid.FullReset();
+
                 delete dimension;
                 dimension = nullptr;
                 step = SET_ORIGIN;
@@ -2776,6 +2776,10 @@ bool DRAWING_TOOL::drawShape( const TOOL_EVENT& aTool, PCB_SHAPE** aGraphic,
                 twoPointMgr.SetEnd( aCommittedGraphics->top()->GetEnd() );
                 aCommittedGraphics->pop();
 
+                // Snap guides persist in the grid helper until the tool exits, so a mid-draw
+                // backup must clear them or they linger on screen.
+                grid.FullReset();
+
                 getViewControls()->WarpMouseCursor( twoPointMgr.GetEnd(), true );
 
                 if( PICKED_ITEMS_LIST* undo = m_frame->PopCommandFromUndoList() )
@@ -3033,6 +3037,9 @@ bool DRAWING_TOOL::drawArc( const TOOL_EVENT& aTool, PCB_SHAPE** aGraphic,
         }
         else if( evt->IsAction( &PCB_ACTIONS::deleteLastPoint ) )
         {
+            // Snap guides persist in the grid helper until the tool exits, so a mid-draw backup
+            // must clear them or they linger on screen.
+            grid.FullReset();
             arcManager.RemoveLastPoint();
         }
         else if( evt->IsMotion() )
@@ -3365,6 +3372,9 @@ std::unique_ptr<PCB_SHAPE> DRAWING_TOOL::drawOneBezier( const TOOL_EVENT&   aToo
         }
         else if( evt->IsAction( &PCB_ACTIONS::deleteLastPoint ) )
         {
+            // Snap guides persist in the grid helper until the tool exits, so a mid-draw backup
+            // must clear them or they linger on screen.
+            grid.FullReset();
             bezierManager.RemoveLastPoint();
 
             if( bezierManager.GetStep() < KIGFX::PREVIEW::BEZIER_GEOM_MANAGER::SET_END )
@@ -3593,6 +3603,11 @@ int DRAWING_TOOL::DrawZone( const TOOL_EVENT& aEvent )
                 polyGeomMgr.Reset();
                 started = false;
                 grid.ClearSkipPoint();
+
+                // Snap guides persist in the grid helper until the tool exits, so abandoning the
+                // outline mid-draw must clear them or they linger on screen.
+                grid.FullReset();
+
                 m_controls->SetAutoPan( false );
                 m_controls->CaptureCursor( false );
             };
@@ -3722,6 +3737,10 @@ int DRAWING_TOOL::DrawZone( const TOOL_EVENT& aEvent )
                              || evt->IsAction( &ACTIONS::doDelete )
                              || evt->IsAction( &ACTIONS::undo ) ) )
         {
+            // Snap guides persist in the grid helper until the tool exits, so dropping a corner
+            // must clear them or they linger on screen.
+            grid.FullReset();
+
             if( std::optional<VECTOR2I> last = polyGeomMgr.DeleteLastCorner() )
             {
                 cursorPos = last.value();
@@ -3812,7 +3831,7 @@ int DRAWING_TOOL::DrawVia( const TOOL_EVENT& aEvent )
             try
             {
                 if( aFrame )
-                    m_drcEngine->InitEngine( aFrame->GetDesignRulesPath() );
+                    m_drcEngine->InitEngine( aFrame->GetBoard()->GetDesignRulesPath() );
 
                 DRC_CONSTRAINT constraint;
 
@@ -3932,7 +3951,9 @@ int DRAWING_TOOL::DrawVia( const TOOL_EVENT& aEvent )
                                 if( hit )
                                     return;
 
-                                if( zone->Outline()->Collide( aVia->GetPosition(), aVia->GetWidth( aLayer ) / 2 ) )
+                                SHAPE_POLY_SET zoneOutline = zone->GetBoardOutline();
+
+                                if( zoneOutline.Collide( aVia->GetPosition(), aVia->GetWidth( aLayer ) / 2 ) )
                                     hit = true;
                             } );
 

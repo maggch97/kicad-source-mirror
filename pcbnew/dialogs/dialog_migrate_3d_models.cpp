@@ -14,10 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialogs/dialog_migrate_3d_models.h>
@@ -50,6 +47,7 @@
 #include <common_ogl/ogl_attr_list.h>
 #include <3d_viewer/eda_3d_viewer_settings.h>
 #include <filename_resolver.h>
+#include <gestfich.h>
 
 
 namespace
@@ -559,7 +557,7 @@ void DIALOG_MIGRATE_3D_MODELS::scanDirectory( const wxString& aDir )
         return;
 
     wxArrayString files;
-    wxDir::GetAllFiles( normFn.GetPath(), &files, wxEmptyString, wxDIR_FILES | wxDIR_DIRS );
+    CollectFilesLoopSafe( normFn.GetPath(), files, wxEmptyString, wxDIR_FILES | wxDIR_DIRS );
 
     // Collect duplicate-detection set by absolute-path key so re-scanning
     // the same tree (e.g. through a different env var alias) doesn't add

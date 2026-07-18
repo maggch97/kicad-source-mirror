@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "bitmap_base.h"
@@ -129,6 +125,27 @@ void BITMAP_BASE::updatePPI()
         else
             m_ppi = KiROUND( dpiX );
     }
+}
+
+
+int BITMAP_BASE::GetLegacyPPI() const
+{
+    if( !m_originalImage )
+        return m_ppi;
+
+    // Mirror the pre-fix path, which read pixels/cm via GetOptionInt() and so truncated
+    // "37.8" to 37 before the * 2.54 multiply.
+    int dpiX = m_originalImage->GetOptionInt( wxIMAGE_OPTION_RESOLUTIONX );
+
+    if( dpiX > 1 )
+    {
+        if( m_originalImage->GetOptionInt( wxIMAGE_OPTION_RESOLUTIONUNIT ) == wxIMAGE_RESOLUTION_CM )
+            return KiROUND( dpiX * 2.54 );
+        else
+            return dpiX;
+    }
+
+    return m_ppi;
 }
 
 

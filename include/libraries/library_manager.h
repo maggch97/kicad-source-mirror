@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef LIBRARY_MANAGER_H
@@ -23,6 +23,7 @@
 
 #include <future>
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 
 #include <kicommon.h>
@@ -31,6 +32,7 @@
 
 
 class LIBRARY_MANAGER;
+class LIBRARY_MANAGER_ADAPTER;
 class PROJECT;
 
 
@@ -57,6 +59,11 @@ struct KICOMMON_API LIB_DATA
     std::unique_ptr<IO_BASE> plugin;
     const LIBRARY_TABLE_ROW* row = nullptr;
     LIB_STATUS               status;
+
+    // For an entry in the process-wide globalLibs() cache, the adapter that loaded it and so owns
+    // the lifetime of row. Its destructor evicts the entry; identity is by adapter, not by the
+    // reusable row pointer.
+    const LIBRARY_MANAGER_ADAPTER* global_owner = nullptr;
 
     int                   modify_hash = -1;
     std::vector<wxString> available_fields_cache;
@@ -213,6 +220,13 @@ protected:
                                              std::map<wxString, LIB_DATA>& aTarget,
                                              std::shared_mutex& aMutex );
 
+    /// Erases this adapter's own entries (LIB_DATA::global_owner == this) from the process-wide
+    /// globalLibs() cache. The cached LIB_DATA::row pointers reference this manager's tables, so
+    /// they must be dropped before the manager is destroyed or a later manager's fetchIfLoaded()
+    /// would dereference freed rows. Derived destructors must call this while globalLibs() is
+    /// still resolvable.
+    void evictOwnedGlobalEntries();
+
     /// Aborts any async load in progress; blocks until fully done aborting
     void abortLoad();
 
@@ -229,6 +243,13 @@ protected:
     virtual LIBRARY_RESULT<IO_BASE*> createPlugin( const LIBRARY_TABLE_ROW* row ) = 0;
 
     virtual IO_BASE* plugin( const LIB_DATA* aRow ) = 0;
+
+    /// Serializes access to a library's shared plugin instance so its single mutable cache is not
+    /// raced by concurrent enumerate/load/save/delete calls from the loader pool, preview panels
+    /// and tree refreshes. Keyed by nickname, a safe over-approximation of the real resource (the
+    /// plugin instance): sharing one mutex across two distinct resources can only over-serialize,
+    /// never under-protect. Static because global-library plugins are shared process-wide.
+    static std::mutex& pluginMutex( const wxString& aNickname );
 
     LIBRARY_MANAGER& m_manager;
 
@@ -259,6 +280,27 @@ public:
     static wxString DefaultGlobalTablePath( LIBRARY_TABLE_TYPE aType );
 
     static wxString StockTablePath( LIBRARY_TABLE_TYPE aType );
+
+    /**
+     * @return the stock library-table path for @p aType against the versioned template-dir env
+     *         var, e.g. ${KICAD10_TEMPLATE_DIR}/sym-lib-table.
+     *
+     * Unlike StockTablePath() this URI stays unresolved, so it survives the per-launch prefix
+     * change of relocatable installs (AppImage, Nix).
+     */
+    static wxString StockTableTokenizedURI( LIBRARY_TABLE_TYPE aType );
+
+    /**
+     * @return the URI to use when referencing the stock table from a freshly created global
+     *         table.
+     *
+     * When the versioned template-dir env var is defined externally to the process -- as
+     * relocatable installs (AppImage, Nix) do at launch -- this returns the unresolved
+     * StockTableTokenizedURI() so the reference re-resolves on every launch. Otherwise the
+     * variable is at its built-in default and this returns the resolved StockTablePath(),
+     * preserving the historical absolute-path behavior of standard installs.
+     */
+    static wxString StockTableReferenceURI( LIBRARY_TABLE_TYPE aType );
 
     static bool IsTableValid( const wxString& aPath );
 
@@ -360,19 +402,43 @@ public:
     /**
      * Return true if a library table row was added by the Plugin and Content Manager.
      *
-     * PCM-managed rows are identified by the unexpanded URI template referencing the
-     * versioned 3RD_PARTY env var (as produced by PCM_LIB_TRAVERSER). Matching on the
-     * URI template, rather than on the expanded absolute path, prevents false positives
-     * when a user library uses a different env var whose expanded path is a descendant
-     * of the 3RD_PARTY directory (e.g. KICAD_USER_LIB pointing inside KICAD10_3RD_PARTY).
+     * PCM-managed rows are identified by the full unexpanded URI template emitted by
+     * PCM_LIB_TRAVERSER, namely ${KICADn_3RD_PARTY}/<category>/<pkgid>/<library> where
+     * <category> is one of the PCM content folders and <library> carries the matching
+     * library extension. Matching the full template, rather than the expanded absolute
+     * path or the env-var prefix alone, prevents false positives both when a user library
+     * uses a different env var whose expanded path is a descendant of the 3RD_PARTY
+     * directory and when a user repurposes KICADn_3RD_PARTY for their own libraries.
      */
     static bool IsPcmManagedRow( const LIBRARY_TABLE_ROW& aRow );
+
+    /// Applies stored user overrides (disabled/hidden) to rows of a read-only table.
+    /// Call this after constructing a LIBRARY_TABLE from a read-only file before
+    /// displaying it in the UI.
+    void ApplyLibOverrides( LIBRARY_TABLE& aTable );
+
+    /**
+     * Set a user override for a library in a read-only nested table.
+     * The override is saved to user settings so it persists across sessions.
+     * @param aTablePath normalized path of the read-only library table file
+     * @param aNickname the library nickname to override
+     * @param aDisabled true to mark the library as disabled
+     * @param aHidden true to mark the library as hidden
+     */
+    void SetLibOverride( const wxString& aTablePath, const wxString& aNickname,
+                         bool aDisabled, bool aHidden );
+
+    /// Removes any override for a library that no longer needs one
+    void ClearLibOverride( const wxString& aTablePath, const wxString& aNickname );
 
 private:
     void loadTables( const wxString& aTablePath, LIBRARY_TABLE_SCOPE aScope,
                      std::vector<LIBRARY_TABLE_TYPE> aTablesToLoad = {} );
 
     void loadNestedTables( LIBRARY_TABLE& aTable );
+
+    /// Applies user overrides (disabled/hidden) to rows of a read-only nested table
+    void applyLibOverrides( LIBRARY_TABLE& aTable );
 
     static wxString tableFileName( LIBRARY_TABLE_TYPE aType );
 

@@ -14,15 +14,13 @@
 * GNU General Public License for more details.
 *
 * You should have received a copy of the GNU General Public License
-* along with this program; if not, you may find one here:
-* http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
-* or you may search the http://www.gnu.org website for the version 2 license,
-* or you may write to the Free Software Foundation, Inc.,
-* 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #ifndef GAL_OPENGL_RESOURCES_H___
 #define GAL_OPENGL_RESOURCES_H___
+
+#include <gal/gal.h>
 
 #define BITMAP_FONT_USE_SPANS
 
@@ -35,7 +33,8 @@ namespace KIGFX {
             unsigned int width, height;
             unsigned int char_border;
             unsigned int spacing;
-            unsigned char pixels[1024 * 1024 * 3];
+            // Height must match the atlas in bitmap_font_img.c
+            unsigned char pixels[1024 * 1071 * 3];
         };
 
         struct FONT_INFO_TYPE
@@ -61,10 +60,10 @@ namespace KIGFX {
             float advance;
         };
 
-        extern FONT_IMAGE_TYPE font_image;
+        extern GAL_API FONT_IMAGE_TYPE font_image;
         extern FONT_INFO_TYPE  font_information;
 
-        const FONT_GLYPH_TYPE* LookupGlyph( unsigned int aCodePoint );
+        GAL_API const FONT_GLYPH_TYPE* LookupGlyph( unsigned int aCodePoint );
 
     }
 

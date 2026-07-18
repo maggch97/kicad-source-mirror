@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "pcb_actions.h"
@@ -594,6 +590,18 @@ TOOL_ACTION PCB_ACTIONS::editLibFpInFpEditor( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Edit Library Footprint..." ) )
         .Icon( BITMAPS::module_editor ) );
 
+TOOL_ACTION PCB_ACTIONS::toggleExcludeFromBOM( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveEdit.toggleExcludeFromBOM" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Exclude from Bill of Materials" ) )
+        .Tooltip( _( "Toggle the exclude from bill of materials attribute" ) ) );
+
+TOOL_ACTION PCB_ACTIONS::toggleExcludeFromPosFiles( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveEdit.toggleExcludeFromPosFiles" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Exclude from Position Files" ) )
+        .Tooltip( _( "Toggle the exclude from position files attribute" ) ) );
+
 TOOL_ACTION PCB_ACTIONS::findByProperties( TOOL_ACTION_ARGS()
         .Name( "pcbnew.EditorControl.findByProperties" )
         .Scope( AS_GLOBAL )
@@ -960,6 +968,13 @@ TOOL_ACTION PCB_ACTIONS::exportFootprint( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Export Current Footprint..." ) )
         .Tooltip( _( "Export edited footprint to file" ) )
         .Icon( BITMAPS::export_module ) );
+
+TOOL_ACTION PCB_ACTIONS::compareFpLibraryWithFile( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ModuleEditor.CompareFpLibraryWithFile" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Compare Library with File..." ) )
+        .Tooltip( _( "Diff the current footprint library against another .pretty directory" ) )
+        .Icon( BITMAPS::library ) );
 
 TOOL_ACTION PCB_ACTIONS::footprintProperties( TOOL_ACTION_ARGS()
         .Name( "pcbnew.ModuleEditor.footprintProperties" )
@@ -2246,6 +2261,20 @@ TOOL_ACTION PCB_ACTIONS::diffFootprint( TOOL_ACTION_ARGS()
         .Tooltip( _( "Show differences between board footprint and its library equivalent" ) )
         .Icon( BITMAPS::library ) );
 
+TOOL_ACTION PCB_ACTIONS::compareBoardWithFile( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InspectionTool.CompareBoardWithFile" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Compare Board with File..." ) )
+        .Tooltip( _( "Diff the current PCB against another .kicad_pcb file" ) )
+        .Icon( BITMAPS::library ) );
+
+TOOL_ACTION PCB_ACTIONS::compareBoardWithHistory( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InspectionTool.CompareBoardWithHistory" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Compare Board with Local History..." ) )
+        .Tooltip( _( "Diff the current PCB against the most recent local-history snapshot" ) )
+        .Icon( BITMAPS::library ) );
+
 TOOL_ACTION PCB_ACTIONS::showFootprintAssociations( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InspectionTool.ShowFootprintAssociations" )
         .Scope( AS_GLOBAL )
@@ -2275,6 +2304,26 @@ TOOL_ACTION PCB_ACTIONS::repairFootprint( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Repair Footprint" ) )
         .Tooltip( _( "Run various diagnostics and attempt to repair footprint" ) )
         .Icon( BITMAPS::rescue ) );
+
+// These carry no DefaultHotkey because GTK refuses WXK_TAB as a menu accelerator. Ctrl+Tab is
+// routed through a frame char-hook handler instead.
+TOOL_ACTION PCB_ACTIONS::nextFootprintTab( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ModuleEditor.nextFootprintTab" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Next Footprint Tab" ) )
+        .Tooltip( _( "Switch to the next open footprint tab" ) ) );
+
+TOOL_ACTION PCB_ACTIONS::prevFootprintTab( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ModuleEditor.prevFootprintTab" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Previous Footprint Tab" ) )
+        .Tooltip( _( "Switch to the previous open footprint tab" ) ) );
+
+TOOL_ACTION PCB_ACTIONS::closeFootprintTab( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ModuleEditor.closeFootprintTab" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Close Footprint Tab" ) )
+        .Tooltip( _( "Close the active footprint tab" ) ) );
 
 
 // PLACEMENT_TOOL
@@ -2885,6 +2934,15 @@ TOOL_ACTION PCB_ACTIONS::exportFpToEditor( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Export footprint to editor" ) )
         .Tooltip( _( "Export footprint to editor" ) )
         .Icon( BITMAPS::export_footprint_names ) );
+
+TOOL_ACTION PCB_ACTIONS::showDiffPhaseSkew( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDiffPhaseSkew" )
+        .Scope( AS_GLOBAL )
+        .Flags( AF_ACTIVATE )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .FriendlyName( _( "Show relative skew of diff pair tracks" ) )
+        .Tooltip( _( "Show relative skew of diff pair tracks" ) )
+        .Icon( BITMAPS::tune_diff_pair_skew_legend ) );
 
 
 const TOOL_EVENT& PCB_EVENTS::SnappingModeChangedByKeyEvent()

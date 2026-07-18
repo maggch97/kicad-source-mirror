@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef _REPORTER_H_
@@ -27,6 +23,7 @@
 
 #include <memory>
 #include <map>
+#include <mutex>
 
 #include <eda_units.h>
 #include <widgets/report_severity.h>
@@ -159,6 +156,41 @@ public:
 
 private:
     int m_reportedSeverityMask;
+};
+
+
+/**
+ * A thread-safe REPORTER wrapper that serializes forwarding to an underlying reporter.
+ *
+ * Use it when several worker threads may report concurrently through one reporter that is not
+ * itself thread-safe.  The wrapped reporter must outlive this object.  This only guards against
+ * data races on the wrapped reporter's state, it does not marshal calls onto a UI thread, so the
+ * wrapped reporter must be safe to touch from a background thread.
+ */
+class KICOMMON_API SYNC_REPORTER : public REPORTER
+{
+public:
+    SYNC_REPORTER( REPORTER& aReporter ) :
+            m_reporter( aReporter )
+    { }
+
+    REPORTER& Report( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+    REPORTER& ReportTail( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+    REPORTER& ReportHead( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+    bool HasMessage() const override;
+
+    bool HasMessageOfSeverity( int aSeverityMask ) const override;
+
+    EDA_UNITS GetUnits() const override;
+
+    void Clear() override;
+
+private:
+    REPORTER&          m_reporter;
+    mutable std::mutex m_mutex;
 };
 
 

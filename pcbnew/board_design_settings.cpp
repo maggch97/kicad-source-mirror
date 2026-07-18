@@ -14,15 +14,12 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pcb_dimension.h>
 #include <pcb_track.h>
+#include <algorithm>
 #include <cmath>
 #include <layer_ids.h>
 #include <lset.h>
@@ -182,6 +179,7 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
     m_DRCSeverities[ DRCE_ISOLATED_COPPER ] = RPT_SEVERITY_WARNING;
 
     m_DRCSeverities[ DRCE_PADSTACK ] = RPT_SEVERITY_WARNING;
+    m_DRCSeverities[ DRCE_FOOTPRINT_SCALED_WITH_PADS ] = RPT_SEVERITY_WARNING;
 
     m_DRCSeverities[ DRCE_MISSING_FOOTPRINT ] = RPT_SEVERITY_WARNING;
     m_DRCSeverities[ DRCE_DUPLICATE_FOOTPRINT ] = RPT_SEVERITY_WARNING;
@@ -1621,6 +1619,9 @@ int BOARD_DESIGN_SETTINGS::GetBiggestClearanceValue() const
         m_DRCEngine->QueryWorstConstraint( PHYSICAL_CLEARANCE_CONSTRAINT, constraint );
         biggest = std::max( biggest, constraint.Value().Min() );
 
+        m_DRCEngine->QueryWorstConstraint( PHYSICAL_HOLE_CLEARANCE_CONSTRAINT, constraint );
+        biggest = std::max( biggest, constraint.Value().Min() );
+
         m_DRCEngine->QueryWorstConstraint( HOLE_CLEARANCE_CONSTRAINT, constraint );
         biggest = std::max( biggest, constraint.Value().Min() );
 
@@ -1647,10 +1648,39 @@ int BOARD_DESIGN_SETTINGS::GetSmallestClearanceValue() const
 }
 
 
+// Compute the next index when cycling a predefined-size list whose index 0 is the synthetic
+// "use netclass" placeholder. Roll-over skips that placeholder when real sizes exist so the
+// cycle stays monotonic.
+static int nextPredefinedIndex( int aIndex, bool aForward, int aListSize )
+{
+    // Nothing to cycle when the list holds only the netclass placeholder (or is empty).
+    if( aListSize <= 1 )
+        return 0;
+
+    constexpr int lowestRealIndex = 1;
+    int           next = aIndex + ( aForward ? 1 : -1 );
+
+    if( next >= aListSize )
+        next = lowestRealIndex;
+    else if( next < lowestRealIndex )
+        next = aListSize - 1;
+
+    return next;
+}
+
+
 void BOARD_DESIGN_SETTINGS::SetViaSizeIndex( int aIndex )
 {
-    m_viaSizeIndex = std::min( aIndex, (int) m_ViasDimensionsList.size() - 1 );
+    m_viaSizeIndex = m_ViasDimensionsList.empty()
+                             ? 0
+                             : std::clamp( aIndex, 0, (int) m_ViasDimensionsList.size() - 1 );
     m_useCustomTrackVia = false;
+}
+
+
+int BOARD_DESIGN_SETTINGS::GetNextViaSizeIndex( int aIndex, bool aForward ) const
+{
+    return nextPredefinedIndex( aIndex, aForward, (int) m_ViasDimensionsList.size() );
 }
 
 
@@ -1682,8 +1712,16 @@ int BOARD_DESIGN_SETTINGS::GetCurrentViaDrill() const
 
 void BOARD_DESIGN_SETTINGS::SetTrackWidthIndex( int aIndex )
 {
-    m_trackWidthIndex = std::min( aIndex, (int) m_TrackWidthList.size() - 1 );
+    m_trackWidthIndex = m_TrackWidthList.empty()
+                                ? 0
+                                : std::clamp( aIndex, 0, (int) m_TrackWidthList.size() - 1 );
     m_useCustomTrackVia = false;
+}
+
+
+int BOARD_DESIGN_SETTINGS::GetNextTrackWidthIndex( int aIndex, bool aForward ) const
+{
+    return nextPredefinedIndex( aIndex, aForward, (int) m_TrackWidthList.size() );
 }
 
 
@@ -1700,10 +1738,16 @@ int BOARD_DESIGN_SETTINGS::GetCurrentTrackWidth() const
 
 void BOARD_DESIGN_SETTINGS::SetDiffPairIndex( int aIndex )
 {
-    if( !m_DiffPairDimensionsList.empty() )
-        m_diffPairIndex = std::min( aIndex, (int) m_DiffPairDimensionsList.size() - 1 );
-
+    m_diffPairIndex = m_DiffPairDimensionsList.empty()
+                              ? 0
+                              : std::clamp( aIndex, 0, (int) m_DiffPairDimensionsList.size() - 1 );
     m_useCustomDiffPair = false;
+}
+
+
+int BOARD_DESIGN_SETTINGS::GetNextDiffPairIndex( int aIndex, bool aForward ) const
+{
+    return nextPredefinedIndex( aIndex, aForward, (int) m_DiffPairDimensionsList.size() );
 }
 
 

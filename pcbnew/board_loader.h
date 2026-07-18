@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCBNEW_BOARD_LOADER_H
@@ -47,6 +47,10 @@ public:
 
         // optional callback to configure the plugin, e.g. to set GUI callbacks
         std::function<void( PCB_IO& )> plugin_configurator;
+
+        // optional callback invoked with the plugin after a successful load, e.g. to extract the
+        // importer's cached library footprints before the plugin is destroyed
+        std::function<void( PCB_IO& )> post_load_hook;
 
         // if present, will be called with (sheet path, error message) on failure to load sheet
         std::function<void( const wxString&, const wxString& )> drawing_sheet_error_callback;

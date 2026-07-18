@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <stack>
@@ -262,6 +258,13 @@ void SCH_SCREEN::Append( SCH_ITEM* aItem, bool aUpdateLibSymbol )
                             symbol->SetLibSymbol( newLibSymbol->Flatten().release() );
                             m_libSymbols[newName] = newLibSymbol;
                         }
+                    }
+                    else
+                    {
+                        // LIB_SYMBOL::Compare ignores embedded files, so an embedded-file-only
+                        // edit leaves the cached symbol equal but stale.  Refresh the cache from
+                        // the instance so the change survives serialization.
+                        *foundSymbol->GetEmbeddedFiles() = *symbol->GetLibSymbolRef()->GetEmbeddedFiles();
                     }
                 }
             }
@@ -1009,6 +1012,11 @@ void SCH_SCREEN::Plot( PLOTTER* aPlotter, const SCH_PLOT_OPTS& aPlotOpts, const 
                 double arcRadius = defaultLineWidth * hopOverScale;
                 std::vector<VECTOR3I> curr_wire_shape = aLine->BuildWireWithHopShape( this, arcRadius );
 
+                // The hop pieces are standalone copies/shapes without the connection map, so
+                // resolve the net-class color and style from the original wire and reuse them.
+                COLOR4D    lineColor = aLine->GetLineColor();
+                LINE_STYLE lineStyle = aLine->GetEffectiveLineStyle();
+
                 for( size_t ii = 1; ii < curr_wire_shape.size(); ii++ )
                 {
                     VECTOR2I start( curr_wire_shape[ii-1].x, curr_wire_shape[ii-1].y );
@@ -1021,6 +1029,8 @@ void SCH_SCREEN::Plot( PLOTTER* aPlotter, const SCH_PLOT_OPTS& aPlotOpts, const 
                         SCH_LINE curr_line( *aLine );
                         curr_line.SetStartPoint( start );
                         curr_line.SetEndPoint( end );
+                        curr_line.SetLineColor( lineColor );
+                        curr_line.SetLineStyle( lineStyle );
                         curr_line.Plot( aPlotter, !background, aPlotOpts, 0, 0, { 0, 0 }, false );
                     }
                     else   // This is the start point of a arc. there are always 3 points in list for an arc
@@ -1035,6 +1045,7 @@ void SCH_SCREEN::Plot( PLOTTER* aPlotter, const SCH_PLOT_OPTS& aPlotOpts, const 
                         arc.SetArcGeometry( start, arc_middle, arc_end );
                         // Hop are a small arc, so use a solid line style gives best results
                         arc.SetLineStyle( LINE_STYLE::SOLID );
+                        arc.SetLineColor( lineColor );
                         arc.Plot( aPlotter, !background, aPlotOpts, 0, 0, { 0, 0 }, false );
                     }
                 }

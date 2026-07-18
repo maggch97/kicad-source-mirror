@@ -14,10 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "model_substitution_helpers.h"
@@ -30,6 +27,7 @@
 #include <wx/filename.h>
 
 #include <filename_resolver.h>
+#include <gestfich.h>
 #include <pgm_base.h>
 #include <settings/common_settings.h>
 
@@ -200,7 +198,7 @@ void STEP_CATALOG::Build( const wxString& aProjectPath, const FILENAME_RESOLVER*
     for( const wxString& dir : gatherScanDirs( aProjectPath, aResolver ) )
     {
         wxArrayString files;
-        wxDir::GetAllFiles( dir, &files, wxEmptyString, wxDIR_FILES | wxDIR_DIRS );
+        ::CollectFilesLoopSafe( dir, files, wxEmptyString, wxDIR_FILES | wxDIR_DIRS );
 
         for( const wxString& file : files )
         {

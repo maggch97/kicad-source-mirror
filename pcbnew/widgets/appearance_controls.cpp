@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <widgets/appearance_controls.h>
@@ -2724,8 +2724,7 @@ void APPEARANCE_CONTROLS::rebuildNets()
 
 void APPEARANCE_CONTROLS::rebuildLayerPresetsWidget( bool aReset )
 {
-    m_viewportsLabel->SetLabel( wxString::Format( _( "Presets (%s+Tab):" ),
-                                                  KeyNameFromKeyCode( PRESET_SWITCH_KEY ) ) );
+    m_presetsLabel->SetLabel( wxString::Format( _( "Presets (%s+Tab):" ), KeyNameFromKeyCode( PRESET_SWITCH_KEY ) ) );
 
     m_cbLayerPresets->Clear();
 

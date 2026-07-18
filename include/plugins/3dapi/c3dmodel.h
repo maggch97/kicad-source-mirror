@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -88,6 +84,26 @@ struct SMESH
     unsigned int   *m_FaceIdx;      ///< Triangle Face Indexes
     unsigned int    m_MaterialIdx;  ///< Material Index to be used in this mesh (must be < m_MaterialsSize )
 };
+
+
+/**
+ * Test whether the three face indices of a triangle all reference valid vertices.
+ *
+ * Malformed mesh data can carry indices past the end of the vertex array; consuming
+ * them would read out of bounds and produce corrupt geometry, so callers skip any
+ * triangle this rejects.
+ *
+ * @param aFaceIdx      Face index array (@ref SMESH::m_FaceIdx).
+ * @param aTriangleIdx  Offset of the triangle's first index into @p aFaceIdx.
+ * @param aVertexCount  Number of vertices available (@ref SMESH::m_VertexSize).
+ */
+inline bool IsTriangleInRange( const unsigned int* aFaceIdx, unsigned int aTriangleIdx,
+                               unsigned int aVertexCount )
+{
+    return aFaceIdx[aTriangleIdx + 0] < aVertexCount
+        && aFaceIdx[aTriangleIdx + 1] < aVertexCount
+        && aFaceIdx[aTriangleIdx + 2] < aVertexCount;
+}
 
 
 /// Store the a model based on meshes and materials

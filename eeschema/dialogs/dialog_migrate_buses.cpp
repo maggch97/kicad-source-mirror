@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <sch_connection.h>
@@ -55,6 +55,14 @@
  * or BUS.  We present a dialog to the user for them to select which name
  * they want to use.
  */
+
+
+bool DIALOG_MIGRATE_BUSES::ShouldPrompt( int aFileFormatVersionAtLoad, size_t aBusesNeedingMigration )
+{
+    // Legacy .sch files report format version 0 and no s-expression schematic predates 20200310,
+    // so anything at or above that boundary already went through the one-time bus migration.
+    return aBusesNeedingMigration > 0 && aFileFormatVersionAtLoad < 20200310;
+}
 
 
 DIALOG_MIGRATE_BUSES::DIALOG_MIGRATE_BUSES( SCH_EDIT_FRAME* aParent )

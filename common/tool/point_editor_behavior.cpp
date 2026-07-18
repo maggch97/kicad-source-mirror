@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "tool/point_editor_behavior.h"
@@ -589,10 +585,14 @@ static void editArcCenterKeepEndpoints( EDA_SHAPE& aArc, const VECTOR2I& aCenter
 /**
  * Move an end point of the arc around the circumference.
  */
-static void editArcEndpointKeepCenter( EDA_SHAPE& aArc, const VECTOR2I& aCenter, const VECTOR2I& aStart,
-                                       const VECTOR2I& aMid, const VECTOR2I& aEnd, const VECTOR2I& aCursor )
+void KI_ARC_EDIT::EditArcEndpointKeepCenter( EDA_SHAPE& aArc, const VECTOR2I& aCenter,
+                                             const VECTOR2I& aStart, const VECTOR2I& aMid,
+                                             const VECTOR2I& aEnd, const VECTOR2I& aCursor,
+                                             const EDA_IU_SCALE& aIuScale )
 {
-    int  minRadius = EDA_UNIT_UTILS::Mils2IU( pcbIUScale, 1 );
+    // 1 mil floor in the caller's units keeps the arc non-degenerate without
+    // snapping small eeschema arcs that are legitimately under 100 mils.
+    int  minRadius = EDA_UNIT_UTILS::Mils2IU( aIuScale, 1 );
     bool movingStart;
 
     VECTOR2I p1, p2, prev_p1;
@@ -684,10 +684,13 @@ static void editArcEndpointKeepCenterAndRadius( EDA_SHAPE& aArc, const VECTOR2I&
 /**
  * Move the mid point of the arc, while keeping the two endpoints.
  */
-static void editArcMidKeepCenter( EDA_SHAPE& aArc, const VECTOR2I& aCenter, const VECTOR2I& aStart,
-                                  const VECTOR2I& aMid, const VECTOR2I& aEnd, const VECTOR2I& aCursor )
+void KI_ARC_EDIT::EditArcMidKeepCenter( EDA_SHAPE& aArc, const VECTOR2I& aCenter,
+                                        const VECTOR2I& aStart, const VECTOR2I& aMid,
+                                        const VECTOR2I& aEnd, const VECTOR2I& aCursor,
+                                        const EDA_IU_SCALE& aIuScale )
 {
-    int minRadius = EDA_UNIT_UTILS::Mils2IU( pcbIUScale, 1 );
+    // See EditArcEndpointKeepCenter for why we use the caller's IU scale.
+    int minRadius = EDA_UNIT_UTILS::Mils2IU( aIuScale, 1 );
 
     // Now, update the edit point position
     // Express the point in a circle-centered coordinate system.
@@ -731,10 +734,12 @@ static void editArcMidKeepEndpoints( EDA_SHAPE& aArc, const VECTOR2I& aStart, co
 
 
 EDA_ARC_POINT_EDIT_BEHAVIOR::EDA_ARC_POINT_EDIT_BEHAVIOR( EDA_SHAPE& aArc, const ARC_EDIT_MODE& aArcEditMode,
-                                                          KIGFX::VIEW_CONTROLS& aViewContols ) :
+                                                          KIGFX::VIEW_CONTROLS& aViewContols,
+                                                          const EDA_IU_SCALE&   aIuScale ) :
         m_arc( aArc ),
         m_arcEditMode( aArcEditMode ),
-        m_viewControls( aViewContols )
+        m_viewControls( aViewContols ),
+        m_iuScale( aIuScale )
 {
     wxASSERT( m_arc.GetShape() == SHAPE_T::ARC );
 }
@@ -805,7 +810,7 @@ void EDA_ARC_POINT_EDIT_BEHAVIOR::UpdateItem( const EDIT_POINT& aEditedPoint, ED
             break;
         case ARC_EDIT_MODE::KEEP_CENTER_ENDS_ADJUST_ANGLE:
         case ARC_EDIT_MODE::KEEP_CENTER_ADJUST_ANGLE_RADIUS:
-            editArcMidKeepCenter( m_arc, center, start, mid, end, cursorPos );
+            KI_ARC_EDIT::EditArcMidKeepCenter( m_arc, center, start, mid, end, cursorPos, m_iuScale );
             break;
         }
     }
@@ -817,7 +822,7 @@ void EDA_ARC_POINT_EDIT_BEHAVIOR::UpdateItem( const EDIT_POINT& aEditedPoint, ED
         switch( m_arcEditMode )
         {
         case ARC_EDIT_MODE::KEEP_CENTER_ADJUST_ANGLE_RADIUS:
-            editArcEndpointKeepCenter( m_arc, center, start, mid, end, cursorPos );
+            KI_ARC_EDIT::EditArcEndpointKeepCenter( m_arc, center, start, mid, end, cursorPos, m_iuScale );
             break;
         case ARC_EDIT_MODE::KEEP_CENTER_ENDS_ADJUST_ANGLE:
             editArcEndpointKeepCenterAndRadius( m_arc, center, start, mid, end );

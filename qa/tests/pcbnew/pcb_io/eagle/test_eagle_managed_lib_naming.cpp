@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -43,6 +39,7 @@
 #include <footprint.h>
 #include <lib_id.h>
 
+#include <wx/filefn.h>
 #include <wx/filename.h>
 
 
@@ -56,6 +53,15 @@ BOOST_AUTO_TEST_CASE( FootprintNamesHaveNoUrnSuffix )
 
     BOOST_REQUIRE_MESSAGE( wxFileName::FileExists( dataPath ),
                            "Test board file not found: " + dataPath );
+
+    // This board carries no Eagle clearance matrix, so loading it must not leave an
+    // empty .kicad_dru sidecar behind in the source tree.
+    wxFileName rulesFn( dataPath );
+    rulesFn.SetExt( wxT( "kicad_dru" ) );
+
+    BOOST_REQUIRE_MESSAGE( !rulesFn.FileExists(),
+                           "Stale rules sidecar present before load: "
+                                   + rulesFn.GetFullPath().ToStdString() );
 
     PCB_IO_EAGLE eaglePlugin;
     BOARD*       rawBoard = nullptr;
@@ -102,6 +108,15 @@ BOOST_AUTO_TEST_CASE( FootprintNamesHaveNoUrnSuffix )
 
     BOOST_CHECK_MESSAGE( sawLed, "Expected footprint named 'LED-0603' (no URN suffix)" );
     BOOST_CHECK_MESSAGE( sawRes, "Expected footprint named 'R0603' (no URN suffix)" );
+
+    // With no clearance matrix to convert, the importer must not write an empty
+    // rules sidecar into the source tree.
+    if( rulesFn.FileExists() )
+    {
+        wxRemoveFile( rulesFn.GetFullPath() );
+        BOOST_ERROR( "Importer wrote an empty rules sidecar: "
+                     + rulesFn.GetFullPath().ToStdString() );
+    }
 }
 
 

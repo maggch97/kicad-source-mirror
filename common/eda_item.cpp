@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>
@@ -104,6 +100,25 @@ KIID EDA_ITEM::GetParentGroupId() const
         return group->AsEdaItem()->m_Uuid;
     else
         return niluuid;
+}
+
+
+bool EDA_ITEM::HasSelectedAncestorGroup() const
+{
+    // Walk up via both the parent-item and parent-group chains so that child items (sheet pins,
+    // symbol pins, fields) whose logical owner is in a selected group are also recognised as
+    // moving with that group.
+    for( const EDA_ITEM* item = this; item; item = item->GetParent() )
+    {
+        for( EDA_GROUP* group = item->GetParentGroup(); group;
+             group = group->AsEdaItem()->GetParentGroup() )
+        {
+            if( group->AsEdaItem()->IsSelected() )
+                return true;
+        }
+    }
+
+    return false;
 }
 
 

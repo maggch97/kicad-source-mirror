@@ -15,14 +15,14 @@
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with this program; if not, write to the Free Software
-#  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
-#  MA 02110-1301, USA.
+#  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
 import pytest
 import utils
 import re
+import shutil
+from pathlib import Path
 
 def test_version():
     command = [utils.kicad_cli(), "version"]
@@ -51,3 +51,56 @@ def test_help():
     assert exitcode == 1
     assert stdout != ''
     assert stderr == ''
+
+
+def test_jobset_run_relative_project_path(tmp_path):
+    """Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24474
+
+    Running a jobset with a relative project path used to free the project out from under the
+    jobset runner when a kiface board loader reloaded it by its absolute path. The dangling
+    project pointer then crashed while resolving ${PROJECTNAME} for the archive output path.
+    """
+    source_dir = Path(__file__).resolve().parent.parent.parent / "data" / "pcbnew" / "issue24474"
+    work_dir = tmp_path / "issue24474"
+    shutil.copytree(source_dir, work_dir)
+
+    # Run only the archive destination, which is the one that resolves ${PROJECTNAME} in its
+    # output path and triggered the crash. The project file is passed as a relative path.
+    command = [
+        utils.kicad_cli(),
+        "jobset", "run",
+        "--file", "common.kicad_jobset",
+        "--output", "d289a4c3-15ec-4e02-92f4-a3700d8878f8",
+        "issue24474.kicad_pro",
+    ]
+
+    stdout, stderr, exitcode = utils.run_and_capture(command, cwd=work_dir)
+
+    # A crash would manifest as a non-zero/negative exit code; the archive must also be produced.
+    assert exitcode == 0
+    assert (work_dir / "output" / "issue24474-gerber.zip").exists()
+
+
+def test_jobset_run_unknown_job_type(tmp_path):
+    """A jobset saved by a newer KiCad can contain job types this version does not know.
+
+    These used to deserialize to a null job and segfault as soon as the job list was
+    printed. Now they load as placeholders and fail the run with a clear message.
+    """
+    source_dir = Path(__file__).resolve().parent.parent.parent / "data" / "cli" / "jobset_unknown_type"
+    work_dir = tmp_path / "jobset_unknown_type"
+    shutil.copytree(source_dir, work_dir)
+
+    command = [
+        utils.kicad_cli(),
+        "jobset", "run",
+        "--file", "jobset_unknown_type.kicad_jobset",
+        "jobset_unknown_type.kicad_pro",
+    ]
+
+    stdout, stderr, exitcode = utils.run_and_capture(command, cwd=work_dir)
+
+    # The run must fail gracefully: a positive exit code, not a signal (segfault gives a
+    # negative returncode), and the unknown job reported by name.
+    assert exitcode > 0
+    assert "Unsupported job type 'special_from_the_future'" in stdout

@@ -13,8 +13,8 @@
 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 * General Public License for more details.
 *
-* You should have received a copy of the GNU General Public License along
-* with this program.  If not, see <http://www.gnu.org/licenses/>.
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #ifndef KIPLATFORM_PRINTING_H_
@@ -22,6 +22,8 @@
 
 #include <string>
 #include <wx/translation.h>
+
+class wxPrintData;
 
 #define PRINTING_TRACE "KICAD_PRINT"
 namespace KIPLATFORM
@@ -54,6 +56,16 @@ namespace PRINTING
     }
 
     PRINT_RESULT PrintPDF( const std::string& aFile );
+
+    /**
+     * Clear any leftover "print to file" destination from @a aData.
+     *
+     * On GTK the native print settings retain the output URI chosen after a print-to-file
+     * operation (a temporary /tmp/gtkprintXXXXXX path). Left in place it becomes the default
+     * destination the next time the print dialog is opened. Clearing it here is required
+     * because the wx-level filename does not track the native GtkPrintSettings output URI.
+     */
+    void ResetPrintToFilePath( wxPrintData& aData );
 }
 } // namespace KIPLATFORM
 

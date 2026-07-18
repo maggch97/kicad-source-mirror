@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -199,7 +199,10 @@ std::vector<RULE_TREE_NODE> DIALOG_DRC_RULE_EDITOR::GetDefaultRuleTreeItems()
 
 void DIALOG_DRC_RULE_EDITOR::LoadExistingRules()
 {
-    wxFileName rulesFile( m_frame->GetDesignRulesPath() );
+    if( !m_frame->GetBoard() )
+        return;
+
+    wxFileName rulesFile( m_frame->GetBoard()->GetDesignRulesPath() );
 
     if( !rulesFile.FileExists() )
         return;
@@ -956,7 +959,7 @@ int DIALOG_DRC_RULE_EDITOR::highlightMatchingItems( int aNodeId )
         return 0;
     }
 
-    wxString fullText = wxS( "(version 1)\n" ) + ruleText;
+    wxString fullText = wxS( "(version 2)\n" ) + ruleText;
 
     try
     {
@@ -1348,12 +1351,11 @@ void DIALOG_DRC_RULE_EDITOR::SaveRulesToFile()
     }
 
     DRC_RULE_SAVER saver;
-    saver.SaveFile( m_frame->GetDesignRulesPath(), entries, m_currentBoard );
+    saver.SaveFile( m_frame->GetBoard()->GetDesignRulesPath(), entries, m_currentBoard );
 
     try
     {
-        m_frame->GetBoard()->GetDesignSettings().m_DRCEngine->InitEngine(
-                m_frame->GetDesignRulesPath() );
+        m_frame->GetBoard()->GetDesignSettings().m_DRCEngine->InitEngine( m_frame->GetBoard()->GetDesignRulesPath() );
     }
     catch( PARSE_ERROR& pe )
     {

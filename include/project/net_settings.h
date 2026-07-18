@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef KICAD_NET_SETTINGS_H
@@ -47,12 +47,38 @@ public:
 
     bool operator!=( const NET_SETTINGS& aOther ) const { return !operator==( aOther ); }
 
+    /**
+     * Deep-copy the persisted contents of @p aOther into this instance.
+     *
+     * Replaces the default netclass, all named netclasses (including pattern
+     * assignments), label assignments, color assignments, and chain-class
+     * assignments with copies of @p aOther's state.  Derived caches
+     * (effective netclasses, composite / implicit class maps, chain-derived
+     * pattern assignments) are cleared so stale entries from this instance's
+     * pre-CopyFrom life don't leak through.  The NESTED_SETTINGS parent
+     * linkage (m_parent / m_path) is intentionally NOT touched, so this
+     * instance keeps its attachment to its host project file — subsequent
+     * SaveToFile calls write the copied content to the right place.
+     *
+     * Takes @p aOther by non-const reference because the implementation
+     * flushes the source's JSON cache via Store() before cloning.  This is
+     * logically a read of the source's persisted state, but Store() mutates
+     * the source's internal JSON representation; a const_cast on a truly
+     * const source would be undefined behaviour.
+     *
+     * Used by the 3-way merge applier to transfer a chosen side's net
+     * configuration into the merged project without swapping the shared_ptr
+     * (which would orphan the nested-settings registration in the project's
+     * m_nested_settings map).
+     */
+    void CopyFrom( NET_SETTINGS& aOther );
+
     /// @brief Sets the default netclass for the project
     /// Calling user is responsible for resetting the effective netclass calculation caches
     void SetDefaultNetclass( std::shared_ptr<NETCLASS> netclass );
 
     /// @brief Gets the default netclass for the project
-    std::shared_ptr<NETCLASS> GetDefaultNetclass();
+    std::shared_ptr<NETCLASS> GetDefaultNetclass() const;
 
     /// @brief Determines if the given netclass exists
     bool HasNetclass( const wxString& netclassName ) const;
@@ -130,6 +156,9 @@ public:
     /// Calling this method will reset the effective netclass calculation caches.
     void ClearChainPatternAssignments();
 
+    /// @brief Returns true if any chain-derived pattern assignment is present.
+    bool HasChainPatternAssignments() const { return !m_netClassChainPatternAssignments.empty(); }
+
     /// @brief Clears effective netclass cache for the given net
     void ClearCacheForNet( const wxString& netName );
 
@@ -146,6 +175,11 @@ public:
     /// @brief Clears all net name to color assignments
     /// Calling user is responsible for resetting the effective netclass calculation caches
     void ClearNetColorAssignments();
+
+    /// @brief Retarget netclass patterns and net colors after a path prefix changes (sheet rename).
+    /// Rewrites any entry whose net path starts with aOldPrefix to use aNewPrefix. Returns true and
+    /// clears the caches if anything changed.
+    bool RenameNetPathPrefix( const wxString& aOldPrefix, const wxString& aNewPrefix );
 
     /// @brief Assign a net chain to a named class (used by inNetChainClass() DRC scope).
     void SetNetChainClass( const wxString& aChain, const wxString& aClass )

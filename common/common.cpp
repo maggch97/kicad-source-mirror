@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <eda_base_frame.h>
@@ -68,6 +64,20 @@ wxString ExpandTextVars( const wxString& aSource, const PROJECT* aProject, int a
     };
 
     return ExpandTextVars( aSource, &projectResolver, aFlags );
+}
+
+
+wxString NormalizeFilePathForTextVars( const wxString& aPath )
+{
+    wxString path = aPath;
+
+    // ExpandTextVars treats \${ and \@{ as escape sequences, which misinterprets Windows paths
+    // like "subdir\${REVISION}.csv" where the backslash is a path separator, not an escape. Only
+    // the ambiguous separator is rewritten so legitimate backslashes elsewhere are preserved.
+    path.Replace( wxT( "\\${" ), wxT( "/${" ) );
+    path.Replace( wxT( "\\@{" ), wxT( "/@{" ) );
+
+    return path;
 }
 
 
@@ -590,22 +600,24 @@ wxString KIwxExpandEnvVars( const wxString& str, const PROJECT* aProject, std::s
             // If the user has the older location defined, that will be matched
             // first above.  But if they do not, this will ensure that their board still
             // displays correctly
-            else if( strVarName.Contains( "KISYS3DMOD" ) || strVarName.Matches( "KICAD*_3DMODEL_DIR" ) )
+            else if( strVarName.Contains( "KISYS3DMOD" )
+                     || ENV_VAR::IsVersionedEnvVar( strVarName, "3DMODEL_DIR" ) )
             {
                 if( getVersionedEnvVar( "KICAD*_3DMODEL_DIR", strResult ) )
                     expanded = true;
             }
-            else if( strVarName.Matches( "KICAD*_SYMBOL_DIR" ) )
+            else if( strVarName == "KICAD_SYMBOL_DIR"
+                     || ENV_VAR::IsVersionedEnvVar( strVarName, "SYMBOL_DIR" ) )
             {
                 if( getVersionedEnvVar( "KICAD*_SYMBOL_DIR", strResult ) )
                     expanded = true;
             }
-            else if( strVarName.Matches( "KICAD*_FOOTPRINT_DIR" ) )
+            else if( ENV_VAR::IsVersionedEnvVar( strVarName, "FOOTPRINT_DIR" ) )
             {
                 if( getVersionedEnvVar( "KICAD*_FOOTPRINT_DIR", strResult ) )
                     expanded = true;
             }
-            else if( strVarName.Matches( "KICAD*_3RD_PARTY" ) )
+            else if( ENV_VAR::IsVersionedEnvVar( strVarName, "3RD_PARTY" ) )
             {
                 if( getVersionedEnvVar( "KICAD*_3RD_PARTY", strResult ) )
                     expanded = true;
@@ -630,10 +642,11 @@ wxString KIwxExpandEnvVars( const wxString& str, const PROJECT* aProject, std::s
             {
                 auto isVersionedWildcard =
                         strVarName.Contains( wxT( "KISYS3DMOD" ) )
-                        || strVarName.Matches( wxT( "KICAD*_3DMODEL_DIR" ) )
-                        || strVarName.Matches( wxT( "KICAD*_SYMBOL_DIR" ) )
-                        || strVarName.Matches( wxT( "KICAD*_FOOTPRINT_DIR" ) )
-                        || strVarName.Matches( wxT( "KICAD*_3RD_PARTY" ) );
+                        || strVarName == wxT( "KICAD_SYMBOL_DIR" )
+                        || ENV_VAR::IsVersionedEnvVar( strVarName, wxT( "3DMODEL_DIR" ) )
+                        || ENV_VAR::IsVersionedEnvVar( strVarName, wxT( "SYMBOL_DIR" ) )
+                        || ENV_VAR::IsVersionedEnvVar( strVarName, wxT( "FOOTPRINT_DIR" ) )
+                        || ENV_VAR::IsVersionedEnvVar( strVarName, wxT( "3RD_PARTY" ) );
 
                 if( isVersionedWildcard )
                 {

@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <charconv>
@@ -210,6 +206,9 @@ void DRAWING_SHEET_PARSER::Parse( DS_DATA_MODEL* aLayout )
     parseHeader( token );
     aLayout->SetFileFormatVersionAtLoad( m_requiredVersion );
 
+    // Sheets predating the generator token, or a reused model, must not inherit a stale generator.
+    aLayout->SetGenerator( wxT( "pl_editor" ) );
+
     auto checkVersion =
             [&]()
             {
@@ -228,8 +227,8 @@ void DRAWING_SHEET_PARSER::Parse( DS_DATA_MODEL* aLayout )
         switch( token )
         {
         case T_generator:
-            // (generator "genname"); we don't care about it at the moment.
             NeedSYMBOL();
+            aLayout->SetGenerator( FromUTF8() );
             NeedRIGHT();
             break;
 

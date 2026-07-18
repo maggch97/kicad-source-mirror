@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef  SCH_EDIT_FRAME_H
@@ -65,6 +61,7 @@ class DIALOG_ERC;
 class DIALOG_SYMBOL_FIELDS_TABLE;
 class RESCUER;
 class HIERARCHY_PANE;
+class API_HANDLER_COMMON;
 class API_HANDLER_SCH;
 class DIALOG_SCHEMATIC_SETUP;
 class PROGRESS_REPORTER;
@@ -260,6 +257,10 @@ public:
 
     void EditVariantDescription();
 
+    void RenameVariant();
+
+    void CopyVariant();
+
     /**
      * Update the variant name control on the main toolbar.
      *
@@ -276,7 +277,7 @@ public:
      *
      * @return true if a variant was created, false if cancelled or invalid input
      */
-    bool ShowAddVariantDialog();
+    bool ShowAddVariantDialog( wxWindow* aParent = nullptr );
 
     void onVariantSelected( wxCommandEvent& aEvent );
 
@@ -941,6 +942,8 @@ protected:
      */
     bool doAutoSave() override;
 
+    bool canRunAutoSave() const override;
+
     void configureToolbars() override;
 
     void doReCreateMenuBar() override;
@@ -964,11 +967,18 @@ protected:
 
     void updateSelectionFilterVisbility() override;
 
-#ifdef KICAD_IPC_API
     void onPluginAvailabilityChanged( wxCommandEvent& aEvt );
-#endif
 
 private:
+    /**
+     * Validate a user-entered variant name for the rename/copy dialogs.
+     *
+     * Shows an info-bar error and returns false when the name is empty, matches the reserved
+     * default name, or collides (case-insensitively) with an existing variant.  @p aExcludeName
+     * lets a rename keep its own slot (e.g. a case-only rename of the same variant).
+     */
+    bool validateNewVariantName( const wxString& aName, const wxString& aExcludeName );
+
     // Called when resizing the Hierarchy Navigator panel
     void OnResizeHierarchyNavigator( wxSizeEvent& aEvent );
 
@@ -1111,9 +1121,8 @@ private:
 
     wxChoice*                   m_currentVariantCtrl;
 
-#ifdef KICAD_IPC_API
     std::unique_ptr<API_HANDLER_SCH> m_apiHandler;
-#endif
+    std::unique_ptr<API_HANDLER_COMMON> m_apiHandlerCommon;
 };
 
 

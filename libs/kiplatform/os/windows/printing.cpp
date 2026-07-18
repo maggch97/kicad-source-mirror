@@ -13,11 +13,14 @@
 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 * General Public License for more details.
 *
-* You should have received a copy of the GNU General Public License along
-* with this program.  If not, see <http://www.gnu.org/licenses/>.
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include <printing.h>
+
+#include <wx/print.h>
+#include <wx/cmndata.h>
 
 #ifndef __MINGW32__
 #include <windows.h>
@@ -450,3 +453,16 @@ namespace PRINTING
 } // namespace KIPLATFORM
 
 #endif
+
+namespace KIPLATFORM
+{
+namespace PRINTING
+{
+    // Windows keeps the print-to-file destination in the wx-level filename, so clearing it
+    // is sufficient here.
+    void ResetPrintToFilePath( wxPrintData& aData )
+    {
+        aData.SetFilename( wxEmptyString );
+    }
+} // namespace PRINTING
+} // namespace KIPLATFORM

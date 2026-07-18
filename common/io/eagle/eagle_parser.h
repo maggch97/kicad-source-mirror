@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -396,6 +392,8 @@ typedef OPTIONAL_XML_ATTRIBUTE<EROT>     opt_erot;
 typedef OPTIONAL_XML_ATTRIBUTE<ECOORD>   opt_ecoord;
 typedef OPTIONAL_XML_ATTRIBUTE<EURN>     opt_eurn;
 
+/// Converts Eagle's text size to KiCad text size depending on the font used.
+VECTOR2I ConvertEagleTextSize( const opt_wxString& font, const ECOORD& size );
 
 struct EAGLE_BASE
 {
@@ -1186,6 +1184,10 @@ struct EPOLYGON : public EAGLE_BASE
 
     // TODO add grouprefs
 
+    /// Fewer than three vertices cannot bound an area; such polygons (which pre-v6
+    /// binary files can carry) would throw on later geometry queries.
+    bool IsValidOutline() const { return vertices.size() >= 3; }
+
     EPOLYGON( wxXmlNode* aPolygon, IO_BASE* aIo = nullptr );
 };
 
@@ -1433,7 +1435,18 @@ struct EAGLE_LAYER : public EAGLE_BASE
         INFO        = 97,
         GUIDE       = 98,
         USERLAYER1  = 160,
-        USERLAYER2  = 161
+        USERLAYER2  = 161,
+        USERDRAWINGS = 162,
+        USERMARGIN  = 163,
+        USER1       = 170,
+        USER2       = 171,
+        USER3       = 172,
+        USER4       = 173,
+        USER5       = 174,
+        USER6       = 175,
+        USER7       = 176,
+        USER8       = 177,
+        USER9       = 178
     };
 };
 
@@ -1606,9 +1619,9 @@ struct EDEVICE : public EAGLE_BASE
     wxString     name;
     opt_wxString package;
 
-    std::vector<std::unique_ptr<ECONNECT>>         connects;
-    std::vector < std::unique_ptr<EPACKAGE3DINST>> package3dinstances;
-    std::vector < std::unique_ptr<ETECHNOLOGY>>    technologies;
+    std::vector<std::unique_ptr<ECONNECT>>           connects;
+    std::vector<std::unique_ptr<EPACKAGE3DINST>>     package3dinstances;
+    std::map<wxString, std::unique_ptr<ETECHNOLOGY>> technologies;
 
     EDEVICE( wxXmlNode* aDevice, IO_BASE* aIo = nullptr );
 };
@@ -1639,10 +1652,10 @@ struct EDEVICE_SET : public EAGLE_BASE
     opt_int      library_version;
     opt_bool     library_locally_modified;
 
-    std::optional<EDESCRIPTION>                description;
-    std::map<wxString, std::unique_ptr<EGATE>> gates;
-    std::vector<std::unique_ptr<EDEVICE>>      devices;
-    std::optional<ESPICE>                      spice;
+    std::optional<EDESCRIPTION>                  description;
+    std::map<wxString, std::unique_ptr<EGATE>>   gates;
+    std::map<wxString, std::unique_ptr<EDEVICE>> devices;
+    std::optional<ESPICE>                        spice;
 
     EDEVICE_SET( wxXmlNode* aDeviceSet, IO_BASE* aIo = nullptr );
 };

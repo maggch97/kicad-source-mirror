@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/debug.h>
@@ -92,6 +88,18 @@ BOARD* BOARD_ITEM::GetBoard()
         return static_cast<BOARD*>( this );
 
     return static_cast<BOARD*>( findParent( PCB_T ) );
+}
+
+
+BOARD_ITEM::~BOARD_ITEM()
+{
+    // Safety net for paths that free an item without ::Remove().  Gate on the flag so a never-indexed
+    // transient does not walk GetBoard()'s parent chain into an already-freed board.
+    if( m_indexedInBoard && Type() != PCB_T )
+    {
+        if( BOARD* board = GetBoard(); board && board->IsItemIndexedById( this ) )
+            board->UncacheItemByPtr( this );
+    }
 }
 
 
@@ -230,24 +238,29 @@ wxString BOARD_ITEM::LayerMaskDescribe() const
 {
     const BOARD* board = GetBoard();
     LSET         layers = GetLayerSet();
+    int          copperLayerCount = MAX_CU_LAYERS;
 
     if( board )
+    {
         layers &= board->GetEnabledLayers();
+        copperLayerCount = board->GetCopperLayerCount();
+    }
 
     LSET copperLayers = layers & LSET::AllCuMask();
     LSET techLayers = layers & LSET::AllTechMask();
 
     // Try to be smart and useful.  Check all copper first.
-    if( (int) copperLayers.count() == board->GetCopperLayerCount() )
+    if( (int) copperLayers.count() == copperLayerCount )
         return _( "all copper layers" );
 
     for( LSET testLayers : { copperLayers, techLayers, layers } )
     {
-        for( int bit = PCBNEW_LAYER_ID_START; bit < PCB_LAYER_ID_COUNT; ++bit )
+        for( int layer = PCBNEW_LAYER_ID_START; layer < PCB_LAYER_ID_COUNT; ++layer )
         {
-            if( testLayers[ bit ] )
+            if( testLayers[ layer ] )
             {
-                wxString layerInfo = board->GetLayerName( static_cast<PCB_LAYER_ID>( bit ) );
+                wxString layerInfo = board ? board->GetLayerName( ToLAYER_ID( layer ) )
+                                           : LayerName( ToLAYER_ID( layer ) );
 
                 if( testLayers.count() > 1 )
                     layerInfo << wxS( " " ) + _( "and others" );
@@ -294,8 +307,10 @@ void BOARD_ITEM::SwapItemData( BOARD_ITEM* aImage )
     if( aImage == nullptr )
         return;
 
-    EDA_ITEM* parent = GetParent();
-    BOARD*    board = GetBoard();
+    EDA_ITEM*  parent = GetParent();
+    EDA_GROUP* group = GetParentGroup();
+    EDA_GROUP* imageGroup = aImage->GetParentGroup();
+    BOARD*     board = GetBoard();
 
     // Evict children from the item-by-id cache before the swap moves them to the
     // image.  The image is typically deleted after the swap (undo/redo, commit revert),
@@ -307,6 +322,10 @@ void BOARD_ITEM::SwapItemData( BOARD_ITEM* aImage )
 
     swapData( aImage );
     SetParent( parent );
+
+    // Group membership is a back-reference, not item data, so keep each side's own.
+    SetParentGroup( group );
+    aImage->SetParentGroup( imageGroup );
 
     if( board )
     {
@@ -380,29 +399,19 @@ std::shared_ptr<SHAPE_SEGMENT> BOARD_ITEM::GetEffectiveHoleShape() const
 
 VECTOR2I BOARD_ITEM::GetFPRelativePosition() const
 {
-    VECTOR2I pos = GetPosition();
-
     if( FOOTPRINT* parentFP = GetParentFootprint() )
-    {
-        pos -= parentFP->GetPosition();
-        RotatePoint( pos, -parentFP->GetOrientation() );
-    }
+        return parentFP->GetTransform().InverseApply( GetPosition() );
 
-    return pos;
+    return GetPosition();
 }
 
 
 void BOARD_ITEM::SetFPRelativePosition( const VECTOR2I& aPos )
 {
-    VECTOR2I pos( aPos );
-
     if( FOOTPRINT* parentFP = GetParentFootprint() )
-    {
-        RotatePoint( pos, parentFP->GetOrientation() );
-        pos += parentFP->GetPosition();
-    }
-
-    SetPosition( pos );
+        SetPosition( parentFP->GetTransform().Apply( aPos ) );
+    else
+        SetPosition( aPos );
 }
 
 

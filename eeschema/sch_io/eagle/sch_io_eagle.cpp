@@ -18,8 +18,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <sch_io/eagle/sch_io_eagle.h>
@@ -34,9 +34,11 @@
 #include <wx/mstream.h>
 #include <wx/xml/xml.h>
 
+#include <advanced_config.h>
 #include <font/fontconfig.h>
 #include <reporter.h>
 #include <io/eagle/eagle_parser.h>
+#include <io/eagle/eagle_bin_parser.h>
 #include <lib_id.h>
 #include <progress_reporter.h>
 #include <project.h>
@@ -94,7 +96,7 @@ static BOX2I getSheetBbox( SCH_SHEET* aSheet )
 }
 
 
-///< Extract the net name part from a pin name (e.g. return 'GND' for pin named 'GND@2')
+///< Strip the Eagle "@<tag>" linking hint from a pin name (e.g. return 'GND' for 'GND@2')
 static inline wxString extractNetName( const wxString& aPinName )
 {
     return aPinName.BeforeFirst( '@' );
@@ -465,6 +467,12 @@ SCH_SHEET* SCH_IO_EAGLE::LoadSchematicFile( const wxString& aFileName, SCHEMATIC
 
     m_pi->SaveLibrary( getLibFileName().GetFullPath() );
 
+    // The project library was created empty and then cached by the adapter (LoadOne above)
+    // before any symbols were written to it. Reload it from disk now that SaveLibrary has
+    // populated the file, otherwise UpdateSymbolLinks resolves against the stale empty cache
+    // and every imported symbol is reported as missing.
+    adapter->ReloadLibraryEntry( getLibName(), LIBRARY_TABLE_SCOPE::PROJECT );
+
     SCH_SCREENS allSheets( m_rootSheet );
     allSheets.UpdateSymbolLinks( &LOAD_INFO_REPORTER::GetInstance() ); // Update all symbol library links for all sheets.
 
@@ -591,6 +599,31 @@ wxXmlDocument SCH_IO_EAGLE::loadXmlDocument( const wxString& aFileName )
     {
         THROW_IO_ERROR(
                 wxString::Format( _( "Unable to read file '%s'." ), m_filename.GetFullPath() ) );
+    }
+
+    // Pre-v6 schematics are a binary stream identified by a two-byte magic. Decode
+    // them into an XML-compatible DOM and adopt that tree, mirroring PCB_IO_EAGLE.
+    // IsBinaryEagle consumes the two-byte magic, so rewind before reading on.
+    bool isBinary = EAGLE_BIN_PARSER::IsBinaryEagle( stream );
+    stream.SeekI( 0 );
+
+    if( isBinary )
+    {
+        std::vector<uint8_t> bytes;
+        bytes.resize( static_cast<size_t>( stream.GetLength() ) );
+        stream.Read( bytes.data(), bytes.size() );
+
+        if( stream.LastRead() != bytes.size() )
+        {
+            THROW_IO_ERROR(
+                    wxString::Format( _( "Unable to read file '%s'." ), m_filename.GetFullPath() ) );
+        }
+
+        EAGLE_BIN_PARSER               binParser;
+        std::unique_ptr<wxXmlDocument> binDocument = binParser.Parse( bytes );
+
+        xmlDocument.SetRoot( binDocument->DetachRoot() );
+        return xmlDocument;
     }
 
     // read first line to check for Eagle XML format file
@@ -727,6 +760,14 @@ void SCH_IO_EAGLE::loadSchematic( const ESCHEMATIC& aSchematic )
     // Map all children into a readable dictionary
     if( aSchematic.sheets.empty() )
         return;
+
+    for( const auto& [name, variantDef] : aSchematic.variantdefs )
+    {
+        m_schematic->AddVariant( name );
+
+        if( variantDef->current && *variantDef->current )
+            m_schematic->SetCurrentVariant( name );
+    }
 
     // N.B. Eagle parts are case-insensitive in matching but we keep the display case
     for( const auto& [name, epart] : aSchematic.parts )
@@ -936,7 +977,10 @@ void SCH_IO_EAGLE::loadSheet( const std::unique_ptr<ESHEET>& aSheet )
     if( aSheet->plain )
     {
         for( const std::unique_ptr<EPOLYGON>& epoly : aSheet->plain->polygons )
-            screen->Append( loadPolyLine( epoly ) );
+        {
+            if( SCH_SHAPE* shape = loadPolyLine( epoly ) )
+                screen->Append( shape );
+        }
 
         for( const std::unique_ptr<EWIRE>& ewire : aSheet->plain->wires )
         {
@@ -1239,8 +1283,8 @@ void SCH_IO_EAGLE::loadModuleInstance( const std::unique_ptr<EMODULEINST>& aModu
 }
 
 
-void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
-                              std::vector<SCH_ITEM*>& aItems )
+void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame, std::vector<SCH_ITEM*>& aItems,
+                              SCH_LAYER_ID aLayer )
 {
     int xMin = aFrame->x1.ToSchUnits();
     int xMax = aFrame->x2.ToSchUnits();
@@ -1253,7 +1297,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
     if( yMin > yMax )
         std::swap( yMin, yMax );
 
-    SCH_SHAPE* lines = new SCH_SHAPE( SHAPE_T::POLY );
+    SCH_SHAPE* lines = new SCH_SHAPE( SHAPE_T::POLY, aLayer );
     lines->AddPoint( VECTOR2I( xMin, yMin ) );
     lines->AddPoint( VECTOR2I( xMax, yMin ) );
     lines->AddPoint( VECTOR2I( xMax, yMax ) );
@@ -1263,7 +1307,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
 
     if( !( aFrame->border_left == false ) )
     {
-        lines = new SCH_SHAPE( SHAPE_T::POLY );
+        lines = new SCH_SHAPE( SHAPE_T::POLY, aLayer );
         lines->AddPoint( VECTOR2I( xMin + schIUScale.MilsToIU( 150 ),
                                    yMin + schIUScale.MilsToIU( 150 ) ) );
         lines->AddPoint( VECTOR2I( xMin + schIUScale.MilsToIU( 150 ),
@@ -1281,7 +1325,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
         for( i = 1; i < aFrame->rows; i++ )
         {
             int newY = KiROUND( yMin + ( rowSpacing * (double) i ) );
-            lines = new SCH_SHAPE( SHAPE_T::POLY );
+            lines = new SCH_SHAPE( SHAPE_T::POLY, aLayer );
             lines->AddPoint( VECTOR2I( x1, newY ) );
             lines->AddPoint( VECTOR2I( x2, newY ) );
             aItems.push_back( lines );
@@ -1292,6 +1336,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
         for( i = 0; i < aFrame->rows; i++ )
         {
             SCH_TEXT* legendText = new SCH_TEXT();
+            legendText->SetLayer( aLayer );
             legendText->SetPosition( VECTOR2I( legendPosX, KiROUND( legendPosY ) ) );
             legendText->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
             legendText->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
@@ -1306,7 +1351,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
 
     if( !( aFrame->border_right == false ) )
     {
-        lines = new SCH_SHAPE( SHAPE_T::POLY );
+        lines = new SCH_SHAPE( SHAPE_T::POLY, aLayer );
         lines->AddPoint( VECTOR2I( xMax - schIUScale.MilsToIU( 150 ),
                                    yMin + schIUScale.MilsToIU( 150 ) ) );
         lines->AddPoint( VECTOR2I( xMax - schIUScale.MilsToIU( 150 ),
@@ -1324,7 +1369,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
         for( i = 1; i < aFrame->rows; i++ )
         {
             int newY = KiROUND( yMin + ( rowSpacing * (double) i ) );
-            lines = new SCH_SHAPE( SHAPE_T::POLY );
+            lines = new SCH_SHAPE( SHAPE_T::POLY, aLayer );
             lines->AddPoint( VECTOR2I( x1, newY ) );
             lines->AddPoint( VECTOR2I( x2, newY ) );
             aItems.push_back( lines );
@@ -1335,6 +1380,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
         for( i = 0; i < aFrame->rows; i++ )
         {
             SCH_TEXT* legendText = new SCH_TEXT();
+            legendText->SetLayer( aLayer );
             legendText->SetPosition( VECTOR2I( legendPosX, KiROUND( legendPosY ) ) );
             legendText->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
             legendText->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
@@ -1349,7 +1395,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
 
     if( !( aFrame->border_top == false ) )
     {
-        lines = new SCH_SHAPE( SHAPE_T::POLY );
+        lines = new SCH_SHAPE( SHAPE_T::POLY, aLayer );
         lines->AddPoint( VECTOR2I( xMax - schIUScale.MilsToIU( 150 ),
                                    yMin + schIUScale.MilsToIU( 150 ) ) );
         lines->AddPoint( VECTOR2I( xMin + schIUScale.MilsToIU( 150 ),
@@ -1367,7 +1413,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
         for( i = 1; i < aFrame->columns; i++ )
         {
             int newX = KiROUND( xMin + ( columnSpacing * (double) i ) );
-            lines = new SCH_SHAPE( SHAPE_T::POLY );
+            lines = new SCH_SHAPE( SHAPE_T::POLY, aLayer );
             lines->AddPoint( VECTOR2I( newX, y1 ) );
             lines->AddPoint( VECTOR2I( newX, y2 ) );
             aItems.push_back( lines );
@@ -1378,6 +1424,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
         for( i = 0; i < aFrame->columns; i++ )
         {
             SCH_TEXT* legendText = new SCH_TEXT();
+            legendText->SetLayer( aLayer );
             legendText->SetPosition( VECTOR2I( KiROUND( legendPosX ), legendPosY ) );
             legendText->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
             legendText->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
@@ -1392,7 +1439,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
 
     if( !( aFrame->border_bottom == false ) )
     {
-        lines = new SCH_SHAPE( SHAPE_T::POLY );
+        lines = new SCH_SHAPE( SHAPE_T::POLY, aLayer );
         lines->AddPoint( VECTOR2I( xMax - schIUScale.MilsToIU( 150 ),
                                    yMax - schIUScale.MilsToIU( 150 ) ) );
         lines->AddPoint( VECTOR2I( xMin + schIUScale.MilsToIU( 150 ),
@@ -1410,7 +1457,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
         for( i = 1; i < aFrame->columns; i++ )
         {
             int newX = KiROUND( xMin + ( columnSpacing * (double) i ) );
-            lines = new SCH_SHAPE( SHAPE_T::POLY );
+            lines = new SCH_SHAPE( SHAPE_T::POLY, aLayer );
             lines->AddPoint( VECTOR2I( newX, y1 ) );
             lines->AddPoint( VECTOR2I( newX, y2 ) );
             aItems.push_back( lines );
@@ -1421,6 +1468,7 @@ void SCH_IO_EAGLE::loadFrame( const std::unique_ptr<EFRAME>& aFrame,
         for( i = 0; i < aFrame->columns; i++ )
         {
             SCH_TEXT* legendText = new SCH_TEXT();
+            legendText->SetLayer( aLayer );
             legendText->SetPosition( VECTOR2I( KiROUND( legendPosX ), legendPosY ) );
             legendText->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
             legendText->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
@@ -1575,6 +1623,9 @@ void SCH_IO_EAGLE::loadSegments( const std::vector<std::unique_ptr<ESEGMENT>>& a
 
 SCH_SHAPE* SCH_IO_EAGLE::loadPolyLine( const std::unique_ptr<EPOLYGON>& aPolygon )
 {
+    if( !aPolygon->IsValidOutline() )
+        return nullptr;
+
     std::unique_ptr<SCH_SHAPE> poly = std::make_unique<SCH_SHAPE>( SHAPE_T::POLY );
     VECTOR2I   pt, prev_pt;
     opt_double prev_curve;
@@ -1808,30 +1859,13 @@ SCH_IO_EAGLE::findNearestLinePoint( const VECTOR2I&         aPoint,
 
     double d, mindistance = std::numeric_limits<double>::max();
 
-    // Find the nearest start, middle or end of a line from the list of lines.
+    // Project the label onto the closest wire.  Snapping to the perpendicular foot keeps a
+    // detached Eagle label at its position along the wire; snapping only to the wire's
+    // endpoints or midpoint would slide it far along a long wire and pile parallel labels
+    // onto the same point.
     for( const SEG& line : aLines )
     {
-        VECTOR2I testpoint = line.A;
-        d = aPoint.Distance( testpoint );
-
-        if( d < mindistance )
-        {
-            mindistance  = d;
-            nearestPoint = testpoint;
-            nearestLine  = &line;
-        }
-
-        testpoint = line.Center();
-        d = aPoint.Distance( testpoint );
-
-        if( d < mindistance )
-        {
-            mindistance  = d;
-            nearestPoint = testpoint;
-            nearestLine  = &line;
-        }
-
-        testpoint = line.B;
+        VECTOR2I testpoint = line.NearestPoint( aPoint );
         d = aPoint.Distance( testpoint );
 
         if( d < mindistance )
@@ -1878,7 +1912,14 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
     wxString gatename    = epart->deviceset + wxS( "_" ) + epart->device + wxS( "_" ) +
                            aInstance->gate;
     wxString symbolname  = wxString( epart->deviceset + epart->device );
+    wxString kiPackageName = epart->deviceset + epart->device;
+
+    if( epart->technology )
+        symbolname += *epart->technology;
+
     symbolname.Replace( wxT( "*" ), wxEmptyString );
+    kiPackageName.Replace( wxT( "*" ), wxEmptyString );
+
     wxString kisymbolname = EscapeString( symbolname, CTX_LIBID );
 
     // Eagle schematics can have multiple libraries containing symbols with duplicate symbol
@@ -1919,7 +1960,16 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
     auto p = elib->package.find( kisymbolname );
 
     if( p != elib->package.end() )
+    {
         package = p->second;
+    }
+    else
+    {
+        p = elib->package.find( kiPackageName );
+
+        if( p != elib->package.end() )
+            package = p->second;
+    }
 
     // set properties to prevent save file on every symbol save
     std::map<std::string, UTF8> properties;
@@ -2054,17 +2104,6 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
         symbol->AddField( newField );
     }
 
-    for( const auto& [variantName, variant] : epart->variants )
-    {
-        SCH_FIELD* field = symbol->AddField( *symbol->GetField( FIELD_T::VALUE ) );
-        field->SetName( wxT( "VARIANT_" ) + variant->name );
-
-        if( variant->value )
-            field->SetText( *variant->value );
-
-        field->SetVisible( false );
-    }
-
     bool valueAttributeFound = false;
     bool nameAttributeFound  = false;
 
@@ -2092,6 +2131,10 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
         {
             field->SetVisible( true );
             field->SetPosition( VECTOR2I( eattr->x->ToSchUnits(), -eattr->y->ToSchUnits() ) );
+
+            if( eattr->size )
+                field->SetTextSize( ConvertEagleTextSize( eattr->font, eattr->size.Get() ) );
+
             int  align      = eattr->align ? *eattr->align : ETEXT::BOTTOM_LEFT;
             int  absdegrees = eattr->rot ? eattr->rot->degrees : 0;
             bool mirror     = eattr->rot ? eattr->rot->mirror : false;
@@ -2138,7 +2181,69 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
     // Use the already-loaded `part` directly rather than re-fetching through the adapter,
     // because the .kicad_sym library is still buffered in m_pi and has not yet been saved to
     // disk at the time loadInstance runs.
-    symbol->SetLibSymbol( new LIB_SYMBOL( *part ) );
+    symbol->SetLibSymbol( part->Flatten().release() );
+
+    for( const auto& [name, variant] : epart->variants )
+    {
+        SCH_SYMBOL_VARIANT symbolVariant( name );
+
+        if( variant->populate && !*variant->populate )
+            symbolVariant.m_DNP = true;
+
+        if( variant->value )
+            symbolVariant.m_Fields[GetCanonicalFieldName( FIELD_T::VALUE )] = *variant->value;
+
+        if( variant->technology )
+        {
+            auto eLibIt = m_eagleDoc->drawing->schematic->libraries.find( epart->library );
+
+            if( eLibIt == m_eagleDoc->drawing->schematic->libraries.end() )
+            {
+                Report( wxString::Format( wxS( "Library '%s' not found in schematic." ), epart->library ) );
+                continue;
+            }
+
+            auto eDeviceSetIt = eLibIt->second->devicesets.find( epart->deviceset );
+
+            if( eDeviceSetIt == eLibIt->second->devicesets.end() )
+            {
+                Report( wxString::Format( wxS( "Device set '%s' not found in library '%s'." ),
+                                          epart->deviceset, epart->library ) );
+                continue;
+            }
+
+            auto eDeviceIt = eDeviceSetIt->second->devices.find( epart->device );
+
+            if( eDeviceIt == eDeviceSetIt->second->devices.end() )
+            {
+                Report( wxString::Format( wxS( "Device '%s' not found in device set '%s' in library '%s'." ),
+                                          epart->device, epart->deviceset, epart->library ) );
+                continue;
+            }
+
+            auto eTechnologyIt = eDeviceIt->second->technologies.find( *variant->technology );
+
+            if( eTechnologyIt == eDeviceIt->second->technologies.end() )
+            {
+                Report( wxString::Format( wxS( "Technology '%s' not found in device '%s'  in device set '%s' "
+                                               "in library '%s'." ),
+                                          *variant->technology, epart->device, epart->deviceset, epart->library ) );
+                continue;
+            }
+
+            for( const auto& attr : eTechnologyIt->second->attributes )
+            {
+                wxString attrValue;
+
+                if( attr->value )
+                    attrValue = *attr->value;
+
+                symbolVariant.m_Fields[attr->name] = attrValue;
+            }
+        }
+
+        symbol->AddVariant( m_sheetPath, symbolVariant );
+    }
 
     for( const SCH_PIN* pin : symbol->GetLibPins() )
         m_connPoints[symbol->GetPinPhysicalPosition( pin )].emplace( pin );
@@ -2155,6 +2260,7 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
 EAGLE_LIBRARY* SCH_IO_EAGLE::loadLibrary( const ELIBRARY* aLibrary, EAGLE_LIBRARY* aEagleLibrary )
 {
     wxCHECK( aLibrary && aEagleLibrary, nullptr );
+    bool canAutoplace = ADVANCED_CFG::GetCfg().m_EagleImportFieldsCanAutoplace;
 
     // Loop through the device sets and load each of them
     for( const auto& [name, edeviceset] : aLibrary->devicesets )
@@ -2167,8 +2273,10 @@ EAGLE_LIBRARY* SCH_IO_EAGLE::loadLibrary( const ELIBRARY* aLibrary, EAGLE_LIBRAR
             deviceSetDescr = convertDescription( UnescapeHTML( edeviceset->description->text ) );
 
         // For each device in the device set:
-        for( const std::unique_ptr<EDEVICE>& edevice : edeviceset->devices )
+        for( const auto& [devname, edevice] : edeviceset->devices )
         {
+            std::vector<std::unique_ptr<LIB_SYMBOL>> derivedSymbols;
+
             // Create symbol name from deviceset and device names.
             wxString symbolName = edeviceset->name + edevice->name;
             symbolName.Replace( wxT( "*" ), wxEmptyString );
@@ -2182,8 +2290,11 @@ EAGLE_LIBRARY* SCH_IO_EAGLE::loadLibrary( const ELIBRARY* aLibrary, EAGLE_LIBRAR
             std::unique_ptr<LIB_SYMBOL> libSymbol = std::make_unique<LIB_SYMBOL>( symbolName );
 
             // Process each gate in the deviceset for this device.
-            int        gate_count = static_cast<int>( edeviceset->gates.size() );
-            libSymbol->SetUnitCount( gate_count, true );
+            int gate_count = static_cast<int>( edeviceset->gates.size() );
+
+            if( gate_count > 1 )
+                libSymbol->SetUnitCount( gate_count, true );
+
             libSymbol->LockUnits( true );
 
             SCH_FIELD* reference = libSymbol->GetField( FIELD_T::REFERENCE );
@@ -2223,16 +2334,44 @@ EAGLE_LIBRARY* SCH_IO_EAGLE::loadLibrary( const ELIBRARY* aLibrary, EAGLE_LIBRAR
                 gateindex++;
             }
 
-            VECTOR2I nextFieldPosition = getLastSymbolFieldPosition( libSymbol.get() );
+            std::vector<SCH_FIELD*> fields;
+            libSymbol->GetFields( fields );
 
-            for( const std::unique_ptr<ETECHNOLOGY>& technology : edevice->technologies )
+            for( SCH_FIELD* field : fields )
+                field->SetCanAutoplace( canAutoplace );
+
+            for( const auto& [techname, technology ] : edevice->technologies )
             {
+                std::unique_ptr<LIB_SYMBOL> derivedSymbol;
+                VECTOR2I nextFieldPosition = getLastSymbolFieldPosition( libSymbol.get() );
+
+                if( !technology->name.IsEmpty() )
+                {
+                    derivedSymbol = std::make_unique<LIB_SYMBOL>( symbolName + technology->name, libSymbol.get() );
+
+                    for( SCH_FIELD* parentField : fields )
+                    {
+                        SCH_FIELD* childField = derivedSymbol->GetField( parentField->GetName() );
+
+                        if( childField )
+                        {
+                            childField->SetAttributes( *parentField );
+                            childField->SetCanAutoplace( canAutoplace );
+                        }
+                    }
+                }
+
                 for( const std::unique_ptr<EATTR>& attr : technology->attributes )
                 {
                     if( !attr->value )
                         continue;
 
-                    SCH_FIELD* field = libSymbol->FindFieldCaseInsensitive( attr->name );
+                    SCH_FIELD* field = nullptr;
+
+                    if( !derivedSymbol )
+                        field = libSymbol->FindFieldCaseInsensitive( attr->name );
+                    else
+                        field = derivedSymbol->FindFieldCaseInsensitive( attr->name );
 
                     if( field )
                     {
@@ -2240,18 +2379,36 @@ EAGLE_LIBRARY* SCH_IO_EAGLE::loadLibrary( const ELIBRARY* aLibrary, EAGLE_LIBRAR
                     }
                     else
                     {
-                        SCH_FIELD* newField = new SCH_FIELD( libSymbol.get(), FIELD_T::USER, attr->name );
+                        SCH_FIELD* newField = new SCH_FIELD( derivedSymbol ? derivedSymbol.get() : libSymbol.get(),
+                                                             FIELD_T::USER, attr->name );
+
+                        if( derivedSymbol )
+                        {
+                            SCH_FIELD* parentField = libSymbol->FindFieldCaseInsensitive( attr->name );
+
+                            if( parentField )
+                                newField->SetAttributes( *parentField );
+                        }
 
                         nextFieldPosition.y += newField->GetTextHeight() + schIUScale.MilsToIU( 10 );
                         newField->SetText( *attr->value );
                         newField->SetVisible( false );
                         newField->SetPosition( nextFieldPosition );
-                        libSymbol->AddField( newField );
+                        newField->SetCanAutoplace( canAutoplace );
+
+                        if( !derivedSymbol )
+                            libSymbol->AddField( newField );
+                        else
+                            derivedSymbol->AddField( newField );
                     }
                 }
+
+                if( derivedSymbol )
+                    derivedSymbols.push_back( std::move( derivedSymbol ) );
             }
 
-            libSymbol->SetUnitCount( gate_count, true );
+            if( gate_count > 1 )
+                libSymbol->SetUnitCount( gate_count, true );
 
             if( gate_count == 1 && ispower )
                 libSymbol->SetGlobalPower();
@@ -2297,8 +2454,23 @@ EAGLE_LIBRARY* SCH_IO_EAGLE::loadLibrary( const ELIBRARY* aLibrary, EAGLE_LIBRAR
                     std::map<std::string, UTF8> properties;
                     properties.emplace( SCH_IO_KICAD_SEXPR::PropBuffering, wxEmptyString );
 
-                    m_pi->SaveSymbol( getLibFileName().GetFullPath(), new LIB_SYMBOL( *libSymbol.get() ),
-                                      &properties );
+                    LIB_SYMBOL* parentSymbol = new LIB_SYMBOL( *libSymbol.get() );
+                    m_pi->SaveSymbol( getLibFileName().GetFullPath(), parentSymbol, &properties );
+
+                    for( std::unique_ptr<LIB_SYMBOL>& symbol : derivedSymbols )
+                    {
+                        if( m_pi->LoadSymbol( getLibFileName().GetFullPath(), symbol->GetName() ) )
+                        {
+                            wxString tmp = aEagleLibrary->name + wxT( "_" ) + symbol->GetName();
+                            tmp = EscapeString( tmp, CTX_LIBID );
+                            symbol->SetName( tmp );
+                        }
+
+                        LIB_SYMBOL* derivedSymbol = new LIB_SYMBOL( *symbol.get() );
+
+                        derivedSymbol->SetParent( parentSymbol );
+                        m_pi->SaveSymbol( getLibFileName().GetFullPath(), derivedSymbol, &properties );
+                    }
                 }
                 catch(...)
                 {
@@ -2313,6 +2485,12 @@ EAGLE_LIBRARY* SCH_IO_EAGLE::loadLibrary( const ELIBRARY* aLibrary, EAGLE_LIBRAR
             // Store information on whether the value of FIELD_T::VALUE for a part should be
             // part/@value or part/@deviceset + part/@device.
             m_userValue.emplace( std::make_pair( libName, edeviceset->uservalue == true ) );
+
+            for( std::unique_ptr<LIB_SYMBOL>& symbol : derivedSymbols )
+            {
+                m_userValue.emplace( std::make_pair( symbol->GetName(), edeviceset->uservalue == true ) );
+                aEagleLibrary->KiCadSymbols[symbol->GetName()] = std::move( symbol );
+            }
         }
     }
 
@@ -2365,7 +2543,10 @@ bool SCH_IO_EAGLE::loadSymbol( const std::unique_ptr<ESYMBOL>& aEsymbol,
         {
             for( const std::unique_ptr<ECONNECT>& connect : aDevice->connects )
             {
-                if( connect->gate == aGateName && pin->GetName() == connect->pin )
+                // Eagle <connect> references the full pin name including any "@<tag>"
+                // linking hint, so match against the raw Eagle name rather than the
+                // stripped display name set on the pin.
+                if( connect->gate == aGateName && epin->name == connect->pin )
                 {
                     wxArrayString pads = wxSplit( wxString( connect->pad ), ' ' );
 
@@ -2399,7 +2580,8 @@ bool SCH_IO_EAGLE::loadSymbol( const std::unique_ptr<ESYMBOL>& aEsymbol,
     }
 
     for( const std::unique_ptr<EPOLYGON>& epolygon : aEsymbol->polygons )
-        aSymbol->AddDrawItem( loadSymbolPolyLine( aSymbol, epolygon, aGateNumber ) );
+        if( SCH_SHAPE* shape = loadSymbolPolyLine( aSymbol, epolygon, aGateNumber ) )
+            aSymbol->AddDrawItem( shape );
 
     for( const std::unique_ptr<ERECT>& erectangle : aEsymbol->rectangles )
         aSymbol->AddDrawItem( loadSymbolRectangle( aSymbol, erectangle, aGateNumber ) );
@@ -2478,13 +2660,23 @@ SCH_SHAPE* SCH_IO_EAGLE::loadSymbolCircle( std::unique_ptr<LIB_SYMBOL>& aSymbol,
     wxCHECK( aSymbol && aCircle, nullptr );
 
     // Parse the circle properties
-    SCH_SHAPE* circle = new SCH_SHAPE( SHAPE_T::CIRCLE );
+    SCH_SHAPE* circle = new SCH_SHAPE( SHAPE_T::CIRCLE, LAYER_DEVICE );
     VECTOR2I   center( aCircle->x.ToSchUnits(), -aCircle->y.ToSchUnits() );
 
     circle->SetParent( aSymbol.get() );
     circle->SetPosition( center );
     circle->SetEnd( VECTOR2I( center.x + aCircle->radius.ToSchUnits(), center.y ) );
-    circle->SetStroke( STROKE_PARAMS( aCircle->width.ToSchUnits(), LINE_STYLE::SOLID ) );
+
+    if( aCircle->width.ToSchUnits() == 0 )
+    {
+        circle->SetStroke( STROKE_PARAMS( -1, LINE_STYLE::SOLID ) );
+        circle->SetFillMode( FILL_T::FILLED_SHAPE );
+    }
+    else
+    {
+        circle->SetStroke( STROKE_PARAMS( aCircle->width.ToSchUnits(), LINE_STYLE::SOLID ) );
+    }
+
     circle->SetUnit( aGateNumber );
 
     return circle;
@@ -2497,7 +2689,7 @@ SCH_SHAPE* SCH_IO_EAGLE::loadSymbolRectangle( std::unique_ptr<LIB_SYMBOL>& aSymb
 {
     wxCHECK( aSymbol && aRectangle, nullptr );
 
-    SCH_SHAPE* rectangle = new SCH_SHAPE( SHAPE_T::RECTANGLE );
+    SCH_SHAPE* rectangle = new SCH_SHAPE( SHAPE_T::RECTANGLE, LAYER_DEVICE );
 
     rectangle->SetParent( aSymbol.get() );
     rectangle->SetPosition( VECTOR2I( aRectangle->x1.ToSchUnits(), -aRectangle->y1.ToSchUnits() ) );
@@ -2518,8 +2710,9 @@ SCH_SHAPE* SCH_IO_EAGLE::loadSymbolRectangle( std::unique_ptr<LIB_SYMBOL>& aSymb
 
     rectangle->SetUnit( aGateNumber );
 
-    // Eagle rectangles are filled by definition.
+    // Eagle rectangles are filled and have vanishing line width by definition.
     rectangle->SetFillMode( FILL_T::FILLED_SHAPE );
+    rectangle->SetWidth( -1 );
 
     return rectangle;
 }
@@ -2594,15 +2787,22 @@ SCH_SHAPE* SCH_IO_EAGLE::loadSymbolPolyLine( std::unique_ptr<LIB_SYMBOL>& aSymbo
 {
     wxCHECK( aSymbol && aPolygon, nullptr );
 
-    SCH_SHAPE* poly = new SCH_SHAPE( SHAPE_T::POLY );
+    if( !aPolygon->IsValidOutline() )
+        return nullptr;
+
+    SCH_SHAPE* poly = new SCH_SHAPE( SHAPE_T::POLY, LAYER_DEVICE );
     VECTOR2I   pt, prev_pt;
     opt_double prev_curve;
+    std::optional<VECTOR2I> first_pt;
 
     poly->SetParent( aSymbol.get() );
 
     for( const std::unique_ptr<EVERTEX>& evertex : aPolygon->vertices )
     {
-        pt = VECTOR2I( evertex->x.ToSchUnits(), evertex->y.ToSchUnits() );
+        pt = VECTOR2I( evertex->x.ToSchUnits(), -evertex->y.ToSchUnits() );
+
+        if( !first_pt.has_value() )
+            first_pt = pt;
 
         if( prev_curve )
         {
@@ -2619,6 +2819,9 @@ SCH_SHAPE* SCH_IO_EAGLE::loadSymbolPolyLine( std::unique_ptr<LIB_SYMBOL>& aSymbo
         prev_curve = evertex->curve;
     }
 
+    if( first_pt.has_value() )
+        poly->AddPoint( first_pt.value() );
+
     poly->SetStroke( STROKE_PARAMS( aPolygon->width.ToSchUnits(), LINE_STYLE::SOLID ) );
     poly->SetFillMode( FILL_T::FILLED_SHAPE );
     poly->SetUnit( aGateNumber );
@@ -2634,7 +2837,11 @@ SCH_PIN* SCH_IO_EAGLE::loadPin( std::unique_ptr<LIB_SYMBOL>& aSymbol,
 
     std::unique_ptr<SCH_PIN> pin = std::make_unique<SCH_PIN>( aSymbol.get() );
     pin->SetPosition( VECTOR2I( aPin->x.ToSchUnits(), -aPin->y.ToSchUnits() ) );
-    pin->SetName( aPin->name );
+
+    // Eagle pin names may carry a trailing "@<tag>" linking hint that disambiguates
+    // duplicate names within a symbol. It is metadata, not visible text, so strip it
+    // from the displayed name. The full Eagle name is still used to match <connect>.
+    pin->SetName( extractNetName( aPin->name ) );
     pin->SetUnit( aGateNumber );
 
     int roti = aPin->rot ? aPin->rot->degrees : 0;
@@ -2717,6 +2924,7 @@ SCH_TEXT* SCH_IO_EAGLE::loadSymbolText( std::unique_ptr<LIB_SYMBOL>& aSymbol,
 
     std::unique_ptr<SCH_TEXT> libtext = std::make_unique<SCH_TEXT>();
 
+    libtext->SetLayer( LAYER_DEVICE );
     libtext->SetParent( aSymbol.get() );
     libtext->SetUnit( aGateNumber );
     libtext->SetPosition( VECTOR2I( aText->x.ToSchUnits(), -aText->y.ToSchUnits() ) );
@@ -3592,10 +3800,10 @@ void SCH_IO_EAGLE::addImplicitConnections( SCH_SYMBOL* aSymbol, SCH_SCREEN* aScr
                         netLabel->SetSpinStyle( SPIN_STYLE::RIGHT );
                         break;
                     case PIN_ORIENTATION::PIN_UP:
-                        netLabel->SetSpinStyle( SPIN_STYLE::UP );
+                        netLabel->SetSpinStyle( SPIN_STYLE::BOTTOM );
                         break;
                     case PIN_ORIENTATION::PIN_DOWN:
-                        netLabel->SetSpinStyle( SPIN_STYLE::BOTTOM );
+                        netLabel->SetSpinStyle( SPIN_STYLE::UP );
                         break;
                     }
 

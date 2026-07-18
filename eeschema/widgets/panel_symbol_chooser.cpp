@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "panel_symbol_chooser.h"
@@ -42,6 +38,7 @@
 #include <algorithm>
 #include <wx/button.h>
 #include <wx/clipbrd.h>
+#include <wx/display.h>
 #include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/splitter.h>
@@ -306,8 +303,8 @@ PANEL_SYMBOL_CHOOSER::~PANEL_SYMBOL_CHOOSER()
         // Save any changes to column widths, etc.
         m_adapter->SaveSettings();
 
-        cfg->m_SymChooserPanel.width = GetParent()->GetSize().x;
-        cfg->m_SymChooserPanel.height = GetParent()->GetSize().y;
+        cfg->m_SymChooserPanel.width = GetParent()->ToDIP( GetParent()->GetSize().x );
+        cfg->m_SymChooserPanel.height = GetParent()->ToDIP( GetParent()->GetSize().y );
 
         cfg->m_SymChooserPanel.sash_pos_h = m_hsplitter->GetSashPosition();
 
@@ -415,8 +412,19 @@ void PANEL_SYMBOL_CHOOSER::FinishSetup()
 
         EESCHEMA_SETTINGS::PANEL_SYM_CHOOSER& panelCfg = cfg->m_SymChooserPanel;
 
-        int w = panelCfg.width > 40 ? panelCfg.width : horizPixelsFromDU( 440 );
-        int h = panelCfg.height > 40 ? panelCfg.height : horizPixelsFromDU( 340 );
+        // The persisted size is stored in DIP so it is independent of the monitor it was saved
+        // on. Restoring raw pixels would scale the window by the DPI ratio when reopened on a
+        // different-scale display, producing a window that spills across monitors.
+        int w = panelCfg.width > 40 ? GetParent()->FromDIP( panelCfg.width ) : horizPixelsFromDU( 440 );
+        int h = panelCfg.height > 40 ? GetParent()->FromDIP( panelCfg.height ) : horizPixelsFromDU( 340 );
+
+        // Cap to the work area so a stale pre-DIP setting cannot reopen the window across monitors.
+        if( int display = wxDisplay::GetFromWindow( GetParent() ); display != wxNOT_FOUND )
+        {
+            wxRect workArea = wxDisplay( display ).GetClientArea();
+            w = std::min( w, workArea.GetWidth() );
+            h = std::min( h, workArea.GetHeight() );
+        }
 
         GetParent()->SetSize( wxSize( w, h ) );
         GetParent()->Layout();
@@ -610,6 +618,12 @@ void PANEL_SYMBOL_CHOOSER::populateFootprintSelector( LIB_ID const& aLibId )
     int        pinCount = symbol->GetGraphicalPins( 0 /* all units */, 1 /* single bodyStyle */ ).size();
         SCH_FIELD* fp_field = symbol->GetField( FIELD_T::FOOTPRINT );
         wxString   fp_name = fp_field ? fp_field->GetFullText() : wxString( "" );
+
+        // Explicitly associated footprints (issue #2282) are listed ahead of the glob matches in
+        // written order and bypass the pin-count filter; a mapped EP/NC footprint legally has more
+        // pads than the symbol has pins.
+        for( const ASSOCIATED_FOOTPRINT& assoc : symbol->GetEffectiveAssociatedFootprints() )
+            m_fp_sel_ctrl->AddAlwaysIncludedFootprint( assoc.m_FootprintLibId );
 
         m_fp_sel_ctrl->FilterByPinCount( pinCount );
         m_fp_sel_ctrl->FilterByFootprintFilters( symbol->GetFPFilters(), true );

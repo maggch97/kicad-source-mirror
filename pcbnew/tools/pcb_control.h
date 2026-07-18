@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_CONTROL_H
@@ -121,6 +117,9 @@ public:
 
     int RehatchShapes( const TOOL_EVENT& aEvent );
 
+    /// Regenerate and redraw an item's hatching, skipping non-hatched shapes. Static for testing.
+    static void rehatchBoardItem( KIGFX::VIEW* aView, BOARD_ITEM* aItem );
+
     // Drag and drop
     int DdAppendBoard( const TOOL_EVENT& aEvent );
     int DdAddLibrary( const TOOL_EVENT& aEvent );
@@ -159,8 +158,6 @@ private:
 
     bool placeBoardItems( BOARD_COMMIT* aCommit, BOARD* aBoard, bool aAnchorAtOrigin, bool aReannotateDuplicates,
                           bool aSkipMove );
-
-    void rehatchBoardItem( BOARD_ITEM* aItem );
 
 private:
     PCB_BASE_FRAME*                         m_frame;

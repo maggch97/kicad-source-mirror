@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -58,10 +54,8 @@ class COMMON_SETTINGS;
 class SETTINGS_MANAGER;
 class LIBRARY_MANAGER;
 
-#ifdef KICAD_IPC_API
 class API_PLUGIN_MANAGER;
 class KICAD_API_SERVER;
-#endif
 
 /**
  * A small class to handle the list of existing translations.
@@ -143,13 +137,11 @@ public:
         return *m_notifications_manager;
     }
 
-#ifdef KICAD_IPC_API
     virtual API_PLUGIN_MANAGER& GetPluginManager() const { return *m_plugin_manager; }
 
     KICAD_API_SERVER& GetApiServer() { return *m_api_server; }
 
     KICAD_API_SERVER* ApiServerOrNull() const { return m_api_server.get(); }
-#endif
 
     virtual void SetTextEditor( const wxString& aFileName );
 
@@ -303,6 +295,17 @@ public:
      */
     bool InitPgm( bool aHeadless = false, bool aIsUnitTest = false );
 
+    /**
+     * Map a program name (argv[0] basename, lowercased) to the freedesktop application id of
+     * its installed .desktop launcher, e.g. "eeschema" -> "org.kicad.eeschema".
+     *
+     * @return the reverse-DNS application id, or an empty string for programs without a desktop
+     *         launcher (pl_editor, kicad-cli) or on platforms that do not use desktop files.
+     */
+    static wxString DesktopAppIdForProgram( const wxString& aPgmName );
+
+    const wxString& GetDesktopAppId() const { return m_desktopAppId; }
+
     // The PGM_* classes can have difficulties at termination if they
     // are not destroyed soon enough.  Relying on a static destructor can be
     // too late for contained objects like wxSingleInstanceChecker.
@@ -416,12 +419,12 @@ protected:
     /// Check if there is another copy of Kicad running at the same time.
     std::unique_ptr<wxSingleInstanceChecker> m_pgm_checker;
 
-#ifdef KICAD_IPC_API
     std::unique_ptr<API_PLUGIN_MANAGER> m_plugin_manager;
     std::unique_ptr<KICAD_API_SERVER> m_api_server;
-#endif
 
     wxString        m_kicad_env;              ///< The KICAD system environment variable.
+
+    wxString        m_desktopAppId;           ///< freedesktop app id of this process, or empty.
 
     wxLocale*       m_locale;
     int             m_language_id;

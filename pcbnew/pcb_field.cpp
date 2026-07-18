@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <common.h>
@@ -272,6 +268,13 @@ double PCB_FIELD::ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const
 EDA_ITEM* PCB_FIELD::Clone() const
 {
     return new PCB_FIELD( *this );
+}
+
+
+void PCB_FIELD::CopyFrom( const BOARD_ITEM* aOther )
+{
+    wxCHECK( aOther && aOther->Type() == PCB_FIELD_T, /* void */ );
+    *this = *static_cast<const PCB_FIELD*>( aOther );
 }
 
 

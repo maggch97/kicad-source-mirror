@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -56,7 +52,8 @@ int BOARD_EDITOR_CONTROL::ExportGenCAD( const TOOL_EVENT& aEvent )
     bool storeOriginCoords = optionsDialog.GetOption( STORE_ORIGIN_COORDS );
 
     // No idea on *why* this should be needed... maybe to fix net names?
-    m_frame->Compile_Ratsnest( true );
+    m_frame->GetBoard()->CompileRatsnest();
+    m_frame->SetMsgPanel( m_frame->GetBoard() );
 
     GENCAD_EXPORTER exporter( m_frame->GetBoard() );
 

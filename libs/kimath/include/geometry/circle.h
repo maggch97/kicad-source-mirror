@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef __CIRCLE_H
@@ -87,6 +87,26 @@ public:
      * @return nearest point to aP.
      */
     VECTOR2D NearestPoint( const VECTOR2D& aP ) const;
+
+    /**
+     * Compute the point on the circumference of the circle that is the furthest from aP.
+     *
+     * Finds the intersection point of this circle and a line that passes through both this
+     * circle's center and aP, on the side of the center opposite aP.
+     *
+     * @param aP.
+     * @return furthest point from aP.
+     */
+    VECTOR2I FurthestPoint( const VECTOR2I& aP ) const;
+
+    /**
+     * Compute the point (floating point version) on the circumference of the circle that
+     * is the furthest from aP.
+     *
+     * @param aP.
+     * @return furthest point from aP.
+     */
+    VECTOR2D FurthestPoint( const VECTOR2D& aP ) const;
 
     /**
      * Compute the intersection points between this circle and \a aCircle.

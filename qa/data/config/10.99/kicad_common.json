@@ -31,6 +31,12 @@
     "update_check_prompt": false,
     "zone_fill_warning": false
   },
+  "embed_file_defaults": {
+    "datasheet": true,
+    "drawing_sheet": true,
+    "model_3d": false,
+    "sim_model": false
+  },
   "environment": {
     "vars": null
   },
@@ -95,7 +101,6 @@
     "file_history_size": 9,
     "language": "Default",
     "local_history_debounce": 5,
-    "local_history_enabled": true,
     "pdf_viewer_name": "",
     "text_editor": "",
     "use_system_pdf_viewer": true,

@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/log.h>
@@ -216,9 +216,16 @@ void SCH_EDIT_FRAME::MakeNetNavigatorNode( const wxString& aNetName, wxTreeItemI
     wxCHECK( connectionGraph, /* void */ );
 
     std::set<CONNECTION_SUBGRAPH*> subgraphs;
+    std::set<wxString> netNamesToSearch;
 
+    netNamesToSearch.insert( aNetName );
+
+    for( const wxString& equivalent : connectionGraph->GetEquivalentBusNames( aNetName ) )
+        netNamesToSearch.insert( equivalent );
+
+    for( const wxString& netName : netNamesToSearch )
     {
-        const std::vector<CONNECTION_SUBGRAPH*>& tmp = connectionGraph->GetAllSubgraphs( aNetName );
+        const std::vector<CONNECTION_SUBGRAPH*>& tmp = connectionGraph->GetAllSubgraphs( netName );
         subgraphs.insert( tmp.begin(), tmp.end() );
     }
 

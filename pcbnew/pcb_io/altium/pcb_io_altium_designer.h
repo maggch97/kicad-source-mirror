@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_IO_ALTIUM_DESIGNER_H_
@@ -35,6 +31,7 @@
 
 class ALTIUM_PCB_COMPOUND_FILE;
 class BOARD;
+class PROJECT;
 struct ALTIUM_PROJECT_VARIANT;
 
 /**
@@ -43,6 +40,17 @@ struct ALTIUM_PROJECT_VARIANT;
  */
 void ApplyAltiumProjectVariantsToBoard( BOARD* aBoard,
                                         const std::vector<ALTIUM_PROJECT_VARIANT>& aVariants );
+
+
+/**
+ * Register Altium project parameters as KiCad project text variables so that imported board
+ * text referencing special strings (e.g. ".PCB_Revision") resolves to its value.
+ *
+ * Existing project variables are not overwritten, and names that collide with KiCad's reserved
+ * or contextually resolved variables are skipped to preserve native resolution.
+ */
+void ApplyAltiumProjectParametersToProject( PROJECT* aProject,
+                                            const std::map<wxString, wxString>& aParameters );
 
 
 class PCB_IO_ALTIUM_DESIGNER : public PCB_IO, public LAYER_MAPPABLE_PLUGIN

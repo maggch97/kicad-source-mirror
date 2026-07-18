@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "pcb_io_sprint_layout.h"
@@ -28,6 +24,7 @@
 #include <footprint.h>
 #include <zone.h>
 #include <font/fontconfig.h>
+#include <gestfich.h>
 #include <reporter.h>
 
 #include <ranges>
@@ -56,7 +53,7 @@ void PCB_IO_SPRINT_LAYOUT::FootprintEnumerate( wxArrayString& aFootprintNames, c
     if( wxDir::Exists( aLibraryPath ) )
     {
         wxArrayString files;
-        wxDir::GetAllFiles( aLibraryPath, &files, wxEmptyString, wxDIR_FILES | wxDIR_DIRS );
+        CollectFilesLoopSafe( aLibraryPath, files, wxEmptyString, wxDIR_FILES | wxDIR_DIRS );
 
         for( const wxString& filePath : files )
         {

@@ -14,14 +14,12 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "eeschema_helpers.h"
+
+#include <algorithm>
 
 #include <connection_graph.h>
 #include <locale_io.h>
@@ -29,6 +27,7 @@
 #include <schematic.h>
 #include <sch_commit.h>
 #include <sch_edit_frame.h>
+#include <sch_file_versions.h>
 #include <sch_label.h>
 #include <sch_io/sch_io.h>
 #include <sch_io/sch_io_mgr.h>
@@ -112,7 +111,7 @@ SCHEMATIC* EESCHEMA_HELPERS::LoadSchematic( const wxString& aFileName,
 
     IO_RELEASER<SCH_IO> pi( SCH_IO_MGR::FindPlugin( aFormat ) );
 
-    SCHEMATIC* schematic = new SCHEMATIC( project );
+    std::unique_ptr<SCHEMATIC> schematic = std::make_unique<SCHEMATIC>( project );
     schematic->CreateDefaultScreens();
 
     wxFileName schFile = aFileName;
@@ -120,12 +119,21 @@ SCHEMATIC* EESCHEMA_HELPERS::LoadSchematic( const wxString& aFileName,
 
     try
     {
-        SCH_SHEET* rootSheet = pi->LoadSchematicFile( schFile.GetFullPath(), schematic );
+        SCH_SHEET* rootSheet = pi->LoadSchematicFile( schFile.GetFullPath(), schematic.get() );
 
         if( !rootSheet )
+        {
+            schematic->SetProject( nullptr );
             return nullptr;
+        }
 
-        schematic->SetTopLevelSheets( { rootSheet } );
+        std::vector<SCH_SHEET*> topLevelSheets = schematic->GetTopLevelSheets();
+        bool rootIsTopLevel = std::find( topLevelSheets.begin(), topLevelSheets.end(), rootSheet )
+                              != topLevelSheets.end();
+        bool rootIsVirtualRoot = rootSheet == &schematic->Root() || rootSheet->IsVirtualRootSheet();
+
+        if( !rootIsTopLevel && !rootIsVirtualRoot )
+            schematic->SetTopLevelSheets( { rootSheet } );
 
         // Make ${SHEETNAME} work on the root sheet until we properly support naming the root
         // sheet.  Prefer the display name from the matching schematic.top_level_sheets entry in
@@ -150,6 +158,7 @@ SCHEMATIC* EESCHEMA_HELPERS::LoadSchematic( const wxString& aFileName,
     }
     catch( ... )
     {
+        schematic->SetProject( nullptr );
         return nullptr;
     }
 
@@ -185,10 +194,25 @@ SCHEMATIC* EESCHEMA_HELPERS::LoadSchematic( const wxString& aFileName,
 
     sheetList.AnnotatePowerSymbols();
 
+    if( sheetList.AllSheetPageNumbersEmpty() )
+        sheetList.SetInitialPageNumbers();
+    else
+        sheetList.RepairPageNumbers();
+
+    // A schematic written by an older version can lose the junctions that Eeschema implies from
+    // merged colinear wires, which shows up as connectivity errors.  The GUI editor repairs this on
+    // load; the headless/CLI loader must do the same before connectivity is calculated.  It is
+    // limited to pre-current files (the current version writes those junctions on save, so running
+    // it on a current file could silently connect an intentional crossing) and to callers that
+    // actually want connectivity.
+    if( aCalculateConnectivity
+        && schematic->RootScreen()->GetFileFormatVersionAtLoad() < SEXPR_SCHEMATIC_FILE_VERSION )
+        schematic->FixupJunctionsAfterImport();
+
     schematic->ConnectionGraph()->Reset();
 
     TOOL_MANAGER* toolManager = new TOOL_MANAGER;
-    toolManager->SetEnvironment( schematic, nullptr, nullptr, Kiface().KifaceSettings(), nullptr );
+    toolManager->SetEnvironment( schematic.get(), nullptr, nullptr, Kiface().KifaceSettings(), nullptr );
 
     if( aCalculateConnectivity )
     {
@@ -210,5 +234,5 @@ SCHEMATIC* EESCHEMA_HELPERS::LoadSchematic( const wxString& aFileName,
     if( aCalculateConnectivity )
         schematic->ConnectionGraph()->Recalculate( sheetList, true );
 
-    return schematic;
+    return schematic.release();
 }

@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <settings/bom_settings.h>
@@ -133,6 +133,8 @@ BOM_PRESET BOM_PRESET::DefaultEditing()
         { "${DNP}", "DNP", true, true },
         { "${EXCLUDE_FROM_BOM}", "Exclude from BOM", true, true },
         { "${EXCLUDE_FROM_BOARD}", "Exclude from Board", true, true },
+        { "${EXCLUDE_FROM_SIM}", "Exclude from Simulation", true, true },
+        { "${EXCLUDE_FROM_POS_FILES}", "Exclude from Position Files", true, true },
         { "Footprint", "Footprint", true, true },
         { "Datasheet", "Datasheet", true, false },
     };
@@ -195,6 +197,7 @@ BOM_PRESET BOM_PRESET::Attributes()
         { "${EXCLUDE_FROM_BOM}", "Exclude from BOM", true, false },
         { "${EXCLUDE_FROM_BOARD}", "Exclude from Board", true, false },
         { "${EXCLUDE_FROM_SIM}", "Exclude from Simulation", true, false },
+        { "${EXCLUDE_FROM_POS_FILES}", "Exclude from Position Files", true, false },
     };
 
     return p;

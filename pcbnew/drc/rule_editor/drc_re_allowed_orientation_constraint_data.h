@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DRC_RE_ALLOWED_ORIENTATION_CONSTRAINT_DATA_H_
@@ -58,14 +54,14 @@ public:
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
         // Positions measured from constraint_allowed_orientation.png (~280x180)
-        // Format: { xStart, xEnd, yTop, tabOrder }
+        // Format: { xStart, xEnd, yCenter, tabOrder }
         // Checkboxes stacked vertically on the right side
         return {
-            { 400 + DRC_RE_OVERLAY_XO, 414 + DRC_RE_OVERLAY_XO, 40 + DRC_RE_OVERLAY_YO, 1, _( "Allow 0°" ), LABEL_POSITION::RIGHT },      // 0 degrees checkbox
-            { 400 + DRC_RE_OVERLAY_XO, 414 + DRC_RE_OVERLAY_XO, 80 + DRC_RE_OVERLAY_YO, 2, _( "Allow 90°" ), LABEL_POSITION::RIGHT },     // 90 degrees checkbox
-            { 400 + DRC_RE_OVERLAY_XO, 414 + DRC_RE_OVERLAY_XO, 120 + DRC_RE_OVERLAY_YO, 3, _( "Allow 180°" ), LABEL_POSITION::RIGHT },   // 180 degrees checkbox
-            { 400 + DRC_RE_OVERLAY_XO, 414 + DRC_RE_OVERLAY_XO, 160 + DRC_RE_OVERLAY_YO, 4, _( "Allow 270°" ), LABEL_POSITION::RIGHT },   // 270 degrees checkbox
-            { 400 + DRC_RE_OVERLAY_XO, 414 + DRC_RE_OVERLAY_XO, 200 + DRC_RE_OVERLAY_YO, 5, _( "Allow All" ), LABEL_POSITION::RIGHT },    // all degrees checkbox
+            { 400, 615, 52, 1, _( "Allow 0°" ), LABEL_POSITION::RIGHT },    // 0 degrees checkbox
+            { 400, 615, 92, 2, _( "Allow 90°" ), LABEL_POSITION::RIGHT },   // 90 degrees checkbox
+            { 400, 615, 132, 3, _( "Allow 180°" ), LABEL_POSITION::RIGHT }, // 180 degrees checkbox
+            { 400, 615, 172, 4, _( "Allow 270°" ), LABEL_POSITION::RIGHT }, // 270 degrees checkbox
+            { 400, 615, 212, 5, _( "Allow All" ), LABEL_POSITION::RIGHT },  // all degrees checkbox
         };
     }
 

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -34,6 +30,7 @@
 #include <lset.h>
 #include <stroke_params.h>
 #include <geometry/eda_angle.h>
+#include "macros.h"
 
 class BOARD;
 class BOARD_DESIGN_SETTINGS;
@@ -111,6 +108,8 @@ public:
         m_isLocked = aOther.m_isLocked;
         return *this;
     }
+
+    ~BOARD_ITEM() override;
 
     virtual void CopyFrom( const BOARD_ITEM* aOther );
 
@@ -301,7 +300,7 @@ public:
             return;
         }
 
-        wxFAIL_MSG( wxT( "Attempted to SetLayerSet() on a single-layer object." ) );
+        UNIMPLEMENTED_FOR( GetClass() );
 
         // Derived classes which support multiple layers must implement this
     }
@@ -358,6 +357,8 @@ public:
     bool IsLocked() const override;
     void SetLocked( bool aLocked ) override { m_isLocked = aLocked; }
 
+    bool IsIndexedInBoard() const { return m_indexedInBoard; }
+
     int GetMaxError() const;
 
     virtual void StyleFromSettings( const BOARD_DESIGN_SETTINGS& settings, bool aCheckSide ) { }
@@ -383,6 +384,27 @@ public:
      * @param aRotCentre the rotation center point.
      */
     virtual void Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle );
+
+    /**
+     * Apply a parent footprint scale to this item. Default is a no-op. Items
+     * with sizable geometry (PAD, PCB_SHAPE, PCB_TEXT, ZONE) override.
+     *
+     * @param aRatioX        new Sx / old Sx (multiply X-axis-aligned values by this).
+     * @param aRatioY        same for Y.
+     * @param aLinearFactor  weighted factor for stroke / thickness.
+     * @param aAnchor        scale anchor (the parent footprint's translate).
+     * @param aParentRotate  current parent rotation. Needed by POLY / BEZIER
+     *                       to unrotate before scaling and rotate back.
+     */
+    virtual void OnFootprintRescaled( double aRatioX, double aRatioY, double aLinearFactor, const VECTOR2I& aAnchor,
+                                      const EDA_ANGLE& aParentRotate )
+    {}
+
+    /**
+     * Hook for items inside a footprint to refresh after the FP transform
+     * changes (translate, rotate, flip). Scaling uses OnFootprintRescaled.
+     */
+    virtual void OnFootprintTransformed() {}
 
     /**
      * Flip this object, i.e. change the board side for this object.
@@ -490,6 +512,10 @@ protected:
     PCB_LAYER_ID    m_layer;
     bool            m_isKnockout;
     bool            m_isLocked;
+
+    // Mirrors BOARD identity-cache membership so ~BOARD_ITEM can evict without walking a parent
+    // chain that may already be freed.  Maintained by BOARD; clones start detached.
+    mutable bool    m_indexedInBoard = false;
 
     friend class BOARD;
 };

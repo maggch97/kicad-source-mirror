@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PATHS_H
@@ -241,6 +241,17 @@ public:
     static wxString CalculateUserSettingsPath( bool aIncludeVer = true, bool aUseEnv = true );
 
     static const wxString& GetExecutablePath();
+
+    /**
+     * Resolve a sibling executable alongside the running process. Returns the
+     * absolute path (with .exe extension on Windows) when the file exists,
+     * otherwise an empty string. Used by sub-binary launchers (kicad,
+     * kicad-cli, kicad-cli-helper) that need to find each other without
+     * relying on PATH, which differs across installers, portable builds, and
+     * per-user PATH overrides.
+     */
+    static wxString ResolveSiblingExecutable( const wxString& aBaseName );
+
 private:
     // we are a static helper
     PATHS() {}

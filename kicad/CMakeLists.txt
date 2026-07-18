@@ -19,6 +19,8 @@ include_directories(
 set( KICAD_SRCS
     dialogs/dialog_destination.cpp
     dialogs/dialog_destination_base.cpp
+    dialogs/dialog_archive_job_settings.cpp
+    dialogs/dialog_archive_job_settings_base.cpp
     dialogs/dialog_copyfiles_job_settings.cpp
     dialogs/dialog_copyfiles_job_settings_base.cpp
     dialogs/dialog_executecommand_job_settings.cpp
@@ -39,6 +41,7 @@ set( KICAD_SRCS
     kicad_manager_frame.cpp
     local_history_pane.cpp
     menubar.cpp
+    mergetool_frame.cpp
     project_template.cpp
     project_tree_pane.cpp
     project_tree.cpp
@@ -52,9 +55,16 @@ set( KICAD_SRCS
 
 set( KICAD_CLI_SRCS
     cli/command.cpp
+    cli/command_api_server.cpp
     cli/command_jobset_run.cpp
     cli/command_pcb_export_base.cpp
+    cli/command_pcb_diff.cpp
     cli/command_pcb_drc.cpp
+    cli/command_mergetool.cpp
+    cli/command_git_mergedriver.cpp
+    cli/command_fp_diff.cpp
+    cli/command_sym_diff.cpp
+    cli/command_sch_diff.cpp
     cli/command_pcb_render.cpp
     cli/command_pcb_export_3d.cpp
     cli/command_pcb_export_drill.cpp
@@ -74,6 +84,8 @@ set( KICAD_CLI_SRCS
     cli/command_pcb_export_svg.cpp
     cli/command_pcb_upgrade.cpp
     cli/command_pcb_import.cpp
+    cli/command_sch_import.cpp
+    cli/command_import.cpp
     cli/command_fp_export_svg.cpp
     cli/command_fp_upgrade.cpp
     cli/command_sch_upgrade.cpp
@@ -91,13 +103,6 @@ set( KICAD_CLI_SRCS
 
     jobs_runner.cpp
     )
-
-if( KICAD_IPC_API )
-    set( KICAD_CLI_SRCS
-        ${KICAD_CLI_SRCS}
-        cli/command_api_server.cpp
-    )
-endif()
 
 if( WIN32 )
     if( MINGW )

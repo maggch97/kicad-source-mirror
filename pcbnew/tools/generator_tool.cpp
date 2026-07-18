@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "generator_tool.h"
@@ -39,7 +35,8 @@ GENERATOR_TOOL::GENERATOR_TOOL() :
         GENERATOR_TOOL_PNS_PROXY( "pcbnew.Generators" ),
         m_mgrDialog( nullptr )
 {
-    PROPERTY_MANAGER::Instance().RegisterListener( TYPE_HASH( BOARD_ITEM ),
+    m_boardItemListener = PROPERTY_MANAGER::Instance().RegisterListener(
+            TYPE_HASH( BOARD_ITEM ),
             [&]( INSPECTABLE* aItem, PROPERTY_BASE* aProperty, COMMIT* aCommit )
             {
                 // Special case: propagate lock from generated items to parent generator
@@ -61,7 +58,8 @@ GENERATOR_TOOL::GENERATOR_TOOL() :
                 }
             } );
 
-    PROPERTY_MANAGER::Instance().RegisterListener( TYPE_HASH( PCB_GENERATOR ),
+    m_generatorListener = PROPERTY_MANAGER::Instance().RegisterListener(
+            TYPE_HASH( PCB_GENERATOR ),
             [&]( INSPECTABLE* aItem, PROPERTY_BASE* aProperty, COMMIT* aCommit )
             {
                 // Special case: regenerate generators when their properties change
@@ -80,6 +78,11 @@ GENERATOR_TOOL::GENERATOR_TOOL() :
 
 GENERATOR_TOOL::~GENERATOR_TOOL()
 {
+    // Unregister before the rest of the object tears down so a property
+    // change firing mid-destruction cannot dispatch into a half-destroyed
+    // listener body.
+    m_generatorListener.reset();
+    m_boardItemListener.reset();
 }
 
 

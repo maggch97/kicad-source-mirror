@@ -14,25 +14,20 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef KICAD_BOARD_CONTEXT_H
 #define KICAD_BOARD_CONTEXT_H
 
-#include <memory>
-
-#include <wx/string.h>
-
 class BOARD;
 class KIWAY;
-class PCB_EDIT_FRAME;
 class PROJECT;
 class TOOL_MANAGER;
 
 
-/// An interface for the frame surface that the API handlers need; to enable headless mode
+/// Base interface for board-level API contexts; shared by PCB editor and footprint editor
 class BOARD_CONTEXT
 {
 public:
@@ -46,16 +41,7 @@ public:
 
     virtual KIWAY* GetKiway() const = 0;
 
-    virtual wxString GetCurrentFileName() const = 0;
-
     virtual bool CanAcceptApiCommands() const = 0;
-
-    virtual bool SaveBoard() = 0;
-
-    virtual bool SavePcbCopy( const wxString& aFileName, bool aCreateProject, bool aHeadless ) = 0;
 };
 
-
-std::shared_ptr<BOARD_CONTEXT> CreatePcbFrameContext( PCB_EDIT_FRAME* aFrame );
-
-#endif
+#endif // KICAD_BOARD_CONTEXT_H

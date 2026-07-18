@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -167,6 +163,11 @@ public:
      */
     void SetGroup( ACTION_GROUP* aGroup ) { m_group = aGroup; }
     ACTION_GROUP* GetGroup() { return m_group; }
+
+#ifdef __WXMSW__
+    bool MSWHandleMessage( WXLRESULT* aResult, WXUINT aMessage, WXWPARAM aWParam,
+                           WXLPARAM aLParam ) override;
+#endif
 
 protected:
     void onCharHook( wxKeyEvent& aEvent );
@@ -390,6 +391,13 @@ protected:
 
     ///< Handle a right-click on a menu item
     void onRightClick( wxAuiToolBarEvent& aEvent );
+
+    ///< Handle a right mouse button release; resolves the tool ourselves to work around a
+    ///< wxAuiToolBar hit-testing bug that dead-zones part of every button on vertical toolbars.
+    void onRightUp( wxMouseEvent& aEvent );
+
+    ///< Show the context menu registered for the given tool ID (handles group remapping).
+    void showContextMenu( int aToolId );
 
     ///< Handle the button select inside the palette
     void onPaletteEvent( wxCommandEvent& aEvent );

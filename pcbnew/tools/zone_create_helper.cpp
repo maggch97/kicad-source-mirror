@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <core/spinlock.h>
@@ -98,6 +94,9 @@ std::unique_ptr<ZONE> ZONE_CREATE_HELPER::createNewZone( bool aKeepout )
     zoneInfo.m_LayerProperties.clear();                 // Do not copy over layer properties
     zoneInfo.m_Netcode = highlightedNets.empty() ? -1 : *highlightedNets.begin();
     zoneInfo.SetIsRuleArea( m_params.m_keepout );
+
+    // A new zone starts unnamed, do not inherit the last drawn zone's name (issue 23131)
+    zoneInfo.m_Name = wxEmptyString;
 
     if( m_params.m_thieving )
     {
@@ -179,7 +178,16 @@ void ZONE_CREATE_HELPER::performZoneCutout( ZONE& aZone, const ZONE& aCutout )
     toolMgr->RunAction( ACTIONS::selectionClear );
 
     SHAPE_POLY_SET originalOutline( *aZone.Outline() );
-    originalOutline.BooleanSubtract( *aCutout.Outline() );
+    SHAPE_POLY_SET cutoutOutline( *aCutout.Outline() );
+
+    // Clipper2 cannot carry arcs through boolean operations when either operand has holes or
+    // the clip side has outlines, so strip arc metadata first. Without this, zones built from
+    // circles (or any arc-bearing outline) get corrupt arc endpoints written to disk and
+    // render as garbage after reload. See SHAPE_POLY_SET::booleanOp.
+    originalOutline.ClearArcs();
+    cutoutOutline.ClearArcs();
+
+    originalOutline.BooleanSubtract( cutoutOutline );
 
     // After substracting the hole, originalOutline can have more than one main outline.
     // But a zone can have only one main outline, so create as many zones as originalOutline

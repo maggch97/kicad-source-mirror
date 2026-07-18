@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /*
@@ -33,6 +33,13 @@ import "common/types/enums.proto";
 message RefreshEditor
 {
   kiapi.common.types.FrameType frame = 1;
+}
+
+// Opens a specific item from a library by identifier
+message OpenLibraryItem
+{
+  kiapi.common.types.DocumentType type = 1;
+  kiapi.common.types.LibraryIdentifier identifier = 2;
 }
 
 // Retrieves a list of open documents of the given type

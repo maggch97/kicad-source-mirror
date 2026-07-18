@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef __PNS_ITEMSET_H
@@ -48,6 +48,14 @@ public:
     ITEM_SET( const ITEM_SET& aOther )
     {
         m_items = aOther.m_items;
+    }
+
+    ITEM_SET( ITEM_SET&& aOther ) noexcept { m_items = std::move( aOther.m_items ); }
+
+    ITEM_SET& operator=( ITEM_SET&& aOther ) noexcept
+    {
+        m_items = std::move( aOther.m_items );
+        return *this;
     }
 
     ~ITEM_SET();
@@ -117,15 +125,17 @@ public:
     void Add( const LINE& aLine );
     void Prepend( const LINE& aLine );
 
-    ITEM* operator[]( size_t aIndex ) const
-    {
-        return m_items[aIndex];
-    }
+    ITEM* operator[]( const size_t aIndex ) const { return m_items[aIndex]; }
 
     std::vector<ITEM*>::iterator begin()              { return m_items.begin(); }
     std::vector<ITEM*>::iterator end()                { return m_items.end(); }
     std::vector<ITEM*>::const_iterator cbegin() const { return m_items.cbegin(); }
     std::vector<ITEM*>::const_iterator cend() const   { return m_items.cend(); }
+
+    std::vector<ITEM*>::reverse_iterator       rbegin() { return m_items.rbegin(); }
+    std::vector<ITEM*>::reverse_iterator       rend() { return m_items.rend(); }
+    std::vector<ITEM*>::const_reverse_iterator crbegin() const { return m_items.crbegin(); }
+    std::vector<ITEM*>::const_reverse_iterator crend() const { return m_items.crend(); }
 
     void Add( ITEM* aItem, bool aBecomeOwner = false )
     {

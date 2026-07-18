@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pgm_base.h>
@@ -53,6 +49,7 @@ void PANEL_EESCHEMA_DISPLAY_OPTIONS::loadEEschemaSettings( EESCHEMA_SETTINGS* cf
         m_defaultFontCtrl->SetSelection( 0 );
 
     m_checkShowHiddenPins->SetValue( cfg->m_Appearance.show_hidden_pins );
+    m_checkShowRemappedPinNumbers->SetValue( cfg->m_Appearance.show_remapped_pin_numbers );
     m_checkShowHiddenFields->SetValue( cfg->m_Appearance.show_hidden_fields );
     m_checkShowERCErrors->SetValue( cfg->m_Appearance.show_erc_errors );
     m_checkShowERCWarnings->SetValue( cfg->m_Appearance.show_erc_warnings );
@@ -97,6 +94,7 @@ bool PANEL_EESCHEMA_DISPLAY_OPTIONS::TransferDataFromWindow()
                                          ? wxString( KICAD_FONT_NAME )
                                          : m_defaultFontCtrl->GetStringSelection();
         cfg->m_Appearance.show_hidden_pins = m_checkShowHiddenPins->GetValue();
+        cfg->m_Appearance.show_remapped_pin_numbers = m_checkShowRemappedPinNumbers->GetValue();
         cfg->m_Appearance.show_hidden_fields = m_checkShowHiddenFields->GetValue();
         cfg->m_Appearance.show_erc_warnings = m_checkShowERCWarnings->GetValue();
         cfg->m_Appearance.show_erc_errors = m_checkShowERCErrors->GetValue();

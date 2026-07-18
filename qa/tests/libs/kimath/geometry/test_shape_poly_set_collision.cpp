@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <tuple>
@@ -254,6 +250,43 @@ BOOST_AUTO_TEST_CASE( CollideSegments )
 
         if( expectedResult )
             BOOST_REQUIRE_EQUAL( location, expectedLocation );
+    }
+}
+
+// regression for keepout collision location reported at the origin
+BOOST_AUTO_TEST_CASE( CollideSegmentLocationNearMiss )
+{
+    SHAPE_POLY_SET   square;
+    SHAPE_LINE_CHAIN outline;
+    outline.Append( 1000, 1000 );
+    outline.Append( 2000, 1000 );
+    outline.Append( 2000, 2000 );
+    outline.Append( 1000, 2000 );
+    outline.SetClosed( true );
+    square.AddOutline( outline );
+
+    const int clearance = 100;
+
+    // first segment sits outside the first iterated edge
+    std::vector<SEG> nearMisses = {
+        SEG( VECTOR2I( 1400, 950 ), VECTOR2I( 1600, 950 ) ),
+        SEG( VECTOR2I( 1400, 2050 ), VECTOR2I( 1600, 2050 ) ),
+        SEG( VECTOR2I( 950, 1400 ), VECTOR2I( 950, 1600 ) ),
+        SEG( VECTOR2I( 2050, 1400 ), VECTOR2I( 2050, 1600 ) ),
+    };
+
+    for( const SEG& seg : nearMisses )
+    {
+        BOOST_TEST_CONTEXT( "seg " << seg.A << " -> " << seg.B )
+        {
+            int      actual = -1;
+            VECTOR2I location( -1, -1 );
+
+            BOOST_CHECK( square.Collide( seg, clearance, &actual, &location ) );
+            BOOST_CHECK( location != VECTOR2I( 0, 0 ) );
+            BOOST_CHECK( square.PointOnEdge( location ) );
+            BOOST_CHECK_EQUAL( actual, 50 );
+        }
     }
 }
 

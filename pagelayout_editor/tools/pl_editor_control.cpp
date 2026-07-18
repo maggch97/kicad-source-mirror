@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <kiway.h>
@@ -178,6 +174,14 @@ int PL_EDITOR_CONTROL::UpdateMessagePanel( const TOOL_EVENT& aEvent )
 }
 
 
+int PL_EDITOR_CONTROL::GridResetOrigin( const TOOL_EVENT& aEvent )
+{
+    m_frame->SetGridOrigin( VECTOR2I( 0, 0 ) );
+    m_frame->GetCanvas()->ForceRefresh();
+    return 0;
+}
+
+
 void PL_EDITOR_CONTROL::setTransitions()
 {
     Go( &PL_EDITOR_CONTROL::New,                   ACTIONS::doNew.MakeEvent() );
@@ -191,6 +195,8 @@ void PL_EDITOR_CONTROL::setTransitions()
     Go( &PL_EDITOR_CONTROL::ShowInspector,         PL_ACTIONS::showInspector.MakeEvent() );
     Go( &PL_EDITOR_CONTROL::TitleBlockDisplayMode, PL_ACTIONS::layoutEditMode.MakeEvent() );
     Go( &PL_EDITOR_CONTROL::TitleBlockDisplayMode, PL_ACTIONS::layoutNormalMode.MakeEvent() );
+
+    Go( &PL_EDITOR_CONTROL::GridResetOrigin,       ACTIONS::gridResetOrigin.MakeEvent() );
 
     Go( &PL_EDITOR_CONTROL::UpdateMessagePanel,    EVENTS::SelectedEvent );
     Go( &PL_EDITOR_CONTROL::UpdateMessagePanel,    EVENTS::UnselectedEvent );

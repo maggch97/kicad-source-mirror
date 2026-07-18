@@ -15,18 +15,16 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <unordered_set>
 
@@ -35,6 +33,7 @@
 
 #include <board.h>
 #include <geometry/shape_line_chain.h>
+#include <geometry/transform_trs.h>
 #include <reporter.h>
 #include <progress_reporter.h>
 #include <pcb_io/common/plugin_common_layer_mapping.h>
@@ -181,24 +180,27 @@ private:
      */
     std::unique_ptr<ZONE> buildZone( const BLOCK_BASE&                     aBoundaryBlock,
                                      const std::vector<const BLOCK_BASE*>& aRelatedBlocks,
-                                     ZONE_FILL_HANDLER&                    aZoneFillHandler );
+                                     ZONE_FILL_HANDLER& aZoneFillHandler, BOARD_ITEM_CONTAINER& aParent );
 
-    SHAPE_LINE_CHAIN buildOutline( const BLK_0x0E_RECT& aRect ) const;
-    SHAPE_LINE_CHAIN buildOutline( const BLK_0x24_RECT& aRect ) const;
-    SHAPE_LINE_CHAIN buildOutline( const BLK_0x28_SHAPE& aShape ) const;
+    SHAPE_LINE_CHAIN buildOutline( const BLK_0x0E_RECT& aRect, const TRANSFORM_TRS& aXform = TRANSFORM_TRS() ) const;
+    SHAPE_LINE_CHAIN buildOutline( const BLK_0x24_RECT& aRect, const TRANSFORM_TRS& aXform = TRANSFORM_TRS() ) const;
+    SHAPE_LINE_CHAIN buildOutline( const BLK_0x28_SHAPE& aShape, const TRANSFORM_TRS& aXform = TRANSFORM_TRS() ) const;
 
-    SHAPE_POLY_SET shapeToPolySet( const BLK_0x28_SHAPE& aShape ) const;
+    SHAPE_POLY_SET shapeToPolySet( const BLK_0x28_SHAPE& aShape, const TRANSFORM_TRS& aXform = TRANSFORM_TRS() ) const;
 
     /**
      * Try to build a zone shape for the given block, with holes.
      */
-    SHAPE_POLY_SET tryBuildZoneShape( const BLOCK_BASE& aBlock );
+    SHAPE_POLY_SET tryBuildZoneShape( const BLOCK_BASE& aBlock,
+                                      const TRANSFORM_TRS& aXform = TRANSFORM_TRS() ) const;
 
     /**
      * Walk a geometry chain (0x01 arcs and 0x15-17 segments) starting from the given key,
      * following m_Next links. Used for building hole outlines from 0x34 KEEPOUT blocks.
+     * Identity transforms are cached by start key; non-identity transforms are built fresh.
      */
-    const SHAPE_LINE_CHAIN& buildSegmentChain( uint32_t aStartKey ) const;
+    SHAPE_LINE_CHAIN buildSegmentChain( uint32_t aStartKey,
+                                        const TRANSFORM_TRS& aXform = TRANSFORM_TRS() ) const;
 
     /**
      * Get blocks that are related to the BOUNDARY shape, i.e. NET and SHAPE (fill) info.

@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef OUTLINE_DECOMPOSER_H
@@ -63,6 +59,10 @@ struct GLYPH_DATA
     // Cache of the triangulation data.  We'll use this as a hint for triangulating the actual
     // OUTLINE_GLYPHs.
     std::vector<std::unique_ptr<SHAPE_POLY_SET::TRIANGULATED_POLYGON>> m_TriangulationData;
+
+    // Glyphs with no outline (e.g. a space) legitimately decompose to zero contours, so cache
+    // occupancy can't key off m_Contours alone.
+    bool m_Loaded = false;
 };
 
 

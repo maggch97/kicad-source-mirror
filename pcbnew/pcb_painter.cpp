@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <advanced_config.h>
@@ -990,7 +986,46 @@ void PCB_PAINTER::draw( const PCB_ARC* aArc, int aLayer )
 
     if( IsNetnameLayer( aLayer ) )
     {
-        // Ummm, yeah.  Anyone fancy implementing text on a path?
+        if( !pcbconfig() || pcbconfig()->m_Display.m_NetNames < 2 )
+            return;
+
+        if( aArc->GetNetCode() <= NETINFO_LIST::UNCONNECTED )
+            return;
+
+        wxString netname = aArc->GetDisplayNetname();
+
+        if( netname.IsEmpty() )
+            return;
+
+        // Arc length must accommodate the label width.
+        double arcLen = std::abs( radius * angle.AsRadians() );
+
+        if( arcLen < (double) width * (double) netname.size() )
+            return;
+
+        // Tangent at the arc midpoint is perpendicular to the radius there.
+        VECTOR2I  midPt = aArc->GetMid();
+        VECTOR2D  radial = midPt - aArc->GetCenter();
+        EDA_ANGLE textOrientation( VECTOR2D( -radial.y, radial.x ) );
+        textOrientation = -textOrientation;
+        textOrientation.Normalize90();
+
+        double textSize = width;
+        double penWidth = textSize / 12.0;
+
+        m_gal->SetIsStroke( true );
+        m_gal->SetIsFill( false );
+        m_gal->SetStrokeColor( color );
+        m_gal->SetLineWidth( penWidth );
+        m_gal->SetFontBold( false );
+        m_gal->SetFontItalic( false );
+        m_gal->SetFontUnderlined( false );
+        m_gal->SetTextMirrored( false );
+        m_gal->SetGlyphSize( VECTOR2D( textSize * 0.55, textSize * 0.55 ) );
+        m_gal->SetHorizontalJustify( GR_TEXT_H_ALIGN_CENTER );
+        m_gal->SetVerticalJustify( GR_TEXT_V_ALIGN_CENTER );
+
+        m_gal->BitmapText( netname, midPt, textOrientation );
         return;
     }
     else if( IsCopperLayer( aLayer ) || IsSolderMaskLayer( aLayer ) || aLayer == LAYER_LOCKED_ITEM_SHADOW )
@@ -1089,8 +1124,7 @@ void PCB_PAINTER::draw( const PCB_VIA* aVia, int aLayer )
     COLOR4D      color = m_pcbSettings.GetColor( aVia, aLayer );
     VECTOR2D     center( aVia->GetStart() );
 
-    if( color == COLOR4D::CLEAR )
-        return;
+    // draw hidden vias transparent not skipped so a recolour restores them without re-tessellating
 
     // Chain highlight colour override for copper/hole layers.
     if( board && !m_pcbSettings.m_highlightedNetChain.IsEmpty()
@@ -2660,6 +2694,9 @@ void PCB_PAINTER::draw( const PCB_TEXT* aText, int aLayer )
 
     const KIFONT::METRICS& metrics = aText->GetFontMetrics();
     TEXT_ATTRIBUTES        attrs = aText->GetAttributes();
+    // Raw attrs are lib frame for FP children, pull scaled values for render.
+    attrs.m_Size = aText->GetTextSize();
+    attrs.m_StrokeWidth = aText->GetTextThickness();
     const COLOR4D&         color = m_pcbSettings.GetColor( aText, aLayer );
     bool                   outline_mode = !viewer_settings()->m_ViewersDisplay.m_DisplayTextFill;
 
@@ -2849,6 +2886,8 @@ void PCB_PAINTER::draw( const PCB_TEXTBOX* aTextBox, int aLayer )
 
         const KIFONT::METRICS& metrics = aTextBox->GetFontMetrics();
         TEXT_ATTRIBUTES        attrs = aTextBox->GetAttributes();
+        // Raw attrs are lib frame for FP children, pull scaled size for render.
+        attrs.m_Size = aTextBox->GetTextSize();
         attrs.m_StrokeWidth = getLineThickness( aTextBox->GetEffectiveTextPenWidth() );
 
         if( m_gal->IsFlippedX() && !aTextBox->IsSideSpecific() )
@@ -3074,6 +3113,15 @@ void PCB_PAINTER::draw( const PCB_GROUP* aGroup, int aLayer )
 }
 
 
+bool KIGFX::ZoneOutlineDrawnOnLayer( bool aOutlineOnly, int aLayer )
+{
+    if( aOutlineOnly )
+        return IsZoneFillLayer( aLayer );
+
+    return !IsZoneFillLayer( aLayer );
+}
+
+
 void PCB_PAINTER::draw( const ZONE* aZone, int aLayer )
 {
     if( aLayer == LAYER_CONFLICTS_SHADOW )
@@ -3086,7 +3134,7 @@ void PCB_PAINTER::draw( const ZONE* aZone, int aLayer )
             m_gal->SetIsStroke( false );
             m_gal->SetFillColor( color );
 
-            m_gal->DrawPolygon( aZone->Outline()->Outline( 0 ) );
+            m_gal->DrawPolygon( aZone->GetBoardOutline().Outline( 0 ) );
         }
 
         return;
@@ -3115,10 +3163,15 @@ void PCB_PAINTER::draw( const ZONE* aZone, int aLayer )
     if( aZone->IsTeardropArea() )
         displayMode = ZONE_DISPLAY_MODE::SHOW_FILLED;
 
+    // A zone whose only visual is its outline (rule area, or outline-only display) draws it on
+    // the zone layer, above copper, so tracks and pads can't paint over it.
+    bool outlineOnly = aZone->GetIsRuleArea() || displayMode == ZONE_DISPLAY_MODE::SHOW_ZONE_OUTLINE;
+
     // Draw the outline
-    if( !IsZoneFillLayer( aLayer ) )
+    if( ZoneOutlineDrawnOnLayer( outlineOnly, aLayer ) )
     {
-        const SHAPE_POLY_SET* outline = aZone->Outline();
+        const SHAPE_POLY_SET  boardOutline = aZone->GetBoardOutline();
+        const SHAPE_POLY_SET* outline = &boardOutline;
         bool allowDrawOutline = aZone->GetHatchStyle() != ZONE_BORDER_DISPLAY_STYLE::INVISIBLE_BORDER;
 
         if( allowDrawOutline && !m_pcbSettings.m_isPrinting && outline && outline->OutlineCount() > 0 )
@@ -3216,6 +3269,43 @@ void PCB_PAINTER::draw( const PCB_BARCODE* aBarcode, int aLayer )
 void PCB_PAINTER::draw( const PCB_DIMENSION_BASE* aDimension, int aLayer )
 {
     const COLOR4D& color = m_pcbSettings.GetColor( aDimension, aLayer );
+
+    if( aLayer == LAYER_LOCKED_ITEM_SHADOW )
+    {
+        m_gal->SetIsFill( true );
+        m_gal->SetIsStroke( true );
+        m_gal->SetFillColor( color );
+        m_gal->SetStrokeColor( color );
+        m_gal->SetLineWidth( m_lockedShadowMargin );
+
+        for( const std::shared_ptr<SHAPE>& shape : aDimension->GetShapes() )
+        {
+            switch( shape->Type() )
+            {
+            case SH_SEGMENT:
+            {
+                const SEG& seg = static_cast<const SHAPE_SEGMENT*>( shape.get() )->GetSeg();
+                m_gal->DrawSegment( seg.A, seg.B, m_lockedShadowMargin );
+                break;
+            }
+
+            case SH_CIRCLE:
+            {
+                int radius = static_cast<const SHAPE_CIRCLE*>( shape.get() )->GetRadius();
+                m_gal->DrawCircle( shape->Centre(), radius );
+                break;
+            }
+
+            default: break;
+            }
+        }
+
+        SHAPE_POLY_SET poly;
+        aDimension->PCB_TEXT::TransformShapeToPolygon( poly, aDimension->GetLayer(), 0, m_maxError, ERROR_OUTSIDE );
+        m_gal->DrawPolygon( poly );
+
+        return;
+    }
 
     m_gal->SetStrokeColor( color );
     m_gal->SetFillColor( color );

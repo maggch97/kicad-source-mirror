@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/dir.h>
@@ -37,6 +33,7 @@
 #include <fmt/core.h>
 #include <font/fontconfig.h>
 #include <footprint.h>
+#include <gestfich.h>
 #include <io/kicad/kicad_io_utils.h>
 #include <kiface_base.h>
 #include <kiplatform/io.h>
@@ -468,12 +465,42 @@ std::string formatInternalUnits( const VECTOR2I& aCoord, const FOOTPRINT* aParen
 {
     if( aParentFP )
     {
-        VECTOR2I coord = aCoord - aParentFP->GetPosition();
-        RotatePoint( coord, -aParentFP->GetOrientation() );
-        return formatInternalUnits( coord );
+        return formatInternalUnits( aParentFP->GetTransform().InverseApply( aCoord ) );
     }
 
     return formatInternalUnits( aCoord );
+}
+
+
+static VECTOR2I unbakeSize( const VECTOR2I& aSize, const FOOTPRINT* aParentFP )
+{
+    if( !aParentFP )
+        return aSize;
+
+    const TRANSFORM_TRS& xform = aParentFP->GetTransform();
+    return { KiROUND( aSize.x / xform.GetScaleX() ), KiROUND( aSize.y / xform.GetScaleY() ) };
+}
+
+
+static VECTOR2I unbakeSizeUniform( const VECTOR2I& aSize, const FOOTPRINT* aParentFP )
+{
+    if( !aParentFP )
+        return aSize;
+
+    const TRANSFORM_TRS& xform = aParentFP->GetTransform();
+    double               avg = ( xform.GetScaleX() + xform.GetScaleY() ) * 0.5;
+    return { KiROUND( aSize.x / avg ), KiROUND( aSize.y / avg ) };
+}
+
+
+static int unbakeLinear( int aValue, const FOOTPRINT* aParentFP )
+{
+    if( !aParentFP )
+        return aValue;
+
+    const TRANSFORM_TRS& xform = aParentFP->GetTransform();
+    double               avg = ( xform.GetScaleX() + xform.GetScaleY() ) * 0.5;
+    return KiROUND( aValue / avg );
 }
 
 
@@ -1072,7 +1099,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_SHAPE* aShape ) const
     FOOTPRINT*  parentFP = aShape->GetParentFootprint();
     std::string prefix = parentFP ? "fp" : "gr";
 
-    switch( aShape->GetShape() )
+    switch( aShape->GetLibraryShape() )
     {
     case SHAPE_T::SEGMENT:
         m_out->Print( "(%s_line (start %s) (end %s)",
@@ -1082,28 +1109,25 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_SHAPE* aShape ) const
         break;
 
     case SHAPE_T::RECTANGLE:
-        m_out->Print( "(%s_rect (start %s) (end %s)",
-                      prefix.c_str(),
-                      formatInternalUnits( aShape->GetStart(), parentFP ).c_str(),
-                      formatInternalUnits( aShape->GetEnd(), parentFP ).c_str() );
+        m_out->Print( "(%s_rect (start %s) (end %s)", prefix.c_str(),
+                      formatInternalUnits( aShape->GetLibraryStart() ).c_str(),
+                      formatInternalUnits( aShape->GetLibraryEnd() ).c_str() );
 
         if( aShape->GetCornerRadius() > 0 )
             m_out->Print( " (radius %s)", formatInternalUnits( aShape->GetCornerRadius() ).c_str() );
         break;
 
     case SHAPE_T::CIRCLE:
-        m_out->Print( "(%s_circle (center %s) (end %s)",
-                      prefix.c_str(),
-                      formatInternalUnits( aShape->GetStart(), parentFP ).c_str(),
-                      formatInternalUnits( aShape->GetEnd(), parentFP ).c_str() );
+        m_out->Print( "(%s_circle (center %s) (end %s)", prefix.c_str(),
+                      formatInternalUnits( aShape->GetLibraryStart() ).c_str(),
+                      formatInternalUnits( aShape->GetLibraryEnd() ).c_str() );
         break;
 
     case SHAPE_T::ARC:
-        m_out->Print( "(%s_arc (start %s) (mid %s) (end %s)",
-                      prefix.c_str(),
-                      formatInternalUnits( aShape->GetStart(), parentFP ).c_str(),
-                      formatInternalUnits( aShape->GetArcMid(), parentFP ).c_str(),
-                      formatInternalUnits( aShape->GetEnd(), parentFP ).c_str() );
+        m_out->Print( "(%s_arc (start %s) (mid %s) (end %s)", prefix.c_str(),
+                      formatInternalUnits( aShape->GetLibraryStart() ).c_str(),
+                      formatInternalUnits( aShape->GetLibraryArcMid() ).c_str(),
+                      formatInternalUnits( aShape->GetLibraryEnd() ).c_str() );
         break;
 
     case SHAPE_T::POLY:
@@ -1134,21 +1158,23 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_SHAPE* aShape ) const
     case SHAPE_T::ELLIPSE:
         m_out->Print( "(%s_ellipse (center %s) (major_radius %s) (minor_radius %s) "
                       "(rotation_angle %s)",
-                      prefix.c_str(), formatInternalUnits( aShape->GetEllipseCenter(), parentFP ).c_str(),
-                      formatInternalUnits( aShape->GetEllipseMajorRadius() ).c_str(),
-                      formatInternalUnits( aShape->GetEllipseMinorRadius() ).c_str(),
-                      EDA_UNIT_UTILS::FormatAngle( aShape->GetEllipseRotation() ).c_str() );
+                      prefix.c_str(),
+                      formatInternalUnits( aShape->GetLibraryEllipseCenter() ).c_str(),
+                      formatInternalUnits( aShape->GetLibraryEllipseMajorRadius() ).c_str(),
+                      formatInternalUnits( aShape->GetLibraryEllipseMinorRadius() ).c_str(),
+                      EDA_UNIT_UTILS::FormatAngle( aShape->GetLibraryEllipseRotation() ).c_str() );
         break;
 
     case SHAPE_T::ELLIPSE_ARC:
         m_out->Print( "(%s_ellipse_arc (center %s) (major_radius %s) (minor_radius %s) "
                       "(rotation_angle %s) (start_angle %s) (end_angle %s)",
-                      prefix.c_str(), formatInternalUnits( aShape->GetEllipseCenter(), parentFP ).c_str(),
-                      formatInternalUnits( aShape->GetEllipseMajorRadius() ).c_str(),
-                      formatInternalUnits( aShape->GetEllipseMinorRadius() ).c_str(),
-                      EDA_UNIT_UTILS::FormatAngle( aShape->GetEllipseRotation() ).c_str(),
-                      EDA_UNIT_UTILS::FormatAngle( aShape->GetEllipseStartAngle() ).c_str(),
-                      EDA_UNIT_UTILS::FormatAngle( aShape->GetEllipseEndAngle() ).c_str() );
+                      prefix.c_str(),
+                      formatInternalUnits( aShape->GetLibraryEllipseCenter() ).c_str(),
+                      formatInternalUnits( aShape->GetLibraryEllipseMajorRadius() ).c_str(),
+                      formatInternalUnits( aShape->GetLibraryEllipseMinorRadius() ).c_str(),
+                      EDA_UNIT_UTILS::FormatAngle( aShape->GetLibraryEllipseRotation() ).c_str(),
+                      EDA_UNIT_UTILS::FormatAngle( aShape->GetLibraryEllipseStartAngle() ).c_str(),
+                      EDA_UNIT_UTILS::FormatAngle( aShape->GetLibraryEllipseEndAngle() ).c_str() );
         break;
 
     default:
@@ -1156,7 +1182,11 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_SHAPE* aShape ) const
         return;
     };
 
-    aShape->GetStroke().Format( m_out, pcbIUScale );
+    {
+        STROKE_PARAMS stroke = aShape->GetStroke();
+        stroke.SetWidth( unbakeLinear( stroke.GetWidth(), parentFP ) );
+        stroke.Format( m_out, pcbIUScale );
+    }
 
     // The filled flag represents if a solid fill is present on circles, rectangles and polygons
     if( ( aShape->GetShape() == SHAPE_T::POLY ) || ( aShape->GetShape() == SHAPE_T::RECTANGLE )
@@ -1244,10 +1274,8 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_REFERENCE_IMAGE* aBitmap ) const
 
 void PCB_IO_KICAD_SEXPR::format( const PCB_POINT* aPoint ) const
 {
-    m_out->Print( "(point (at %s) (size %s)",
-        formatInternalUnits( aPoint->GetPosition() ).c_str(),
-        formatInternalUnits( aPoint->GetSize() ).c_str()
-    );
+    m_out->Print( "(point (at %s) (size %s)", formatInternalUnits( aPoint->GetLibraryPosition() ).c_str(),
+                  formatInternalUnits( aPoint->GetSize() ).c_str() );
 
     formatLayer( aPoint->GetLayer() );
 
@@ -1316,11 +1344,11 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
 
     if( !( m_ctl & CTL_OMIT_AT ) )
     {
-        m_out->Print( "(at %s %s)",
+        m_out->Print( "(transform (translate %s) (rotate %s) (scale %s %s))",
                       formatInternalUnits( aFootprint->GetPosition() ).c_str(),
-                      aFootprint->GetOrientation().IsZero()
-                            ? ""
-                            : EDA_UNIT_UTILS::FormatAngle( aFootprint->GetOrientation() ).c_str() );
+                      EDA_UNIT_UTILS::FormatAngle( aFootprint->GetOrientation() ).c_str(),
+                      FormatDouble2Str( aFootprint->GetTransform().GetScaleX() ).c_str(),
+                      FormatDouble2Str( aFootprint->GetTransform().GetScaleY() ).c_str() );
     }
 
     if( !aFootprint->GetLibDescription().IsEmpty() )
@@ -1766,7 +1794,8 @@ void PCB_IO_KICAD_SEXPR::formatLayers( LSET aLayerMask, bool aEnumerateLayers, b
 
 void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
 {
-    const BOARD* board = aPad->GetBoard();
+    const BOARD*     board = aPad->GetBoard();
+    const FOOTPRINT* parentFP = aPad->GetParentFootprint();
 
     auto shapeName =
         [&]( PCB_LAYER_ID aLayer )
@@ -1820,6 +1849,15 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
                                           aPad->GetProperty() ) );
     }
 
+    const char* simElectricalType = nullptr;
+
+    switch( aPad->GetSimElectricalType() )
+    {
+    case PAD_SIM_ELECTRICAL_TYPE::SOURCE: simElectricalType = "source"; break;
+    case PAD_SIM_ELECTRICAL_TYPE::SINK: simElectricalType = "sink"; break;
+    default: simElectricalType = nullptr; break;
+    }
+
     m_out->Print( "(pad %s %s %s",
                   m_out->Quotew( aPad->GetNumber() ).c_str(),
                   type,
@@ -1831,16 +1869,20 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
                         ? ""
                         : EDA_UNIT_UTILS::FormatAngle( aPad->GetOrientation() ).c_str() );
 
-    m_out->Print( "(size %s)", formatInternalUnits( aPad->GetSize( PADSTACK::ALL_LAYERS ) ).c_str() );
+    // Write the stored library size directly: it is the footprint-frame value the parser
+    // reads back, and avoids a bake/unbake that is not the inverse of GetSize() for a
+    // pad rotated within the footprint.
+    m_out->Print( "(size %s)", formatInternalUnits( aPad->Padstack().Size( PADSTACK::ALL_LAYERS ) ).c_str() );
 
     if( aPad->GetDelta( PADSTACK::ALL_LAYERS ).x != 0
         || aPad->GetDelta( PADSTACK::ALL_LAYERS ).y != 0 )
     {
-        m_out->Print( "(rect_delta %s)",
-                      formatInternalUnits( aPad->GetDelta( PADSTACK::ALL_LAYERS ) ).c_str() );
+        m_out->Print( "(rect_delta %s)", formatInternalUnits( aPad->GetDelta( PADSTACK::ALL_LAYERS ) ).c_str() );
     }
 
-    const VECTOR2I& drill = aPad->GetDrillSize();
+    const VECTOR2I  drill = aPad->GetDrillShape() == PAD_DRILL_SHAPE::CIRCLE
+                                    ? unbakeSizeUniform( aPad->GetDrillSize(), parentFP )
+                                    : unbakeSize( aPad->GetDrillSize(), parentFP );
     VECTOR2I        shapeoffset = aPad->GetOffset( PADSTACK::ALL_LAYERS );
     bool            forceShapeOffsetOutput = false;
 
@@ -1869,7 +1911,8 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
         // changes, but note that the other padstack layers (if present) will have an offset stored
         // separately.
         if( shapeoffset.x != 0 || shapeoffset.y != 0 || forceShapeOffsetOutput )
-            m_out->Print( "(offset %s)", formatInternalUnits( aPad->GetOffset( PADSTACK::ALL_LAYERS ) ).c_str() );
+            m_out->Print( "(offset %s)",
+                          formatInternalUnits( aPad->Padstack().Offset( PADSTACK::ALL_LAYERS ) ).c_str() );
 
         m_out->Print( ")" );
     }
@@ -1919,6 +1962,9 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
     // Add pad property, if exists.
     if( property )
         m_out->Print( "(property %s)", property );
+
+    if( simElectricalType )
+        m_out->Print( "(sim_electrical_type %s)", simElectricalType );
 
     formatLayers( aPad->GetLayerSet(), false /* enumerate layers */ );
 
@@ -2088,7 +2134,9 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
                 // Output all basic shapes
                 for( const std::shared_ptr<PCB_SHAPE>& primitive : aPad->GetPrimitives( aLayer ) )
                 {
-                    switch( primitive->GetShape() )
+                    const SHAPE_T libShape = primitive->GetLibraryShape();
+
+                    switch( libShape )
                     {
                     case SHAPE_T::SEGMENT:
                         if( primitive->IsProxyItem() )
@@ -2109,14 +2157,14 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
                         if( primitive->IsProxyItem() )
                         {
                             m_out->Print( "(gr_bbox (start %s) (end %s)",
-                                          formatInternalUnits( primitive->GetStart() ).c_str(),
-                                          formatInternalUnits( primitive->GetEnd() ).c_str() );
+                                          formatInternalUnits( primitive->GetLibraryStart() ).c_str(),
+                                          formatInternalUnits( primitive->GetLibraryEnd() ).c_str() );
                         }
                         else
                         {
                             m_out->Print( "(gr_rect (start %s) (end %s)",
-                                          formatInternalUnits( primitive->GetStart() ).c_str(),
-                                          formatInternalUnits( primitive->GetEnd() ).c_str() );
+                                          formatInternalUnits( primitive->GetLibraryStart() ).c_str(),
+                                          formatInternalUnits( primitive->GetLibraryEnd() ).c_str() );
 
                             if( primitive->GetCornerRadius() > 0 )
                             {
@@ -2128,29 +2176,31 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
 
                     case SHAPE_T::ARC:
                         m_out->Print( "(gr_arc (start %s) (mid %s) (end %s)",
-                                      formatInternalUnits( primitive->GetStart() ).c_str(),
-                                      formatInternalUnits( primitive->GetArcMid() ).c_str(),
-                                      formatInternalUnits( primitive->GetEnd() ).c_str() );
+                                      formatInternalUnits( primitive->GetLibraryStart() ).c_str(),
+                                      formatInternalUnits( primitive->GetLibraryArcMid() ).c_str(),
+                                      formatInternalUnits( primitive->GetLibraryEnd() ).c_str() );
                         break;
 
                     case SHAPE_T::CIRCLE:
                         m_out->Print( "(gr_circle (center %s) (end %s)",
-                                      formatInternalUnits( primitive->GetStart() ).c_str(),
-                                      formatInternalUnits( primitive->GetEnd() ).c_str() );
+                                      formatInternalUnits( primitive->GetLibraryStart() ).c_str(),
+                                      formatInternalUnits( primitive->GetLibraryEnd() ).c_str() );
                         break;
 
                     case SHAPE_T::BEZIER:
+                        // Pad primitives are stored in raw library coordinates and read back
+                        // raw, so emit library coordinates like the other primitive types above.
                         m_out->Print( "(gr_curve (pts (xy %s) (xy %s) (xy %s) (xy %s))",
-                                      formatInternalUnits( primitive->GetStart() ).c_str(),
-                                      formatInternalUnits( primitive->GetBezierC1() ).c_str(),
-                                      formatInternalUnits( primitive->GetBezierC2() ).c_str(),
-                                      formatInternalUnits( primitive->GetEnd() ).c_str() );
+                                      formatInternalUnits( primitive->GetLibraryStart() ).c_str(),
+                                      formatInternalUnits( primitive->GetLibraryBezierC1() ).c_str(),
+                                      formatInternalUnits( primitive->GetLibraryBezierC2() ).c_str(),
+                                      formatInternalUnits( primitive->GetLibraryEnd() ).c_str() );
                         break;
 
                     case SHAPE_T::POLY:
                         if( primitive->IsPolyShapeValid() )
                         {
-                            const SHAPE_POLY_SET& poly = primitive->GetPolyShape();
+                            const SHAPE_POLY_SET    poly = primitive->GetLibraryPolyShape();
                             const SHAPE_LINE_CHAIN& outline = poly.Outline( 0 );
 
                             m_out->Print( "(gr_poly" );
@@ -2167,9 +2217,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
 
                     // The filled flag represents if a solid fill is present on circles,
                     // rectangles and polygons
-                    if( ( primitive->GetShape() == SHAPE_T::POLY )
-                        || ( primitive->GetShape() == SHAPE_T::RECTANGLE )
-                        || ( primitive->GetShape() == SHAPE_T::CIRCLE ) )
+                    if( libShape == SHAPE_T::POLY || libShape == SHAPE_T::RECTANGLE || libShape == SHAPE_T::CIRCLE )
                     {
                         KICAD_FORMAT::FormatBool( m_out, "fill", primitive->IsSolidFill() );
                     }
@@ -2221,9 +2269,10 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
                 const PADSTACK& padstack = aPad->Padstack();
 
                 m_out->Print( "(shape %s)", shapeName( aLayer ) );
-                m_out->Print( "(size %s)", formatInternalUnits( aPad->GetSize( aLayer ) ).c_str() );
 
-                const VECTOR2I& delta = aPad->GetDelta( aLayer );
+                m_out->Print( "(size %s)", formatInternalUnits( padstack.Size( aLayer ) ).c_str() );
+
+                const VECTOR2I delta = aPad->GetDelta( aLayer );
 
                 if( delta.x != 0 || delta.y != 0 )
                     m_out->Print( "(rect_delta %s)", formatInternalUnits( delta ).c_str() );
@@ -2231,7 +2280,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
                 shapeoffset = aPad->GetOffset( aLayer );
 
                 if( shapeoffset.x != 0 || shapeoffset.y != 0 )
-                    m_out->Print( "(offset %s)", formatInternalUnits( shapeoffset ).c_str() );
+                    m_out->Print( "(offset %s)", formatInternalUnits( padstack.Offset( aLayer ) ).c_str() );
 
                 formatCornerProperties( aLayer );
 
@@ -2411,8 +2460,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TEXT* aText ) const
         prefix = "fp";
         type = "user";
 
-        pos -= parentFP->GetPosition();
-        RotatePoint( pos, -parentFP->GetOrientation() );
+        pos = parentFP->GetTransform().InverseApply( pos );
     }
     else
     {
@@ -2448,7 +2496,29 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TEXT* aText ) const
     // so ensure they are never written in kicad_pcb file
     int ctl_flags = CTL_OMIT_COLOR | CTL_OMIT_HYPERLINK;
 
-    aText->EDA_TEXT::Format( m_out, ctl_flags );
+    if( parentFP )
+    {
+        EDA_TEXT*      mut = const_cast<EDA_TEXT*>( static_cast<const EDA_TEXT*>( aText ) );
+        const VECTOR2I savedSize = mut->GetTextSize();
+        const int      savedThickness = mut->GetTextThickness();
+        const bool     mutateThickness = !mut->GetAutoThickness();
+
+        mut->SetTextSize( unbakeSize( savedSize, parentFP ) );
+
+        if( mutateThickness )
+            mut->SetTextThickness( unbakeLinear( savedThickness, parentFP ) );
+
+        aText->EDA_TEXT::Format( m_out, ctl_flags );
+
+        mut->SetTextSize( savedSize );
+
+        if( mutateThickness )
+            mut->SetTextThickness( savedThickness );
+    }
+    else
+    {
+        aText->EDA_TEXT::Format( m_out, ctl_flags );
+    }
 
     if( aText->GetFont() && aText->GetFont()->IsOutline() )
         formatRenderCache( aText );
@@ -2471,18 +2541,24 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TEXTBOX* aTextBox ) const
     if( aTextBox->IsLocked() )
         KICAD_FORMAT::FormatBool( m_out, "locked", true );
 
-    if( aTextBox->GetShape() == SHAPE_T::RECTANGLE )
-    {
-        m_out->Print( "(start %s) (end %s)",
-                      formatInternalUnits( aTextBox->GetStart(), parentFP ).c_str(),
-                      formatInternalUnits( aTextBox->GetEnd(), parentFP ).c_str() );
-    }
-    else if( aTextBox->GetShape() == SHAPE_T::POLY )
-    {
-        const SHAPE_POLY_SET& poly = aTextBox->GetPolyShape();
-        const SHAPE_LINE_CHAIN& outline = poly.Outline( 0 );
+    // Use the lib-frame shape. The board-frame shape can flip to POLY for
+    // rendering when the FP rotation is non-cardinal.
+    SHAPE_T libShape = aTextBox->GetLibraryShape();
 
-        formatPolyPts( outline, parentFP );
+    if( libShape == SHAPE_T::RECTANGLE )
+    {
+        m_out->Print( "(start %s) (end %s)", formatInternalUnits( aTextBox->GetLibraryStart() ).c_str(),
+                      formatInternalUnits( aTextBox->GetLibraryEnd() ).c_str() );
+    }
+    else if( libShape == SHAPE_T::POLY )
+    {
+        // Fall back to the runtime polygon if the lib copy was never seeded.
+        const SHAPE_POLY_SET& libPoly = aTextBox->GetLibPoly();
+        const bool            haveLibPoly = libPoly.OutlineCount() > 0;
+        const SHAPE_POLY_SET& poly = haveLibPoly ? libPoly : aTextBox->GetPolyShape();
+
+        if( poly.OutlineCount() > 0 )
+            formatPolyPts( poly.Outline( 0 ), haveLibPoly ? nullptr : parentFP );
     }
     else
     {
@@ -2519,9 +2595,9 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TEXTBOX* aTextBox ) const
     {
         KICAD_FORMAT::FormatBool( m_out, "border", aTextBox->IsBorderEnabled() );
         aTextBox->GetStroke().Format( m_out, pcbIUScale );
-
-        KICAD_FORMAT::FormatBool( m_out, "knockout", aTextBox->IsKnockout() );
     }
+
+    KICAD_FORMAT::FormatBool( m_out, "knockout", aTextBox->IsKnockout() );
 
     if( aTextBox->GetFont() && aTextBox->GetFont()->IsOutline() )
         formatRenderCache( aTextBox );
@@ -2594,31 +2670,20 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_GROUP* aGroup ) const
     // applies when the group itself is part of m_board; for groups created off-board (e.g. a
     // DeepClone() used by the clipboard) the cache contains the originals, not our clones, so
     // skip the validation in that case and trust the member pointers.
-    bool                                validateAgainstBoard = false;
-    std::unordered_set<const EDA_ITEM*> validPtrs;
+    //
+    // BOARD::IsItemIndexedById() probes the board's inverse pointer index without dereferencing
+    // the candidate, so it is safe to call on a possibly-dangling member.
+    bool validateAgainstBoard = m_board && m_board->IsItemIndexedById( aGroup );
 
-    if( m_board )
+    memberIds.Alloc( aGroup->GetItems().size() );
+
+    for( EDA_ITEM* member : aGroup->GetItems() )
     {
-        const auto& cache = m_board->GetItemByIdCache();
-
-        for( const auto& [uuid, item] : cache )
-            validPtrs.insert( item );
-
-        validateAgainstBoard = validPtrs.count( aGroup ) > 0;
-    }
-
-    if( validateAgainstBoard )
-    {
-        for( EDA_ITEM* member : aGroup->GetItems() )
+        if( !validateAgainstBoard
+                || m_board->IsItemIndexedById( static_cast<const BOARD_ITEM*>( member ) ) )
         {
-            if( validPtrs.count( member ) )
-                memberIds.Add( member->m_Uuid.AsString() );
-        }
-    }
-    else
-    {
-        for( EDA_ITEM* member : aGroup->GetItems() )
             memberIds.Add( member->m_Uuid.AsString() );
+        }
     }
 
     if( memberIds.empty() )
@@ -3337,6 +3402,57 @@ BOARD* PCB_IO_KICAD_SEXPR::DoLoad( LINE_READER& aReader, BOARD* aAppendToMe,
 
     PCB_IO_KICAD_SEXPR_PARSER parser( &aReader, aAppendToMe, m_queryUserCallback, aProgressReporter, aLineCount,
                                       preserveDestinationStackup );
+
+    parser.SetLayerMappingHandler( m_layer_mapping_handler );
+
+    std::set<BOARD_ITEM*>   itemsBefore;
+    std::set<NETINFO_ITEM*> netsBefore;
+
+    if( aAppendToMe )
+    {
+        for( BOARD_ITEM* item : aAppendToMe->GetItemSet() )
+            itemsBefore.insert( item );
+
+        for( NETINFO_ITEM* net : aAppendToMe->GetNetInfo() )
+            netsBefore.insert( net );
+    }
+
+    auto revertPartialAppend = [&]()
+    {
+        if( !aAppendToMe )
+            return;
+
+        std::vector<BOARD_ITEM*> addedItems;
+
+        for( BOARD_ITEM* item : aAppendToMe->GetItemSet() )
+        {
+            if( !itemsBefore.contains( item ) )
+                addedItems.push_back( item );
+        }
+
+        // Remove everything before deleting anything, group member back pointers
+        // must be unlinked while their groups are still alive
+        for( BOARD_ITEM* item : addedItems )
+            aAppendToMe->Remove( item );
+
+        for( BOARD_ITEM* item : addedItems )
+            delete item;
+
+        std::vector<NETINFO_ITEM*> addedNets;
+
+        for( NETINFO_ITEM* net : aAppendToMe->GetNetInfo() )
+        {
+            if( !netsBefore.contains( net ) )
+                addedNets.push_back( net );
+        }
+
+        for( NETINFO_ITEM* net : addedNets )
+        {
+            aAppendToMe->Remove( net );
+            delete net;
+        }
+    };
+
     BOARD* board;
 
     try
@@ -3345,15 +3461,24 @@ BOARD* PCB_IO_KICAD_SEXPR::DoLoad( LINE_READER& aReader, BOARD* aAppendToMe,
     }
     catch( const FUTURE_FORMAT_ERROR& )
     {
+        revertPartialAppend();
+
         // Don't wrap a FUTURE_FORMAT_ERROR in another
         throw;
     }
     catch( const PARSE_ERROR& parse_error )
     {
+        revertPartialAppend();
+
         if( parser.IsTooRecent() )
             throw FUTURE_FORMAT_ERROR( parse_error, parser.GetRequiredVersion() );
         else
             throw;
+    }
+    catch( ... )
+    {
+        revertPartialAppend();
+        throw;
     }
 
     if( !board )
@@ -3721,7 +3846,7 @@ bool PCB_IO_KICAD_SEXPR::DeleteLibrary( const wxString& aLibraryPath,
         wxFileName    tmp;
         wxArrayString files;
 
-        wxDir::GetAllFiles( aLibraryPath, &files );
+        CollectFilesLoopSafe( aLibraryPath, files );
 
         for( i = 0;  i < files.GetCount();  i++ )
         {

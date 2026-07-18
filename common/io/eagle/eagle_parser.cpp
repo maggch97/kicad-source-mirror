@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <io/eagle/eagle_parser.h>
@@ -1038,7 +1034,7 @@ ETEXT::ETEXT( wxXmlNode* aText, IO_BASE* aIo ) :
 }
 
 
-VECTOR2I ETEXT::ConvertSize() const
+VECTOR2I ConvertEagleTextSize( const opt_wxString& font, const ECOORD& size )
 {
     VECTOR2I textsize;
 
@@ -1065,6 +1061,12 @@ VECTOR2I ETEXT::ConvertSize() const
     }
 
     return textsize;
+}
+
+
+VECTOR2I ETEXT::ConvertSize() const
+{
+    return ConvertEagleTextSize( font, size );
 }
 
 
@@ -1761,11 +1763,13 @@ EDEVICE::EDEVICE( wxXmlNode* aDevice, IO_BASE* aIo ) :
         }
         else if( child->GetName() == "technologies" )
         {
-            for( wxXmlNode* technology = child->GetChildren(); technology;
-                 technology = technology->GetNext() )
+            for( wxXmlNode* technology = child->GetChildren(); technology; technology = technology->GetNext() )
             {
                 if( technology->GetName() == "technology" )
-                    technologies.emplace_back( std::make_unique<ETECHNOLOGY>( technology, aIo ) );
+                {
+                    std::unique_ptr<ETECHNOLOGY> tmp = std::make_unique<ETECHNOLOGY>( technology, aIo );
+                    technologies[tmp->name] = std::move( tmp );
+                }
             }
 
             AdvanceProgressPhase();
@@ -1821,7 +1825,10 @@ EDEVICE_SET::EDEVICE_SET( wxXmlNode* aDeviceSet, IO_BASE* aIo ) :
         else if( child->GetName() == "devices" )
         {
             for( wxXmlNode* device = child->GetChildren(); device; device = device->GetNext() )
-                devices.emplace_back( std::make_unique<EDEVICE>( device, aIo ) );
+            {
+                std::unique_ptr<EDEVICE> tmp = std::make_unique<EDEVICE>( device, aIo );
+                devices[tmp->name] = std::move( tmp );
+            }
 
             AdvanceProgressPhase();
         }
@@ -2641,15 +2648,15 @@ ESCHEMATIC::ESCHEMATIC( wxXmlNode* aSchematic, IO_BASE* aIo ) :
                         for( const auto& [setName, setLibrary] : libraries )
                             usedNames.emplace( setName );
 
-                        if( usedNames.find( libName ) != usedNames.end() )
+                        // One of _1.._N+1 is always free (pigeonhole); the bound also
+                        // stops an infinite loop on malformed names (e.g. embedded
+                        // NULs) whose suffixed variants all compare equal.
+                        for( int i = 1; i <= (int) usedNames.size() + 1; i++ )
                         {
-                            int i = 1;
+                            uniqueName.Format( wxS( "%s_%d" ), libName, i );
 
-                            do
-                            {
-                                uniqueName.Format( wxS( "%s_%d" ), libName, i );
-                                i += 1;
-                            } while( usedNames.find( uniqueName ) != usedNames.end() );
+                            if( usedNames.find( uniqueName ) == usedNames.end() )
+                                break;
                         }
 
                         libName = uniqueName;

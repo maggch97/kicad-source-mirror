@@ -15,17 +15,16 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /*
  * Some calculations (mainly computeCurvedForRoundShape) are derived from
  * https://github.com/NilujePerchut/kicad_scripts/tree/master/teardrops
  */
+
+#include <algorithm>
+#include <limits>
 
 #include <board_design_settings.h>
 #include <pcb_track.h>
@@ -173,25 +172,18 @@ bool TEARDROP_MANAGER::areItemsInSameZone( BOARD_ITEM* aPadOrVia, PCB_TRACK* aTr
 }
 
 
-int TEARDROP_MANAGER::computeEmergingTrackLength( PCB_TRACK* aTrack, BOARD_ITEM* aOther,
-                                                  PCB_LAYER_ID aLayer ) const
+int TEARDROP_MANAGER::computeChordThroughShape( PCB_TRACK* aTrack, BOARD_ITEM* aOther,
+                                                PCB_LAYER_ID aLayer, const VECTOR2I& aInsidePoint ) const
 {
-    VECTOR2I start = aTrack->GetStart();
-    VECTOR2I end = aTrack->GetEnd();
-    bool     startInside = aOther->HitTest( start, 0 );
-    bool     endInside = aOther->HitTest( end, 0 );
+    // Arcs are genuine entries, not the short straight grazes this filter targets.
+    if( aTrack->Type() == PCB_ARC_T )
+        return std::numeric_limits<int>::max();
 
-    if( startInside && endInside )
-        return 0;
+    VECTOR2D delta( aTrack->GetEnd() - aTrack->GetStart() );
+    double   len = delta.EuclideanNorm();
 
-    // Fully outside: caller handles crossing geometry separately; report full length so
-    // the emergence filter never rejects those.
-    if( !startInside && !endInside )
-        return KiROUND( SEG( start, end ).Length() );
-
-    // Exactly one endpoint inside: normalize so start is outside, end is inside.
-    if( startInside )
-        std::swap( start, end );
+    if( len == 0.0 )
+        return std::numeric_limits<int>::max();
 
     int            maxError = m_board->GetDesignSettings().m_MaxError;
     int            radius = GetWidth( aOther, aLayer ) / 2;
@@ -209,38 +201,61 @@ int TEARDROP_MANAGER::computeEmergingTrackLength( PCB_TRACK* aTrack, BOARD_ITEM*
                                                               ERROR_INSIDE );
     }
 
-    SHAPE_LINE_CHAIN& outline = shapebuffer.Outline( 0 );
-    outline.SetClosed( true );
+    // Measure the chord on the extended centerline, not the short track segment.
+    // The bbox-diagonal reach spans rotated elongated pads.
+    VECTOR2D dir = delta / len;
+    VECTOR2I mid = ( aTrack->GetStart() + aTrack->GetEnd() ) / 2;
+    int      reach = KiROUND( shapebuffer.BBox().Diagonal() + len );
+    VECTOR2I extStart = mid - VECTOR2I( KiROUND( dir.x * reach ), KiROUND( dir.y * reach ) );
+    VECTOR2I extEnd = mid + VECTOR2I( KiROUND( dir.x * reach ), KiROUND( dir.y * reach ) );
 
+    // Include every contour and hole in the boundary crossings.
     SHAPE_LINE_CHAIN::INTERSECTIONS pts;
-    int                             pt_count = 0;
 
-    if( aTrack->Type() == PCB_ARC_T )
+    for( int ii = 0; ii < shapebuffer.OutlineCount(); ++ii )
     {
-        SHAPE_ARC arc( aTrack->GetStart(), static_cast<PCB_ARC*>( aTrack )->GetMid(),
-                       aTrack->GetEnd(), aTrack->GetWidth() );
-        SHAPE_LINE_CHAIN poly = arc.ConvertToPolyline( maxError );
-        pt_count = outline.Intersect( poly, pts );
-    }
-    else
-    {
-        pt_count = outline.Intersect( SEG( start, end ), pts );
+        SHAPE_LINE_CHAIN& outline = shapebuffer.Outline( ii );
+        outline.SetClosed( true );
+        outline.Intersect( SEG( extStart, extEnd ), pts );
+
+        for( int jj = 0; jj < shapebuffer.HoleCount( ii ); ++jj )
+        {
+            SHAPE_LINE_CHAIN& hole = shapebuffer.Hole( ii, jj );
+            hole.SetClosed( true );
+            hole.Intersect( SEG( extStart, extEnd ), pts );
+        }
     }
 
-    if( pt_count < 1 )
-        return 0;
+    // Degenerate/tangent-only crossings should not drop the teardrop.
+    if( pts.size() < 2 )
+        return std::numeric_limits<int>::max();
 
-    double minDist = std::numeric_limits<double>::max();
+    // Adjacent projected crossings bound copper/air spans.
+    // Use the copper span bracketing the inside endpoint.
+    std::vector<double> proj;
+    proj.reserve( pts.size() );
 
     for( const SHAPE_LINE_CHAIN::INTERSECTION& hit : pts )
-    {
-        double d = ( hit.p - start ).EuclideanNorm();
+        proj.push_back( ( hit.p - extStart ).Dot( dir ) );
 
-        if( d < minDist )
-            minDist = d;
+    std::sort( proj.begin(), proj.end() );
+
+    double insideProj = ( VECTOR2D( aInsidePoint ) - VECTOR2D( extStart ) ).Dot( dir );
+
+    for( size_t ii = 0; ii + 1 < proj.size(); ++ii )
+    {
+        VECTOR2I spanMid = extStart + VECTOR2I( KiROUND( dir.x * ( proj[ii] + proj[ii + 1] ) / 2 ),
+                                                KiROUND( dir.y * ( proj[ii] + proj[ii + 1] ) / 2 ) );
+
+        if( !shapebuffer.Contains( spanMid ) )
+            continue;
+
+        if( insideProj >= proj[ii] && insideProj <= proj[ii + 1] )
+            return KiROUND( proj[ii + 1] - proj[ii] );
     }
 
-    return KiROUND( minDist );
+    // Boundary-touch fallback: keep the teardrop.
+    return std::numeric_limits<int>::max();
 }
 
 
@@ -1143,47 +1158,49 @@ bool TEARDROP_MANAGER::computeTeardropPolygon( const TEARDROP_PARAMETERS& aParam
     int offset = pcbIUScale.mmToIU( 0.001 );
 
     // For non-round pads, clamp effectiveDist so pointD stays within the pad outline.
-    // When a track enters an elongated pad at a steep angle, the projection along the
-    // track axis can extend well beyond the narrow side of the pad.
+    // pointD is placed at effectiveDist from the intersection along -vecVia (into the pad).
+    // The intersection lies on the pad edge, so the segment from the intersection into the pad
+    // must exit again through the far edge. Clamp effectiveDist to that far edge so pointD can
+    // never escape the pad outline. This is essential for oblique connections where the track
+    // only grazes a corner of an elongated pad. There the track axis crosses the pad rather
+    // than entering its body, and an unclamped projection sends pointD spiking out the side.
     if( !IsRound( aOther, layer ) && aOther->Type() == PCB_PAD_T )
     {
-        PAD* pad = static_cast<PAD*>( aOther );
-        VECTOR2I candidateD = intersection
-                              + VECTOR2I( KiROUND( -vecVia.x * ( effectiveDist + offset ) ),
-                                          KiROUND( -vecVia.y * ( effectiveDist + offset ) ) );
+        PAD*           pad = static_cast<PAD*>( aOther );
+        int            maxError = m_board->GetDesignSettings().m_MaxError;
+        SHAPE_POLY_SET padPoly;
+        pad->TransformShapeToPolygon( padPoly, layer, 0, maxError, ERROR_INSIDE );
 
-        if( !pad->HitTest( candidateD, 0, layer ) )
+        SHAPE_LINE_CHAIN& padOutline = padPoly.Outline( 0 );
+        padOutline.SetClosed( true );
+
+        // Cast the into-pad ray from the intersection well past the candidate point so a chord
+        // through the pad always produces a far-edge crossing to clamp against. The reach must
+        // span the longest possible chord from the entry, so use the pad's circumscribed radius
+        // rather than the minor half-axis (padRadius). On an elongated pad entered along its long
+        // axis the far edge sits up to two major half-axes away, and a reach scaled by the minor
+        // axis stops short of it, leaving farEdge == 0 and wrongly collapsing the teardrop.
+        double   reach = effectiveDist + 2.0 * pad->GetBoundingRadius() + offset;
+        VECTOR2I rayEnd = intersection + VECTOR2I( KiROUND( -vecVia.x * reach ),
+                                                   KiROUND( -vecVia.y * reach ) );
+
+        SHAPE_LINE_CHAIN::INTERSECTIONS hits;
+        padOutline.Intersect( SEG( intersection, rayEnd ), hits );
+
+        double farEdge = 0;
+
+        for( const SHAPE_LINE_CHAIN::INTERSECTION& hit : hits )
         {
-            int maxError = m_board->GetDesignSettings().m_MaxError;
-            SHAPE_POLY_SET padPoly;
-            pad->TransformShapeToPolygon( padPoly, layer, 0, maxError, ERROR_INSIDE );
+            // Ignore the crossing at the intersection point itself.
+            double d = ( hit.p - intersection ).EuclideanNorm();
 
-            SHAPE_LINE_CHAIN& padOutline = padPoly.Outline( 0 );
-            padOutline.SetClosed( true );
-
-            // Shoot a ray from just inside the pad at the entry to beyond the candidate point
-            VECTOR2I rayStart = intersection
-                                + VECTOR2I( KiROUND( -vecVia.x * offset ),
-                                            KiROUND( -vecVia.y * offset ) );
-
-            SHAPE_LINE_CHAIN::INTERSECTIONS hits;
-            padOutline.Intersect( SEG( rayStart, candidateD ), hits );
-
-            if( !hits.empty() )
-            {
-                double maxExitDist = 0;
-
-                for( const SHAPE_LINE_CHAIN::INTERSECTION& hit : hits )
-                {
-                    double d = ( hit.p - intersection ).EuclideanNorm();
-
-                    if( d > maxExitDist )
-                        maxExitDist = d;
-                }
-
-                effectiveDist = std::max( 0.0, maxExitDist - 2.0 * offset );
-            }
+            if( d > offset )
+                farEdge = std::max( farEdge, d );
         }
+
+        // farEdge == 0 means -vecVia does not penetrate the pad (a tangential graze); collapse
+        // pointD onto the entry so the teardrop simply flares from the track to the pad edge.
+        effectiveDist = std::min( effectiveDist, std::max( 0.0, farEdge - 2.0 * offset ) );
     }
     else
     {

@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /// @todo The Boost entropy exception does not exist prior to 1.67. Once the minimum Boost
@@ -54,6 +50,7 @@
 #include <pcb_track.h>
 #include <pgm_base.h>
 #include <project_pcb.h>
+#include <scoped_set_reset.h>
 #include <trace_helpers.h>
 #include <wildcards_and_files_ext.h>
 #include <zone.h>
@@ -370,10 +367,10 @@ void PCB_BASE_FRAME::FocusOnItems( std::vector<BOARD_ITEM*> aItems, PCB_LAYER_ID
                 zone->TransformShapeToPolygon( itemPoly, aLayer, 0, pcbIUScale.mmToIU( 0.1 ), ERROR_INSIDE );
 
                 if( itemPoly.IsEmpty() )
-                    itemPoly = *zone->Outline();
+                    itemPoly = zone->GetBoardOutline();
 #else
                 // much faster calculation time when using only the zone outlines
-                itemPoly = *zone->Outline();
+                itemPoly = zone->GetBoardOutline();
 #endif
 
                 break;
@@ -1046,7 +1043,6 @@ void PCB_BASE_FRAME::ActivateGalCanvas()
     canvas->StartDrawing();
 
     try
-
     {
         if( !m_spaceMouse )
         {
@@ -1058,18 +1054,31 @@ void PCB_BASE_FRAME::ActivateGalCanvas()
 #endif
         }
     }
-    catch( const std::system_error& e )
+    catch( const std::exception& e )
     {
-        wxLogTrace( wxT( "KI_TRACE_NAVLIB" ), e.what() );
+        wxLogTrace( wxT( "KI_TRACE_NAVLIB" ), wxS( "%s" ), e.what() );
     }
+    catch( ... )
+    {
+        wxLogTrace( wxT( "KI_TRACE_NAVLIB" ),
+                    wxT( "Unknown exception during SpaceMouse initialization" ) );
+    }
+}
+
+
+bool PCB_BASE_FRAME::displayOptionsRequireRecache( const PCB_DISPLAY_OPTIONS& aOld,
+                                                   const PCB_DISPLAY_OPTIONS& aNew )
+{
+    // only zone mode and board flip change geometry
+    // colour opacity contrast are recolour only
+    return aOld.m_ZoneDisplayMode != aNew.m_ZoneDisplayMode
+           || aOld.m_FlipBoardView != aNew.m_FlipBoardView;
 }
 
 
 void PCB_BASE_FRAME::SetDisplayOptions( const PCB_DISPLAY_OPTIONS& aOptions, bool aRefresh )
 {
-    bool hcChanged    = m_displayOptions.m_ContrastModeDisplay != aOptions.m_ContrastModeDisplay;
-    bool hcVisChanged = m_displayOptions.m_ContrastModeDisplay == HIGH_CONTRAST_MODE::HIDDEN
-                        || aOptions.m_ContrastModeDisplay == HIGH_CONTRAST_MODE::HIDDEN;
+    bool needsRecache = displayOptionsRequireRecache( m_displayOptions, aOptions );
     m_displayOptions  = aOptions;
 
     EDA_DRAW_PANEL_GAL* canvas = GetCanvas();
@@ -1077,45 +1086,13 @@ void PCB_BASE_FRAME::SetDisplayOptions( const PCB_DISPLAY_OPTIONS& aOptions, boo
 
     view->UpdateDisplayOptions( aOptions );
     view->SetMirror( aOptions.m_FlipBoardView, view->IsMirroredY() );
-    view->RecacheAllItems();
+
+    // skip recache for colour/alpha-only changes handled by the recolour below
+    if( needsRecache )
+        view->RecacheAllItems();
 
     canvas->SetHighContrastLayer( GetActiveLayer() );
     OnDisplayOptionsChanged();
-
-    // Vias on a restricted layer set must be redrawn when high contrast mode is changed
-    if( hcChanged )
-    {
-        bool showNetNames = false;
-
-        if( PCBNEW_SETTINGS* config = dynamic_cast<PCBNEW_SETTINGS*>( Kiface().KifaceSettings() ) )
-            showNetNames = config->m_Display.m_NetNames > 0;
-
-        // Note: KIGFX::REPAINT isn't enough for things that go from invisible to visible as
-        // they won't be found in the view layer's itemset for re-painting.
-        GetCanvas()->GetView()->UpdateAllItemsConditionally(
-                [&]( KIGFX::VIEW_ITEM* aItem ) -> int
-                {
-                    if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
-                    {
-                        if( via->GetViaType() != VIATYPE::THROUGH
-                                || via->GetRemoveUnconnected()
-                                || showNetNames )
-                        {
-                            return hcVisChanged ? KIGFX::ALL : KIGFX::REPAINT;
-                        }
-                    }
-                    else if( PAD* pad = dynamic_cast<PAD*>( aItem ) )
-                    {
-                        if( pad->GetRemoveUnconnected()
-                                || showNetNames )
-                        {
-                            return hcVisChanged ? KIGFX::ALL : KIGFX::REPAINT;
-                        }
-                    }
-
-                    return 0;
-                } );
-    }
 
     if( aRefresh )
         canvas->Refresh();
@@ -1212,16 +1189,41 @@ void PCB_BASE_FRAME::OnFpChangeDebounceTimer( wxTimerEvent& aEvent )
 
     if( m_inFpChangeTimerEvent )
     {
-    wxLogTrace( traceLibWatch, "Restarting debounce timer" );
+        wxLogTrace( traceLibWatch, "Restarting debounce timer" );
         m_watcherDebounceTimer.StartOnce( 3000 );
+        return;
+    }
+
+    // If the frame is currently disabled then a quasi-modal/modal dialog is open on top of it (for
+    // example the footprint properties dialog).  Reloading the footprint now would delete the items
+    // the dialog is editing and crash on dialog close.  Defer the reload until the dialog is gone.
+    if( !IsEnabled() )
+    {
+        wxLogTrace( traceLibWatch, "Frame disabled (dialog open); restarting debounce timer" );
+        m_watcherDebounceTimer.StartOnce( 1000 );
+        return;
+    }
+
+    // An interactive tool (move, draw, place) holds references into the current footprint while its
+    // event loop runs.  Reloading now would free those out from under the running tool and crash.
+    // Restart the timer before touching the watcher timestamp so the reload is retried once the tool
+    // finishes rather than silently dropped.
+    if( !ToolStackIsEmpty() )
+    {
+        wxLogTrace( traceLibWatch, "Interactive tool active; restarting debounce timer" );
+        m_watcherDebounceTimer.StartOnce( 1000 );
+        return;
     }
 
     wxLogTrace( traceLibWatch, "OnFpChangeDebounceTimer" );
 
-    // Disable logging to avoid spurious messages and check if the file has changed
-    wxLog::EnableLogging( false );
-    wxDateTime lastModified = m_watcherFileName.GetModificationTime();
-    wxLog::EnableLogging( true );
+    wxDateTime lastModified;
+
+    {
+        // Silence spurious OS messages while checking if the file has changed
+        wxLogNull silence;
+        lastModified = m_watcherFileName.GetModificationTime();
+    }
 
     if( lastModified == m_watcherLastModified || !lastModified.IsValid() )
         return;
@@ -1238,7 +1240,7 @@ void PCB_BASE_FRAME::OnFpChangeDebounceTimer( wxTimerEvent& aEvent )
     if( !fp || !adapter )
         return;
 
-    m_inFpChangeTimerEvent = true;
+    SCOPED_SET_RESET<bool> inTimerEvent( m_inFpChangeTimerEvent, true );
 
     if( !GetScreen()->IsContentModified()
         || IsOK( this, _( "The library containing the current footprint has changed.\n"
@@ -1284,6 +1286,4 @@ void PCB_BASE_FRAME::OnFpChangeDebounceTimer( wxTimerEvent& aEvent )
             DisplayError( this, ioe.What() );
         }
     }
-
-    m_inFpChangeTimerEvent = false;
 }

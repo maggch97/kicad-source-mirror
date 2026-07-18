@@ -14,12 +14,13 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "settings/json_settings.h"
 #include <regex>
+#include <set>
 #include <wx/debug.h>
 #include <wx/dir.h>
 #include <wx/filename.h>
@@ -155,10 +156,30 @@ JSON_SETTINGS* SETTINGS_MANAGER::registerSettings( JSON_SETTINGS* aSettings, boo
 }
 
 
+// Color settings writes are owned by SaveColorSettings and project file writes by SaveProject or
+// UnloadProject, so the manager must never write either on its own.  Project local settings stay
+// eligible; they carry view state that should persist even when the project is not saved.
+static bool managerMayAutoSave( JSON_SETTINGS* aSettings )
+{
+    return !dynamic_cast<COLOR_SETTINGS*>( aSettings ) && !dynamic_cast<PROJECT_FILE*>( aSettings );
+}
+
+
+// Load() can run late in the application lifecycle, so pending in-memory edits are flushed first
+// or the stale on-disk copy would clobber them.  Objects that have never been synchronized with
+// their file are never flushed; for those a store mismatch only means the object has not been
+// populated yet, and writing it out would replace the file with construction state.
+static void reloadFromFile( JSON_SETTINGS* aSettings, const wxString& aPath )
+{
+    if( aSettings->IsFileSynced() && managerMayAutoSave( aSettings ) )
+        aSettings->SaveToFile( aPath );
+
+    aSettings->LoadFromFile( aPath );
+}
+
+
 void SETTINGS_MANAGER::Load()
 {
-    // TODO(JE) We should check for dirty settings here and write them if so, because
-    // Load() could be called late in the application lifecycle
     std::vector<JSON_SETTINGS*> toLoad;
 
     // Cache a copy of raw pointers; m_settings may be modified during the load loop
@@ -169,7 +190,7 @@ void SETTINGS_MANAGER::Load()
                     } );
 
     for( JSON_SETTINGS* settings : toLoad )
-        settings->LoadFromFile( GetPathForSettingsFile( settings ) );
+        reloadFromFile( settings, GetPathForSettingsFile( settings ) );
 }
 
 
@@ -182,7 +203,7 @@ void SETTINGS_MANAGER::Load( JSON_SETTINGS* aSettings )
                             } );
 
     if( it != m_settings.end() )
-        ( *it )->LoadFromFile( GetPathForSettingsFile( it->get() ) );
+        reloadFromFile( it->get(), GetPathForSettingsFile( it->get() ) );
 }
 
 
@@ -190,17 +211,8 @@ void SETTINGS_MANAGER::Save()
 {
     for( auto&& settings : m_settings )
     {
-        // Never automatically save color settings, caller should use SaveColorSettings
-        if( dynamic_cast<COLOR_SETTINGS*>( settings.get() ) )
+        if( !managerMayAutoSave( settings.get() ) )
             continue;
-
-        // Never automatically save project file, caller should use SaveProject or UnloadProject
-        // We do want to save the project local settings, though because they are generally view
-        // settings that should persist even if the project is not saved
-        if( dynamic_cast<PROJECT_FILE*>( settings.get() ) )
-        {
-            continue;
-        }
 
         settings->SaveToFile( GetPathForSettingsFile( settings.get() ) );
     }
@@ -240,6 +252,10 @@ void SETTINGS_MANAGER::FlushAndRelease( JSON_SETTINGS* aSettings, bool aSave )
 
         JSON_SETTINGS* tmp = it->get(); // We use a temporary to suppress a Clang warning
         size_t         typeHash = typeid( *tmp ).hash_code();
+
+        // Releasing the common settings would otherwise leave the cached pointer dangling
+        if( tmp == m_common_settings )
+            m_common_settings = nullptr;
 
         if( m_app_settings_cache.count( typeHash ) )
             m_app_settings_cache.erase( typeHash );
@@ -445,6 +461,33 @@ void SETTINGS_MANAGER::loadAllColorSettings()
 
     if( colors_dir.IsOpened() )
         colors_dir.Traverse( loader );
+
+    // A user theme file can carry the same display name as a built-in theme (for example a
+    // user.json left over from an older version still named "KiCad Default"), which makes two
+    // identically-named entries appear in every theme selector. Built-ins own their names, so
+    // disambiguate any colliding user theme by appending its filename.
+    std::set<wxString> builtinNames;
+
+    for( const wxString& builtin : { COLOR_SETTINGS::COLOR_BUILTIN_DEFAULT,
+                                     COLOR_SETTINGS::COLOR_BUILTIN_CLASSIC } )
+    {
+        if( m_color_settings.count( builtin ) )
+            builtinNames.insert( m_color_settings.at( builtin )->GetName() );
+    }
+
+    for( const std::pair<const wxString, COLOR_SETTINGS*>& entry : m_color_settings )
+    {
+        COLOR_SETTINGS* settings = entry.second;
+
+        if( entry.first != COLOR_SETTINGS::COLOR_BUILTIN_DEFAULT
+            && entry.first != COLOR_SETTINGS::COLOR_BUILTIN_CLASSIC
+            && builtinNames.count( settings->GetName() ) )
+        {
+            // Absolute-path themes store a full path as their filename, so reduce it to a basename.
+            settings->SetName( wxString::Format( wxS( "%s (%s)" ), settings->GetName(),
+                                                 wxFileName( settings->GetFilename() ).GetName() ) );
+        }
+    }
 }
 
 
@@ -505,6 +548,10 @@ wxString SETTINGS_MANAGER::GetPathForSettingsFile( JSON_SETTINGS* aSettings )
         return PATHS::GetUserSettingsPath();
 
     case SETTINGS_LOC::PROJECT:
+        // Prj() is the active project, which during a switch may not own aSettings.
+        if( const PROJECT* owner = aSettings->GetOwningProject() )
+            return owner->GetProjectPath();
+
         // TODO: MDI support
         return Prj().GetProjectPath();
 
@@ -1079,6 +1126,19 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
 }
 
 
+bool SETTINGS_MANAGER::IsProjectLoaded( PROJECT* aProject ) const
+{
+    if( !aProject )
+        return false;
+
+    return std::any_of( m_projects_list.begin(), m_projects_list.end(),
+                        [&]( const std::unique_ptr<PROJECT>& aPtr )
+                        {
+                            return aPtr.get() == aProject;
+                        } );
+}
+
+
 bool SETTINGS_MANAGER::UnloadProject( PROJECT* aProject, bool aSave )
 {
     if( !aProject || !m_projects.count( aProject->GetProjectFullName() ) )
@@ -1265,7 +1325,7 @@ void SETTINGS_MANAGER::SaveProjectAs( const wxString& aFullPath, PROJECT* aProje
 }
 
 
-void SETTINGS_MANAGER::SaveProjectCopy( const wxString& aFullPath, PROJECT* aProject )
+bool SETTINGS_MANAGER::SaveProjectCopy( const wxString& aFullPath, PROJECT* aProject )
 {
     if( !aProject )
         aProject = &Prj();
@@ -1278,9 +1338,12 @@ void SETTINGS_MANAGER::SaveProjectCopy( const wxString& aFullPath, PROJECT* aPro
     project->SetReadOnly( false );
 
     project->SetFilename( fn.GetName() );
-    project->SaveToFile( fn.GetPath() );
+    const bool projectOk = project->SaveToFile( fn.GetPath() );
     project->SetFilename( oldName );
 
+    // PROJECT_LOCAL_SETTINGS save is best-effort: SaveToFile returns false for
+    // benign skips (unchanged content, default settings with m_createIfDefault
+    // == false), so requiring success would false-positive an error.
     PROJECT_LOCAL_SETTINGS& localSettings = aProject->GetLocalSettings();
 
     localSettings.SetFilename( fn.GetName() );
@@ -1288,6 +1351,8 @@ void SETTINGS_MANAGER::SaveProjectCopy( const wxString& aFullPath, PROJECT* aPro
     localSettings.SetFilename( oldName );
 
     project->SetReadOnly( readOnly );
+
+    return projectOk;
 }
 
 
@@ -1332,7 +1397,8 @@ bool SETTINGS_MANAGER::unloadProjectFile( PROJECT* aProject, bool aSave )
 
     if( it != m_settings.end() )
     {
-        wxString projectPath = GetPathForSettingsFile( it->get() );
+        // Resolve from aProject directly; during a switch Prj() is no longer aProject.
+        wxString projectPath = aProject->GetProjectPath();
 
         bool saveLocalSettings = aSave && aProject->GetLocalSettings().ShouldAutoSave();
 

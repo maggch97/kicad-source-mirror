@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "dialogs/panel_maintenance.h"
@@ -30,6 +26,7 @@
 #include <nlohmann/json.hpp>
 
 #include <advanced_config.h>
+#include <api/api_server.h>
 #include <bitmaps.h>
 #include <bitmap_store.h>
 #include <dialog_shim.h>
@@ -51,6 +48,7 @@
 #include <confirm.h>
 #include <panel_packages_and_updates.h>
 #include <pgm_base.h>
+#include <scoped_set_reset.h>
 #include <settings/app_settings.h>
 #include <settings/common_settings.h>
 #include <settings/settings_manager.h>
@@ -87,9 +85,6 @@
 #include <functional>
 #include <kiface_ids.h>
 
-#ifdef KICAD_IPC_API
-#include <api/api_server.h>
-#endif
 
 
 // Minimum window size
@@ -150,6 +145,7 @@ void EDA_BASE_FRAME::commonInit( FRAME_T aFrameType )
     m_autoSavePending   = false;
     m_undoRedoCountMax  = DEFAULT_MAX_UNDO_ITEMS;
     m_isClosing         = false;
+    m_closeInProgress   = false;
     m_isNonUserClose    = false;
     m_autoSaveTimer     = new wxTimer( this, ID_AUTO_SAVE_TIMER );
     m_autoSaveRequired  = false;
@@ -175,6 +171,8 @@ void EDA_BASE_FRAME::commonInit( FRAME_T aFrameType )
     // hook wxEVT_CLOSE_WINDOW so we can call SaveSettings().  This function seems
     // to be called before any other hook for wxCloseEvent, which is necessary.
     Connect( wxEVT_CLOSE_WINDOW, wxCloseEventHandler( EDA_BASE_FRAME::windowClosing ) );
+
+    KIPLATFORM::UI::SetWMClass( this, Pgm().GetDesktopAppId() );
 
     initExitKey();
 }
@@ -270,6 +268,24 @@ void EDA_BASE_FRAME::windowClosing( wxCloseEvent& event )
     if( m_isClosing )
         return;
 
+    // The unsaved-changes prompt in canCloseWindow() pumps messages, so a second close event
+    // (queued title-bar click, Alt+F4 repeat, session end) can arrive while the first close is
+    // still deciding.  m_isClosing is not set until canCloseWindow() succeeds, so without this
+    // guard the second event would run the entire prompt and teardown re-entrantly and the
+    // first close would then resume against a demolished frame.
+    //
+    // A non-vetoable session end that lands during the prompt is dropped here rather than run
+    // re-entrantly. That trades a rare failure to persist settings on forced logoff for not
+    // crashing; the durable fix keeps the close off the OS default-window-proc stack entirely and
+    // needs Windows verification.
+    if( m_closeInProgress )
+    {
+        if( event.CanVeto() )
+            event.Veto();
+
+        return;
+    }
+
     // Don't allow closing when a quasi-modal is open.
     wxWindow* quasiModal = findQuasiModalDialog();
 
@@ -293,6 +309,8 @@ void EDA_BASE_FRAME::windowClosing( wxCloseEvent& event )
         // End session means the OS is going to terminate us
         m_isNonUserClose = true;
     }
+
+    SCOPED_SET_RESET<bool> closeGuard( m_closeInProgress, true );
 
     if( canCloseWindow( event ) )
     {
@@ -381,6 +399,11 @@ bool EDA_BASE_FRAME::ProcessEvent( wxEvent& aEvent )
             wxLogTrace( traceAutoSave, wxT( "Starting auto save timer." ) );
             m_autoSaveTimer->Start( GetAutoSaveInterval() * 1000, wxTIMER_ONE_SHOT );
             m_autoSavePending = true;
+
+            // A fresh cycle starts here (a prior snapshot completed or an explicit save cleared
+            // the pending state), so drop any deferral streak left over from that cycle; otherwise
+            // its stale start time could force the next snapshot to run mid-interaction.
+            m_autoSaveDeferredSince = wxInvalidDateTime;
         }
         else if( m_autoSaveTimer->IsRunning() )
         {
@@ -409,8 +432,23 @@ void EDA_BASE_FRAME::onAutoSaveTimer( wxTimerEvent& aEvent )
         return;
     }
 
-    if( !doAutoSave() )
+    // A one-shot tick can already be queued when the frame starts closing; running the saver batch
+    // then would serialize documents whose editors are mid-teardown, so bail once closing begins.
+    if( m_isClosing )
+        return;
+
+    // When the save is deferred (an interactive operation is in progress) keep the timer armed so
+    // a later tick retries.  Maintaining m_autoSavePending here preserves the "pending == timer
+    // running" invariant that ProcessEvent() relies on to avoid re-arming the timer on every event.
+    if( !doAutoSave() && isAutoSaveRequired() && GetAutoSaveInterval() > 0 )
+    {
         m_autoSaveTimer->Start( GetAutoSaveInterval() * 1000, wxTIMER_ONE_SHOT );
+        m_autoSavePending = true;
+    }
+    else
+    {
+        m_autoSavePending = false;
+    }
 }
 
 
@@ -434,11 +472,6 @@ static wxString buildRecoveredFileName( const wxFileName& aSrcFn, const wxDateTi
 
 void EDA_BASE_FRAME::CheckForAutosaveFiles( const wxString& aProjectPath, const std::vector<wxString>& aExtensions )
 {
-    COMMON_SETTINGS* cs = Pgm().GetCommonSettings();
-
-    if( cs->m_Backup.format != BACKUP_FORMAT::ZIP )
-        return;
-
     auto stale = Kiway().LocalHistory().FindStaleAutosaveFiles( aProjectPath, aExtensions );
 
     if( stale.empty() )
@@ -500,8 +533,36 @@ void EDA_BASE_FRAME::CheckForAutosaveFiles( const wxString& aProjectPath, const 
 
 bool EDA_BASE_FRAME::doAutoSave()
 {
+    // Defer the snapshot if the user is mid-interaction.  Serializing a large document on the
+    // UI thread freezes the editor for seconds; deferring keeps the dirty flags set so the
+    // rescheduled timer tick will pick the work up once the operation completes.  To avoid
+    // starving the snapshot when the user parks in an interactive tool, the deferral is bounded
+    // and the save is forced once it has been outstanding for longer than the cap.
+    if( !canRunAutoSave() )
+    {
+        wxDateTime now = wxDateTime::Now();
+
+        if( !m_autoSaveDeferredSince.IsValid() )
+            m_autoSaveDeferredSince = now;
+
+        wxTimeSpan maxDeferral = wxTimeSpan::Seconds( std::max( 60, GetAutoSaveInterval() * 12 ) );
+
+        if( now - m_autoSaveDeferredSince < maxDeferral )
+        {
+            wxLogTrace( traceAutoSave, wxT( "Deferring auto save; an interactive operation is in progress." ) );
+            return false;
+        }
+
+        wxLogTrace( traceAutoSave, wxT( "Auto save deferral exceeded; saving despite interactive operation." ) );
+    }
+
+    // The deferral is resolved (either the user went idle or the cap forced the snapshot), so the
+    // cycle is now consumed regardless of the saver outcome.  The snapshot is best effort: a
+    // droppable cycle (a prior autosave still writing) is recaptured by the next edit's OnModify,
+    // so clear the flags here rather than re-arming on the saver result, which would poll forever
+    // in degenerate states such as no registered savers.
+    m_autoSaveDeferredSince = wxInvalidDateTime;
     m_autoSaveRequired = false;
-    m_autoSavePending = false;
 
     COMMON_SETTINGS* cs = Pgm().GetCommonSettings();
 
@@ -511,15 +572,10 @@ bool EDA_BASE_FRAME::doAutoSave()
     if( cs->m_Backup.location == BACKUP_LOCATION::PROJECT_DIR && Prj().IsReadOnly() )
         return true;
 
-    if( cs->m_Backup.format == BACKUP_FORMAT::INCREMENTAL )
-    {
-        Kiway().LocalHistory().RunRegisteredSaversAndCommit( Prj().GetProjectPath(),
-                                                             wxS( "Autosave" ) );
-    }
+    if( cs->AutosaveUsesLocalHistory() )
+        Kiway().LocalHistory().RunRegisteredSaversAndCommit( Prj().GetProjectPath(), wxS( "Autosave" ) );
     else
-    {
         Kiway().LocalHistory().RunRegisteredSaversAsAutosaveFiles( Prj().GetProjectPath() );
-    }
 
     return true;
 }
@@ -581,7 +637,7 @@ void EDA_BASE_FRAME::onUpdateUI( wxUpdateUIEvent& aEvent )
 
 
 void EDA_BASE_FRAME::HandleUpdateUIEvent( wxUpdateUIEvent& aEvent, EDA_BASE_FRAME* aFrame,
-                                          ACTION_CONDITIONS aCond )
+                                          ACTION_CONDITIONS& aCond )
 {
     bool       checkRes  = false;
     bool       enableRes = true;
@@ -907,14 +963,12 @@ void EDA_BASE_FRAME::CommonSettingsChanged( int aFlags )
 
     COMMON_SETTINGS* settings = Pgm().GetCommonSettings();
 
-#ifdef KICAD_IPC_API
     bool running = Pgm().GetApiServer().Running();
 
     if( running && !settings->m_Api.enable_server )
         Pgm().GetApiServer().Stop();
     else if( !running && settings->m_Api.enable_server )
         Pgm().GetApiServer().Start();
-#endif
 
     if( m_fileHistory )
     {
@@ -922,7 +976,7 @@ void EDA_BASE_FRAME::CommonSettingsChanged( int aFlags )
         m_fileHistory->SetMaxFiles( (unsigned) std::max( 0, historySize ) );
     }
 
-    if( Pgm().GetCommonSettings()->m_Backup.enabled )
+    if( Pgm().GetCommonSettings()->AutosaveUsesLocalHistory() )
         Kiway().LocalHistory().Init( Prj().GetProjectPath() );
 
     GetBitmapStore()->ThemeChanged();
@@ -1692,9 +1746,7 @@ void EDA_BASE_FRAME::ShowPreferences( wxString aStartPage, wxString aStartParent
         {
         }
 
-#ifdef KICAD_IPC_API
         book->AddPage( new PANEL_PLUGIN_SETTINGS( book ), _( "Plugins" ) );
-#endif
 
         book->AddPage( new PANEL_MAINTENANCE( book, this ), _( "Maintenance" ) );
 

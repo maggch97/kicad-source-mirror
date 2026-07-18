@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <tool/actions.h>
@@ -123,8 +123,9 @@ std::optional<TOOLBAR_CONFIGURATION> FOOTPRINT_EDIT_TOOLBAR_SETTINGS::DefaultToo
               .AppendAction( PCB_ACTIONS::drawPolygon )
               .AppendAction( PCB_ACTIONS::drawBezier )
               .AppendAction( PCB_ACTIONS::placeReferenceImage )
-              .AppendAction( PCB_ACTIONS::placeText )
-              .AppendAction( PCB_ACTIONS::drawTextBox )
+              .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Text objects" ) )
+                            .AddAction( PCB_ACTIONS::placeText )
+                            .AddAction( PCB_ACTIONS::drawTextBox ) )
               .AppendAction( PCB_ACTIONS::drawTable )
               .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Dimension objects" ) )
                             .AddAction( PCB_ACTIONS::drawOrthogonalDimension )

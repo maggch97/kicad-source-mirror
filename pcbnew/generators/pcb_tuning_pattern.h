@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <eda_item.h>
@@ -406,6 +402,7 @@ public:
     }
 
     LENGTH_TUNING_MODE GetTuningMode() const { return m_tuningMode; }
+    void               SetTuningMode( LENGTH_TUNING_MODE aMode ) { m_tuningMode = aMode; }
 
     PNS::ROUTER_MODE GetPNSMode()
     {
@@ -532,7 +529,7 @@ protected:
         std::swap( *this, *static_cast<PCB_TUNING_PATTERN*>( aImage ) );
     }
 
-    bool recoverBaseline( PNS::ROUTER* aRouter );
+    bool recoverBaseline( PNS::ROUTER* aRouter, int aPNSLayer );
 
     bool baselineValid();
 

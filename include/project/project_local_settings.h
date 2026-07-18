@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef KICAD_PROJECT_LOCAL_SETTINGS_H
@@ -65,6 +65,8 @@ public:
     bool SaveToFile( const wxString& aDirectory = "", bool aForce = false ) override;
 
     void SetProject( PROJECT* aProject ) { m_project = aProject; }
+
+    const PROJECT* GetOwningProject() const override { return m_project; }
 
     void SaveFileState( const wxString& aFileName, const WINDOW_SETTINGS* aWindowCfg, bool aOpen );
 

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef FOOTPRINT_CHOOSER_FRAME_H
@@ -93,6 +89,15 @@ private:
     void doCloseWindow() override;
     void closeFootprintChooser( wxCommandEvent& aEvent );
 
+    /**
+     * Stop the preview canvases and release their GPU/board state before the
+     * modal loop exits.  Must run before DismissModal() so that paint/idle/timer
+     * events delivered during KIWAY_PLAYER::ShowModal()'s post-loop wxSafeYield()
+     * cannot touch the preview after its backing data has been torn down.
+     * Idempotent; safe to call multiple times and from the destructor.
+     */
+    void quiescePreview();
+
     WINDOW_SETTINGS* GetWindowSettings( APP_SETTINGS_BASE* aCfg ) override;
     COLOR_SETTINGS* GetColorSettings( bool aForceRefresh ) const override;
 
@@ -146,6 +151,8 @@ private:
     // window that isn't yet visible will return false to AcceptsFocus().  So we must delay
     // the initial-focus SetFocus() call to the first paint event.
     bool                     m_firstPaintEvent;
+
+    bool                     m_quiesced = false;
 };
 
 #endif  // FOOTPRINT_CHOOSER_FRAME_H

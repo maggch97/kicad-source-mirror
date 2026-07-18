@@ -15,17 +15,18 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
 
 #include <map>
+#include <filesystem>
+#include <string>
+#include <unordered_set>
 #include <kicommon.h>
+#include <wx/arrstr.h>
+#include <wx/dir.h>
 #include <wx/filename.h>
 #include <wx/process.h>
 #include <wx/zipstrm.h>
@@ -82,6 +83,20 @@ KICOMMON_API void CopySexprFile( const wxString& aSrcPath, const wxString& aDest
 KICOMMON_API int ExecuteFile( const wxString& aEditorName,
                               const wxString& aFileName = wxEmptyString,
                               wxProcess* aCallback = nullptr, bool aFileForKicad = true );
+
+/**
+ * Run a user-supplied command line through the platform shell so glob expansion, pipes, and
+ * other shell features work consistently.
+ *
+ * On Windows the command is wrapped as cmd.exe /d /s /c "<cmd>" so that absolute paths containing
+ * spaces or quotes survive cmd.exe's quote handling intact. On POSIX the command is handed to
+ * /bin/sh -c as a single argument.
+ *
+ * @param aCommand the command line exactly as entered by the user.
+ * @param aProcess an optional wxProcess for the call; pass a Redirect()ed process to capture output.
+ * @return the process exit code, or -1 if the command could not be executed.
+ */
+KICOMMON_API int ExecuteCommandThroughShell( const wxString& aCommand, wxProcess* aProcess = nullptr );
 
 /**
  * Add un " to the start and the end of string (if not already done).
@@ -144,3 +159,65 @@ KICOMMON_API bool CopyFilesOrDirectory( const wxString& aSourceDir, const wxStri
  */
 KICOMMON_API bool AddDirectoryToZip( wxZipOutputStream& aZip, const wxString& aSourceDir, wxString& aErrors,
                                      const wxString& aParentDir = "" );
+
+/**
+ * Recursively collect every file under \a aRoot, deduplicating subdirectories by
+ * their resolved path.  Legitimate one-level symlinks resolve normally, but
+ * recursive symlinks (a Wine `dosdevices/z: -> /` loop, a self-referencing `.`
+ * link, etc.) are visited at most once instead of recursing until OOM.  This is
+ * a loop-safe replacement for wxDir::GetAllFiles() when scanning user-controlled
+ * directory trees.
+ *
+ * @param aRoot is the directory to walk.
+ * @param aFiles receives the full path of every matching file found.
+ * @param aFileSpec is an optional wildcard filter (e.g. `*.step`); empty matches all.
+ * @param aFlags is the wxDir traversal flag set; defaults to wxDIR_DEFAULT to match
+ *               wxDir::GetAllFiles().  Pass `wxDIR_FILES | wxDIR_DIRS` to exclude
+ *               hidden entries.  wxDIR_FILES and wxDIR_DIRS are always implied so
+ *               recursion and file collection happen regardless.
+ */
+KICOMMON_API void CollectFilesLoopSafe( const wxString& aRoot, wxArrayString& aFiles,
+                                        const wxString& aFileSpec = wxEmptyString,
+                                        int aFlags = wxDIR_DEFAULT );
+
+/**
+ * Recursively collect every subdirectory under \a aRoot using the same loop
+ * detection as CollectFilesLoopSafe().  Loop-safe replacement for
+ * wxDir::GetAllFiles() called with the wxDIR_DIRS flag.
+ *
+ * @param aRoot is the directory to walk.
+ * @param aDirs receives the full path of every subdirectory found.
+ * @param aFlags is the wxDir traversal flag set; defaults to wxDIR_DIRS (hidden
+ *               directories excluded).  Pass `wxDIR_DIRS | wxDIR_HIDDEN` to include
+ *               them.  wxDIR_DIRS is always implied.
+ */
+KICOMMON_API void CollectSubdirsLoopSafe( const wxString& aRoot, wxArrayString& aDirs,
+                                          int aFlags = wxDIR_DIRS );
+
+
+// how a symlink that resolves outside the scan root is treated
+enum class DIR_LOOP_POLICY
+{
+    CONFINE_TO_ROOT,    // descend only into targets that stay inside the root subtree
+    BLOCK_ROOT_ESCAPE   // descend anywhere except a link resolving to an ancestor of the root
+};
+
+
+// bounds a hand-rolled recursive dir walk against symlink cycles and root escapes
+// query ShouldDescend before recursing real dirs keyed by name links canonicalized
+class KICOMMON_API DIR_LOOP_GUARD
+{
+public:
+    explicit DIR_LOOP_GUARD( const wxString& aRoot,
+                             DIR_LOOP_POLICY aPolicy = DIR_LOOP_POLICY::CONFINE_TO_ROOT );
+
+    // false when the root itself would not resolve caller must not walk
+    bool IsRooted() const { return !m_root.empty(); }
+
+    bool ShouldDescend( const wxString& aDir );
+
+private:
+    std::filesystem::path           m_root;
+    DIR_LOOP_POLICY                 m_policy;
+    std::unordered_set<std::string> m_visited;
+};

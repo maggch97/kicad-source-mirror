@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DIALOG_SHIM_
@@ -46,6 +42,21 @@ class wxSpinDoubleEvent;
 class wxStyledTextEvent;
 class wxPropertyGridEvent;
 class wxDataViewEvent;
+
+
+/**
+ * Constrain a window rectangle so it fits entirely within a display's client area.
+ *
+ * The size is capped to the client area, then the top-left corner is pulled back so the
+ * whole rectangle is visible (the corner is preferred over the bottom-right edge so the
+ * title bar stays reachable).  Used to tame geometry restored from a different, possibly
+ * higher-DPI, monitor that would otherwise land off-screen or oversized.
+ *
+ * @param aRect       The window rectangle to constrain, in screen coordinates.
+ * @param aClientArea The target display's client (work) area, in screen coordinates.
+ * @return The constrained rectangle.
+ */
+KICOMMON_API wxRect ClampRectToDisplay( const wxRect& aRect, const wxRect& aClientArea );
 
 
 /**
@@ -172,6 +183,17 @@ public:
      */
     void RegisterUnitBinder( UNIT_BINDER* aUnitBinder, wxWindow* aWindow );
 
+    /**
+     * Remove a UNIT_BINDER from the control-state save/restore map.
+     *
+     * Called from ~UNIT_BINDER so that a destroyed binder never leaves a dangling pointer behind
+     * for SaveControlState()/LoadControlState() to dereference when a later control reuses the
+     * freed window's address.
+     *
+     * @param aUnitBinder the binder being destroyed
+     */
+    void UnregisterUnitBinder( UNIT_BINDER* aUnitBinder );
+
 protected:
     /**
      * In all dialogs, we must call the same functions to fix minimal dlg size, the default
@@ -184,6 +206,17 @@ protected:
      * wxInitDialogEvent handler.
      */
     void finishDialogSettings();
+
+    /**
+     * Constrain the dialog's minimum size, size and position to the work area of the display
+     * it occupies, so a dialog whose content or restored geometry is larger than the monitor
+     * still fits, its bottom controls stay reachable, and it never lands off-screen.
+     *
+     * Geometry restored from a different monitor, or inflated by the per-monitor DPI rescale
+     * that fires when the dialog moves to the saved monitor, can otherwise leave the dialog
+     * off-screen or larger than the display with no way to shrink it. Only shrinks; never grows.
+     */
+    void clampToWorkArea();
 
     /**
      * Set the dialog to the given dimensions in "dialog units". These are units equivalent
@@ -224,17 +257,17 @@ protected:
      */
     virtual void TearDownQuasiModal() {}
 
-    /**                                                                                                               
+    /**
      * Reset undo/redo tracking after dynamically replacing child panels.
-     *                                                                                                                
+     *
      * Clears the undo/redo stacks and current value baselines, then registers
      * undo/redo event handlers on the new children.
      *
      * @param aChildren The child window list of the newly created panel.
      */
-    void resetUndoRedoForNewContent( wxWindowList& aChildren ); 
+    void resetUndoRedoForNewContent( wxWindowList& aChildren );
 
-    /**                                                                                                                   
+    /**
      * Remove UNIT_BINDER registrations for a window and all its descendants.
      *
      * Call before destroying a panel whose children have registered unit binders.
@@ -267,8 +300,12 @@ private:
      * Set focus back to the parent frame's tool canvas if available, otherwise to the
      * parent window. Prevents focus from landing on auxiliary panels like the properties
      * panel when the mouse happens to hover over them at dialog close time.
+     *
+     * @param aDeferUntilFrameActive also re-asserts the focus from an idle callback, needed only
+     *                               for the GTK quasi-modal teardown race where the dialog is
+     *                               still the active top-level window when this is called.
      */
-    void focusParentCanvas();
+    void focusParentCanvas( bool aDeferUntilFrameActive = false );
 
     std::string generateKey( const wxWindow* aWin ) const;
 

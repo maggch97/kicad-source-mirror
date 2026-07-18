@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -52,6 +48,7 @@
 #include <sch_junction.h>
 #include <sch_line.h>
 #include <sch_shape.h>
+#include <sch_rule_area.h>
 #include <sch_marker.h>
 #include <sch_no_connect.h>
 #include <sch_sheet.h>
@@ -420,7 +417,7 @@ COLOR4D SCH_PAINTER::getRenderColor( const SCH_ITEM* aItem, int aLayer, bool aDr
                 color = otherTextItem->GetTextColor();
         }
 
-        if( color.m_text )
+        if( color.m_text && m_schematic )
             color = COLOR4D( aItem->ResolveText( *color.m_text, &m_schematic->CurrentSheet() ) );
     }
     else  /* overrideItemColors */
@@ -1667,7 +1664,38 @@ void SCH_PAINTER::draw( const SCH_PIN* aPin, int aLayer, bool aDimmed )
     // Request text layout info and draw it
 
     if( std::optional<PIN_LAYOUT_CACHE::TEXT_INFO> numInfo = cache.GetPinNumberInfo( shadowWidth ) )
+    {
         drawTextInfo( *numInfo, getColorForLayer( LAYER_PINNUM ) );
+
+        // Pin-to-pad mapping (issue #2282): when the effective pad differs from the symbol pin
+        // number and the preference is on, draw the original number as a dimmed secondary label
+        // ("effective / original") one font size smaller, in the pin-number colour at 50% alpha.
+        // The secondary label is positioned just past the primary number's bounding box along the
+        // number's writing axis so the slash reads naturally after the effective pad.
+        if( !drawingShadows && !aPin->GetRemappedFromNumber().IsEmpty() )
+        {
+            PIN_LAYOUT_CACHE::TEXT_INFO origInfo = *numInfo;
+            origInfo.m_Text = wxT( "/" ) + aPin->GetRemappedFromNumber();
+            origInfo.m_TextSize = std::max( 1, ( numInfo->m_TextSize * 4 ) / 5 );
+
+            if( OPT_BOX2I numBox = cache.GetPinNumberBBox() )
+            {
+                const bool vertical = numInfo->m_Angle == ANGLE_VERTICAL;
+
+                if( vertical )
+                    origInfo.m_TextPosition.y = numBox->GetBottom();
+                else
+                    origInfo.m_TextPosition.x = numBox->GetRight();
+
+                origInfo.m_HAlign = GR_TEXT_H_ALIGN_LEFT;
+            }
+
+            COLOR4D dimmed = getColorForLayer( LAYER_PINNUM );
+            dimmed.a *= 0.5;
+
+            drawTextInfo( origInfo, dimmed );
+        }
+    }
 
     if( std::optional<PIN_LAYOUT_CACHE::TEXT_INFO> nameInfo = cache.GetPinNameInfo( shadowWidth ) )
     {
@@ -2017,6 +2045,16 @@ void SCH_PAINTER::draw( const SCH_SHAPE* aShape, int aLayer, bool aDimmed )
     if( aShape->IsPrivate() && !m_schSettings.m_IsSymbolEditor )
         return;
 
+    // A rule area that exists solely to carry attached directive labels follows the visibility of
+    // those labels.  Rule areas which also apply DNP or exclude-from rules always remain visible
+    // since they have a design effect of their own.
+    if( aShape->Type() == SCH_RULE_AREA_T && !eeconfig()->m_Appearance.show_directive_labels
+            && !aShape->IsSelected() )
+    {
+        if( static_cast<const SCH_RULE_AREA*>( aShape )->IsDirectiveLabelOnlyArea() )
+            return;
+    }
+
     bool drawingShadows = aLayer == LAYER_SELECTION_SHADOWS;
 
     if( m_schSettings.IsPrinting() && drawingShadows )
@@ -2298,7 +2336,7 @@ void SCH_PAINTER::draw( const SCH_TEXT* aText, int aLayer, bool aDimmed )
             conn = aText->Connection();
 
         if( conn && conn->IsBus() )
-            color = getRenderColor( aText, LAYER_BUS, drawingShadows );
+            color = getRenderColor( aText, LAYER_BUS, drawingShadows, aDimmed );
     }
 
     if( !( aText->IsVisible() || aText->IsForceVisible() ) )
@@ -2308,6 +2346,10 @@ void SCH_PAINTER::draw( const SCH_TEXT* aText, int aLayer, bool aDimmed )
         else
             return;
     }
+
+    // A zero-alpha color renders as an opaque artifact on some backends, so skip the glyphs.
+    // The selection anchor below must still draw so a selected transparent item stays visible.
+    bool transparentColor = !drawingShadows && color.a <= 0.0;
 
     m_gal->SetStrokeColor( color );
     m_gal->SetFillColor( color );
@@ -2321,11 +2363,20 @@ void SCH_PAINTER::draw( const SCH_TEXT* aText, int aLayer, bool aDimmed )
     attrs.m_Angle = aText->GetDrawRotation();
     attrs.m_StrokeWidth = KiROUND( getTextThickness( aText ) );
 
-    if( drawingShadows && font->IsOutline() )
+    if( transparentColor )
+    {
+        // Clear any hover URL so a hidden item leaves no stale clickable region behind.
+        aText->SetActiveUrl( wxString() );
+    }
+    else if( drawingShadows && font->IsOutline() )
     {
         // Trying to draw glyph-shaped shadows on outline text is a fool's errand.  Just box it.
         // Use GetBoundingBox() which correctly handles multiline text dimensions.
         BOX2I bbox = aText->GetBoundingBox();
+
+        // SCH_TEXT glyphs are drawn shifted by GetOffsetToMatchSCH_FIELD(); shift the box to match.
+        if( aText->Type() == SCH_TEXT_T )
+            bbox.Offset( aText->GetOffsetToMatchSCH_FIELD( nullptr ) );
 
         bbox.Inflate( attrs.m_StrokeWidth / 2, attrs.m_StrokeWidth * 2 );
 
@@ -2575,6 +2626,8 @@ void SCH_PAINTER::draw( const SCH_TEXTBOX* aTextBox, int aLayer, bool aDimmed )
     if( drawingShadows && !( aTextBox->IsBrightened() || aTextBox->IsSelected() ) )
         return;
 
+    bool transparentColor = !drawingShadows && color.a <= 0.0;
+
     m_gal->SetFillColor( color );
     m_gal->SetStrokeColor( color );
     m_gal->SetHoverColor( color );
@@ -2592,7 +2645,7 @@ void SCH_PAINTER::draw( const SCH_TEXTBOX* aTextBox, int aLayer, bool aDimmed )
     {
         // Do not fill the shape in B&W print mode, to avoid to visible items
         // inside the shape
-        if( aTextBox->IsSolidFill() && !m_schSettings.PrintBlackAndWhiteReq() )
+        if( !transparentColor && aTextBox->IsSolidFill() && !m_schSettings.PrintBlackAndWhiteReq() )
         {
             m_gal->SetIsFill( true );
             m_gal->SetIsStroke( false );
@@ -2603,7 +2656,10 @@ void SCH_PAINTER::draw( const SCH_TEXTBOX* aTextBox, int aLayer, bool aDimmed )
     }
     else if( aLayer == LAYER_DEVICE || aLayer == LAYER_NOTES || aLayer == LAYER_PRIVATE_NOTES )
     {
-        drawText();
+        if( transparentColor )
+            aTextBox->SetActiveUrl( wxString() );
+        else
+            drawText();
 
         if( aTextBox->Type() != SCH_TABLECELL_T && borderWidth > 0 )
         {
@@ -2827,6 +2883,8 @@ void SCH_PAINTER::draw( const SCH_SYMBOL* aSymbol, int aLayer )
         SCH_PIN* symbolPin = aSymbol->GetPin( originalPins[ i ] );
         SCH_PIN* tempPin = tempPins[ i ];
 
+        tempPin->SetFlipStackedTextSide( originalPins[i]->StackedTextSideFlipped( aSymbol->GetTransform() ) );
+
         if( !symbolPin )
             continue;
 
@@ -2837,6 +2895,30 @@ void SCH_PAINTER::draw( const SCH_SYMBOL* aSymbol, int aLayer )
         tempPin->SetName( expandLibItemTextVars( symbolPin->GetShownName(), aSymbol ) );
         tempPin->SetType( symbolPin->GetType() );
         tempPin->SetShape( symbolPin->GetShape() );
+
+        // Pin-to-pad mapping (issue #2282): show the effective pad number on the schematic.  The
+        // resolution needs the SCH_SYMBOL context that symbolPin carries, so substitute the temp
+        // pin's number here, which lets the layout cache recompute geometry for the shown text.
+        if( m_schematic )
+        {
+            const wxString original = symbolPin->GetShownNumber();
+            const wxString effective =
+                    symbolPin->GetEffectivePadNumber( m_schematic->CurrentSheet(), m_schematic->GetCurrentVariant() );
+
+            if( effective != original )
+            {
+                bool showOriginal = eeconfig() ? eeconfig()->m_Appearance.show_remapped_pin_numbers
+                                               : m_schSettings.m_ShowRemappedPinNumbers;
+
+                // The effective pad is the primary number; the layout cache positions and sizes it.
+                // When the preference is on, the original symbol-pin number is carried on the temp
+                // pin so draw( SCH_PIN* ) can render it as a dimmed secondary label.
+                tempPin->SetNumber( effective );
+
+                if( showOriginal )
+                    tempPin->SetRemappedFromNumber( original );
+            }
+        }
 
         if( symbolPin->IsDangling() )
             tempPin->SetFlags( IS_DANGLING );
@@ -2975,6 +3057,10 @@ void SCH_PAINTER::draw( const SCH_FIELD* aField, int aLayer, bool aDimmed )
             return;
     }
 
+    // A zero-alpha color renders as an opaque artifact on some backends, so skip the glyphs.
+    // The selection anchor and umbilical line below must still draw for a transparent field.
+    bool transparentColor = !drawingShadows && color.a <= 0.0;
+
     SCH_SHEET_PATH* sheetPath = nullptr;
     wxString        variant;
 
@@ -3032,7 +3118,11 @@ void SCH_PAINTER::draw( const SCH_FIELD* aField, int aLayer, bool aDimmed )
     m_gal->SetFillColor( color );
     m_gal->SetHoverColor( color );
 
-    if( drawingShadows && getFont( aField )->IsOutline() )
+    if( transparentColor )
+    {
+        // Skip glyph rendering; the anchor/umbilical drawing below still runs.
+    }
+    else if( drawingShadows && getFont( aField )->IsOutline() )
     {
         // Trying to draw glyph-shaped shadows on outline text is a fool's errand.  Just box it.
         VECTOR2I textpos = bbox.Centre();
@@ -3113,8 +3203,11 @@ void SCH_PAINTER::draw( const SCH_FIELD* aField, int aLayer, bool aDimmed )
                             bbox.GetBottom() - bbox.GetHeight() / 6.0 );
         }
 
-        if( parent->IsSymbolLikePowerLocalLabel() && aField->GetId() == FIELD_T::VALUE )
+        if( !transparentColor && parent->IsSymbolLikePowerLocalLabel()
+                && aField->GetId() == FIELD_T::VALUE )
+        {
             drawLocalPowerIcon( pos, size, rotated, color, drawingShadows, aField->IsBrightened() );
+        }
     }
 
     // Draw anchor or umbilical line.  The umbilical line shows independent motion of a field
@@ -3173,28 +3266,35 @@ void SCH_PAINTER::draw( const SCH_GLOBALLABEL* aLabel, int aLayer, bool aDimmed 
         return;
     }
 
-    std::vector<VECTOR2I> pts;
-    std::deque<VECTOR2D> pts2;
+    // Skip the flag shape when transparent, but still delegate to the SCH_TEXT draw so it can
+    // clear any stale hover URL on the now-hidden label.
+    bool transparentColor = !drawingShadows && color.a <= 0.0;
 
-    aLabel->CreateGraphicShape( &m_schSettings, pts, aLabel->GetTextPos() );
-
-    for( const VECTOR2I& p : pts )
-        pts2.emplace_back( VECTOR2D( p.x, p.y ) );
-
-    m_gal->SetIsStroke( true );
-    m_gal->SetLineWidth( getLineWidth( aLabel, drawingShadows ) );
-    m_gal->SetStrokeColor( color );
-
-    if( drawingShadows )
+    if( !transparentColor )
     {
-        m_gal->SetIsFill( eeconfig()->m_Selection.fill_shapes );
-        m_gal->SetFillColor( color );
-        m_gal->DrawPolygon( pts2 );
-    }
-    else
-    {
-        m_gal->SetIsFill( false );
-        m_gal->DrawPolyline( pts2 );
+        std::vector<VECTOR2I> pts;
+        std::deque<VECTOR2D> pts2;
+
+        aLabel->CreateGraphicShape( &m_schSettings, pts, aLabel->GetTextPos() );
+
+        for( const VECTOR2I& p : pts )
+            pts2.emplace_back( VECTOR2D( p.x, p.y ) );
+
+        m_gal->SetIsStroke( true );
+        m_gal->SetLineWidth( getLineWidth( aLabel, drawingShadows ) );
+        m_gal->SetStrokeColor( color );
+
+        if( drawingShadows )
+        {
+            m_gal->SetIsFill( eeconfig()->m_Selection.fill_shapes );
+            m_gal->SetFillColor( color );
+            m_gal->DrawPolygon( pts2 );
+        }
+        else
+        {
+            m_gal->SetIsFill( false );
+            m_gal->DrawPolyline( pts2 );
+        }
     }
 
     draw( static_cast<const SCH_TEXT*>( aLabel ), aLayer, false );
@@ -3236,6 +3336,8 @@ void SCH_PAINTER::draw( const SCH_LABEL* aLabel, int aLayer, bool aDimmed )
         return;
     }
 
+    // Transparency is handled by the delegated SCH_TEXT draw, which also keeps the anchor visible
+    // for a selected local label.
     draw( static_cast<const SCH_TEXT*>( aLabel ), aLayer, false );
 }
 
@@ -3275,20 +3377,27 @@ void SCH_PAINTER::draw( const SCH_HIERLABEL* aLabel, int aLayer, bool aDimmed )
         return;
     }
 
-    std::vector<VECTOR2I> i_pts;
-    std::deque<VECTOR2D>  d_pts;
+    // Skip the flag shape when transparent, but still delegate to the SCH_TEXT draw so it can
+    // clear any stale hover URL on the now-hidden label.
+    bool transparentColor = !drawingShadows && color.a <= 0.0;
 
-    aLabel->CreateGraphicShape( &m_schSettings, i_pts, (VECTOR2I)aLabel->GetTextPos() );
+    if( !transparentColor )
+    {
+        std::vector<VECTOR2I> i_pts;
+        std::deque<VECTOR2D>  d_pts;
 
-    for( const VECTOR2I& i_pt : i_pts )
-        d_pts.emplace_back( VECTOR2D( i_pt.x, i_pt.y ) );
+        aLabel->CreateGraphicShape( &m_schSettings, i_pts, (VECTOR2I)aLabel->GetTextPos() );
 
-    m_gal->SetIsFill( true );
-    m_gal->SetFillColor( m_schSettings.GetLayerColor( LAYER_SCHEMATIC_BACKGROUND ) );
-    m_gal->SetIsStroke( true );
-    m_gal->SetLineWidth( getLineWidth( aLabel, drawingShadows ) );
-    m_gal->SetStrokeColor( color );
-    m_gal->DrawPolyline( d_pts );
+        for( const VECTOR2I& i_pt : i_pts )
+            d_pts.emplace_back( VECTOR2D( i_pt.x, i_pt.y ) );
+
+        m_gal->SetIsFill( true );
+        m_gal->SetFillColor( m_schSettings.GetLayerColor( LAYER_SCHEMATIC_BACKGROUND ) );
+        m_gal->SetIsStroke( true );
+        m_gal->SetLineWidth( getLineWidth( aLabel, drawingShadows ) );
+        m_gal->SetStrokeColor( color );
+        m_gal->DrawPolyline( d_pts );
+    }
 
     draw( static_cast<const SCH_TEXT*>( aLabel ), aLayer, aDimmed );
 }
@@ -3329,6 +3438,9 @@ void SCH_PAINTER::draw( const SCH_DIRECTIVE_LABEL* aLabel, int aLayer, bool aDim
 
         return;
     }
+
+    if( !drawingShadows && color.a <= 0.0 )
+        return;
 
     std::vector<VECTOR2I> pts;
     std::deque<VECTOR2D> pts2;

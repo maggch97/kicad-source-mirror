@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef ERC_H
@@ -72,6 +68,16 @@ public:
      *                       false = calculate error count only
      */
     int TestDuplicateSheetNames( bool aCreateMarker );
+
+    /**
+     * Check pin-to-pad maps (issue #2282): stale pin references, duplicate pad targets, bad pads
+     * and unmapped connected pins.  Footprint pad numbers come from the cvpcb kiface (aCvPcb), so
+     * the footprint-dependent checks (bad-pad, unmapped-connected-pin) run here when it is
+     * available.  Drops a SCH_MARKER at the symbol body per violation.
+     *
+     * @return the number of violations found.
+     */
+    int TestPinMap( KIFACE* aCvPcb, PROJECT* aProject );
 
     /**
      * Check for any unresolved text variable references.

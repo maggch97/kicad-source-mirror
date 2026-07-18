@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <chrono>
@@ -31,12 +31,14 @@
 #include <paths.h>
 #include <pgm_base.h>
 #include <richio.h>
+#include <string_utils.h>
 #include <trace_helpers.h>
 #include <wildcards_and_files_ext.h>
 
 #include <libraries/library_manager.h>
 
 using namespace std::chrono_literals;
+#include <settings/common_settings.h>
 #include <settings/kicad_settings.h>
 #include <settings/settings_manager.h>
 #include <wx/dir.h>
@@ -46,6 +48,24 @@ struct LIBRARY_MANAGER_INTERNALS
 {
     std::vector<LIBRARY_TABLE> tables;
 };
+
+
+std::mutex& LIBRARY_MANAGER_ADAPTER::pluginMutex( const wxString& aNickname )
+{
+    // Leaked and never erased: must outlive every caller including static teardown, and stable node
+    // addresses keep the returned reference valid.
+    static std::mutex&                                      registryLock = *new std::mutex;
+    static std::map<wxString, std::unique_ptr<std::mutex>>& registry =
+            *new std::map<wxString, std::unique_ptr<std::mutex>>;
+
+    std::lock_guard              guard( registryLock );
+    std::unique_ptr<std::mutex>& slot = registry[aNickname];
+
+    if( !slot )
+        slot = std::make_unique<std::mutex>();
+
+    return *slot;
+}
 
 
 LIBRARY_MANAGER::LIBRARY_MANAGER()
@@ -159,12 +179,90 @@ void LIBRARY_MANAGER::loadNestedTables( LIBRARY_TABLE& aRootTable )
                             row.SetErrorDescription( child->ErrorDescription() );
                         }
 
+                        applyLibOverrides( *child );
+
                         m_childTables.insert_or_assign( row.URI(), std::move( child ) );
                     }
                 }
             };
 
     processOneTable( aRootTable );
+}
+
+
+void LIBRARY_MANAGER::ApplyLibOverrides( LIBRARY_TABLE& aTable )
+{
+    if( !aTable.IsReadOnly() )
+        return;
+
+    SETTINGS_MANAGER& mgr = Pgm().GetSettingsManager();
+    KICAD_SETTINGS*   settings = mgr.GetAppSettings<KICAD_SETTINGS>( "kicad" );
+
+    if( !settings )
+        return;
+
+    wxString tablePath = aTable.Path();
+
+    auto it = settings->m_LibOverrides.find( tablePath );
+
+    if( it == settings->m_LibOverrides.end() )
+        return;
+
+    const std::map<wxString, LIB_OVERRIDE>& overrides = it->second;
+
+    for( LIBRARY_TABLE_ROW& row : aTable.Rows() )
+    {
+        auto overIt = overrides.find( row.Nickname() );
+
+        if( overIt != overrides.end() )
+        {
+            row.SetDisabled( overIt->second.disabled );
+            row.SetHidden( overIt->second.hidden );
+        }
+    }
+}
+
+
+void LIBRARY_MANAGER::applyLibOverrides( LIBRARY_TABLE& aTable )
+{
+    ApplyLibOverrides( aTable );
+}
+
+
+void LIBRARY_MANAGER::SetLibOverride( const wxString& aTablePath, const wxString& aNickname,
+                                      bool aDisabled, bool aHidden )
+{
+    SETTINGS_MANAGER& mgr = Pgm().GetSettingsManager();
+    KICAD_SETTINGS*   settings = mgr.GetAppSettings<KICAD_SETTINGS>( "kicad" );
+
+    wxCHECK( settings, /* void */ );
+
+    if( !aDisabled && !aHidden )
+    {
+        ClearLibOverride( aTablePath, aNickname );
+        return;
+    }
+
+    settings->m_LibOverrides[aTablePath][aNickname] = { aDisabled, aHidden };
+}
+
+
+void LIBRARY_MANAGER::ClearLibOverride( const wxString& aTablePath, const wxString& aNickname )
+{
+    SETTINGS_MANAGER& mgr = Pgm().GetSettingsManager();
+    KICAD_SETTINGS*   settings = mgr.GetAppSettings<KICAD_SETTINGS>( "kicad" );
+
+    wxCHECK( settings, /* void */ );
+
+    auto tableIt = settings->m_LibOverrides.find( aTablePath );
+
+    if( tableIt == settings->m_LibOverrides.end() )
+        return;
+
+    tableIt->second.erase( aNickname );
+
+    if( tableIt->second.empty() )
+        settings->m_LibOverrides.erase( tableIt );
 }
 
 
@@ -358,6 +456,34 @@ wxString LIBRARY_MANAGER::StockTablePath( LIBRARY_TABLE_TYPE aType )
 }
 
 
+wxString LIBRARY_MANAGER::StockTableTokenizedURI( LIBRARY_TABLE_TYPE aType )
+{
+    wxString templateDirVar = ENV_VAR::GetVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) );
+
+    return wxString::Format( wxS( "${%s}/%s" ), templateDirVar, tableFileName( aType ) );
+}
+
+
+wxString LIBRARY_MANAGER::StockTableReferenceURI( LIBRARY_TABLE_TYPE aType )
+{
+    const wxString templateDirVar = ENV_VAR::GetVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) );
+
+    // Only relocatable installs (AppImage, Nix) export the template-dir variable so the stock
+    // path follows the remounted prefix. There we store the unresolved token, which re-resolves
+    // each launch instead of dangling. A standard install leaves the variable at its built-in
+    // default, so we keep the historical resolved absolute path.
+    if( COMMON_SETTINGS* common = Pgm().GetCommonSettings() )
+    {
+        auto it = common->m_Env.vars.find( templateDirVar );
+
+        if( it != common->m_Env.vars.end() && it->second.GetDefinedExternally() )
+            return StockTableTokenizedURI( aType );
+    }
+
+    return StockTablePath( aType );
+}
+
+
 bool LIBRARY_MANAGER::IsTableValid( const wxString& aPath )
 {
     if( wxFileName fn( aPath ); fn.IsFileReadable() )
@@ -407,19 +533,19 @@ bool LIBRARY_MANAGER::CreateGlobalTable( LIBRARY_TABLE_TYPE aType, bool aPopulat
 
     wxFileName defaultLib( StockTablePath( aType ) );
 
-    if( !defaultLib.IsFileReadable() )
-    {
-        wxLogTrace( traceLibraries, "Warning: couldn't read default library table for %s at '%s'",
-                    magic_enum::enum_name( aType ), defaultLib.GetFullPath() );
-    }
-
-    if( aPopulateDefaultLibraries )
+    if( aPopulateDefaultLibraries && defaultLib.IsFileReadable() )
     {
         LIBRARY_TABLE_ROW& chained = table.InsertRow();
         chained.SetType( LIBRARY_TABLE_ROW::TABLE_TYPE_NAME );
         chained.SetNickname( wxT( "KiCad" ) );
         chained.SetDescription( _( "KiCad Default Libraries" ) );
-        chained.SetURI( defaultLib.GetFullPath() );
+        chained.SetURI( StockTableReferenceURI( aType ) );
+    }
+    else if( aPopulateDefaultLibraries )
+    {
+        auto typeName = magic_enum::enum_name( aType );
+        wxLogTrace( traceLibraries, "No stock library table for %s at '%s'; creating empty global table",
+                    wxString( typeName.data(), typeName.size() ), defaultLib.GetFullPath() );
     }
 
     try
@@ -486,7 +612,9 @@ void LIBRARY_MANAGER::LoadGlobalTables( std::initializer_list<LIBRARY_TABLE_TYPE
             [&]( LIBRARY_TABLE_TYPE aType )
             {
                 LIBRARY_TABLE* table = Table( aType, LIBRARY_TABLE_SCOPE::GLOBAL ).value_or( nullptr );
-                wxCHECK( table, /* void */ );
+                // No global table file yet (first run): nothing to scan for PCM removals.
+                if( !table )
+                    return;
 
                 auto toErase = std::ranges::remove_if( table->Rows(),
                         [&]( const LIBRARY_TABLE_ROW& aRow )
@@ -856,11 +984,15 @@ wxString LIBRARY_MANAGER::ExpandURI( const wxString& aShortURI, const PROJECT& a
 
 bool LIBRARY_MANAGER::IsPcmManagedRow( const LIBRARY_TABLE_ROW& aRow )
 {
-    // PCM_LIB_TRAVERSER always stores URIs that begin with the versioned
-    // ${KICADn_3RD_PARTY} env var token. Any row whose URI does not start with that
-    // token was not added by PCM and must not be auto-removed even if its expanded
-    // absolute path happens to live inside the 3RD_PARTY directory via a different
-    // env var.
+    // PCM_LIB_TRAVERSER stores URIs of the form
+    //     ${KICADn_3RD_PARTY}/<category>/<pkgid>/<name>.<ext>
+    // where <category> is one of the fixed PCM content folders. Matching this full
+    // template is what uniquely identifies a PCM-added row. Matching only the leading
+    // ${KICADn_3RD_PARTY} token is not sufficient because users routinely repurpose
+    // that env var to point at their own library collection (as they did with
+    // KICAD8_3RD_PARTY in earlier versions). A row the user added by hand under their
+    // repurposed 3RD_PARTY directory must never be treated as PCM-managed, or the
+    // auto-remove pass would silently delete it.
     const wxString& uri = aRow.URI();
 
     if( !uri.StartsWith( wxS( "${" ) ) )
@@ -873,7 +1005,56 @@ bool LIBRARY_MANAGER::IsPcmManagedRow( const LIBRARY_TABLE_ROW& aRow )
 
     wxString varName = uri.SubString( 2, end - 1 );
 
-    return varName.Matches( wxS( "KICAD*_3RD_PARTY" ) );
+    if( !ENV_VAR::IsVersionedEnvVar( varName, wxS( "3RD_PARTY" ) ) )
+        return false;
+
+    // PCM_LIB_TRAVERSER always joins the URI with '/', so the token must be followed by a
+    // forward slash; a backslash or missing separator (e.g. "${KICAD10_3RD_PARTY}symbols/...")
+    // was never emitted by PCM.
+    if( end + 1 >= uri.length() || uri[end + 1] != wxS( '/' ) )
+        return false;
+
+    // PCM_LIB_TRAVERSER nests libraries at least as <category>/<pkgid>/<library>, so there
+    // must be a category folder, at least one package-id folder, and a library leaf, with no
+    // empty components. A user library placed directly under the repurposed 3RD_PARTY root
+    // (or in a same-named folder with no package level) does not match.
+    wxArrayString parts = wxSplit( uri.Mid( end + 2 ), '/', '\0' );
+
+    if( parts.size() < 3 )
+        return false;
+
+    for( const wxString& part : parts )
+    {
+        if( part.IsEmpty() )
+            return false;
+    }
+
+    wxString category = parts[0];
+    wxString leaf = parts.Last();
+
+    // The leaf must carry the category-appropriate library extension over a non-empty stem;
+    // a bare extension (e.g. a hidden ".kicad_sym") is never a PCM library and matching it
+    // would let the auto-remove pass delete an unrelated file in a same-named folder.
+    auto hasLibExtension = [&leaf]( const wxString& aExt )
+    {
+        return leaf.length() > aExt.length() && leaf.EndsWith( aExt );
+    };
+
+    if( category == wxS( "symbols" ) )
+        return hasLibExtension( wxS( ".kicad_sym" ) );
+
+    if( category == wxS( "footprints" ) )
+        return hasLibExtension( wxS( ".pretty" ) );
+
+    if( category == wxS( "design_blocks" ) )
+    {
+        static const wxString designBlockExt =
+                wxString::Format( wxS( ".%s" ), FILEEXT::KiCadDesignBlockLibPathExtension );
+
+        return hasLibExtension( designBlockExt );
+    }
+
+    return false;
 }
 
 
@@ -972,6 +1153,24 @@ void LIBRARY_MANAGER_ADAPTER::GlobalTablesChanged( std::initializer_list<LIBRARY
     {
         std::unique_lock lock( globalLibsMutex() );
         globalLibs().clear();
+    }
+}
+
+
+void LIBRARY_MANAGER_ADAPTER::evictOwnedGlobalEntries()
+{
+    abortLoad();
+
+    std::unique_lock lock( globalLibsMutex() );
+
+    // Drop entries this adapter owns, identified by global_owner rather than the row pointer,
+    // which another manager could reuse at the same address after this manager frees its tables.
+    for( auto it = globalLibs().begin(); it != globalLibs().end(); )
+    {
+        if( it->second.global_owner == this )
+            it = globalLibs().erase( it );
+        else
+            ++it;
     }
 }
 
@@ -1120,6 +1319,8 @@ std::vector<wxString> LIBRARY_MANAGER_ADAPTER::GetLibraryNames() const
             ret.emplace_back( nickname );
     }
 
+    StrNumSort( ret, CASE_SENSITIVITY::INSENSITIVE );
+
     wxLogTrace( traceLibraries, "GetLibraryNames: returning %zu of %zu libraries", ret.size(), rows.size() );
     return ret;
 }
@@ -1142,6 +1343,10 @@ bool LIBRARY_MANAGER_ADAPTER::DeleteLibrary( const wxString& aNickname )
     {
         LIB_DATA* data = *result;
         std::map<std::string, UTF8> options = data->row->GetOptionsMap();
+
+        // Serialize cache teardown against readers. loadIfNeeded() already dropped the manager lock
+        // (manager > pluginMutex).
+        std::lock_guard pluginGuard( pluginMutex( aNickname ) );
 
         try
         {
@@ -1341,6 +1546,10 @@ std::optional<LIB_STATUS> LIBRARY_MANAGER_ADAPTER::LoadLibraryEntry( const wxStr
 
 void LIBRARY_MANAGER_ADAPTER::ReloadLibraryEntry( const wxString& aNickname, LIBRARY_TABLE_SCOPE aScope )
 {
+    // Drain the async load before erasing, else a worker mid-enumerate writes status through the
+    // freed LIB_DATA (every other invalidator already does this).
+    abortLoad();
+
     auto reloadScope =
             [&]( LIBRARY_TABLE_SCOPE aScopeToReload, std::map<wxString, LIB_DATA>& aTarget,
                  std::shared_mutex& aMutex )
@@ -1395,6 +1604,11 @@ bool LIBRARY_MANAGER_ADAPTER::IsWritable( const wxString& aNickname ) const
     if( std::optional<const LIB_DATA*> result = fetchIfLoaded( aNickname ) )
     {
         const LIB_DATA* rowData = *result;
+
+        // IsLibraryWritable() may rebuild the cache via validateCache(); serialize against readers.
+        // fetchIfLoaded() already dropped the manager lock.
+        std::lock_guard pluginGuard( pluginMutex( aNickname ) );
+
         return rowData->plugin->IsLibraryWritable( getUri( rowData->row ) );
     }
 
@@ -1408,6 +1622,9 @@ bool LIBRARY_MANAGER_ADAPTER::CreateLibrary( const wxString& aNickname )
     {
         LIB_DATA* data = *result;
         std::map<std::string, UTF8> options = data->row->GetOptionsMap();
+
+        // Serialize cache replacement against readers; loadIfNeeded() already dropped the manager lock.
+        std::lock_guard pluginGuard( pluginMutex( aNickname ) );
 
         try
         {
@@ -1526,6 +1743,9 @@ LIBRARY_RESULT<LIB_DATA*> LIBRARY_MANAGER_ADAPTER::loadFromScope( const wxString
                 aTarget[ row->Nickname() ].status.load_status = LOAD_STATUS::LOADING;
                 aTarget[ row->Nickname() ].row = row;
                 aTarget[ row->Nickname() ].plugin.reset( *plugin );
+
+                if( aScope == LIBRARY_TABLE_SCOPE::GLOBAL )
+                    aTarget[ row->Nickname() ].global_owner = this;
 
                 return &aTarget.at( aNickname );
             }

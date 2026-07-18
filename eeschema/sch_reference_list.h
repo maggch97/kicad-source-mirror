@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef _SCH_REFERENCE_LIST_H_
@@ -234,11 +230,13 @@ public:
     bool GetSymbolExcludedFromBOM( const wxString& aVariant = wxEmptyString ) const;
     bool GetSymbolExcludedFromSim( const wxString& aVariant = wxEmptyString ) const;
     bool GetSymbolExcludedFromBoard() const;
+    bool GetSymbolExcludedFromPosFiles( const wxString& aVariant = wxEmptyString ) const;
 
     void SetSymbolDNP( bool aEnable, const wxString& aVariant = wxEmptyString );
     void SetSymbolExcludedFromBOM( bool aEnable, const wxString& aVariant = wxEmptyString );
     void SetSymbolExcludedFromSim( bool aEnable, const wxString& aVariant = wxEmptyString );
     void SetSymbolExcludedFromBoard( bool aEnable );
+    void SetSymbolExcludedFromPosFiles( bool aEnable, const wxString& aVariant = wxEmptyString );
 
 private:
     wxString formatRefStr( int aNumber ) const;

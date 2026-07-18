@@ -14,19 +14,56 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <eda_group.h>
+
+#include <set>
+#include <vector>
+
+
+bool EDA_GROUP::ContainsItem( const EDA_ITEM* aItem ) const
+{
+    if( !aItem )
+        return false;
+
+    std::set<const EDA_GROUP*>    visitedGroups;
+    std::vector<const EDA_GROUP*> pendingGroups;
+
+    pendingGroups.push_back( this );
+
+    while( !pendingGroups.empty() )
+    {
+        const EDA_GROUP* group = pendingGroups.back();
+        pendingGroups.pop_back();
+
+        if( !visitedGroups.insert( group ).second )
+            continue;
+
+        for( EDA_ITEM* member : group->GetItems() )
+        {
+            if( member == aItem )
+                return true;
+
+            if( const EDA_GROUP* childGroup = dynamic_cast<const EDA_GROUP*>( member ) )
+                pendingGroups.push_back( childGroup );
+        }
+    }
+
+    return false;
+}
 
 
 void EDA_GROUP::AddItem( EDA_ITEM* aItem )
 {
     wxCHECK_RET( aItem, wxT( "Nullptr added to group." ) );
+    wxCHECK_RET( aItem != AsEdaItem(), wxT( "Group added to itself." ) );
+
+    if( EDA_GROUP* group = dynamic_cast<EDA_GROUP*>( aItem ) )
+    {
+        wxCHECK_RET( !group->ContainsItem( AsEdaItem() ), wxT( "Ancestor group added to group." ) );
+    }
 
     // Items can only be in one group at a time
     if( EDA_GROUP* parentGroup = aItem->GetParentGroup() )
@@ -64,5 +101,3 @@ std::vector<KIID> EDA_GROUP::GetGroupMemberIds() const
 
     return members;
 }
-
-

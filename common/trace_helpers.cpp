@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -65,7 +61,9 @@ const wxChar* const traceLibWatch = wxT( "KICAD_LIB_WATCH" );
 const wxChar* const traceKiCad2Step = wxT( "KICAD2STEP" );
 const wxChar* const traceUiProfile = wxT( "KICAD_UI_PROFILE" );
 const wxChar* const traceGit = wxT( "KICAD_GIT" );
+const wxChar* const traceDiffMerge = wxT( "KICAD_DIFF_MERGE" );
 const wxChar* const traceEagleIo = wxT( "KICAD_EAGLE_IO" );
+const wxChar* const traceDiptraceIo = wxT( "KICAD_DIPTRACE_IO" );
 const wxChar* const traceDesignBlocks = wxT( "KICAD_DESIGN_BLOCK" );
 const wxChar* const traceLibFieldTable = wxT( "KICAD_LIB_FIELD_TABLE" );
 const wxChar* const tracePdfPlotter = wxT( "KICAD_PDF_PLOTTER" );

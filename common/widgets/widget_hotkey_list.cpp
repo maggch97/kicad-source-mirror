@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <cctype>
@@ -507,23 +503,15 @@ bool WIDGET_HOTKEY_LIST::resolveKeyConflicts( TOOL_ACTION* aAction, long aKey )
         return true;
 
     TOOL_ACTION* conflictingAction = conflictingHotKey->m_Actions[ 0 ];
-    wxString msg = wxString::Format( _( "'%s' is already assigned to '%s' in section '%s'. "
-                                        "Are you sure you want to change its assignment?" ),
-                                     KeyNameFromKeyCode( aKey ),
-                                     conflictingAction->GetFriendlyName(),
-                                     HOTKEY_STORE::GetSectionName( conflictingAction ) );
+    wxString     msg = wxString::Format( _( "'%s' is already assigned to '%s' in section '%s'. "
+                                                "Both bindings are kept, but only one runs per key "
+                                                "press. Continue?" ),
+                                         KeyNameFromKeyCode( aKey ), conflictingAction->GetFriendlyName(),
+                                         HOTKEY_STORE::GetSectionName( conflictingAction ) );
 
-    KICAD_MESSAGE_DIALOG dlg( GetParent(), msg, _( "Confirm change" ), wxYES_NO | wxNO_DEFAULT );
+    KICAD_MESSAGE_DIALOG dlg( GetParent(), msg, _( "Hotkey conflict" ), wxYES_NO | wxNO_DEFAULT );
 
-    if( dlg.ShowModal() == wxID_YES )
-    {
-        // Reset the other hotkey
-        conflictingHotKey->m_EditKeycode = 0;
-        updateFromClientData();
-        return true;
-    }
-
-    return false;
+    return dlg.ShowModal() == wxID_YES;
 }
 
 

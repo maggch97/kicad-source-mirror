@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef GRAPHICS_IMPORTER_H
@@ -237,6 +233,18 @@ public:
     static constexpr unsigned int DEFAULT_LINE_WIDTH_DFX = 1;
 
     virtual void NewShape( POLY_FILL_RULE aFillRule = PF_NONZERO );
+
+    /**
+     * Return true if shapes from a given source layer should be imported.
+     *
+     * This is used by buffered importers that preserve source-format layer names.
+     */
+    virtual bool CanImportSourceLayer( const wxString& ) const { return true; }
+
+    /**
+     * Set the source layer for the next buffered shape to be imported.
+     */
+    virtual void SetCurrentSourceLayer( const wxString& ) {}
 
     /**
      * Create an object representing a line segment.

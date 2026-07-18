@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>
@@ -29,6 +29,7 @@
 #include <set>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <app_monitor.h>
@@ -728,8 +729,19 @@ void CONNECTION_GRAPH::Merge( CONNECTION_GRAPH& aGraph )
     for( auto& [key, value] : aGraph.m_net_code_to_subgraphs_map )
         m_net_code_to_subgraphs_map.insert_or_assign( key, value );
 
+    // Union rather than replace.  An incremental pass may only have rebuilt the item on some of
+    // its sheet paths, and dropping the surviving subgraphs here would orphan their references
+    // to the item so a later removal could no longer find them.
     for( auto& [key, value] : aGraph.m_item_to_subgraph_map )
-        m_item_to_subgraph_map.insert_or_assign( key, value );
+    {
+        std::vector<CONNECTION_SUBGRAPH*>& existing = m_item_to_subgraph_map[key];
+
+        for( CONNECTION_SUBGRAPH* sg : value )
+        {
+            if( !alg::contains( existing, sg ) )
+                existing.push_back( sg );
+        }
+    }
 
     for( auto& [key, value] : aGraph.m_local_label_cache )
         m_local_label_cache.insert_or_assign( key, value );
@@ -790,12 +802,13 @@ void CONNECTION_GRAPH::ExchangeItem( SCH_ITEM* aOldItem, SCH_ITEM* aNewItem )
         if( it == m_item_to_subgraph_map.end() )
             return;
 
-        CONNECTION_SUBGRAPH* sg = it->second;
+        std::vector<CONNECTION_SUBGRAPH*> sgs = std::move( it->second );
 
-        sg->ExchangeItem( aOld, aNew );
+        for( CONNECTION_SUBGRAPH* sg : sgs )
+            sg->ExchangeItem( aOld, aNew );
 
         m_item_to_subgraph_map.erase( it );
-        m_item_to_subgraph_map.emplace( aNew, sg );
+        m_item_to_subgraph_map.emplace( aNew, std::move( sgs ) );
 
         for( auto it2 = m_items.begin(); it2 != m_items.end(); ++it2 )
         {
@@ -1136,12 +1149,16 @@ void CONNECTION_GRAPH::RemoveItem( SCH_ITEM* aItem )
     if( it == m_item_to_subgraph_map.end() )
         return;
 
-    CONNECTION_SUBGRAPH* subgraph = it->second;
+    // The item sits in one subgraph per instantiating sheet path, and every one of them must
+    // drop it here or a subsequent recalculation resolves drivers against freed memory
+    for( CONNECTION_SUBGRAPH* subgraph : it->second )
+    {
+        while( subgraph->m_absorbed_by )
+            subgraph = subgraph->m_absorbed_by;
 
-    while(subgraph->m_absorbed_by )
-        subgraph = subgraph->m_absorbed_by;
+        subgraph->RemoveItem( aItem );
+    }
 
-    subgraph->RemoveItem( aItem );
     std::erase( m_items, aItem );
     m_item_to_subgraph_map.erase( it );
 }
@@ -1273,7 +1290,9 @@ void CONNECTION_GRAPH::removeSubgraphs( std::set<CONNECTION_SUBGRAPH*>& aSubgrap
 
         for( auto it = m_item_to_subgraph_map.begin(); it != m_item_to_subgraph_map.end(); )
         {
-            if( it->second == sg )
+            std::erase( it->second, sg );
+
+            if( it->second.empty() )
                 it = m_item_to_subgraph_map.erase( it );
             else
                 ++it;
@@ -1675,7 +1694,7 @@ void CONNECTION_GRAPH::buildItemSubGraphs()
                 subgraph->AddItem( item );
 
                 connection->SetSubgraphCode( subgraph->m_code );
-                m_item_to_subgraph_map[item] = subgraph;
+                m_item_to_subgraph_map[item].push_back( subgraph );
 
                 std::list<SCH_ITEM*> memberlist;
 
@@ -1707,7 +1726,7 @@ void CONNECTION_GRAPH::buildItemSubGraphs()
                     if( connected_conn->SubgraphCode() == 0 )
                     {
                         connected_conn->SetSubgraphCode( subgraph->m_code );
-                        m_item_to_subgraph_map[connected_item] = subgraph;
+                        m_item_to_subgraph_map[connected_item].push_back( subgraph );
                         subgraph->AddItem( connected_item );
 
                         for( SCH_ITEM* citem : connected_item->ConnectedItems( sheet ) )
@@ -2062,10 +2081,11 @@ void CONNECTION_GRAPH::processSubGraphs()
         // Test subgraphs with weak drivers for net name conflicts and fix them
         unsigned suffix = 1;
 
+        wxString base_name = connection->Name();
+
         auto create_new_name =
-                [&suffix]( SCH_CONNECTION* aConn ) -> wxString
+                [&suffix, &base_name]( SCH_CONNECTION* aConn ) -> wxString
                 {
-                    wxString newName;
                     wxString suffixStr = std::to_wstring( suffix );
 
                     // For group buses with a prefix, we can add the suffix to the prefix.
@@ -2081,20 +2101,52 @@ void CONNECTION_GRAPH::processSubGraphs()
                         // Use BusPrefix length to skip past any formatting markers
                         // in the prefix (e.g. ~{RESET}) rather than AfterFirst('{')
                         // which would split at a formatting brace.
-                        wxString members = aConn->Name().Mid( aConn->BusPrefix().length() );
+                        wxString members = base_name.Mid( aConn->BusPrefix().length() );
 
+                        wxString newName;
                         newName << prefix << wxT( "_" ) << suffixStr << members;
 
                         aConn->ConfigureFromLabel( newName );
                     }
                     else
                     {
-                        newName << aConn->Name() << wxT( "_" ) << suffixStr;
+                        // Reset to the unsuffixed base so retries generate base_1, base_2, ...
+                        // instead of stacking suffixes onto the previous attempt.
                         aConn->SetSuffix( wxString( wxT( "_" ) ) << suffixStr );
                     }
 
                     suffix++;
-                    return newName;
+                    return aConn->Name();
+                };
+
+        // Promote a weakly-driven sheet-pin subgraph to a strong driver so that it is considered
+        // below for propagation/merging.  A sheet pin sharing its (path-less) name with a global
+        // label on the same sheet would then be treated as if it had a matching local label, so we
+        // skip the promotion in that case to avoid a false merge.
+        auto promote_sheet_pin_driver =
+                [&]()
+                {
+                    if( !subgraph->m_driver || subgraph->m_driver->Type() != SCH_SHEET_PIN_T )
+                        return;
+
+                    wxString global_name = connection->Name( true );
+                    auto     kk          = m_net_name_to_subgraphs_map.find( global_name );
+
+                    if( kk != m_net_name_to_subgraphs_map.end() )
+                    {
+                        for( const CONNECTION_SUBGRAPH* candidate : kk->second )
+                        {
+                            if( candidate->m_sheet == sheet )
+                            {
+                                wxLogTrace( ConnTrace,
+                                            wxS( "%ld (%s) skipped for promotion due to potential conflict" ),
+                                            subgraph->m_code, connection->Name() );
+                                return;
+                            }
+                        }
+                    }
+
+                    subgraph->m_strong_driver = true;
                 };
 
         if( !subgraph->m_strong_driver )
@@ -2130,52 +2182,14 @@ void CONNECTION_GRAPH::processSubGraphs()
                 m_net_name_to_subgraphs_map[new_name].emplace_back( subgraph );
 
                 name = new_name;
+
+                // The renamed sheet pin still drives its own bus members through the hierarchy, so
+                // it must be promoted for propagation to reach them (issue #21798).
+                promote_sheet_pin_driver();
             }
             else if( subgraph->m_driver )
             {
-                // If there is no conflict, promote sheet pins to be strong drivers so that they
-                // will be considered below for propagation/merging.
-
-                // It is possible for this to generate a conflict if the sheet pin has the same
-                // name as a global label on the same sheet, because global merging will then treat
-                // this subgraph as if it had a matching local label.  So, for those cases, we
-                // don't apply this promotion
-
-                if( subgraph->m_driver->Type() == SCH_SHEET_PIN_T )
-                {
-                    bool     conflict    = false;
-                    wxString global_name = connection->Name( true );
-                    auto     kk          = m_net_name_to_subgraphs_map.find( global_name );
-
-                    if( kk != m_net_name_to_subgraphs_map.end() )
-                    {
-                        // A global will conflict if it is on the same sheet as this subgraph, since
-                        // it would be connected by implicit local label linking
-                        std::vector<CONNECTION_SUBGRAPH*>& candidates = kk->second;
-
-                        for( const CONNECTION_SUBGRAPH* candidate : candidates )
-                        {
-                            if( candidate->m_sheet == sheet )
-                                conflict = true;
-                        }
-                    }
-
-                    if( conflict )
-                    {
-                        wxLogTrace( ConnTrace, wxS( "%ld (%s) skipped for promotion due to potential conflict" ),
-                                    subgraph->m_code, name );
-                    }
-                    else
-                    {
-                        UNITS_PROVIDER unitsProvider( schIUScale, EDA_UNITS::MM );
-
-                        wxLogTrace( ConnTrace, wxS( "%ld (%s) weakly driven by unique sheet pin %s, promoting" ),
-                                    subgraph->m_code, name,
-                                    subgraph->m_driver->GetItemDescription( &unitsProvider, true ) );
-
-                        subgraph->m_strong_driver = true;
-                    }
-                }
+                promote_sheet_pin_driver();
             }
         }
 
@@ -2949,6 +2963,8 @@ void CONNECTION_GRAPH::buildConnectionGraph( std::function<void( SCH_ITEM* )>* a
     }
 
     RebuildNetChains();
+
+    ApplyNetChainNetclasses();
 }
 
 std::function<void( CONNECTION_GRAPH& )>& CONNECTION_GRAPH::RebuildNetChainsTestHook()
@@ -4155,6 +4171,51 @@ SCH_NETCHAIN* CONNECTION_GRAPH::GetNetChainForNet( const wxString& aNet )
 }
 
 
+void CONNECTION_GRAPH::ApplyNetChainNetclasses()
+{
+    if( !m_schematic )
+        return;
+
+    std::shared_ptr<NET_SETTINGS> netSettings = m_schematic->Project().GetProjectFile().NetSettings();
+
+    if( !netSettings )
+        return;
+
+    bool anyOverride = std::any_of( m_committedNetChains.begin(), m_committedNetChains.end(),
+                                    []( const std::unique_ptr<SCH_NETCHAIN>& aChain )
+                                    {
+                                        return aChain && !aChain->GetNetClass().IsEmpty();
+                                    } );
+
+    // The common no-chain path must not wipe the effective-netclass cache on every connectivity
+    // rebuild.  Only rebuild when a chain carries an override or a prior pass left stale entries.
+    if( !anyOverride && !netSettings->HasChainPatternAssignments() )
+        return;
+
+    netSettings->ClearChainPatternAssignments();
+
+    for( const std::unique_ptr<SCH_NETCHAIN>& chain : m_committedNetChains )
+    {
+        if( !chain )
+            continue;
+
+        const wxString& netclass = chain->GetNetClass();
+
+        if( netclass.IsEmpty() || !netSettings->HasNetclass( netclass ) )
+            continue;
+
+        for( const wxString& net : chain->GetNets() )
+        {
+            // Synthetic per-run keys embed a subgraph code and never match a resolved net name.
+            if( net.StartsWith( SCH_NETCHAIN::SYNTHETIC_NET_PREFIX ) )
+                continue;
+
+            netSettings->SetChainPatternAssignment( net, netclass );
+        }
+    }
+}
+
+
 SCH_NETCHAIN* CONNECTION_GRAPH::GetNetChainByName( const wxString& aName )
 {
     wxLogTrace( traceSchNetChain, "CONNECTION_GRAPH::GetNetChainByName(%s)", aName );
@@ -4893,8 +4954,13 @@ CONNECTION_SUBGRAPH* CONNECTION_GRAPH::FindFirstSubgraphByName( const wxString& 
 
 CONNECTION_SUBGRAPH* CONNECTION_GRAPH::GetSubgraphForItem( SCH_ITEM* aItem ) const
 {
-    auto                 it  = m_item_to_subgraph_map.find( aItem );
-    CONNECTION_SUBGRAPH* ret = it != m_item_to_subgraph_map.end() ? it->second : nullptr;
+    auto it = m_item_to_subgraph_map.find( aItem );
+
+    // Callers expect a single subgraph even for items registered on several sheet paths, so
+    // hand back the most recently registered one
+    CONNECTION_SUBGRAPH* ret = ( it != m_item_to_subgraph_map.end() && !it->second.empty() )
+                                       ? it->second.back()
+                                       : nullptr;
 
     while( ret && ret->m_absorbed )
         ret = ret->m_absorbed_by;
@@ -4914,6 +4980,91 @@ CONNECTION_GRAPH::GetAllSubgraphs( const wxString& aNetName ) const
         return subgraphs;
 
     return it->second;
+}
+
+
+std::vector<wxString> CONNECTION_GRAPH::GetEquivalentBusNames( const wxString& aBusName ) const
+{
+    std::vector<wxString> equivalents;
+
+    // Split off the sheet-path prefix. A literal '/' is always the hierarchy separator here, since
+    // slashes in member names are escaped as "{slash}". Re-attached to results so they match the
+    // net-name map keys.
+    wxString path;
+    wxString group = aBusName;
+    size_t   lastSlash = aBusName.find_last_of( '/' );
+
+    if( lastSlash != wxString::npos )
+    {
+        path = aBusName.Left( lastSlash + 1 );
+        group = aBusName.Mid( lastSlash + 1 );
+    }
+
+    wxString              prefix;
+    std::vector<wxString> members;
+
+    if( !NET_SETTINGS::ParseBusGroup( UnescapeString( group ), &prefix, &members ) )
+        return equivalents;
+
+    // A named-group prefix ("BUS{A B}") renames the members, so it is not aliasable.
+    if( !prefix.IsEmpty() )
+        return equivalents;
+
+    // ParseBusGroup escapes spaces as "\ " and leaves net-name escapes in place; BUS_ALIAS stores
+    // members verbatim. Undo both so the two compare in the same form.
+    for( wxString& member : members )
+    {
+        member.Replace( wxT( "\\ " ), wxT( " " ) );
+        member = UnescapeString( member );
+    }
+
+    // A single-member name may itself be an alias ("{MIXED_BUS}"); expand it and don't re-emit it.
+    wxString selfAlias;
+
+    if( members.size() == 1 )
+    {
+        auto aliasIt = m_bus_alias_cache.find( members[0] );
+
+        if( aliasIt != m_bus_alias_cache.end() )
+        {
+            selfAlias = members[0];
+            members = aliasIt->second->Members();
+        }
+    }
+
+    // Re-escape members back to net-name form so the label matches the connection-graph keys.
+    wxString expandedLabel = path + wxT( "{" );
+
+    for( size_t i = 0; i < members.size(); ++i )
+    {
+        if( i > 0 )
+            expandedLabel += wxT( " " );
+
+        wxString escaped = EscapeString( members[i], CTX_NETNAME );
+        escaped.Replace( wxT( " " ), wxT( "\\ " ) );
+        expandedLabel += escaped;
+    }
+
+    expandedLabel += wxT( "}" );
+
+    if( expandedLabel != aBusName )
+        equivalents.push_back( expandedLabel );
+
+    // Match aliases by member set; bus connectivity is order-independent, so compare as multisets.
+    std::multiset<wxString> memberSet( members.begin(), members.end() );
+
+    for( const auto& [aliasName, alias] : m_bus_alias_cache )
+    {
+        if( aliasName == selfAlias || alias->Members().size() != members.size() )
+            continue;
+
+        std::multiset<wxString> aliasMembers( alias->Members().begin(), alias->Members().end() );
+
+        if( memberSet == aliasMembers )
+            equivalents.push_back( path + wxT( "{" ) + aliasName + wxT( "}" ) );
+    }
+
+    return equivalents;
 }
 
 
@@ -5708,6 +5859,28 @@ bool CONNECTION_GRAPH::ercCheckFloatingWires( const CONNECTION_SUBGRAPH* aSubgra
 }
 
 
+void CONNECTION_GRAPH::collectBusMemberSiblings( const CONNECTION_SUBGRAPH* aBusParent, const wxString& aMemberName,
+                                                 std::unordered_set<const CONNECTION_SUBGRAPH*>& aOut ) const
+{
+    auto busBucket = m_net_name_to_subgraphs_map.find( aBusParent->m_driver_connection->Name() );
+
+    if( busBucket == m_net_name_to_subgraphs_map.end() )
+        return;
+
+    for( const CONNECTION_SUBGRAPH* siblingBus : busBucket->second )
+    {
+        for( const auto& [sibMemberConn, sibMembers] : siblingBus->m_bus_neighbors )
+        {
+            if( sibMemberConn->Name() != aMemberName )
+                continue;
+
+            for( const CONNECTION_SUBGRAPH* sibling : sibMembers )
+                aOut.insert( sibling );
+        }
+    }
+}
+
+
 bool CONNECTION_GRAPH::ercCheckLabels( const CONNECTION_SUBGRAPH* aSubgraph )
 {
     // Label connection rules:
@@ -5791,30 +5964,27 @@ bool CONNECTION_GRAPH::ercCheckLabels( const CONNECTION_SUBGRAPH* aSubgraph )
     if( label_map.empty() )
         return true;
 
-    // No-connects on net neighbors will be noticed before, but to notice them on bus parents we
-    // need to walk the graph
-    for( auto& [ connection, subgraphs ] : aSubgraph->m_bus_parents )
+    // Walk m_bus_parents once. Bus parents may carry a no-connect that suppresses
+    // an unconnected-label error, and they're how we reach bus members on other
+    // sheets that share this net.
+    std::unordered_set<const CONNECTION_SUBGRAPH*> busMemberSiblings;
+
+    for( auto& [memberConn, busParents] : aSubgraph->m_bus_parents )
     {
-        for( CONNECTION_SUBGRAPH* busParent : subgraphs )
+        wxString memberName = memberConn->Name();
+
+        for( CONNECTION_SUBGRAPH* busParent : busParents )
         {
             if( busParent->m_no_connect )
-            {
                 has_nc = true;
-                break;
-            }
 
-            CONNECTION_SUBGRAPH* hp = busParent->m_hier_parent;
-
-            while( hp )
+            for( CONNECTION_SUBGRAPH* hp = busParent->m_hier_parent; hp; hp = hp->m_hier_parent )
             {
                 if( hp->m_no_connect )
-                {
                     has_nc = true;
-                    break;
-                }
-
-                hp = hp->m_hier_parent;
             }
+
+            collectBusMemberSiblings( busParent, memberName, busMemberSiblings );
         }
     }
 
@@ -5870,33 +6040,41 @@ bool CONNECTION_GRAPH::ercCheckLabels( const CONNECTION_SUBGRAPH* aSubgraph )
                 }
             }
 
+            std::unordered_set<const CONNECTION_SUBGRAPH*> creditedNeighbors;
+            creditedNeighbors.insert( aSubgraph );
+
+            auto creditNeighbor = [&]( const CONNECTION_SUBGRAPH* neighbor )
+            {
+                if( !creditedNeighbors.insert( neighbor ).second )
+                    return;
+
+                if( neighbor->m_no_connect )
+                    has_nc = true;
+
+                size_t neighborPins = hasPins( neighbor );
+                allPins += neighborPins;
+
+                if( neighbor->m_sheet == sheet )
+                {
+                    localPins += neighborPins;
+
+                    if( !neighbor->m_hier_pins.empty() || !neighbor->m_hier_ports.empty() )
+                    {
+                        hasLocalHierarchy = true;
+                    }
+                }
+            };
+
             auto it = m_net_name_to_subgraphs_map.find( netName );
 
             if( it != m_net_name_to_subgraphs_map.end() )
             {
                 for( const CONNECTION_SUBGRAPH* neighbor : it->second )
-                {
-                    if( neighbor == aSubgraph )
-                        continue;
-
-                    if( neighbor->m_no_connect )
-                        has_nc = true;
-
-                    size_t neighborPins = hasPins( neighbor );
-                    allPins += neighborPins;
-
-                    if( neighbor->m_sheet == sheet )
-                    {
-                        localPins += neighborPins;
-
-                        if( !neighbor->m_hier_pins.empty()
-                            || !neighbor->m_hier_ports.empty() )
-                        {
-                            hasLocalHierarchy = true;
-                        }
-                    }
-                }
+                    creditNeighbor( neighbor );
             }
+
+            for( const CONNECTION_SUBGRAPH* sibling : busMemberSiblings )
+                creditNeighbor( sibling );
 
             if( allPins == 1 && !has_nc )
             {

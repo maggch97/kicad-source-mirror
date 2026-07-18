@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <board_loader.h>
@@ -52,7 +52,7 @@ std::unique_ptr<BOARD> BOARD_LOADER::Load( const wxString& aFileName,
 
     BOARD* loaded = nullptr;
 
-    if( aOptions.plugin_configurator || aOptions.reporter )
+    if( aOptions.plugin_configurator || aOptions.reporter || aOptions.post_load_hook )
     {
         IO_RELEASER<PCB_IO> pi( PCB_IO_MGR::FindPlugin( aFormat ) );
 
@@ -66,7 +66,16 @@ std::unique_ptr<BOARD> BOARD_LOADER::Load( const wxString& aFileName,
             pi->SetReporter( aOptions.reporter );
 
         pi->SetProgressReporter( aOptions.progress_reporter );
-        loaded = pi->LoadBoard( aFileName, nullptr, aOptions.properties, aProject );
+
+        // own the board first so a throwing hook can't leak it
+        std::unique_ptr<BOARD> boardOwner(
+                pi->LoadBoard( aFileName, nullptr, aOptions.properties, aProject ) );
+
+        // grab cached lib footprints while the plugin is alive
+        if( boardOwner && aOptions.post_load_hook )
+            aOptions.post_load_hook( *pi );
+
+        loaded = boardOwner.release();
     }
     else
     {

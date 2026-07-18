@@ -14,17 +14,14 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "spnav_viewer_plugin.h"
 
 #include <3d-viewer/3d_canvas/eda_3d_canvas.h>
 #include <3d-viewer/3d_rendering/track_ball.h>
+#include <wx/toplevel.h>
 #include <pgm_base.h>
 #include <settings/common_settings.h>
 
@@ -57,7 +54,17 @@ void SPNAV_VIEWER_PLUGIN::SetFocus( bool aFocus )
 
 void SPNAV_VIEWER_PLUGIN::onPollTimer( wxTimerEvent& )
 {
-    if( m_driver && m_focused )
+    if( !m_driver || !m_focused )
+        return;
+
+    wxTopLevelWindow* topLevel = m_canvas
+            ? dynamic_cast<wxTopLevelWindow*>( wxGetTopLevelParent( m_canvas ) )
+            : nullptr;
+
+    // The Linux spnav backend drains a process-global event queue.  Guard polling
+    // with the top-level window activation state so a stale focus latch cannot let
+    // an inactive editor keep consuming SpaceMouse events after another editor opens.
+    if( !topLevel || topLevel->IsActive() )
         m_driver->Poll();
 }
 

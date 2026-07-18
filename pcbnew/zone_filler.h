@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef ZONE_FILLER_H
@@ -31,6 +27,7 @@
 #include <vector>
 #include <zone.h>
 #include <geometry/shape_poly_set.h>
+#include <hash_128.h>
 
 class PROGRESS_REPORTER;
 class BOARD;
@@ -71,8 +68,8 @@ private:
     void addHoleKnockout( PAD* aPad, int aGap, SHAPE_POLY_SET& aHoles );
 
     void knockoutThermalReliefs( const ZONE* aZone, PCB_LAYER_ID aLayer, SHAPE_POLY_SET& aFill,
-                                 std::vector<BOARD_ITEM*>& aThermalConnectionPads,
-                                 std::vector<PAD*>& aNoConnectionPads );
+                                 std::vector<BOARD_ITEM*>& aThermalConnectionPads, std::vector<PAD*>& aNoConnectionPads,
+                                 std::vector<BOARD_ITEM*>& aSolidConnectionItems );
 
     void buildCopperItemClearances( const ZONE* aZone, PCB_LAYER_ID aLayer,
                                     const std::vector<PAD*>& aNoConnectionPads,
@@ -85,6 +82,13 @@ private:
      */
     void buildDifferentNetZoneClearances( const ZONE* aZone, PCB_LAYER_ID aLayer,
                                           SHAPE_POLY_SET& aHoles );
+
+    /**
+     * Test whether aKnockout's fill can knock out any part of aZone's fill.  Every reader of
+     * another zone's fill must gate on this same predicate; see the implementation for why and
+     * for the reach rationale.
+     */
+    bool zoneKnockoutMayInteract( const ZONE* aZone, const ZONE* aKnockout ) const;
 
     void subtractHigherPriorityZones( const ZONE* aZone, PCB_LAYER_ID aLayer,
                                       SHAPE_POLY_SET& aRawFill );
@@ -213,11 +217,22 @@ private:
     int                   m_maxError;
     int                   m_worstClearance;
 
+    // ExtraClearance plus max approximation error, part of the knockout reach
+    int                   m_zoneKnockoutSlack;
+
     bool                  m_debugZoneFiller;
 
     // Cache of pre-knockout fills for iterative refill optimization (issue 21746)
     // Key: (zone pointer, layer), Value: fill polygon before higher-priority zone knockout
     std::map<std::pair<const ZONE*, PCB_LAYER_ID>, SHAPE_POLY_SET> m_preKnockoutFillCache;
+
+    // Un-hatched extent per (zone, layer); lets the refiller re-border carved hatch zones (#24758).
+    std::map<std::pair<const ZONE*, PCB_LAYER_ID>, SHAPE_POLY_SET> m_preHatchSolidFillCache;
+
+    // Refill result keyed by (zone, layer); value is the knockout-geometry hash + cached fill.
+    // Hit lets an unchanged-knockout zone skip the refill subtract + prune.  Cleared each Fill().
+    std::map<std::pair<const ZONE*, PCB_LAYER_ID>, std::pair<HASH_128, SHAPE_POLY_SET>>
+                                                                   m_refillResultCache;
     mutable std::mutex                                             m_cacheMutex;
 };
 

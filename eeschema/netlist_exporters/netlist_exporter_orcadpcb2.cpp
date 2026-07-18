@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>
@@ -131,7 +127,8 @@ bool NETLIST_EXPORTER_ORCADPCB2::WriteNetlist( const wxString& aOutFileName,
                     netName = pin.netName;
                     netName.Replace( wxT( " " ), wxT( "_" ) );
 
-                    fmt::print( f, "  ( {:>4.4} {} )\n", TO_UTF8( pin.num ), TO_UTF8( netName ) );
+                    // Legacy OrcadPCB2 right-aligns the pin number in a 4-column field.
+                    fmt::print( f, "  ( {:>4} {} )\n", TO_UTF8( pin.num ), TO_UTF8( netName ) );
                 }
 
                 fmt::print( f, " )\n" );

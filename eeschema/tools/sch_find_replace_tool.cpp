@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <sch_commit.h>
@@ -83,7 +79,16 @@ int SCH_FIND_REPLACE_TOOL::UpdateFind( const TOOL_EVENT& aEvent )
                 else
                 {
                     for( SCH_ITEM* item : m_frame->GetScreen()->Items() )
+                    {
                         visit( item, sheetPath );
+
+                        item->RunOnChildren(
+                                [&]( SCH_ITEM* aChild )
+                                {
+                                    visit( aChild, sheetPath );
+                                },
+                                RECURSE_MODE::NO_RECURSE );
+                    }
                 }
             };
 
@@ -489,14 +494,17 @@ int SCH_FIND_REPLACE_TOOL::ReplaceAll( const TOOL_EVENT& aEvent )
 
     if( currentSheetOnly || selectedOnly )
     {
-        SCH_ITEM* item = nextMatch( m_frame->GetScreen(), currentSheet, nullptr, data, false );
-
-        while( item )
+        if( currentSheet )
         {
-            if( !selectedOnly || item->IsSelected() )
-                doReplace( item, currentSheet, data );
+            SCH_ITEM* item = nextMatch( m_frame->GetScreen(), currentSheet, nullptr, data, false );
 
-            item = nextMatch( m_frame->GetScreen(), currentSheet, item, data, false );
+            while( item )
+            {
+                if( !selectedOnly || item->IsSelected() )
+                    doReplace( item, currentSheet, data );
+
+                item = nextMatch( m_frame->GetScreen(), currentSheet, item, data, false );
+            }
         }
     }
     else if( SCH_EDIT_FRAME* schematicFrame = dynamic_cast<SCH_EDIT_FRAME*>( m_frame ) )

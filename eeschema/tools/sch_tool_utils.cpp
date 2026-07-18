@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "sch_tool_utils.h"
@@ -34,7 +30,11 @@
 #include <schematic.h>
 #include <sch_sheet_path.h>
 #include <sch_sheet.h>
+#include <sch_screen.h>
+#include <sch_group.h>
 #include <kiid.h>
+
+#include <limits>
 
 #include <wx/arrstr.h>
 
@@ -433,4 +433,54 @@ std::set<wxString> GetSheetNamesFromPaths( const std::set<wxString>& aSheetPaths
     }
 
     return friendlyNames;
+}
+
+
+wxString UniqueSheetName( SCH_SCREEN* aScreen, const wxString& aBaseName )
+{
+    if( !aScreen )
+        return aBaseName;
+
+    std::set<wxString> existing;
+
+    for( SCH_ITEM* item : aScreen->Items().OfType( SCH_SHEET_T ) )
+        existing.insert( static_cast<SCH_SHEET*>( item )->GetShownName( false ).Lower() );
+
+    if( !existing.count( aBaseName.Lower() ) )
+        return aBaseName;
+
+    for( int n = 1; n < std::numeric_limits<int>::max(); ++n )
+    {
+        wxString candidate = aBaseName + wxString::Format( wxT( "%d" ), n );
+
+        if( !existing.count( candidate.Lower() ) )
+            return candidate;
+    }
+
+    return aBaseName;
+}
+
+
+wxString UniqueGroupName( SCH_SCREEN* aScreen, const wxString& aBaseName )
+{
+    if( !aScreen )
+        return aBaseName;
+
+    std::set<wxString> existing;
+
+    for( SCH_ITEM* item : aScreen->Items().OfType( SCH_GROUP_T ) )
+        existing.insert( static_cast<SCH_GROUP*>( item )->GetName() );
+
+    if( !existing.count( aBaseName ) )
+        return aBaseName;
+
+    for( int n = 1; n < std::numeric_limits<int>::max(); ++n )
+    {
+        wxString candidate = aBaseName + wxString::Format( wxT( "%d" ), n );
+
+        if( !existing.count( candidate ) )
+            return candidate;
+    }
+
+    return aBaseName;
 }

@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <eda_shape.h>
@@ -1064,9 +1060,9 @@ void EDA_SHAPE::rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle )
         }
         else
         {
-            // Convert non-cardinally-rotated rect to a diamond
+            // Convert non-cardinally-rotated rect to a polygon.
             ROUNDRECT rr( SHAPE_RECT( GetStart(), GetRectangleWidth(), GetRectangleHeight() ), m_cornerRadius );
-            m_shape = SHAPE_T::POLY;
+            SetShape( SHAPE_T::POLY );
             rr.TransformToPolygon( GetPolyShape(), getMaxError() );
             GetPolyShape().Rotate( aAngle, aRotCentre );
         }
@@ -1274,9 +1270,14 @@ void EDA_SHAPE::SetCenter( const VECTOR2I& aCenter )
         break;
 
     case SHAPE_T::CIRCLE:
-        m_start = aCenter;
+    {
+        // Route through SetStart / SetEnd so subclasses sync lib coords.
+        const VECTOR2I delta = aCenter - m_start;
+        SetEnd( m_end + delta );
+        SetStart( aCenter );
         m_hatchingDirty = true;
         break;
+    }
 
     case SHAPE_T::ELLIPSE:
     case SHAPE_T::ELLIPSE_ARC:
@@ -2063,6 +2064,26 @@ std::vector<VECTOR2I> EDA_SHAPE::GetCornersInSequence( EDA_ANGLE angle ) const
             pts.emplace_back( VECTOR2I( bbox.GetLeft(), bbox.GetTop() ) );
         }
     }
+    else if( m_shape == SHAPE_T::RECTANGLE )
+    {
+        // Axis-aligned rectangle with non-cardinal rotation (used by textboxes).
+        VECTOR2I center = bbox.GetCenter();
+
+        VECTOR2I tl( bbox.GetLeft(), bbox.GetTop() );
+        VECTOR2I tr( bbox.GetRight(), bbox.GetTop() );
+        VECTOR2I br( bbox.GetRight(), bbox.GetBottom() );
+        VECTOR2I bl( bbox.GetLeft(), bbox.GetBottom() );
+
+        RotatePoint( tl, center, angle );
+        RotatePoint( tr, center, angle );
+        RotatePoint( br, center, angle );
+        RotatePoint( bl, center, angle );
+
+        pts.emplace_back( tl );
+        pts.emplace_back( tr );
+        pts.emplace_back( br );
+        pts.emplace_back( bl );
+    }
     else
     {
         // This function was originally located in pcb_textbox.cpp and was later moved to eda_shape.cpp.
@@ -2081,6 +2102,9 @@ std::vector<VECTOR2I> EDA_SHAPE::GetCornersInSequence( EDA_ANGLE angle ) const
             for( const VECTOR2I& pt : GetPolyShape().Outline( ii ).CPoints() )
                 corners.emplace_back( pt );
         }
+
+        if( corners.empty() )
+            return pts;
 
         while( corners.size() < 4 )
             corners.emplace_back( corners.back() + VECTOR2I( 10, 10 ) );
@@ -2365,20 +2389,19 @@ std::vector<SHAPE*> EDA_SHAPE::makeEffectiveShapes( bool aEdgeOnly, bool aLineCh
 
 std::vector<VECTOR2I> EDA_SHAPE::GetPolyPoints() const
 {
+    const SHAPE_POLY_SET& poly = GetPolyShape();
     std::vector<VECTOR2I> points;
+    int                   totalCount = 0;
 
-    for( int ii = 0; ii < GetPolyShape().OutlineCount(); ++ii )
+    for( int ii = 0; ii < poly.OutlineCount(); ++ii )
+        totalCount += poly.COutline( ii ).PointCount();
+
+    points.reserve( totalCount );
+
+    for( int ii = 0; ii < poly.OutlineCount(); ++ii )
     {
-        const SHAPE_LINE_CHAIN& outline = GetPolyShape().COutline( ii );
-        int                     pointCount = outline.PointCount();
-
-        if( pointCount )
-        {
-            points.reserve( points.size() + pointCount );
-
-            for( const VECTOR2I& pt : outline.CPoints() )
-                points.emplace_back( pt );
-        }
+        for( const VECTOR2I& pt : poly.COutline( ii ).CPoints() )
+            points.emplace_back( pt );
     }
 
     return points;

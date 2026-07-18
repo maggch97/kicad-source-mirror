@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef COLLECTOR_H
@@ -211,6 +207,8 @@ public:
      * @param aScanTypes A list of KICAD_Ts.
      */
     void SetScanTypes( const std::vector<KICAD_T>& aTypes ) { m_scanTypes = aTypes; }
+
+    const std::vector<KICAD_T>& GetScanTypes() const { return m_scanTypes; }
 
     void SetRefPos( const VECTOR2I& aRefPos ) { m_refPos = aRefPos; }
 

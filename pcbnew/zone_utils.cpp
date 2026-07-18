@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "zone_utils.h"
@@ -233,11 +229,12 @@ static std::vector<ZONE_OVERLAP_PAIR> findOverlappingPairs( BOARD* aBoard )
             if( !b->GetBoundingBox().Intersects( bboxA ) )
                 continue;
 
-            bool overlaps = a->Outline()->Collide( b->Outline() )
-                            || ( b->Outline()->TotalVertices() > 0
-                                 && a->Outline()->Contains( b->Outline()->CVertex( 0 ) ) )
-                            || ( a->Outline()->TotalVertices() > 0
-                                 && b->Outline()->Contains( a->Outline()->CVertex( 0 ) ) );
+            SHAPE_POLY_SET aOutline = a->GetBoardOutline();
+            SHAPE_POLY_SET bOutline = b->GetBoardOutline();
+
+            bool overlaps = aOutline.Collide( &bOutline )
+                            || ( bOutline.TotalVertices() > 0 && aOutline.Contains( bOutline.CVertex( 0 ) ) )
+                            || ( aOutline.TotalVertices() > 0 && bOutline.Contains( aOutline.CVertex( 0 ) ) );
 
             if( overlaps )
                 pairs.push_back( { a, b, shared } );
@@ -251,8 +248,8 @@ static std::vector<ZONE_OVERLAP_PAIR> findOverlappingPairs( BOARD* aBoard )
 static std::optional<ZONE_PRIORITY_EDGE> computeConstraint( const ZONE_OVERLAP_PAIR& aPair,
                                                              BOARD* aBoard )
 {
-    SHAPE_POLY_SET polyA = aPair.zoneA->Outline()->CloneDropTriangulation();
-    SHAPE_POLY_SET polyB = aPair.zoneB->Outline()->CloneDropTriangulation();
+    SHAPE_POLY_SET polyA = aPair.zoneA->GetBoardOutline();
+    SHAPE_POLY_SET polyB = aPair.zoneB->GetBoardOutline();
     polyA.ClearArcs();
     polyB.ClearArcs();
 
@@ -324,8 +321,8 @@ static std::optional<ZONE_PRIORITY_EDGE> computeConstraint( const ZONE_OVERLAP_P
 
     if( countA == 0 && countB == 0 )
     {
-        double areaA = aPair.zoneA->Outline()->Area();
-        double areaB = aPair.zoneB->Outline()->Area();
+        double areaA = aPair.zoneA->GetBoardOutline().Area();
+        double areaB = aPair.zoneB->GetBoardOutline().Area();
 
         if( areaA == areaB )
             return std::nullopt;
@@ -343,8 +340,8 @@ static std::optional<ZONE_PRIORITY_EDGE> computeConstraint( const ZONE_OVERLAP_P
 
     if( ratio < SIMILARITY_THRESHOLD )
     {
-        double areaA = aPair.zoneA->Outline()->Area();
-        double areaB = aPair.zoneB->Outline()->Area();
+        double areaA = aPair.zoneA->GetBoardOutline().Area();
+        double areaB = aPair.zoneB->GetBoardOutline().Area();
 
         if( areaA == areaB )
             return std::nullopt;

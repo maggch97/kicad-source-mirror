@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <io/pads/pads_common.h>
@@ -298,6 +298,29 @@ wxString ConvertInvertedNetName( const std::string& aNetName )
 }
 
 
+wxString ConvertText( const std::string& aText )
+{
+    if( aText.empty() )
+        return wxString();
+
+    // PADS ASCII uses an 8-bit codepage, and a UTF-8 conversion drops the whole
+    // string on the first high byte. Length-aware to keep embedded NULs.
+    wxString result = wxString::FromUTF8( aText.data(), aText.size() );
+
+    if( result.IsEmpty() )
+    {
+        wxCSConv cp1252( wxFONTENCODING_CP1252 );
+        result = wxString( aText.data(), cp1252, aText.size() );
+
+        // Latin-1 maps every byte one-to-one when CP1252 has no mapping.
+        if( result.IsEmpty() )
+            result = wxString( aText.data(), wxConvISO8859_1, aText.size() );
+    }
+
+    return result;
+}
+
+
 LINE_STYLE PadsLineStyleToKiCad( int aPadsStyle )
 {
     int8_t s = static_cast<int8_t>( aPadsStyle & 0xFF );
@@ -312,6 +335,46 @@ LINE_STYLE PadsLineStyleToKiCad( int aPadsStyle )
     case -4:  return LINE_STYLE::DASHDOT;
     case -5:  return LINE_STYLE::DASHDOTDOT;
     default:  return LINE_STYLE::SOLID;
+    }
+}
+
+
+void DecodeJustification( int aJustification, GR_TEXT_H_ALIGN_T& aHJustify,
+                          GR_TEXT_V_ALIGN_T& aVJustify )
+{
+    int hCode = 0;
+    int vGroup = 0;
+
+    if( aJustification >= 8 )
+    {
+        vGroup = 2;  // middle
+        hCode = aJustification - 8;
+    }
+    else if( aJustification >= 2 )
+    {
+        vGroup = 1;  // top
+        hCode = aJustification - 2;
+    }
+    else
+    {
+        vGroup = 0;  // bottom
+        hCode = aJustification;
+    }
+
+    switch( hCode )
+    {
+    default:
+    case 0: aHJustify = GR_TEXT_H_ALIGN_LEFT;   break;
+    case 1: aHJustify = GR_TEXT_H_ALIGN_RIGHT;  break;
+    case 4: aHJustify = GR_TEXT_H_ALIGN_CENTER; break;
+    }
+
+    switch( vGroup )
+    {
+    default:
+    case 0: aVJustify = GR_TEXT_V_ALIGN_BOTTOM; break;
+    case 1: aVJustify = GR_TEXT_V_ALIGN_TOP;    break;
+    case 2: aVJustify = GR_TEXT_V_ALIGN_CENTER; break;
     }
 }
 

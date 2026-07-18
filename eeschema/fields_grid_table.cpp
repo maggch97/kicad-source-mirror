@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <embedded_files.h>
@@ -188,7 +184,7 @@ FIELDS_GRID_TABLE::FIELDS_GRID_TABLE( DIALOG_SHIM* aDialog, SCH_EDIT_FRAME* aFra
         m_frame( aFrame ),
         m_dialog( aDialog ),
         m_parentType( SCH_SYMBOL_T ),
-        m_part( aSymbol->GetLibSymbolRef().get() ),
+        m_part( nullptr ),
         m_symbolNetlist( netList( aSymbol, aFrame->GetCurrentSheet() ) ),
         m_fieldNameValidator( FIELD_T::USER ),
         m_referenceValidator( FIELD_T::REFERENCE ),
@@ -197,6 +193,16 @@ FIELDS_GRID_TABLE::FIELDS_GRID_TABLE( DIALOG_SHIM* aDialog, SCH_EDIT_FRAME* aFra
         m_nonUrlValidator( FIELD_T::USER ),
         m_filepathValidator( FIELD_T::SHEET_FILENAME )
 {
+    // GetLibSymbolRef() hands back a raw pointer into a unique_ptr owned by the schematic symbol.
+    // This dialog is quasi-modal, so the still-live schematic can free that part through
+    // SetLibSymbol() (library update, ERC, undo) while the grid is open, after which GetAttr() would
+    // dereference freed memory.  Keep a private copy alive for the grid's lifetime instead.
+    if( LIB_SYMBOL* libSymbol = aSymbol->GetLibSymbolRef().get() )
+    {
+        m_ownedPart = std::make_unique<LIB_SYMBOL>( *libSymbol );
+        m_part = m_ownedPart.get();
+    }
+
     m_filesStack.push_back( aSymbol->Schematic() );
 
     if( m_part )
@@ -914,9 +920,10 @@ void FIELDS_GRID_TABLE::SetValue( int aRow, int aCol, const wxString &aValue )
         {
             value = EscapeString( value, CTX_LIBID );
         }
-
-        if( m_frame )
+        else if( m_frame )
+        {
             value = ConvertPathToFileUri( value, &m_frame->Prj() );
+        }
 
         field.SetText( UnescapeString( value ) );
         break;

@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "drc_re_rule_loader.h"
@@ -236,16 +232,18 @@ DRC_RULE_LOADER::createConstraintData( DRC_RULE_EDITOR_CONSTRAINT_NAME   aPanel,
 
         if( trackWidth )
         {
-            double opt = toMM( trackWidth->GetValue().Opt() );
+            double opt = toMM( trackWidth->GetValue().PinnedOpt() );
             double min = toMM( trackWidth->GetValue().Min() );
+
             data->SetOptWidth( opt );
             data->SetWidthTolerance( opt - min );
         }
 
         if( diffGap )
         {
-            double opt = toMM( diffGap->GetValue().Opt() );
+            double opt = toMM( diffGap->GetValue().PinnedOpt() );
             double min = toMM( diffGap->GetValue().Min() );
+
             data->SetOptGap( opt );
             data->SetGapTolerance( opt - min );
         }
@@ -289,7 +287,7 @@ DRC_RULE_LOADER::createConstraintData( DRC_RULE_EDITOR_CONSTRAINT_NAME   aPanel,
 
         if( trackWidth )
         {
-            double opt = toMM( trackWidth->GetValue().Opt() );
+            double opt = toMM( trackWidth->GetValue().PinnedOpt() );
             double min = toMM( trackWidth->GetValue().Min() );
 
             data->SetOptWidth( opt );
@@ -313,8 +311,9 @@ DRC_RULE_LOADER::createConstraintData( DRC_RULE_EDITOR_CONSTRAINT_NAME   aPanel,
         if( length )
         {
             double minMM = toMM( length->GetValue().Min() );
-            double optMM = toMM( length->GetValue().Opt() );
+            double optMM = toMM( length->GetValue().PinnedOpt() );
             double maxMM = toMM( length->GetValue().Max() );
+
             data->SetOptimumLength( optMM );
             data->SetTolerance( ( maxMM - minMM ) / 2.0 );
         }
@@ -336,8 +335,9 @@ DRC_RULE_LOADER::createConstraintData( DRC_RULE_EDITOR_CONSTRAINT_NAME   aPanel,
         if( length )
         {
             double minMM = toMM( length->GetValue().Min() );
-            double optMM = toMM( length->GetValue().Opt() );
+            double optMM = toMM( length->GetValue().PinnedOpt() );
             double maxMM = toMM( length->GetValue().Max() );
+
             data->SetOptimumLength( optMM );
             data->SetTolerance( ( maxMM - minMM ) / 2.0 );
         }
@@ -681,7 +681,7 @@ std::vector<DRC_RE_LOADED_PANEL_ENTRY> DRC_RULE_LOADER::LoadFromString( const wx
     wxString rulesText = aRulesText;
 
     if( !rulesText.Contains( "(version" ) )
-        rulesText.Prepend( "(version 1)\n" );
+        rulesText.Prepend( "(version 2)\n" );
 
     try
     {

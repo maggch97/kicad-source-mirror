@@ -16,14 +16,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
+
+#include <map>
+#include <set>
 
 #include <core/ignore.h>
 #include <kiway.h>
@@ -33,7 +32,9 @@
 #include <sch_sheet.h>
 #include <sch_screen.h>
 #include <sch_symbol.h>
+#include <sch_pin.h>
 #include <sch_label.h>
+#include <sch_line.h>
 #include <sch_sheet_path.h>
 #include <settings/settings_manager.h>
 #include <wildcards_and_files_ext.h>
@@ -77,9 +78,21 @@ static SCH_SHEET* loadEagleSchematic( const wxFileName& aEagleFn,
                                       const wxString& aProjectStem,
                                       std::unique_ptr<SCHEMATIC>& aSchematic )
 {
-    wxString tempDir = wxStandardPaths::Get().GetTempDir();
-    wxString projectPath = tempDir + wxFileName::GetPathSeparator() + aProjectStem
-                           + wxT( ".kicad_pro" );
+    // Stage the project in a private, freshly-emptied directory.  The Eagle importer writes a
+    // "<stem>-eagle-import.kicad_sym" library plus a sym-lib-table into the project directory and
+    // keys duplicate-symbol-name disambiguation off the on-disk library, so leftover files from a
+    // previous run in the shared temp directory would make the imported symbol names
+    // non-deterministic.
+    wxString sep = wxFileName::GetPathSeparator();
+    wxString projectDir = wxStandardPaths::Get().GetTempDir() + sep + aProjectStem
+                          + wxT( "-eagle-qa" );
+
+    if( wxDirExists( projectDir ) )
+        wxFileName::Rmdir( projectDir, wxPATH_RMDIR_RECURSIVE );
+
+    wxFileName::Mkdir( projectDir, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL );
+
+    wxString projectPath = projectDir + sep + aProjectStem + wxT( ".kicad_pro" );
 
     Pgm().GetSettingsManager().LoadProject( projectPath );
     PROJECT& project = Pgm().GetSettingsManager().Prj();
@@ -267,4 +280,221 @@ BOOST_AUTO_TEST_CASE( LabelsRemainGlobalForFlatNamespace )
                              "Found global SCH_GLOBALLABEL '" << busName.ToStdString()
                              << "' — Eagle bus should remain a local SCH_LABEL." );
     }
+}
+
+
+/**
+ * Verify that the Eagle "@<tag>" linking hint on a pin name is stripped from the displayed
+ * pin name while still resolving the device <connect> mapping correctly.
+ *
+ * Regression test for issue #24483: Eagle disambiguates duplicate pin names within a symbol
+ * with a trailing "@<tag>" (e.g. "IN@1", "IN@2", "NC@3").  This tag is metadata used only to
+ * link pins to pads via <connect>; it should not appear as visible pin text.  The importer
+ * was setting the raw Eagle name as the KiCad pin name, leaking "@1"/"@2"/"@3" into the
+ * schematic.
+ */
+BOOST_AUTO_TEST_CASE( PinNameTagStripped )
+{
+    const wxFileName eagleFn = getEagleTestSchematic( "issue24483_pin_tag.sch" );
+    BOOST_REQUIRE( wxFileExists( eagleFn.GetFullPath() ) );
+
+    std::unique_ptr<SCHEMATIC> schematic;
+    loadEagleSchematic( eagleFn, wxS( "eagle_pin_tag" ), schematic );
+
+    SCH_SHEET_LIST hierarchy = schematic->BuildSheetListSortedByPageNumbers();
+
+    // Key symbols by their library item name (e.g. "MYDEV"); the annotated reference is
+    // unreliable here because the no-connect device is annotated with a '#' power prefix.  A
+    // single Eagle library imports without a library-name prefix on the symbol; the prefix is
+    // only added to disambiguate duplicate names across multiple Eagle libraries.
+    std::map<wxString, const SCH_SYMBOL*> symbolByLibItem;
+
+    for( const SCH_SHEET_PATH& sheetPath : hierarchy )
+    {
+        SCH_SCREEN* screen = sheetPath.LastScreen();
+
+        if( !screen )
+            continue;
+
+        for( const EDA_ITEM* item : screen->Items().OfType( SCH_SYMBOL_T ) )
+        {
+            const SCH_SYMBOL* sym = static_cast<const SCH_SYMBOL*>( item );
+            symbolByLibItem[sym->GetLibId().GetLibItemName().wx_str()] = sym;
+        }
+    }
+
+    // The connected device maps pins to pads through <connect>; the no-connect device has no
+    // <connect> so pins are auto-numbered. Both paths must strip the tag from the display name.
+    BOOST_REQUIRE( symbolByLibItem.count( wxS( "MYDEV" ) ) == 1 );
+    BOOST_REQUIRE( symbolByLibItem.count( wxS( "MYDEV_NC" ) ) == 1 );
+
+    auto collectNames = []( const SCH_SYMBOL* aSym )
+    {
+        std::multiset<wxString> names;
+
+        for( const SCH_PIN* pin : aSym->GetAllLibPins() )
+            names.insert( pin->GetName() );
+
+        return names;
+    };
+
+    // No display name on either symbol may retain the "@<tag>" suffix.
+    for( const auto& [libItem, sym] : symbolByLibItem )
+    {
+        for( const SCH_PIN* pin : sym->GetAllLibPins() )
+        {
+            BOOST_CHECK_MESSAGE( pin->GetName().Find( '@' ) == wxNOT_FOUND,
+                                 libItem.ToStdString() << " pin kept Eagle tag '"
+                                 << pin->GetName().ToStdString() << "'." );
+        }
+    }
+
+    // For the connected device, the two "IN@n" pins must both display as "IN" yet keep their
+    // distinct pad mapping, and "NC@3" must strip to "NC".
+    std::map<wxString, wxString> nameByPad;
+
+    for( const SCH_PIN* pin : symbolByLibItem[wxS( "MYDEV" )]->GetAllLibPins() )
+        nameByPad[pin->GetNumber()] = pin->GetName();
+
+    BOOST_CHECK_EQUAL( nameByPad["1"], wxString( wxS( "IN" ) ) );
+    BOOST_CHECK_EQUAL( nameByPad["2"], wxString( wxS( "IN" ) ) );
+    BOOST_CHECK_EQUAL( nameByPad["3"], wxString( wxS( "GND" ) ) );
+    BOOST_CHECK_EQUAL( nameByPad["4"], wxString( wxS( "NC" ) ) );
+
+    // The no-connect device keeps every pin, so both tagged "IN" pins survive the strip.
+    std::multiset<wxString> ncNames = collectNames( symbolByLibItem[wxS( "MYDEV_NC" )] );
+    BOOST_CHECK_EQUAL( ncNames.count( wxS( "IN" ) ), 2 );
+    BOOST_CHECK_EQUAL( ncNames.count( wxS( "GND" ) ), 1 );
+    BOOST_CHECK_EQUAL( ncNames.count( wxS( "NC" ) ), 1 );
+}
+
+
+/**
+ * Verify that a detached Eagle net label snaps onto its wire by perpendicular projection,
+ * preserving its position along the wire.
+ *
+ * Regression test for issue #24810.  Eagle lets a net label float off its wire.  On import
+ * KiCad relocates such a label onto the wire, but the old snap only considered the wire's
+ * two endpoints and midpoint, so a label offset perpendicular from a long wire slid far
+ * along it (e.g. 11 mm) and parallel labels piled onto the wire centre.  The fixture's net
+ * has a 40 mm horizontal wire (80->120 mm) with a label 2.54 mm above it at x=90 mm; the
+ * label must land at x=90 mm on the wire, not at an endpoint or the 100 mm midpoint.
+ */
+BOOST_AUTO_TEST_CASE( DetachedLabelProjectsOntoWire )
+{
+    const wxFileName eagleFn = getEagleTestSchematic( "eagle-import-testfile.sch" );
+    BOOST_REQUIRE( wxFileExists( eagleFn.GetFullPath() ) );
+
+    std::unique_ptr<SCHEMATIC> schematic;
+    loadEagleSchematic( eagleFn, wxS( "eagle_detached_label" ), schematic );
+
+    SCH_LABEL_BASE* detached = nullptr;
+    SCH_SCREEN*     screen = nullptr;
+
+    for( const SCH_SHEET_PATH& sheetPath : schematic->BuildSheetListSortedByPageNumbers() )
+    {
+        SCH_SCREEN* sheetScreen = sheetPath.LastScreen();
+
+        if( !sheetScreen )
+            continue;
+
+        for( SCH_ITEM* item : sheetScreen->Items().OfType( SCH_GLOBAL_LABEL_T ) )
+        {
+            if( static_cast<SCH_LABEL_BASE*>( item )->GetText() == wxS( "DETACHEDLABEL" ) )
+            {
+                detached = static_cast<SCH_LABEL_BASE*>( item );
+                screen   = sheetScreen;
+            }
+        }
+    }
+
+    BOOST_REQUIRE_MESSAGE( detached, "DETACHEDLABEL global label not imported" );
+
+    // Positions carry an import-time sheet translation, so all checks are made relative to
+    // the wire's own endpoints.
+    const VECTOR2I labelPos = detached->GetPosition();
+    SEG            wire;
+    double         wireDist = std::numeric_limits<double>::max();
+
+    for( SCH_ITEM* item : screen->Items().OfType( SCH_LINE_T ) )
+    {
+        SCH_LINE* line = static_cast<SCH_LINE*>( item );
+
+        if( !line->IsWire() )
+            continue;
+
+        SEG    seg( line->GetStartPoint(), line->GetEndPoint() );
+        double d = seg.Distance( labelPos );
+
+        if( d < wireDist )
+        {
+            wireDist = d;
+            wire     = seg;
+        }
+    }
+
+    // The label must be on the wire.
+    BOOST_CHECK_MESSAGE( wireDist <= schIUScale.MilsToIU( 1 ),
+                         "Label is " << ( wireDist / schIUScale.IU_PER_MM )
+                                     << " mm from its wire" );
+
+    // The wire is 40 mm long and the label sat 10 mm from the left end.  Perpendicular
+    // projection preserves that; the old endpoint/midpoint snap would put it at 0 mm
+    // (endpoint) or 20 mm (midpoint) from the left end.
+    const VECTOR2I  leftEnd = wire.A.x <= wire.B.x ? wire.A : wire.B;
+    const double    offsetMM = std::abs( labelPos.x - leftEnd.x ) / (double) schIUScale.IU_PER_MM;
+
+    BOOST_CHECK_MESSAGE( std::abs( offsetMM - 10.0 ) < 1.0,
+                         "Label projected to " << offsetMM
+                                               << " mm from the wire's left end, expected 10 mm" );
+}
+
+
+// issue 24829 dropped net labels under the raw netbuslabel element name
+// and lost symbols whose variant ordinal above 127 sign-extended negative
+BOOST_AUTO_TEST_CASE( BinaryNetLabelAndHighVariantImported )
+{
+    const wxFileName eagleFn = getEagleTestSchematic( "issue24829_brenner.sch" );
+    BOOST_REQUIRE( wxFileExists( eagleFn.GetFullPath() ) );
+
+    std::unique_ptr<SCHEMATIC> schematic;
+    loadEagleSchematic( eagleFn, wxS( "eagle_brenner_24829" ), schematic );
+
+    int symbolCount = 0;
+    SCH_SYMBOL* c4 = nullptr;
+    SCH_LABEL_BASE* netLabel = nullptr;
+
+    for( const SCH_SHEET_PATH& sheetPath : schematic->BuildSheetListSortedByPageNumbers() )
+    {
+        SCH_SCREEN* screen = sheetPath.LastScreen();
+
+        if( !screen )
+            continue;
+
+        for( SCH_ITEM* item : screen->Items() )
+        {
+            if( item->Type() == SCH_LABEL_T || item->Type() == SCH_GLOBAL_LABEL_T
+                || item->Type() == SCH_HIER_LABEL_T )
+            {
+                netLabel = static_cast<SCH_LABEL_BASE*>( item );
+            }
+            else if( item->Type() == SCH_SYMBOL_T )
+            {
+                ++symbolCount;
+                SCH_SYMBOL* sym = static_cast<SCH_SYMBOL*>( item );
+
+                if( sym->GetField( FIELD_T::REFERENCE )->GetText() == wxS( "C4" ) )
+                    c4 = sym;
+            }
+        }
+    }
+
+    // single placed net label on VSS, previously dropped entirely
+    BOOST_REQUIRE_MESSAGE( netLabel, "placed net label was not imported" );
+    BOOST_CHECK_EQUAL( netLabel->GetText(), wxS( "VSS" ) );
+
+    // 36 placed instances, C4 is CPOL-EU with variant ordinal 131
+    BOOST_CHECK_EQUAL( symbolCount, 36 );
+    BOOST_REQUIRE_MESSAGE( c4, "CPOL-EU symbol C4 (variant ordinal 131) was not imported" );
+    BOOST_CHECK( c4->GetLibSymbolRef() != nullptr );
 }

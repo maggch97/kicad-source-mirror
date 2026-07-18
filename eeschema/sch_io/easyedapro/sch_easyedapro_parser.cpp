@@ -1,4 +1,4 @@
-﻿/*
+/*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2023 Alex Shvartzkop <dudesuchamazing@gmail.com>
@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "sch_easyedapro_parser.h"
@@ -47,21 +43,6 @@
 #include <import_gfx/svg_import_plugin.h>
 #include <import_gfx/graphics_importer_lib_symbol.h>
 #include <import_gfx/graphics_importer_sch.h>
-
-
-// clang-format off
-static const std::vector<wxString> c_attributesWhitelist = { "Value",
-                                                             "Datasheet",
-                                                             "Manufacturer Part",
-                                                             "Manufacturer",
-                                                             "BOM_Manufacturer Part",
-                                                             "BOM_Manufacturer",
-                                                             "Supplier Part",
-                                                             "Supplier",
-                                                             "BOM_Supplier Part",
-                                                             "BOM_Supplier",
-                                                             "LCSC Part Name" };
-// clang-format on
 
 
 SCH_EASYEDAPRO_PARSER::SCH_EASYEDAPRO_PARSER( SCHEMATIC*         aSchematic,
@@ -234,67 +215,6 @@ void SCH_EASYEDAPRO_PARSER::ApplyLineStyle( const std::map<wxString, nlohmann::j
 }
 
 
-wxString SCH_EASYEDAPRO_PARSER::ResolveFieldVariables(
-        const wxString aInput, const std::map<wxString, wxString>& aDeviceAttributes )
-{
-    wxString inputText = aInput;
-    wxString resolvedText;
-    int      variableCount = 0;
-
-    // Resolve variables
-    // ={Variable1}text{Variable2}
-    do
-    {
-        if( !inputText.StartsWith( wxS( "={" ) ) )
-            return inputText;
-
-        resolvedText.Clear();
-        variableCount = 0;
-
-        for( size_t i = 1; i < inputText.size(); )
-        {
-            wxUniChar c = inputText[i++];
-
-            if( c == '{' )
-            {
-                wxString varName;
-                bool     endFound = false;
-
-                while( i < inputText.size() )
-                {
-                    c = inputText[i++];
-
-                    if( c == '}' )
-                    {
-                        endFound = true;
-                        break;
-                    }
-
-                    varName << c;
-                }
-
-                if( !endFound )
-                    return inputText;
-
-                wxString varValue =
-                        get_def( aDeviceAttributes, varName, wxString::Format( "{%s!}", varName ) );
-
-                resolvedText << varValue;
-                variableCount++;
-            }
-            else
-            {
-                resolvedText << c;
-            }
-        }
-        inputText = resolvedText;
-
-    } while( variableCount > 0 );
-
-    return resolvedText;
-}
-
-
 template <typename T>
 void SCH_EASYEDAPRO_PARSER::ApplyAttrToField( const std::map<wxString, nlohmann::json>& fontStyles,
                                               T* field, const EASYEDAPRO::SCH_ATTR& aAttr,
@@ -304,7 +224,7 @@ void SCH_EASYEDAPRO_PARSER::ApplyAttrToField( const std::map<wxString, nlohmann:
 {
     EDA_TEXT* text = static_cast<EDA_TEXT*>( field );
 
-    text->SetText( ResolveFieldVariables( aAttr.value, aDeviceAttributes ) );
+    text->SetText( EASYEDAPRO::ResolveDeviceFieldVariables( aAttr.value, aDeviceAttributes ) );
     text->SetVisible( aAttr.keyVisible || aAttr.valVisible );
 
     field->SetNameShown( aAttr.keyVisible );
@@ -715,29 +635,21 @@ SCH_EASYEDAPRO_PARSER::ParseSymbol( const std::vector<nlohmann::json>&  aLines,
             ksymbol->GetReferenceField().SetText( symbolPrefix );
         }
 
-        for( const wxString& attrName : c_attributesWhitelist )
-        {
-            if( auto valOpt = get_opt( aDeviceAttributes, attrName ) )
-            {
-                if( valOpt->empty() )
-                    continue;
-
-                SCH_FIELD* fd = ksymbol->FindFieldCaseInsensitive( attrName );
-
-                if( !fd )
+        EASYEDAPRO::ForEachImportedDeviceField(
+                aDeviceAttributes, true,
+                [&]( const wxString& attrName, const wxString& value )
                 {
-                    fd = new SCH_FIELD( ksymbol, FIELD_T::USER, attrName );
-                    ksymbol->AddField( fd );
-                }
+                    SCH_FIELD* fd = ksymbol->FindFieldCaseInsensitive( attrName );
 
-                wxString value = *valOpt;
+                    if( !fd )
+                    {
+                        fd = new SCH_FIELD( ksymbol, FIELD_T::USER, attrName );
+                        ksymbol->AddField( fd );
+                    }
 
-                value.Replace( wxS( "\u2103" ), wxS( "\u00B0C" ), true ); // ℃ -> °C
-
-                fd->SetText( value );
-                fd->SetVisible( false );
-            }
-        }
+                    fd->SetText( value );
+                    fd->SetVisible( false );
+                } );
     }
 
     for( auto& [unitId, parentedLines] : unitParentedLines )
@@ -1238,7 +1150,7 @@ void SCH_EASYEDAPRO_PARSER::ParseSchematic( SCHEMATIC* aSchematic, SCH_SHEET* aR
                 {
                     globalNetName = globalNetNameFromProject;
 
-                    valueField->SetText( ResolveFieldVariables( globalNetName, mergedAttrValues ) );
+                    valueField->SetText( EASYEDAPRO::ResolveDeviceFieldVariables( globalNetName, mergedAttrValues ) );
                 }
                 else
                 {
@@ -1325,26 +1237,18 @@ void SCH_EASYEDAPRO_PARSER::ParseSchematic( SCHEMATIC* aSchematic, SCH_SHEET* aR
             }
             else
             {
-                for( const wxString& attrKey : c_attributesWhitelist )
-                {
-                    if( auto valOpt = get_opt( mergedAttrValues, attrKey ) )
-                    {
-                        if( valOpt->empty() )
-                            continue;
+                EASYEDAPRO::ForEachImportedDeviceField(
+                        mergedAttrValues, true,
+                        [&]( const wxString& attrKey, const wxString& value )
+                        {
+                            SCH_FIELD* text = schSym->FindFieldCaseInsensitive( attrKey );
 
-                        SCH_FIELD* text = schSym->FindFieldCaseInsensitive( attrKey );
+                            if( !text )
+                                text = schSym->AddField( SCH_FIELD( schSym.get(), FIELD_T::USER, attrKey ) );
 
-                        if( !text )
-                            text = schSym->AddField( SCH_FIELD( schSym.get(), FIELD_T::USER, attrKey ) );
-
-                        wxString value = *valOpt;
-
-                        value.Replace( wxS( "\u2103" ), wxS( "\u00B0C" ), true ); // ℃ -> °C
-
-                        text->SetText( value );
-                        text->SetVisible( false );
-                    }
-                }
+                            text->SetText( value );
+                            text->SetVisible( false );
+                        } );
 
                 auto nameAttr = get_opt( attributes, "Name" );
                 auto valueAttr = get_opt( attributes, "Value" );

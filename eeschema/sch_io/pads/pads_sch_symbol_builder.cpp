@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <sch_io/pads/pads_sch_symbol_builder.h>
@@ -52,29 +52,9 @@ PADS_SCH_SYMBOL_BUILDER::~PADS_SCH_SYMBOL_BUILDER()
 
 int PADS_SCH_SYMBOL_BUILDER::toKiCadUnits( double aPadsValue ) const
 {
-    // Convert from PADS units to KiCad internal units (nanometers)
-    // PADS uses mils by default, KiCad schematic uses schIUScale.MilsToIU()
-
-    double milsValue = aPadsValue;
-
-    switch( m_params.units )
-    {
-    case UNIT_TYPE::MILS:
-        milsValue = aPadsValue;
-        break;
-
-    case UNIT_TYPE::METRIC:
-        // mm to mils: 1 mm = 39.37 mils
-        milsValue = aPadsValue * 39.3701;
-        break;
-
-    case UNIT_TYPE::INCHES:
-        // inches to mils
-        milsValue = aPadsValue * 1000.0;
-        break;
-    }
-
-    return schIUScale.MilsToIU( milsValue );
+    // PADS Logic ASCII schematics always store geometry in mils. The UNITS field selects only
+    // the design-rules unit and must not scale the schematic coordinates.
+    return schIUScale.MilsToIU( aPadsValue );
 }
 
 
@@ -353,7 +333,10 @@ LIB_SYMBOL* PADS_SCH_SYMBOL_BUILDER::GetOrCreatePartTypeSymbol(
         }
     }
 
-    libSymbol->SetShowPinNumbers( hasPinNames );
+    // Connectors number their pins even though they carry no pin names. A single
+    // multi-pin connector placement (no per-pin reference suffix) still routes here,
+    // so force pin numbers on for connector part types.
+    libSymbol->SetShowPinNumbers( hasPinNames || aPartType.is_connector );
     libSymbol->SetShowPinNames( hasPinNames );
 
     m_symbolCache[cacheKey] = std::unique_ptr<LIB_SYMBOL>( libSymbol );

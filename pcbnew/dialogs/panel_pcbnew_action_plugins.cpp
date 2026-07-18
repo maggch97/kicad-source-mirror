@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <api/api_plugin.h>
@@ -41,6 +41,8 @@
 #include <widgets/std_bitmap_button.h>
 #include <widgets/wx_html_report_box.h>
 #include <wx/app.h>
+
+#include <algorithm>
 
 
 #define GRID_CELL_MARGIN 4
@@ -73,7 +75,6 @@ void PLUGINS_GRID_TRICKS::showPopupMenu( wxMenu& menu, wxGridEvent& aEvent )
         m_grid->ClearSelection();
         m_grid->SelectRow( clickedRow );
 
-#ifdef KICAD_IPC_API
         API_PLUGIN_MANAGER& mgr = Pgm().GetPluginManager();
         wxString id = m_grid->GetCellValue( clickedRow,
                                             PANEL_PCBNEW_ACTION_PLUGINS::COLUMN_SETTINGS_IDENTIFIER );
@@ -84,7 +85,6 @@ void PLUGINS_GRID_TRICKS::showPopupMenu( wxMenu& menu, wxGridEvent& aEvent )
             menu.Append( MYID_RECREATE_ENV, _( "Recreate Plugin Environment" ), _( "Recreate Plugin Environment" ) );
             menu.AppendSeparator();
         }
-#endif
     }
 
     GRID_TRICKS::showPopupMenu( menu, aEvent );
@@ -95,7 +95,6 @@ void PLUGINS_GRID_TRICKS::doPopupSelection( wxCommandEvent& event )
 {
     if( event.GetId() == MYID_RECREATE_ENV )
     {
-#ifdef KICAD_IPC_API
         API_PLUGIN_MANAGER& mgr = Pgm().GetPluginManager();
         wxString id = m_grid->GetCellValue( m_grid->GetGridCursorRow(),
                                             PANEL_PCBNEW_ACTION_PLUGINS::COLUMN_SETTINGS_IDENTIFIER );
@@ -105,7 +104,6 @@ void PLUGINS_GRID_TRICKS::doPopupSelection( wxCommandEvent& event )
         {
             mgr.RecreatePluginEnvironment( ( *action )->plugin.Identifier() );
         }
-#endif
     }
     else
     {
@@ -120,6 +118,9 @@ PANEL_PCBNEW_ACTION_PLUGINS::PANEL_PCBNEW_ACTION_PLUGINS( wxWindow* aParent ) :
     m_genericIcon = KiBitmapBundle( BITMAPS::puzzle_piece );
     m_grid->PushEventHandler( new PLUGINS_GRID_TRICKS( m_grid ) );
     m_grid->SetUseNativeColLabels();
+
+    // Pin best size before TransferDataToWindow grows columns past the screen (#24408).
+    m_grid->OverrideMinSize( 1.0, 1.0 );
 
     m_moveUpButton->SetBitmap( KiBitmapBundle( BITMAPS::small_up ) );
     m_moveDownButton->SetBitmap( KiBitmapBundle( BITMAPS::small_down ) );
@@ -224,7 +225,6 @@ bool PANEL_PCBNEW_ACTION_PLUGINS::TransferDataFromWindow()
     PCBNEW_SETTINGS* settings = dynamic_cast<PCBNEW_SETTINGS*>( Kiface().KifaceSettings() );
     wxASSERT( settings );
 
-#ifdef KICAD_IPC_API
     API_PLUGIN_MANAGER& mgr = Pgm().GetPluginManager();
 
     if( settings )
@@ -242,7 +242,6 @@ bool PANEL_PCBNEW_ACTION_PLUGINS::TransferDataFromWindow()
             }
         }
     }
-#endif
 
     return true;
 }
@@ -262,7 +261,6 @@ bool PANEL_PCBNEW_ACTION_PLUGINS::TransferDataToWindow()
 
     for( size_t row = 0; row < orderedPlugins.size(); row++ )
     {
-#ifdef KICAD_IPC_API
             const PLUGIN_ACTION* action = orderedPlugins[row];
 
             const wxBitmapBundle& icon = KIPLATFORM::UI::IsDarkTheme() && action->icon_dark.IsOk() ? action->icon_dark
@@ -284,22 +282,23 @@ bool PANEL_PCBNEW_ACTION_PLUGINS::TransferDataToWindow()
 
             m_grid->SetCellValue( row, COLUMN_PLUGIN_NAME, action->plugin.Name() );
             m_grid->SetCellValue( row, COLUMN_DESCRIPTION, action->description );
-#endif
     }
+
+    const int colMaxWidth = FromDIP( 400 );
 
     for( int col = 0; col < m_grid->GetNumberCols(); col++ )
     {
         const wxString& heading = m_grid->GetColLabelValue( col );
         int             headingWidth = GetTextExtent( heading ).x + 2 * GRID_CELL_MARGIN;
 
-        // Set the minimal width to the column label size.
         m_grid->SetColMinimalWidth( col, headingWidth );
-        // Set the width to see the full contents
-        m_grid->SetColSize( col, m_grid->GetVisibleWidth( col ) );
+        int width = std::min( m_grid->GetVisibleWidth( col ), colMaxWidth );
+        m_grid->SetColSize( col, std::max( headingWidth, width ) );
     }
 
     m_grid->AutoSizeRows();
-    m_grid->AutoSizeColumns();
+    // AutoSizeColumns() would re-expand columns to full content width (setAsMin=true) and undo
+    // the cap above (#24408).
     m_grid->HideCol( COLUMN_SETTINGS_IDENTIFIER );
 
     m_grid->Thaw();

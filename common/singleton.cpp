@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <singleton.h>
@@ -58,6 +58,14 @@ void KICAD_SINGLETON::Shutdown()
 void KICAD_SINGLETON::Init()
 {
     int num_threads = std::max( 0, ADVANCED_CFG::GetCfg().m_MaximumThreads );
-    m_ThreadPool = new BS::priority_thread_pool( num_threads );
+
+    m_ThreadPool = new BS::priority_thread_pool( num_threads,
+                                                 []
+                                                 {
+                                                     // Reduce worker threadpriority to reduce lag in main (UI) thread
+                                                     BS::this_thread::set_os_thread_priority(
+                                                             BS::os_thread_priority::below_normal );
+                                                 } );
+
     m_GLContextManager = new GL_CONTEXT_MANAGER();
 }

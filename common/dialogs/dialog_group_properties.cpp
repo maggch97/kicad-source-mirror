@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <tool/tool_manager.h>
@@ -173,7 +169,19 @@ void DIALOG_GROUP_PROPERTIES::DoAddMember( EDA_ITEM* aItem )
     }
 
     if( aItem == m_group->AsEdaItem() )
+    {
+        m_frame->ShowInfoBarWarning( _( "A group cannot contain itself." ) );
         return;
+    }
+
+    if( const EDA_GROUP* group = dynamic_cast<const EDA_GROUP*>( aItem ) )
+    {
+        if( group->ContainsItem( m_group->AsEdaItem() ) )
+        {
+            m_frame->ShowInfoBarWarning( _( "Cannot add this group because it already contains the current group." ) );
+            return;
+        }
+    }
 
     m_membersList->Append( aItem->GetItemDescription( m_frame, true ), aItem );
 }
@@ -189,5 +197,3 @@ void DIALOG_GROUP_PROPERTIES::OnRemoveMember( wxCommandEvent& event )
     m_frame->ClearFocus();
     m_frame->GetCanvas()->Refresh();
 }
-
-

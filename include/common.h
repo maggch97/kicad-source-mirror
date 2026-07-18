@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -102,6 +98,17 @@ KICOMMON_API wxString ExpandTextVars( const wxString& aSource, const std::functi
                                       int aFlags = 0, int aDepth = 0 );
 
 KICOMMON_API wxString ExpandTextVars( const wxString& aSource, const PROJECT* aProject, int aFlags = 0 );
+
+/**
+ * Normalize a file path so its text variables survive ExpandTextVars.
+ *
+ * ExpandTextVars treats \${ and \@{ as escape sequences, so a Windows path like
+ * "subdir\${REVISION}.csv" leaves the variable unexpanded. Callers that expand text
+ * variables in a user-entered file path must run the path through this first so the
+ * backslash reads as a separator, not an escape. Backslashes not immediately preceding a
+ * text variable are left untouched.
+ */
+KICOMMON_API wxString NormalizeFilePathForTextVars( const wxString& aPath );
 
 /**
  * Lex-scan @p aSource and return every `${...}` reference that appears, without

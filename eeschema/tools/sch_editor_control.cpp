@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "tools/sch_editor_control.h"
@@ -28,6 +24,7 @@
 #include <core/base64.h>
 #include <algorithm>
 #include <chrono>
+#include <api/api_plugin_manager.h>
 #include <confirm.h>
 #include <connection_graph.h>
 #include <design_block.h>
@@ -107,10 +104,6 @@
 #include <wx/mstream.h>
 #include <wx/clipbrd.h>
 #include <wx/imagpng.h>
-
-#ifdef KICAD_IPC_API
-#include <api/api_plugin_manager.h>
-#endif
 
 
 /**
@@ -1606,6 +1599,10 @@ int SCH_EDITOR_CONTROL::UpdateNetHighlighting( const TOOL_EVENT& aEvent )
     {
         connNames.emplace( selectedName );
 
+        // Highlight both label forms together: {MIXED_BUS} and its expansion {FOO BAR HAM EGGS}.
+        for( const wxString& equivalent : connectionGraph->GetEquivalentBusNames( selectedName ) )
+            connNames.emplace( equivalent );
+
         if( CONNECTION_SUBGRAPH* sg = connectionGraph->FindSubgraphByName( selectedName, sheetPath ) )
         {
             if( m_highlightBusMembers )
@@ -1629,12 +1626,15 @@ int SCH_EDITOR_CONTROL::UpdateNetHighlighting( const TOOL_EVENT& aEvent )
         // Place all bus names that are connected to the selected net in the set, regardless of
         // their sheet. This ensures that nets that are connected to a bus on a different sheet
         // get their buses highlighted as well.
-        for( CONNECTION_SUBGRAPH* sg : connectionGraph->GetAllSubgraphs( selectedName ) )
+        for( const wxString& connName : std::vector<wxString>( connNames.begin(), connNames.end() ) )
         {
-            for( const auto& [_, bus_sgs] : sg->GetBusParents() )
+            for( CONNECTION_SUBGRAPH* sg : connectionGraph->GetAllSubgraphs( connName ) )
             {
-                for( CONNECTION_SUBGRAPH* bus_sg : bus_sgs )
-                    connNames.emplace( bus_sg->GetNetName() );
+                for( const auto& [_, bus_sgs] : sg->GetBusParents() )
+                {
+                    for( CONNECTION_SUBGRAPH* bus_sg : bus_sgs )
+                        connNames.emplace( bus_sg->GetNetName() );
+                }
             }
         }
         wxLogTrace( "KICAD_SCH_HIGHLIGHT", "UpdateNetHighlighting: connNames after connection='%zu'", connNames.size() );
@@ -2357,6 +2357,8 @@ SCH_SHEET_PATH SCH_EDITOR_CONTROL::updatePastedSheet( SCH_SHEET* aSheet, const S
     if( aSheet->GetScreen() == nullptr )
         return sheetPath; // We can only really set the page number but not load any items
 
+    bool isSharedPath = sheetPath.IsSharedPath();
+
     for( SCH_ITEM* item : aSheet->GetScreen()->Items() )
     {
         if( item->IsConnectable() )
@@ -2371,9 +2373,15 @@ SCH_SHEET_PATH SCH_EDITOR_CONTROL::updatePastedSheet( SCH_SHEET* aSheet, const S
             // Only do this once if the symbol is shared across multiple sheets.
             if( !m_pastedSymbols.count( symbol ) )
             {
+                if( !isSharedPath )
+                    const_cast<KIID&>( symbol->m_Uuid ) = KIID();
+
                 for( SCH_PIN* pin : symbol->GetPins() )
                 {
-                    const_cast<KIID&>( pin->m_Uuid ) = KIID();
+                    // Only update the UUID if the symbol is not in a shared sheet.
+                    if( !isSharedPath )
+                        const_cast<KIID&>( pin->m_Uuid ) = KIID();
+
                     pin->SetConnectivityDirty();
                 }
             }
@@ -2389,9 +2397,14 @@ SCH_SHEET_PATH SCH_EDITOR_CONTROL::updatePastedSheet( SCH_SHEET* aSheet, const S
             // Make sure pins get a new UUID and set the dirty connectivity flag.
             if( !aPastedSheets->ContainsSheet( subsheet ) )
             {
+                if( !isSharedPath )
+                    const_cast<KIID&>( subsheet->m_Uuid ) = KIID();
+
                 for( SCH_SHEET_PIN* pin : subsheet->GetPins() )
                 {
-                    const_cast<KIID&>( pin->m_Uuid ) = KIID();
+                    if( !isSharedPath )
+                        const_cast<KIID&>( pin->m_Uuid ) = KIID();
+
                     pin->SetConnectivityDirty();
                 }
             }
@@ -2453,6 +2466,35 @@ void SCH_EDITOR_CONTROL::prunePastedSymbolInstances()
         for( const KIID_PATH& path : instancePathsToRemove )
             symbol->RemoveInstance( path );
     }
+}
+
+
+const LIB_SYMBOL* SCH_EDITOR_CONTROL::ChoosePasteLibSymbol( const SCH_SCREEN* aClipboardScreen,
+                                                            const SCH_SCREEN* aDestScreen,
+                                                            const wxString&   aLibSymbolName )
+{
+    // The clipboard's cached library symbol is a matched pair with the pasted instance, so it
+    // must win over the destination's same-named cache. Pasting from the destination cache would
+    // silently remap the instance to a different definition and drop in-place edits such as
+    // renumbered pins (issue 21401) or a changed power type (issue 22162). Fall back to the
+    // destination cache only when the clipboard carries no copy.
+    if( aClipboardScreen )
+    {
+        auto clipIt = aClipboardScreen->GetLibSymbols().find( aLibSymbolName );
+
+        if( clipIt != aClipboardScreen->GetLibSymbols().end() )
+            return clipIt->second;
+    }
+
+    if( aDestScreen )
+    {
+        auto destIt = aDestScreen->GetLibSymbols().find( aLibSymbolName );
+
+        if( destIt != aDestScreen->GetLibSymbols().end() )
+            return destIt->second;
+    }
+
+    return nullptr;
 }
 
 
@@ -2724,52 +2766,15 @@ int SCH_EDITOR_CONTROL::Paste( const TOOL_EVENT& aEvent )
         {
             SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
 
-            // The library symbol gets set from the cached library symbols in the current
-            // schematic not the symbol libraries.  The cached library symbol may have
-            // changed from the original library symbol which would cause the copy to
-            // be incorrect.
             SCH_SCREEN* currentScreen = m_frame->GetScreen();
 
             wxCHECK2( currentScreen, continue );
 
-            // First get the library symbol from the clipboard (if available)
-            auto clipIt = tempScreen->GetLibSymbols().find( symbol->GetSchSymbolLibraryName() );
-            LIB_SYMBOL* clipLibSymbol = ( clipIt != tempScreen->GetLibSymbols().end() )
-                                                ? clipIt->second
-                                                : nullptr;
+            const LIB_SYMBOL* source = ChoosePasteLibSymbol( tempScreen, currentScreen,
+                                                             symbol->GetSchSymbolLibraryName() );
 
-            // Then check the current screen
-            auto it = currentScreen->GetLibSymbols().find( symbol->GetSchSymbolLibraryName() );
-            auto end = currentScreen->GetLibSymbols().end();
-
-            LIB_SYMBOL* libSymbol = nullptr;
-
-            if( it != end && clipLibSymbol )
-            {
-                // Both exist - check if power types match. If they differ (e.g., one is
-                // local power and the other is global power), use the clipboard version
-                // to preserve the copied symbol's power type.
-                if( clipLibSymbol->IsLocalPower() != it->second->IsLocalPower()
-                    || clipLibSymbol->IsGlobalPower() != it->second->IsGlobalPower() )
-                {
-                    libSymbol = new LIB_SYMBOL( *clipLibSymbol );
-                }
-                else
-                {
-                    libSymbol = new LIB_SYMBOL( *it->second );
-                }
-            }
-            else if( it != end )
-            {
-                libSymbol = new LIB_SYMBOL( *it->second );
-            }
-            else if( clipLibSymbol )
-            {
-                libSymbol = new LIB_SYMBOL( *clipLibSymbol );
-            }
-
-            if( libSymbol )
-                symbol->SetLibSymbol( libSymbol );
+            if( source )
+                symbol->SetLibSymbol( new LIB_SYMBOL( *source ) );
 
             // If the symbol is already in the schematic we have to always keep the annotations. The exception
             // is if the user has chosen to remove them.
@@ -2815,7 +2820,7 @@ int SCH_EDITOR_CONTROL::Paste( const TOOL_EVENT& aEvent )
                 for( SCH_SHEET_PATH& sheetPath : sheetPathsForScreen )
                 {
                     // Ignore symbols from a non-existant library.
-                    if( libSymbol )
+                    if( source )
                     {
                         SCH_REFERENCE schReference( symbol, sheetPath );
                         schReference.SetSheetNumber( sheetPath.GetPageNumberAsInt() );
@@ -2921,6 +2926,15 @@ int SCH_EDITOR_CONTROL::Paste( const TOOL_EVENT& aEvent )
                 destItem->SetConnectivityDirty( true );
                 destItem->SetLastResolvedState( srcItem );
             }
+
+            // Pasted named groups need a unique name, the multichannel tool matches groups by name.
+            if( item->Type() == SCH_GROUP_T )
+            {
+                SCH_GROUP* group = static_cast<SCH_GROUP*>( item );
+
+                if( !group->GetName().IsEmpty() )
+                    group->SetName( UniqueGroupName( m_frame->GetScreen(), group->GetName() ) );
+            }
         }
 
         // Lines need both ends selected for a move after paste so the whole line moves.
@@ -2941,20 +2955,29 @@ int SCH_EDITOR_CONTROL::Paste( const TOOL_EVENT& aEvent )
 
     if( sheetsPasted )
     {
-        // The full schematic hierarchy need to be update before assigning new annotation and
-        // page numbers.
+        // The full schematic hierarchy need to be update before assigning new annotation and page numbers.
         m_frame->Schematic().RefreshHierarchy();
 
-        // Update page numbers: Find next free numeric page number
+        // Update sheet instance page and virtual page numbers to ensure annotation works correctly.
         for( SCH_SHEET_PATH& sheetPath : sheetPathsForScreen )
         {
             for( SCH_SHEET_PATH& pastedSheet : pastedSheets[sheetPath] )
             {
+                // Find next free string page number for the sheet instance.
                 int      page = 1;
                 wxString pageNum = wxString::Format( "%d", page );
 
                 while( hierarchy.PageNumberExists( pageNum ) )
                     pageNum = wxString::Format( "%d", ++page );
+
+                int virtualPageNumber = page;
+
+                // The virtual page and sheet instance page numbers do not necessarily track. Increment by one
+                // to ensure the annotation sheet paths all have unique virtual page numbers.
+                if( page == hierarchy.GetLastVirtualPageNumber() )
+                    virtualPageNumber = hierarchy.GetLastVirtualPageNumber() + 1;
+
+                pastedSheet.SetVirtualPageNumber( virtualPageNumber );
 
                 SCH_SHEET_INSTANCE sheetInstance;
 
@@ -2983,6 +3006,20 @@ int SCH_EDITOR_CONTROL::Paste( const TOOL_EVENT& aEvent )
 
                 for( const KIID_PATH& instancePath : instancesToRemove )
                     sheet->RemoveInstance( instancePath );
+
+                // The sheet paths for the annotation code where copied in updatePastedSheets() when the virtual
+                // page number was still 1.  Set the virtual page number in the copied sheet paths.
+                for( auto&[path, refs] : pastedSymbols )
+                {
+                    for( SCH_REFERENCE& ref : refs )
+                    {
+                        if( ref.GetSheetPath() == pastedSheet )
+                        {
+                            ref.GetSheetPath().SetVirtualPageNumber( virtualPageNumber );
+                            ref.SetSheetNumber( virtualPageNumber );
+                        }
+                    }
+                }
             }
         }
 
@@ -3914,6 +3951,30 @@ int SCH_EDITOR_CONTROL::EditVariantDescription( const TOOL_EVENT& aEvent )
 }
 
 
+int SCH_EDITOR_CONTROL::RenameVariant( const TOOL_EVENT& aEvent )
+{
+    SCH_EDIT_FRAME* editFrame = dynamic_cast<SCH_EDIT_FRAME*>( m_frame );
+
+    if( !editFrame )
+        return 1;
+
+    editFrame->RenameVariant();
+    return 0;
+}
+
+
+int SCH_EDITOR_CONTROL::CopyVariant( const TOOL_EVENT& aEvent )
+{
+    SCH_EDIT_FRAME* editFrame = dynamic_cast<SCH_EDIT_FRAME*>( m_frame );
+
+    if( !editFrame )
+        return 1;
+
+    editFrame->CopyVariant();
+    return 0;
+}
+
+
 void SCH_EDITOR_CONTROL::setTransitions()
 {
     Go( &SCH_EDITOR_CONTROL::New,                     ACTIONS::doNew.MakeEvent() );
@@ -4015,4 +4076,6 @@ void SCH_EDITOR_CONTROL::setTransitions()
     Go( &SCH_EDITOR_CONTROL::AddVariant,              SCH_ACTIONS::addVariant.MakeEvent() );
     Go( &SCH_EDITOR_CONTROL::RemoveVariant,           SCH_ACTIONS::removeVariant.MakeEvent() );
     Go( &SCH_EDITOR_CONTROL::EditVariantDescription, SCH_ACTIONS::editVariantDescription.MakeEvent() );
+    Go( &SCH_EDITOR_CONTROL::RenameVariant,           SCH_ACTIONS::renameVariant.MakeEvent() );
+    Go( &SCH_EDITOR_CONTROL::CopyVariant,             SCH_ACTIONS::copyVariant.MakeEvent() );
 }

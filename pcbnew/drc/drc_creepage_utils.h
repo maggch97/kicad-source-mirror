@@ -13,11 +13,7 @@
     * GNU General Public License for more details.
     *
     * You should have received a copy of the GNU General Public License
-    * along with this program; if not, you may find one here:
-    * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
-    * or you may search the http://www.gnu.org website for the version 2 license,
-    * or you may write to the Free Software Foundation, Inc.,
-    * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+    * along with this program.  If not, see <https://www.gnu.org/licenses/>.
     */
 
 
@@ -63,6 +59,19 @@ extern bool SegmentIntersectsBoard( const VECTOR2I& aP1, const VECTOR2I& aP2,
                                     const std::vector<BOARD_ITEM*>&       aBe,
                                     const std::vector<const BOARD_ITEM*>& aDontTestAgainst,
                                     int                                   aMinGrooveWidth );
+
+
+/**
+ * Collect the board-edge items used by the creepage graph.
+ *
+ * Gathers Edge.Cuts drawings (flattening Bezier curves to owned segments) and NPTH pad holes
+ * (circles and oblong slots) into aVector, with transient owned shapes parked in aOwned. When
+ * aExclude is non-null, board items owned by any excluded item (for example the pads of a
+ * footprint being dragged) are skipped so the caller can treat them as moving geometry.
+ */
+void BuildCreepageBoardEdges( BOARD& aBoard, std::vector<BOARD_ITEM*>& aVector,
+                              std::vector<std::unique_ptr<PCB_SHAPE>>&  aOwned,
+                              const std::set<const BOARD_ITEM*>*        aExclude = nullptr );
 
 
 struct PATH_CONNECTION
@@ -858,7 +867,24 @@ public:
     double Solve( std::shared_ptr<GRAPH_NODE>& aFrom, std::shared_ptr<GRAPH_NODE>& aTo,
                   std::vector<std::shared_ptr<GRAPH_CONNECTION>>& aResult );
 
-    void GeneratePaths( double aMaxWeight, PCB_LAYER_ID aLayer );
+    /**
+     * Generate creepage paths between graph nodes.
+     *
+     * When aRelevantNets is non-null, paths between two conductors that both belong to
+     * non-relevant nets are skipped: such an edge can never lie on a shortest path that starts or
+     * ends on a relevant net (a third net's copper is an obstacle, not a routing medium). Board
+     * edges are never conductors, so board-edge paths are always generated. Passing nullptr
+     * generates every pair (the batch / whole-board behaviour).
+     */
+    void GeneratePaths( double aMaxWeight, PCB_LAYER_ID aLayer,
+                        const std::set<int>* aRelevantNets = nullptr );
+
+    /**
+     * Remove every node and connection added after the given prefix sizes, then rebuild the node
+     * lookup set from the surviving prefix. Used to reuse a graph across solves without leaking
+     * stale per-solve nodes into FindNode/AddNode lookups.
+     */
+    void TruncateToPrefix( size_t aNodeCount, size_t aConnectionCount );
 
     std::shared_ptr<GRAPH_NODE> AddNetElements( int aNetCode, PCB_LAYER_ID aLayer, int aMaxCreepage );
 
@@ -886,6 +912,7 @@ public:
     std::vector<BOARD_ITEM*>                       m_boardEdge;
     std::vector<std::unique_ptr<PCB_SHAPE>>        m_ownedBoardEdges;
     SHAPE_POLY_SET*                                m_boardOutline;
+    bool                                           m_hasOverlappingCutouts = false;
     std::vector<std::shared_ptr<GRAPH_NODE>>       m_nodes;
     std::vector<std::shared_ptr<GRAPH_CONNECTION>> m_connections;
     std::vector<CREEP_SHAPE*>                      m_shapeCollection;

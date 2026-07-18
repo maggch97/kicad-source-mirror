@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * https://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef SPICE_GRAMMAR_H
@@ -114,10 +110,12 @@ namespace SPICE_GRAMMAR
                                     one<'e', 'E'>,
                                     opt<one<'+', '-'>>>>> {};
 
+    struct tokenChar : seq<not_at<eolf>,
+                           not_at<backslashContinuation>,
+                           not_one<' ', '\t', '=', '(', ')', ',', ';'>> {};
+
     struct token : seq<tokenStart,
-                       star<not_at<eolf>,
-                            not_at<backslashContinuation>,
-                            not_one<' ', '\t', '=', '(', ')', ',', ';'>>> {};
+                       star<tokenChar>> {};
 
     // Param names cannot be `token` because LTspice models contain spurious values without
     // parameter names, which we need to skip, and because tokens can include a very limited
@@ -132,10 +130,20 @@ namespace SPICE_GRAMMAR
                                 paramValue> {};
     struct paramValuePairs : list<paramValuePair, sep> {};
 
-    struct cplSep : opt<one<' '>> {};
-    struct cplParamValue : sor<list<bracedExpr, cplSep>,
-                               vectorExpr,
-                               list<token, cplSep>> {};
+    struct cplSep : opt<leaders> {};
+
+    // A CPL parameter value is a whitespace-separated list of atoms, where an atom is a braced
+    // expression or a bare token, freely intermixed (e.g. "{R11} 0 {R22}").  The bare token uses
+    // plus<> so every atom consumes at least one character; otherwise the list could spin forever
+    // because cplSep matches empty.  The lookahead stops the list before a following "name=" so a
+    // bare value does not swallow the next parameter.
+    struct cplTokenValue : seq<not_at<identifier, opt<leaders>, one<'='>>,
+                               tokenStart,
+                               plus<tokenChar>> {};
+    struct cplParamValueAtom : sor<bracedExpr,
+                                   vectorExpr,
+                                   cplTokenValue> {};
+    struct cplParamValue : list<cplParamValueAtom, cplSep> {};
     struct cplParamValuePair : seq<param,
                                    sep,
                                    cplParamValue> {};
@@ -161,7 +169,8 @@ namespace SPICE_GRAMMAR
                                          sep,
                                          modelName,
                                          sep,
-                                         TAO_PEGTL_ISTRING( "CPL" )>,
+                                         TAO_PEGTL_ISTRING( "CPL" ),
+                                         at<garbageOrEolf>>,
                                      opt<sep,
                                          cplParamValuePairs>,
                                      opt<sep>,

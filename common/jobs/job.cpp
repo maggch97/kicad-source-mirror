@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <jobs/job.h>
@@ -109,8 +109,8 @@ wxString JOB::ResolveOutputPath( const wxString& aPath, bool aPathIsDirectory, P
                 return false;
             };
 
-    wxString outPath = aPath;
-    outPath = ExpandTextVars( outPath, &textResolver );
+    wxString outPath = ExpandTextVars( NormalizeFilePathForTextVars( aPath ), &textResolver );
+    outPath = ExpandEnvVarSubstitutions( outPath, aProject );
 
     if( !m_tempOutputDirectory.IsEmpty() )
     {

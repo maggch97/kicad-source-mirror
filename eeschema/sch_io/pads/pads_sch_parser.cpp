@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "pads_sch_parser.h"
@@ -638,6 +638,7 @@ size_t PADS_SCH_PARSER::parseSectionTEXT( const std::vector<std::string>& aLines
 
         // Each text item is two lines: attribute line + content line
         TEXT_ITEM item;
+        item.sheet_number = m_currentSheet;
         std::istringstream iss( line );
 
         int x = 0, y = 0;
@@ -706,6 +707,7 @@ size_t PADS_SCH_PARSER::parseSectionLINES( const std::vector<std::string>& aLine
                 item.name = name;
                 item.origin.x = x;
                 item.origin.y = y;
+                item.sheet_number = m_currentSheet;
 
                 i++;
 
@@ -759,6 +761,7 @@ size_t PADS_SCH_PARSER::parseSectionLINES( const std::vector<std::string>& aLine
                     {
                         // Text attribute line
                         TEXT_ITEM text;
+                        text.sheet_number = m_currentSheet;
                         std::istringstream tiss( pline );
                         int tx = 0, ty = 0;
 
@@ -1384,6 +1387,12 @@ size_t PADS_SCH_PARSER::parseSectionPARTTYPE( const std::vector<std::string>& aL
             continue;
         }
 
+        // PADS marks connector part types with a "CN" or "CON" category. Connectors
+        // number their pins regardless of the gate keyword that follows, so flag them
+        // here rather than only in the per-keyword branches below.
+        if( pt.category == "CN" || pt.category == "CON" )
+            pt.is_connector = true;
+
         i++;
 
         // TIMESTAMP line
@@ -1902,7 +1911,11 @@ size_t PADS_SCH_PARSER::parsePartPlacement( const std::vector<std::string>& aLin
             attr.width = w;
             attr.size = h;
             attr.visibility = vis;
-            attr.visible = ( vis == 0 );
+
+            // PADS uses bit 3 (value 8) of the attribute display flag to mark a label
+            // hidden. The lower bits select what is displayed (name and/or value), so a
+            // non-zero flag such as 1 or 3 still denotes a visible label.
+            attr.visible = ( ( vis & 0x8 ) == 0 );
 
             // Parse quoted font name
             std::string rest;

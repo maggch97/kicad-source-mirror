@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef EDA_ITEM_H
@@ -118,6 +114,13 @@ public:
     virtual EDA_GROUP* GetParentGroup() const { return m_group; }
 
     KIID GetParentGroupId() const;
+
+    /**
+     * @return true if any ancestor group (recursively) of this item is currently selected.
+     *         Group members do not carry the SELECTED flag themselves, so callers that need to
+     *         know whether an item is moving as part of a group selection should use this helper.
+     */
+    bool HasSelectedAncestorGroup() const;
 
     virtual bool IsLocked() const { return false; }
     virtual void SetLocked( bool aLocked ) {}

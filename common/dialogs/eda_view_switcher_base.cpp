@@ -1,5 +1,5 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version 3.10.1-0-g8feb16b)
+// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6a)
 // http://www.wxformbuilder.org/
 //
 // PLEASE DO *NOT* EDIT THIS FILE!
@@ -29,8 +29,6 @@ EDA_VIEW_SWITCHER_BASE::EDA_VIEW_SWITCHER_BASE( wxWindow* parent, wxWindowID id,
 	this->SetSizer( bSizerMain );
 	this->Layout();
 	bSizerMain->Fit( this );
-
-	this->Centre( wxBOTH );
 }
 
 EDA_VIEW_SWITCHER_BASE::~EDA_VIEW_SWITCHER_BASE()

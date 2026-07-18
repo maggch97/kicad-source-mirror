@@ -14,20 +14,22 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "nl_footprint_properties_plugin.h"
 #include "nl_footprint_properties_plugin_impl.h"
 #include <advanced_config.h>
 #include <kiplatform/drivers.h>
+#include <navlib_safe_init.h>
 
 
 NL_FOOTPRINT_PROPERTIES_PLUGIN::NL_FOOTPRINT_PROPERTIES_PLUGIN( EDA_3D_CANVAS* aViewport )
 {
     if( ADVANCED_CFG::GetCfg().m_Use3DConnexionDriver
-        && KIPLATFORM::DRIVERS::Valid3DConnexionDriverVersion() )
+        && KIPLATFORM::DRIVERS::Valid3DConnexionDriverVersion()
+        && !NavlibDriverCrashed() )
     {
         m_impl = std::make_unique<NL_FOOTPRINT_PROPERTIES_PLUGIN_IMPL>( aViewport );
         m_impl->Connect();

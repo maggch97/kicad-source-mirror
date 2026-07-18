@@ -14,14 +14,15 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef EESCHEMA_JOBS_HANDLER_H
 #define EESCHEMA_JOBS_HANDLER_H
 
 #include <jobs/job_dispatcher.h>
+#include <diff_merge/diff_doc_kind.h>
 #include <wx/string.h>
 
 class SCH_RENDER_SETTINGS;
@@ -30,6 +31,8 @@ class SCHEMATIC;
 class JOB_SYM_EXPORT_SVG;
 class LIB_SYMBOL;
 class DS_PROXY_VIEW_ITEM;
+class REPORTER;
+class wxWindow;
 
 /**
  * Handle Eeschema job dispatches.
@@ -46,6 +49,26 @@ public:
     int JobSymUpgrade( JOB* aJob );
     int JobSymExportSvg( JOB* aJob );
     int JobUpgrade( JOB* aJob );
+    int JobImport( JOB* aJob );
+    int JobSchDiff( JOB* aJob );
+    int JobSymDiff( JOB* aJob );
+
+    /// Non-job entry points (reached via the kiface KIFACE_MERGE_DOCUMENT /
+    /// KIFACE_OPEN_DIFF_DIALOG function exports, not the JOB system).
+    int RunMerge( KICAD_DIFF::DOC_KIND aKind, const wxString& aAncestor, const wxString& aOurs,
+                  const wxString& aTheirs, const wxString& aOutput, bool aInteractive,
+                  bool aSingleFile, REPORTER* aReporter );
+    int OpenDiffDialog( KICAD_DIFF::DOC_KIND aKind, const wxString& aFileA, const wxString& aFileB,
+                        const wxString& aLabelA, const wxString& aLabelB, wxWindow* aParent,
+                        REPORTER* aReporter );
+
+private:
+    int runSchMerge( const wxString& aAncestor, const wxString& aOurs, const wxString& aTheirs,
+                     const wxString& aOutput, bool aInteractive );
+    int runSymLibMerge( const wxString& aAncestor, const wxString& aOurs, const wxString& aTheirs,
+                        const wxString& aOutput );
+
+public:
 
     /**
      * Clear the cached CLI schematic so the next job reloads from the current project.

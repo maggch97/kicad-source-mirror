@@ -19,11 +19,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef BOARD_NETLIST_UPDATER_H
@@ -34,7 +30,13 @@ class REPORTER;
 class NETLIST;
 class COMPONENT;
 class FOOTPRINT;
+class LIB_ID;
+class NETINFO_ITEM;
+class PAD;
 class PCB_EDIT_FRAME;
+class PCB_GROUP;
+class PCBNEW_SETTINGS;
+class TOOL_MANAGER;
 
 #include <board_commit.h>
 
@@ -65,7 +67,15 @@ class PCB_EDIT_FRAME;
 class BOARD_NETLIST_UPDATER
 {
 public:
+    /**
+     * Construct an updater for interactive use from the board editor.
+     */
     BOARD_NETLIST_UPDATER( PCB_EDIT_FRAME* aFrame, BOARD* aBoard );
+
+    /**
+     * Construct an updater without a board editor frame (headless).
+     */
+    BOARD_NETLIST_UPDATER( TOOL_MANAGER* aToolManager, BOARD* aBoard );
     ~BOARD_NETLIST_UPDATER();
 
     /**
@@ -78,6 +88,15 @@ public:
      */
     bool UpdateNetlist( NETLIST& aNetlist );
 
+    /**
+     * Compare a board footprint ID against a schematic-derived footprint ID, ignoring the
+     * library nickname when the schematic side uses a legacy bare footprint name.  A board
+     * footprint always carries a library nickname, so a strict equality test would never match
+     * a legacy schematic FPID and would wrongly treat the matching board footprint as a
+     * non-base variant (which gets flagged 'Do not place').
+     */
+    static bool fpidsEquivalent( const LIB_ID& aBoardFpid, const LIB_ID& aSchematicFpid );
+
     void SetReporter( REPORTER* aReporter ) { m_reporter = aReporter; }
 
     ///< Enable dry run mode (just report, no changes to PCB).
@@ -86,6 +105,8 @@ public:
     void SetReplaceFootprints( bool aEnabled ) { m_replaceFootprints = aEnabled; }
 
     void SetTransferGroups( bool aEnabled ) { m_transferGroups = aEnabled; }
+
+    void SetApplyDesignBlockLayouts( bool aEnabled ) { m_applyDesignBlockLayouts = aEnabled; }
 
     void SetOverrideLocks( bool aOverride ) { m_overrideLocks = aOverride; }
 
@@ -98,6 +119,14 @@ public:
     void SetRemoveExtraFields( bool aEnabled ) { m_removeExtraFields = aEnabled; }
 
     std::vector<FOOTPRINT*> GetAddedFootprints() const { return m_addedFootprints; }
+
+    std::vector<PCB_GROUP*> GetAddedGroups() const { return m_addedGroups; }
+
+    int GetErrorCount() const { return m_errorCount; }
+
+    int GetWarningCount() const { return m_warningCount; }
+
+    int GetNewFootprintCount() const { return m_newFootprintsCount; }
 
     /**
      * Apply the netlist's chain assignments to every NETINFO_ITEM on the board.
@@ -146,32 +175,35 @@ private:
 
     bool testConnectivity( NETLIST& aNetlist, std::map<COMPONENT*, FOOTPRINT*>& aFootprintMap );
 
-    PCB_EDIT_FRAME* m_frame;
-    BOARD_COMMIT    m_commit;
-    BOARD*          m_board;
-    REPORTER*       m_reporter;
+    PCB_EDIT_FRAME*  m_frame;
+    PCBNEW_SETTINGS* m_settings;
+    BOARD_COMMIT     m_commit;
+    BOARD*           m_board;
+    REPORTER*        m_reporter;
 
     std::map<ZONE*, std::vector<PAD*>> m_zoneConnectionsCache;
     std::map<wxString, wxString>       m_oldToNewNets;
     std::map<PAD*, wxString>           m_padNets;
     std::map<PAD*, wxString>           m_padPinFunctions;
     std::vector<FOOTPRINT*>            m_addedFootprints;
+    std::vector<PCB_GROUP*>            m_addedGroups;
     std::map<wxString, NETINFO_ITEM*>  m_addedNets;
     std::set<wxString>                 m_schematicNetNames;
 
-    bool m_deleteUnusedFootprints;
-    bool m_isDryRun;
-    bool m_replaceFootprints;
-    bool m_transferGroups; // copy component group associations from schematic to PCB
-    bool m_lookupByTimestamp;
-    bool m_overrideLocks;
-    bool m_updateFields;
-    bool m_removeExtraFields;
+    bool m_deleteUnusedFootprints = false;
+    bool m_isDryRun = false;
+    bool m_replaceFootprints = true;
+    bool m_transferGroups = false; // copy component group associations from schematic to PCB
+    bool m_applyDesignBlockLayouts = false;
+    bool m_lookupByTimestamp = false;
+    bool m_overrideLocks = false;
+    bool m_updateFields = false;
+    bool m_removeExtraFields = false;
 
-    int m_warningCount;
-    int m_errorCount;
-    int m_newFootprintsCount;   // the count of new footprints
-                                // either really new or replaced by new fp.
+    int m_warningCount = 0;
+    int m_errorCount = 0;
+    int m_newFootprintsCount = 0;   // the count of new footprints
+                                    // either really new or replaced by new fp.
 };
 
 #endif

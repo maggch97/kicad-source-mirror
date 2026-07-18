@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef ITEM_MODIFICATION_ROUTINE_H_
@@ -327,13 +323,8 @@ public:
     void ProcessLinePair( PCB_SHAPE& aLineA, PCB_SHAPE& aLineB ) override;
 
 private:
-    // Lazily load board outline polygons (outer outline + any holes)
-    bool EnsureBoardOutline() const;
-
     PARAMETERS m_params;
-    bool m_haveNarrowMouths;
-    mutable bool m_boardOutlineCached = false;
-    mutable SHAPE_POLY_SET m_boardOutline; ///< Cached board outline polygons
+    bool       m_haveNarrowMouths;
 };
 
 

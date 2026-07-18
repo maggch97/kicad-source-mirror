@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialogs/panel_plugin_settings.h>
@@ -98,7 +98,6 @@ void PANEL_PLUGIN_SETTINGS::OnEnableApiChecked( wxCommandEvent& aEvent )
 
 void PANEL_PLUGIN_SETTINGS::updateApiStatusText()
 {
-#ifdef KICAD_IPC_API
     if( m_cbEnableApi->GetValue() && Pgm().GetApiServer().Running() )
     {
         m_stApiStatus->SetLabel( wxString::Format( _( "Listening at %s" ),
@@ -108,9 +107,6 @@ void PANEL_PLUGIN_SETTINGS::updateApiStatusText()
     {
         m_stApiStatus->SetLabel( wxEmptyString );
     }
-#else
-    m_stApiStatus->SetLabel( _( "This installation of KiCad does not have API support enabled." ) );
-#endif
 }
 
 

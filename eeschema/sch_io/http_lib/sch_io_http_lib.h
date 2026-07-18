@@ -14,11 +14,17 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
+
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <vector>
 
 #include "http_lib/http_lib_settings.h"
 #include <http_lib/http_lib_connection.h>
@@ -92,6 +98,9 @@ private:
     void syncCache();
 
     void syncCache( const HTTP_LIB_CATEGORY& category );
+
+    /// Refresh the cached parts for a category if it has never been cached or has expired.
+    void syncCacheIfStale( const HTTP_LIB_CATEGORY& category );
 
     LIB_SYMBOL* loadSymbolFromPart( const wxString& aLibraryPath, const wxString& aSymbolName,
                                     const HTTP_LIB_CATEGORY& aCategory, const HTTP_LIB_PART& aPart );

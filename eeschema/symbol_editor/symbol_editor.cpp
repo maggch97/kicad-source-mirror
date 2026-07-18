@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pgm_base.h>
@@ -226,8 +222,7 @@ void SYMBOL_EDIT_FRAME::centerItemIdleHandler( wxIdleEvent& aEvent )
 }
 
 
-bool SYMBOL_EDIT_FRAME::LoadSymbolFromCurrentLib( const wxString& aSymbolName, int aUnit,
-                                                  int aBodyStyle )
+bool SYMBOL_EDIT_FRAME::LoadSymbolFromCurrentLib( const wxString& aSymbolName, int aUnit, int aBodyStyle )
 {
     LIB_SYMBOL* symbol = nullptr;
 
@@ -252,7 +247,6 @@ bool SYMBOL_EDIT_FRAME::LoadSymbolFromCurrentLib( const wxString& aSymbolName, i
     // Enable synchronized pin edit mode for symbols with interchangeable units
     m_SyncPinEdit = GetCurSymbol()->IsMultiUnit() && !GetCurSymbol()->UnitsLocked();
 
-    ClearUndoRedoList();
     m_toolManager->RunAction( ACTIONS::zoomFitScreen );
 
     RebuildSymbolUnitAndBodyStyleLists();
@@ -277,18 +271,10 @@ bool SYMBOL_EDIT_FRAME::LoadOneLibrarySymbolAux( LIB_SYMBOL* aEntry, const wxStr
 
     m_toolManager->RunAction( ACTIONS::cancelInteractive );
 
-    // Symbols from the schematic are edited in place and not managed by the library manager.
+    // Switching away from a schematic-instance tab changes the available menu/toolbar actions. The
+    // instance tab keeps owning its working objects, so nothing is deleted here.
     if( IsSymbolFromSchematic() )
-    {
-        delete m_symbol;
-        m_symbol = nullptr;
-
-        SCH_SCREEN* screen = GetScreen();
-        delete screen;
-        SetScreen( m_dummyScreen );
-        m_isSymbolFromSchematic = false;
         rebuildMenuAndToolbar = true;
-    }
 
     LIB_SYMBOL* lib_symbol = m_libMgr->GetBufferedSymbol( aEntry->GetName(), aLibrary );
     wxCHECK( lib_symbol, false );
@@ -296,12 +282,12 @@ bool SYMBOL_EDIT_FRAME::LoadOneLibrarySymbolAux( LIB_SYMBOL* aEntry, const wxStr
     m_unit = aUnit > 0 ? aUnit : 1;
     m_bodyStyle = aBodyStyle > 0 ? aBodyStyle : 1;
 
-    // The buffered screen for the symbol
-    SCH_SCREEN* symbol_screen = m_libMgr->GetScreen( lib_symbol->GetName(), aLibrary );
-
-    SetScreen( symbol_screen );
-    SetCurSymbol( new LIB_SYMBOL( *lib_symbol ), true );
-    SetCurLib( aLibrary );
+    // Open as a preview tab that the next library-open reuses until the symbol is edited.
+    bool                       wasCreated = false;
+    SYMBOL_EDITOR_TAB_CONTEXT* ctx = findOrCreateSymbolTab( aLibrary, lib_symbol->GetName(),
+                                                            m_unit, m_bodyStyle, true,
+                                                            &wasCreated );
+    wxCHECK( ctx, false );
 
     if( rebuildMenuAndToolbar )
     {
@@ -313,7 +299,9 @@ bool SYMBOL_EDIT_FRAME::LoadOneLibrarySymbolAux( LIB_SYMBOL* aEntry, const wxStr
     UpdateTitle();
     RebuildSymbolUnitAndBodyStyleLists();
 
-    ClearUndoRedoList();
+    // Only a freshly-created tab gets a clean undo history; re-focusing preserves the live stack.
+    if( wasCreated )
+        ClearUndoRedoList();
 
     if( !IsSymbolFromSchematic() )
     {
@@ -321,10 +309,7 @@ bool SYMBOL_EDIT_FRAME::LoadOneLibrarySymbolAux( LIB_SYMBOL* aEntry, const wxStr
         setSymWatcher( &libId );
     }
 
-    // Let tools add things to the view if necessary
-    if( m_toolManager )
-        m_toolManager->ResetTools( TOOL_BASE::MODEL_RELOAD );
-
+    m_toolManager->RunAction( ACTIONS::zoomFitScreen );
     GetCanvas()->GetView()->UpdateAllItems( KIGFX::ALL );
 
     // Display the document information based on the entry selected just in
@@ -493,6 +478,12 @@ static std::vector<std::shared_ptr<LIB_SYMBOL>> GetParentChain( const LIB_SYMBOL
     while( sym->IsDerived() )
     {
         std::shared_ptr<LIB_SYMBOL> parent = sym->GetParent().lock();
+
+        // A symbol can report itself as derived while its parent pointer has already expired.
+        // Stop walking rather than push a null entry and dereference it on the next iteration.
+        if( !parent )
+            break;
+
         chain.push_back( parent );
         sym = parent;
     }
@@ -708,6 +699,11 @@ public:
                 // We should have stored this already, why didn't we get it back?
                 wxASSERT( newParent );
                 new_symbol.SetParent( newParent );
+
+                // Keep the recorded parent name in sync with the (possibly renamed) buffered
+                // parent so serialization has a valid fallback if the live pointer is lost.
+                if( newParent )
+                    new_symbol.SetParentName( newParent->GetName() );
             }
 
             newNames.push_back( newName );
@@ -1210,7 +1206,7 @@ void SYMBOL_EDIT_FRAME::UpdateAfterSymbolProperties( wxString* aOldName )
 {
     wxCHECK( m_symbol, /* void */ );
 
-    wxString lib = GetCurLib();
+    wxString lib = m_symbol->GetLibNickname();
 
     if( !lib.IsEmpty() && aOldName && *aOldName != m_symbol->GetName() )
     {
@@ -1285,7 +1281,16 @@ void SYMBOL_EDIT_FRAME::DeleteSymbolFromLibrary()
                 continue;
         }
 
-        if( GetCurSymbol() )
+        if( m_tabsPanel )
+        {
+            // Close only the tabs for the symbol being deleted and the symbols derived from it,
+            // which are removed along with it. The other open tabs stay put.
+            closeSymbolTab( libId );
+
+            for( const wxString& derivedName : derived )
+                closeSymbolTab( LIB_ID( libId.GetLibNickname().wx_str(), derivedName ) );
+        }
+        else if( GetCurSymbol() )
         {
             for( const std::shared_ptr<LIB_SYMBOL>& symbol : GetParentChain( *GetCurSymbol() ) )
             {
@@ -1602,6 +1607,8 @@ bool SYMBOL_EDIT_FRAME::saveLibrary( const wxString& aLibrary, bool aNewFile )
     if( !aNewFile )
     {
         m_libMgr->ClearLibraryModified( aLibrary );
+
+        clearSymbolTabsModifiedForLibrary( aLibrary );
 
         // Update the library modification time so that we don't reload based on the watcher
         if( aLibrary == getTargetLib() )

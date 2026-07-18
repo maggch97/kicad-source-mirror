@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "dialog_git_repository.h"
@@ -44,6 +40,7 @@ DIALOG_GIT_REPOSITORY::DIALOG_GIT_REPOSITORY( wxWindow* aParent, git_repository*
                                               wxString aURL ) :
         DIALOG_GIT_REPOSITORY_BASE( aParent ),
         m_repository( aRepository ),
+        m_incomeURL( aURL ),
         m_prevFile( wxEmptyString ),
         m_tempRepo( false )
 {
@@ -61,22 +58,9 @@ DIALOG_GIT_REPOSITORY::DIALOG_GIT_REPOSITORY( wxWindow* aParent, git_repository*
         git_repository_init_ext( &m_repository, m_tempPath.ToStdString().c_str(), &options );
     }
 
-    if( !aURL.empty() )
-        m_txtURL->SetValue( aURL );
-    else
-        extractClipboardData();
-
-    if( !m_txtURL->GetValue().IsEmpty() )
-        updateURLData();
-    else
-        m_ConnType->SetSelection( static_cast<int>( KIGIT_COMMON::GIT_CONN_TYPE::GIT_CONN_LOCAL ) );
-
-
     SetupStandardButtons( { { wxID_HELP, _( "Test Connection" ) } } );
     Layout();
     finishDialogSettings();
-
-    updateAuthControls();
 
     m_txtURL->Bind( wxEVT_TEXT,
                     [this]( wxCommandEvent& aEvent )
@@ -119,6 +103,7 @@ bool DIALOG_GIT_REPOSITORY::extractClipboardData()
         || std::get<0>( isValidSSH( clipboardText ) ) )
     {
         m_txtURL->SetValue( clipboardText );
+        return true;
     }
 
     return false;
@@ -268,10 +253,14 @@ void DIALOG_GIT_REPOSITORY::updateURLData()
         {
             m_fullURL = url;
             m_ConnType->SetSelection( static_cast<int>( KIGIT_COMMON::GIT_CONN_TYPE::GIT_CONN_HTTPS ) );
-            SetUsername( username );
-            SetPassword( password );
-            m_txtURL->ChangeValue( repoAddress );
 
+            if( !username.IsEmpty() )
+                SetUsername( username );
+            
+            if( !password.IsEmpty() )
+                SetPassword( password );
+            
+            m_txtURL->ChangeValue( repoAddress );
             m_txtName->SetValue( get_repo_name( repoAddress ) );
         }
     }
@@ -285,6 +274,7 @@ void DIALOG_GIT_REPOSITORY::updateURLData()
             m_ConnType->SetSelection( static_cast<int>( KIGIT_COMMON::GIT_CONN_TYPE::GIT_CONN_SSH ) );
             m_txtUsername->SetValue( username );
             m_txtURL->ChangeValue( repoAddress );
+            m_cbCustom->SetValue( false );
 
             m_txtName->SetValue( get_repo_name( repoAddress ) );
 
@@ -330,16 +320,18 @@ void DIALOG_GIT_REPOSITORY::OnTestClick( wxCommandEvent& event )
 
     KIGIT_COMMON common( m_repository );
     common.SetRemote( fullURL );
-    callbacks.credentials = credentials_cb;
     common.SetPassword( m_txtPassword->GetValue() );
     common.SetUsername( m_txtUsername->GetValue() );
     common.SetSSHKey( m_fpSSHKey->GetFileName().GetFullPath() );
+    
     KIGIT_REPO_MIXIN repoMixin( &common );
     callbacks.payload = &repoMixin;
+    callbacks.credentials = credentials_cb;
 
     git_proxy_options proxyOpts;
     git_proxy_init_options( &proxyOpts, GIT_PROXY_OPTIONS_VERSION );
     proxyOpts.type = GIT_PROXY_AUTO;
+    proxyOpts.url = "";
 
     git_remote_create_anonymous( &remote, m_repository, fullURL.mbc_str() );
     KIGIT::GitRemotePtr remotePtr( remote );
@@ -479,4 +471,21 @@ void DIALOG_GIT_REPOSITORY::updateAuthControls()
 void DIALOG_GIT_REPOSITORY::OnSelectConnType( wxCommandEvent& event )
 {
     updateAuthControls();
+}
+
+bool DIALOG_GIT_REPOSITORY::TransferDataToWindow()
+{
+    if( !m_incomeURL.empty() )
+        m_txtURL->SetValue( m_incomeURL );
+    else
+        extractClipboardData();
+
+    if( !m_txtURL->GetValue().IsEmpty() )
+        updateURLData();
+    else
+        m_ConnType->SetSelection( static_cast<int>( KIGIT_COMMON::GIT_CONN_TYPE::GIT_CONN_LOCAL ) );
+
+    updateAuthControls();
+
+    return true;
 }

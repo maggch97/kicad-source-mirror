@@ -15,15 +15,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <symbol_edit_frame.h>
 #include <lib_symbol_library_manager.h>
+#include <sch_screen.h>
+#include <symbol_editor/symbol_editor_tab_context.h>
 #include <widgets/lib_tree.h>
 #include <tool/tool_manager.h>
 #include <tools/sch_selection_tool.h>
@@ -94,13 +92,15 @@ void SYMBOL_EDIT_FRAME::GetSymbolFromRedoList()
     // Just set the current symbol to the symbol which come from the redo list
     m_symbol = symbol;
 
+    if( m_activeTab )
+        m_activeTab->RefreshFrameOwnedObjects( m_symbol, static_cast<SCH_SCREEN*>( GetScreen() ) );
+
     if( undoRedoType == UNDO_REDO::LIB_RENAME )
     {
-        wxString lib = GetCurLib();
-        m_libMgr->UpdateSymbolAfterRename( symbol, oldSymbol->GetName(), lib );
+        m_libMgr->UpdateSymbolAfterRename( symbol, oldSymbol->GetName(), oldSymbol->GetLibNickname() );
 
         // Reselect the renamed symbol
-        m_treePane->GetLibTree()->SelectLibId( LIB_ID( lib, symbol->GetName() ) );
+        m_treePane->GetLibTree()->SelectLibId( LIB_ID( symbol->GetLibNickname(), symbol->GetName() ) );
     }
 
     RebuildSymbolUnitAndBodyStyleLists();
@@ -144,13 +144,15 @@ void SYMBOL_EDIT_FRAME::GetSymbolFromUndoList()
     // Just set the current symbol to the symbol which come from the undo list
     m_symbol = symbol;
 
+    if( m_activeTab )
+        m_activeTab->RefreshFrameOwnedObjects( m_symbol, static_cast<SCH_SCREEN*>( GetScreen() ) );
+
     if( undoRedoType == UNDO_REDO::LIB_RENAME )
     {
-        wxString lib = GetCurLib();
-        m_libMgr->UpdateSymbolAfterRename( symbol, oldSymbol->GetName(), lib );
+        m_libMgr->UpdateSymbolAfterRename( symbol, oldSymbol->GetName(), oldSymbol->GetLibNickname() );
 
         // Reselect the renamed symbol
-        m_treePane->GetLibTree()->SelectLibId( LIB_ID( lib, symbol->GetName() ) );
+        m_treePane->GetLibTree()->SelectLibId( LIB_ID( symbol->GetLibNickname(), symbol->GetName() ) );
     }
 
     RebuildSymbolUnitAndBodyStyleLists();

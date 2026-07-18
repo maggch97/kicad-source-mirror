@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pgm_base.h>
@@ -42,6 +38,7 @@ SCH_RENDER_SETTINGS::SCH_RENDER_SETTINGS() :
         m_ShowPinNumbers( false ),
         m_ShowPinNames( false ),
         m_ShowPinAltIcons( false ),
+        m_ShowRemappedPinNumbers( true ),
         m_ShowDisabled( false ),
         m_ShowGraphicsDisabled( false ),
         m_ShowConnectionPoints( false ),

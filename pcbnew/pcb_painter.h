@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_PAINTER_H
@@ -282,6 +278,17 @@ protected:
     int                 m_holePlatingThickness;
     int                 m_lockedShadowMargin;
 };
+
+
+/**
+ * Decide which GAL draw pass paints a zone's outline.
+ *
+ * When the outline is the zone's only visual (rule area, or outline-only display) it is drawn on
+ * the zone layer, which sorts above copper, so tracks and pads can't paint over it. A zone shown
+ * filled draws its outline on the copper layer, beneath its own fill on the zone layer.
+ */
+bool ZoneOutlineDrawnOnLayer( bool aOutlineOnly, int aLayer );
+
 } // namespace KIGFX
 
 #endif /* PCB_PAINTER_H */

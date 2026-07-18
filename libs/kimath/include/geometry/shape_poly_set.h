@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef __SHAPE_POLY_SET_H
@@ -161,6 +157,13 @@ public:
             b = m_vertices[ tri.b ];
             c = m_vertices[ tri.c ];
         }
+
+        /**
+         * Refine this triangulation in place with boundary-preserving Lawson edge flips,
+         * minimizing the number of sliver triangles and, on ties, maximizing the minimum angle.
+         * Adds and removes no vertices or triangles.
+         */
+        void Refine();
 
         TRIANGULATED_POLYGON& operator=( const TRIANGULATED_POLYGON& aOther );
 

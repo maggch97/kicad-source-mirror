@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DRC_RE_VIAS_UNDER_SMD_CONSTRAINT_DATA_H_
@@ -57,10 +53,10 @@ public:
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
         return {
-            { 400 + DRC_RE_OVERLAY_XO, 414 + DRC_RE_OVERLAY_XO, 40 + DRC_RE_OVERLAY_YO, 1, wxS( "Disallow Through Via" ), LABEL_POSITION::RIGHT },
-            { 400 + DRC_RE_OVERLAY_XO, 414 + DRC_RE_OVERLAY_XO, 80 + DRC_RE_OVERLAY_YO, 2, wxS( "Disallow Micro Via" ), LABEL_POSITION::RIGHT },
-            { 400 + DRC_RE_OVERLAY_XO, 414 + DRC_RE_OVERLAY_XO, 120 + DRC_RE_OVERLAY_YO, 3, wxS( "Disallow Blind Via" ), LABEL_POSITION::RIGHT },
-            { 400 + DRC_RE_OVERLAY_XO, 414 + DRC_RE_OVERLAY_XO, 160 + DRC_RE_OVERLAY_YO, 4, wxS( "Disallow Buried Via" ), LABEL_POSITION::RIGHT },
+            { 400, 615, 52, 1, wxS( "Disallow Through Via" ), LABEL_POSITION::RIGHT },
+            { 400, 615, 92, 2, wxS( "Disallow Micro Via" ), LABEL_POSITION::RIGHT },
+            { 400, 615, 132, 3, wxS( "Disallow Blind Via" ), LABEL_POSITION::RIGHT },
+            { 400, 615, 172, 4, wxS( "Disallow Buried Via" ), LABEL_POSITION::RIGHT },
         };
     }
 

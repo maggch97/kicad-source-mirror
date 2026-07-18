@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include <core/typeinfo.h> 
 
@@ -301,30 +301,6 @@ void MEANDER_PLACER_BASE::tuneLineLength( MEANDERED_LINE& aTuned, long long int 
 const MEANDER_SETTINGS& MEANDER_PLACER_BASE::MeanderSettings() const
 {
     return m_settings;
-}
-
-
-VECTOR2I MEANDER_PLACER_BASE::getSnappedStartPoint( LINKED_ITEM* aStartItem, VECTOR2I aStartPoint )
-{
-    if( aStartItem->Kind() == ITEM::SEGMENT_T )
-    {
-        return static_cast<SEGMENT*>( aStartItem )->Seg().NearestPoint( aStartPoint );
-    }
-    else
-    {
-        wxASSERT( aStartItem->Kind() == ITEM::ARC_T );
-        ARC* arc = static_cast<ARC*>( aStartItem );
-
-        if( ( VECTOR2I( arc->Anchor( 0 ) - aStartPoint ) ).SquaredEuclideanNorm() <=
-            ( VECTOR2I( arc->Anchor( 1 ) - aStartPoint ) ).SquaredEuclideanNorm() )
-        {
-            return arc->Anchor( 0 );
-        }
-        else
-        {
-            return arc->Anchor( 1 );
-        }
-    }
 }
 
 

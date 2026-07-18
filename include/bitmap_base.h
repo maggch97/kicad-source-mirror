@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -119,6 +115,16 @@ public:
     {
         return m_ppi;
     }
+
+    /**
+     * Recompute the PPI the way it was computed before the pixels/cm truncation fix.
+     *
+     * Used only to migrate the stored image scale of pre-fix designs.  Returns the same
+     * value as GetPPI() whenever the embedded resolution has no fractional pixels/cm.
+     *
+     * @return the PPI a pre-fix KiCad would have derived from the embedded image.
+     */
+    int GetLegacyPPI() const;
 
     /**
      * Return the orthogonal, bounding box of this object for display purposes.

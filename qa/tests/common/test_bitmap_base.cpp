@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -197,6 +193,10 @@ BOOST_AUTO_TEST_CASE( PPIFromNonIntegerPixelsPerCm )
 
     // 3780 PPM should give 96 PPI, not 94 (the old truncation result)
     BOOST_CHECK_EQUAL( bmp.GetPPI(), 96 );
+
+    // GetLegacyPPI() reproduces the truncated value so pre-fix designs can be migrated by
+    // the GetPPI()/GetLegacyPPI() ratio. Here that is 96/94.
+    BOOST_CHECK_EQUAL( bmp.GetLegacyPPI(), 94 );
 }
 
 

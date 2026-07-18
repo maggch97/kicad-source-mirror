@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef __TOPO_MATCH_H
@@ -28,6 +24,7 @@
 #include <vector>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <optional>
 
 #include <wx/string.h>
@@ -96,6 +93,12 @@ private:
      * hierarchical reference designators like TRIM_1.1 and TRIM_2.1.
      */
     static bool prefixesShareCommonBase( const wxString& aPrefixA, const wxString& aPrefixB );
+
+    /**
+     * True for un-annotated placeholder refs like REF** that match any counterpart on FPID and
+     * topology alone
+     */
+    static bool isUnannotatedRef( const wxString& aRef );
 
     std::optional<VECTOR2I> m_raOffset;
     wxString          m_reference;
@@ -196,8 +199,16 @@ public:
     bool   FindIsomorphism( CONNECTION_GRAPH* target, COMPONENT_MATCHES& result,
                             std::vector<TOPOLOGY_MISMATCH_REASON>& aFailureDetails,
                             const ISOMORPHISM_PARAMS& aParams = {} );
+    /**
+     * @param aFps             the channel whose graph is built.
+     * @param aOtherChannelFps the channel it is matched against, used to spot a rail shared by both.
+     * @param aGlobalNets      netcodes already known to be global rails; excluded regardless of
+     *                         their pad count in @p aFps, so a rail with a single pad in this
+     *                         channel is still ignored consistently across targets.
+     */
     static std::unique_ptr<CONNECTION_GRAPH> BuildFromFootprintSet( const std::set<FOOTPRINT*>& aFps,
-                                                                     const std::set<FOOTPRINT*>& aOtherChannelFps = {} );
+                                                                     const std::set<FOOTPRINT*>& aOtherChannelFps = {},
+                                                                     const std::unordered_set<int>& aGlobalNets = {} );
     std::vector<COMPONENT*> &Components() { return m_components; }
 
 private:
@@ -213,11 +224,18 @@ private:
      */
     bool breakTieBySymbolUuid( COMPONENT* aRef, std::vector<COMPONENT*>& aMatches ) const;
 
+    /**
+     * Break a tie by footprint value when the symbol UUID can't, e.g. identical parts that
+     * only differ by value like NC_0 vs NO_1.
+     */
+    bool breakTieByValue( COMPONENT* aRef, std::vector<COMPONENT*>& aMatches ) const;
+
     void sortByPinCount();
 
 
     std::vector<COMPONENT*> findMatchingComponents( COMPONENT*                     ref,
                                                     const std::vector<COMPONENT*>& aStructuralMatches,
+                                                    const TOPOLOGY_MISMATCH_REASON& aStructuralReason,
                                                     const BACKTRACK_STAGE&         partialMatches,
                                                     std::vector<TOPOLOGY_MISMATCH_REASON>& aFailureDetails,
                                                     const std::atomic<bool>* aCancelled = nullptr );

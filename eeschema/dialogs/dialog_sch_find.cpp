@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialog_sch_find.h>
@@ -155,13 +151,32 @@ void DIALOG_SCH_FIND::OnCancel( wxCommandEvent& aEvent )
 }
 
 
+void DIALOG_SCH_FIND::OnCharHook( wxKeyEvent& aEvent )
+{
+    if( aEvent.GetKeyCode() == WXK_F3 )
+    {
+        updateFlags();
+        m_findReplaceData->findString = m_comboFind->GetValue();
+
+        if( aEvent.ShiftDown() )
+            m_findReplaceTool->FindNext( ACTIONS::findPrevious.MakeEvent() );
+        else
+            m_findReplaceTool->FindNext( ACTIONS::findNext.MakeEvent() );
+
+        return;
+    }
+
+    DIALOG_SCH_FIND_BASE::OnCharHook( aEvent );
+}
+
+
 void DIALOG_SCH_FIND::onShowSearchPanel( wxHyperlinkEvent& event )
 {
     wxCHECK2( m_frame->GetFrameType() == FRAME_SCH, /* void */ );
 
     m_frame->GetToolManager()->RunAction( ACTIONS::showSearch );
 
-    EndModal( wxID_CANCEL );
+    Show( false );
 
     CallAfter(
             []()

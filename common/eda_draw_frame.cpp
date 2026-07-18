@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <api/api_plugin_manager.h>
@@ -106,6 +102,7 @@ EDA_DRAW_FRAME::EDA_DRAW_FRAME( KIWAY* aKiway, wxWindow* aParent, FRAME_T aFrame
 {
     m_gridSelectBox       = nullptr;
     m_zoomSelectBox       = nullptr;
+    m_zoomCustomEntry     = wxNOT_FOUND;
     m_overrideLocksCb     = nullptr;
     m_searchPane          = nullptr;
     m_undoRedoCountMax    = DEFAULT_MAX_UNDO_ITEMS;
@@ -235,7 +232,19 @@ void EDA_DRAW_FRAME::configureToolbars()
             [this]( ACTION_TOOLBAR* aToolbar )
             {
                 if( !m_overrideLocksCb )
+                {
                     m_overrideLocksCb = new wxCheckBox( aToolbar, ID_ON_OVERRIDE_LOCKS, _( "Override locks" ) );
+
+                    // Clicking the checkbox takes focus off the canvas, so return it
+                    m_overrideLocksCb->Bind( wxEVT_CHECKBOX,
+                                             [this]( wxCommandEvent& aEvent )
+                                             {
+                                                 if( m_canvas )
+                                                     m_canvas->SetFocus();
+
+                                                 aEvent.Skip();
+                                             } );
+                }
 
                 aToolbar->Add( m_overrideLocksCb );
             };
@@ -434,8 +443,6 @@ void EDA_DRAW_FRAME::OnUpdateSelectGrid( wxUpdateUIEvent& aEvent )
 
 void EDA_DRAW_FRAME::OnUpdateSelectZoom( wxUpdateUIEvent& aEvent )
 {
-    // No need to update the grid select box if it doesn't exist or the grid setting change
-    // was made using the select box.
     if( m_zoomSelectBox == nullptr )
         return;
 
@@ -444,26 +451,42 @@ void EDA_DRAW_FRAME::OnUpdateSelectZoom( wxUpdateUIEvent& aEvent )
     wxCHECK( config(), /* void */ );
 
     const std::vector<double>& zoomList = GetWindowSettings( config() )->zoom_factors;
-    int                        curr_selection = m_zoomSelectBox->GetSelection();
-    int                        new_selection = 0;      // select zoom auto
-    double                     last_approx = 1e9;      // large value to start calculation
+    int                        preset = wxNOT_FOUND;
 
-    // Search for the nearest available value to the current zoom setting, and select it
     for( size_t jj = 0; jj < zoomList.size(); ++jj )
     {
-        double rel_error = std::fabs( zoomList[jj] - zoom ) / zoom;
-
-        if( rel_error < last_approx )
+        if( zoomList[jj] == zoom )
         {
-            last_approx = rel_error;
-
-            // zoom IDs in m_zoomSelectBox start with 1 (leaving 0 for auto-zoom choice)
-            new_selection = (int) jj + 1;
+            preset = (int) jj + 1; // index 0 is Zoom Auto
+            break;
         }
     }
 
-    if( curr_selection != new_selection )
-        m_zoomSelectBox->SetSelection( new_selection );
+    if( preset != wxNOT_FOUND )
+    {
+        // Zoom is on a preset, so drop the custom entry and select the preset.
+        if( m_zoomCustomEntry != wxNOT_FOUND )
+        {
+            m_zoomSelectBox->Delete( m_zoomCustomEntry );
+            m_zoomCustomEntry = wxNOT_FOUND;
+        }
+
+        if( m_zoomSelectBox->GetSelection() != preset )
+            m_zoomSelectBox->SetSelection( preset );
+    }
+    else
+    {
+        // Off-preset zoom, show the exact value in its own entry just below Zoom Auto.
+        wxString text = wxString::Format( _( "Zoom %.2f" ), zoom );
+
+        if( m_zoomCustomEntry == wxNOT_FOUND )
+            m_zoomCustomEntry = m_zoomSelectBox->Insert( text, 1 );
+        else if( m_zoomSelectBox->GetString( m_zoomCustomEntry ) != text )
+            m_zoomSelectBox->SetString( m_zoomCustomEntry, text );
+
+        if( m_zoomSelectBox->GetSelection() != m_zoomCustomEntry )
+            m_zoomSelectBox->SetSelection( m_zoomCustomEntry );
+    }
 }
 
 
@@ -578,6 +601,7 @@ void EDA_DRAW_FRAME::UpdateZoomSelectBox()
     m_zoomSelectBox->Clear();
     m_zoomSelectBox->Append( _( "Zoom Auto" ) );
     m_zoomSelectBox->SetSelection( 0 );
+    m_zoomCustomEntry = wxNOT_FOUND;
 
     wxCHECK( config(), /* void */ );
 
@@ -599,10 +623,20 @@ void EDA_DRAW_FRAME::OnSelectZoom( wxCommandEvent& event )
 
     int id = m_zoomSelectBox->GetCurrentSelection();
 
-    if( id < 0 || !( id < (int)m_zoomSelectBox->GetCount() ) )
+    if( id < 0 || id >= (int) m_zoomSelectBox->GetCount() )
         return;
 
-    m_toolManager->RunAction( ACTIONS::zoomPreset, id );
+    // Picking the custom entry means keep the current zoom, so nothing to do.
+    if( id == m_zoomCustomEntry )
+        return;
+
+    // The custom entry pushes the presets down by one, so shift back to the real preset id.
+    int preset = id;
+
+    if( m_zoomCustomEntry != wxNOT_FOUND && id > m_zoomCustomEntry )
+        preset = id - 1;
+
+    m_toolManager->RunAction( ACTIONS::zoomPreset, preset );
     UpdateStatusBar();
     m_canvas->Refresh();
 
@@ -1420,8 +1454,6 @@ std::vector<const PLUGIN_ACTION*> EDA_DRAW_FRAME::GetOrderedPluginActions( PLUGI
     std::vector<const PLUGIN_ACTION*> actions;
     wxCHECK( aCfg, actions );
 
-#ifdef KICAD_IPC_API
-
     API_PLUGIN_MANAGER& mgr = Pgm().GetPluginManager();
     std::vector<const PLUGIN_ACTION*> unsorted = mgr.GetActionsForScope( aScope );
     std::map<wxString, const PLUGIN_ACTION*> actionMap;
@@ -1446,15 +1478,12 @@ std::vector<const PLUGIN_ACTION*> EDA_DRAW_FRAME::GetOrderedPluginActions( PLUGI
             actions.emplace_back( action );
     }
 
-#endif
-
     return actions;
 }
 
 
 void EDA_DRAW_FRAME::AddApiPluginTools( ACTION_TOOLBAR* aToolbar )
 {
-#ifdef KICAD_IPC_API
     API_PLUGIN_MANAGER& mgr = Pgm().GetPluginManager();
 
     mgr.ButtonBindings().clear();
@@ -1476,13 +1505,11 @@ void EDA_DRAW_FRAME::AddApiPluginTools( ACTION_TOOLBAR* aToolbar )
 
         mgr.ButtonBindings().insert( { button->GetId(), action->identifier } );
     }
-#endif
 }
 
 
 void EDA_DRAW_FRAME::OnApiPluginInvoke( wxCommandEvent& aEvent )
 {
-#ifdef KICAD_IPC_API
     API_PLUGIN_MANAGER& mgr = Pgm().GetPluginManager();
 
     if( mgr.ButtonBindings().count( aEvent.GetId() ) )
@@ -1494,5 +1521,4 @@ void EDA_DRAW_FRAME::OnApiPluginInvoke( wxCommandEvent& aEvent )
 
         mgr.InvokeAction( mgr.ButtonBindings().at( aEvent.GetId() ), reporter );
     }
-#endif
 }

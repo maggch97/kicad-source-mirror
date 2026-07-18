@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "dialog_fp_edit_pad_table.h"
@@ -142,8 +138,11 @@ DIALOG_FP_EDIT_PAD_TABLE::DIALOG_FP_EDIT_PAD_TABLE( PCB_BASE_FRAME* aParent, FOO
     m_grid->SetUnitsProvider( m_unitsProvider.get(), COL_SIZE_Y );
     m_grid->SetUnitsProvider( m_unitsProvider.get(), COL_DRILL_X );
     m_grid->SetUnitsProvider( m_unitsProvider.get(), COL_DRILL_Y );
-    m_grid->SetAutoEvalCols(
-            { COL_POS_X, COL_POS_Y, COL_SIZE_X, COL_SIZE_Y, COL_DRILL_X, COL_DRILL_Y, COL_P2D_LENGTH, COL_P2D_DELAY } );
+    m_grid->SetAutoEvalCols( { COL_POS_X, COL_POS_Y,
+                               COL_SIZE_X, COL_SIZE_Y,
+                               COL_DRILL_X, COL_DRILL_Y,
+                               COL_P2D_LENGTH,
+                               COL_P2D_DELAY } );
 
     // add Cut, Copy, and Paste to wxGrid
     m_grid->PushEventHandler( new GRID_TRICKS( m_grid ) );
@@ -339,13 +338,14 @@ bool DIALOG_FP_EDIT_PAD_TABLE::TransferDataToWindow()
 void DIALOG_FP_EDIT_PAD_TABLE::setRowNullableEditors( int aRowId ) const
 {
     // Set nullable editors
-    auto setCellEditor = [this, aRowId]( int aCol )
-    {
-        GRID_CELL_MARK_AS_NULLABLE* cellEditor = new GRID_CELL_MARK_AS_NULLABLE( true );
-        wxGridCellAttr*             attr = m_grid->GetOrCreateCellAttr( aRowId, aCol );
-        attr->SetEditor( cellEditor );
-        attr->DecRef();
-    };
+    auto setCellEditor =
+            [this, aRowId]( int aCol )
+            {
+                GRID_CELL_MARK_AS_NULLABLE* cellEditor = new GRID_CELL_MARK_AS_NULLABLE( true );
+                wxGridCellAttr*             attr = m_grid->GetOrCreateCellAttr( aRowId, aCol );
+                attr->SetEditor( cellEditor );
+                attr->DecRef();
+            };
 
     setCellEditor( COL_P2D_LENGTH );
     setCellEditor( COL_P2D_DELAY );

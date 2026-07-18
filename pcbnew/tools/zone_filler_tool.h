@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef ZONE_FILLER_TOOL_H
@@ -52,6 +48,16 @@ public:
 
     void CheckAllZones( wxWindow* aCaller, PROGRESS_REPORTER* aReporter = nullptr );
     void FillAllZones( wxWindow* aCaller, PROGRESS_REPORTER* aReporter = nullptr, bool aHeadless = false );
+
+    /**
+     * Run the shared post-fill refresh once a fill commit has been pushed with connectivity
+     * updates skipped.
+     *
+     * Rebuilds connectivity and, unless \a aHeadless, repaints the ratsnest along with the
+     * remove-unconnected vias and pads that a plain canvas refresh would leave stale.  Callers
+     * with no frame attached (e.g. the headless IPC API handler) must pass true.
+     */
+    void PostFillRefresh( bool aHeadless = false );
 
     int ZoneFill( const TOOL_EVENT& aEvent );
     int ZoneFillAll( const TOOL_EVENT& aEvent );

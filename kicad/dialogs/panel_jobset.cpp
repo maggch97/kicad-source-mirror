@@ -14,12 +14,13 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "panel_jobset.h"
 #include "dialog_destination.h"
+#include "dialog_archive_job_settings.h"
 #include "dialog_copyfiles_job_settings.h"
 #include <wx/aui/auibook.h>
 #include <jobs/jobset.h>
@@ -46,6 +47,7 @@
 
 #include <jobs/job_special_execute.h>
 #include <jobs/job_special_copyfiles.h>
+#include <jobs/job_special_archive.h>
 #include <dialogs/dialog_executecommand_job_settings.h>
 #include <common.h>
 
@@ -431,7 +433,9 @@ JOBS_GRID_TRICKS::JOBS_GRID_TRICKS( PANEL_JOBSET* aParent, WX_GRID* aGrid ) :
 
 void JOBS_GRID_TRICKS::showPopupMenu( wxMenu& menu, wxGridEvent& aEvent )
 {
-    wxArrayInt selectedRows = m_grid->GetSelectedRows();
+    // Snapshot the selection, PopupMenu() below can lose it before doPopupSelection() runs
+    m_selectedRows = m_grid->GetSelectedRows();
+    wxArrayInt& selectedRows = m_selectedRows;
 
     menu.Append( JOB_DESCRIPTION, _( "Edit Job Description" ) );
     menu.Append( JOB_PROPERTIES, _( "Edit Job Settings..." ) );
@@ -450,7 +454,7 @@ void JOBS_GRID_TRICKS::showPopupMenu( wxMenu& menu, wxGridEvent& aEvent )
 
 void JOBS_GRID_TRICKS::doPopupSelection( wxCommandEvent& event )
 {
-    wxArrayInt selectedRows = m_grid->GetSelectedRows();
+    wxArrayInt& selectedRows = m_selectedRows;
 
     if( event.GetId() == JOB_DESCRIPTION )
     {
@@ -673,7 +677,7 @@ bool PANEL_JOBSET::OpenJobOptionsForListItem( size_t aItemIndex )
         {
             JOB_SPECIAL_EXECUTE* specialJob = static_cast<JOB_SPECIAL_EXECUTE*>( job.m_job.get() );
 
-            DIALOG_EXECUTECOMMAND_JOB_SETTINGS dialog( m_frame, specialJob );
+            DIALOG_EXECUTECOMMAND_JOB_SETTINGS dialog( m_frame, specialJob, &m_frame->Prj() );
 
             // QuasiModal for Scintilla autocomplete
             if( dialog.ShowQuasiModal() == wxID_OK )
@@ -686,6 +690,20 @@ bool PANEL_JOBSET::OpenJobOptionsForListItem( size_t aItemIndex )
 
             if( dialog.ShowModal() == wxID_OK )
                 success = true;
+        }
+        else if( job.m_job->GetType() == "special_archive" )
+        {
+            JOB_SPECIAL_ARCHIVE*        specialJob = static_cast<JOB_SPECIAL_ARCHIVE*>( job.m_job.get() );
+            DIALOG_ARCHIVE_JOB_SETTINGS dialog( m_frame, specialJob );
+
+            if( dialog.ShowModal() == wxID_OK )
+                success = true;
+        }
+        else
+        {
+            DisplayErrorMessage( m_frame, wxString::Format( _( "This version of KiCad does not "
+                                                               "support the '%s' job type." ),
+                                                            job.m_type ) );
         }
     }
 

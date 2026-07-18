@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_IO_MGR_H_
@@ -54,9 +50,9 @@ public:
      */
     enum PCB_FILE_T
     {
-        PCB_FILE_UNKNOWN = 0,   ///< 0 is not a legal menu id on Mac
-        KICAD_SEXP,             ///< S-expression Pcbnew file format.
-        LEGACY,                 ///< Legacy Pcbnew file formats prior to s-expression.
+        PCB_FILE_UNKNOWN = 0, ///< 0 is not a legal menu id on Mac
+        KICAD_SEXP,           ///< S-expression Pcbnew file format.
+        LEGACY,               ///< Legacy Pcbnew file formats prior to s-expression.
         ALLEGRO,
         ALTIUM_CIRCUIT_MAKER,
         ALTIUM_CIRCUIT_STUDIO,
@@ -65,6 +61,7 @@ public:
         EAGLE,
         EASYEDA,
         EASYEDAPRO,
+        EASYEDAPRO_V3,
         FABMASTER,
         GEDA_PCB, ///< Geda PCB file formats.
         PCAD,
@@ -73,6 +70,8 @@ public:
         ODBPP,
         PADS,
         SPRINT_LAYOUT,
+        DIPTRACE,
+        AUTOTRAX,
         // add your type here.
 
         // etc.

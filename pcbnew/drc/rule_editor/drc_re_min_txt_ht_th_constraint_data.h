@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DRC_RE_MINIMUM_TEXT_HEIGHT_THICKNESS_CONSTRAINT_DATA_H_
@@ -57,8 +53,8 @@ public:
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
         return {
-            { 208 + DRC_RE_OVERLAY_XO, 248 + DRC_RE_OVERLAY_XO, 82 + DRC_RE_OVERLAY_YO, 1, wxS( "mm" ), LABEL_POSITION::RIGHT }, // min_text_height
-            { 109 + DRC_RE_OVERLAY_XO, 149 + DRC_RE_OVERLAY_XO, 197 + DRC_RE_OVERLAY_YO, 2, wxS( "mm" ), LABEL_POSITION::RIGHT }, // min_text_thickness
+            { 208, 263, 94, 1, wxS( "mm" ), LABEL_POSITION::RIGHT }, // min_text_height
+            { 109, 164, 209, 2, wxS( "mm" ), LABEL_POSITION::RIGHT }, // min_text_thickness
         };
     }
 

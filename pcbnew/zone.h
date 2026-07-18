@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef ZONE_H
@@ -424,6 +420,10 @@ public:
 
     void SetOutline( SHAPE_POLY_SET* aOutline ) { m_Poly = aOutline; }
 
+    SHAPE_POLY_SET GetLibraryOutline() const;
+
+    SHAPE_POLY_SET GetBoardOutline() const;
+
     // @copydoc BOARD_ITEM::GetEffectiveShape
     virtual std::shared_ptr<SHAPE>
     GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
@@ -583,6 +583,15 @@ public:
      * @param aFlipDirection is the direction of the flip.
      */
     virtual void Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
+
+    void OnFootprintRescaled( double aRatioX, double aRatioY, double aLinearFactor, const VECTOR2I& aAnchor,
+                              const EDA_ANGLE& aParentRotate ) override;
+
+    void OnFootprintTransformed() override
+    {
+        SetNeedRefill( true );
+        UnFill();
+    }
 
     /**
      * Mirror the outlines relative to a given horizontal axis the layer is not changed.
@@ -771,6 +780,8 @@ public:
     EDA_ITEM* Clone() const override;
     ZONE* Clone( PCB_LAYER_ID aLayer ) const;
 
+    BOARD_ITEM* Duplicate( bool addToParentGroup, BOARD_COMMIT* aCommit = nullptr ) const override;
+
     /**
      * @return true if the zone is a teardrop area
      */
@@ -865,7 +876,7 @@ public:
      */
     void HatchBorder();
 
-    const std::vector<SEG>& GetHatchLines() const { return m_borderHatchLines; }
+    std::vector<SEG> GetHatchLines() const;
 
     /**
      * Build the hash value of m_FilledPolysList, and store it internally in m_filledPolysHash.
@@ -1025,6 +1036,13 @@ protected:
 
     double                    m_area;              // The filled zone area
     double                    m_outlinearea;       // The outline zone area
+
+    /// Compute the bbox from scratch.  Shared so the cached value can't diverge from the live one.
+    BOX2I computeBoundingBox() const;
+
+    /// Lock-free bbox cache, valid while m_bboxCacheTimeStamp matches the board timestamp.
+    mutable BOX2I             m_bboxCache;
+    mutable std::atomic<int>  m_bboxCacheTimeStamp{ -1 };
 
 };
 

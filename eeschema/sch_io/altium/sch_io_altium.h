@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef _SCH_IO_ALTIUM_H_
@@ -135,6 +131,11 @@ public:
     wxFileName getLibFileName();
 
     void ParseAltiumSch( const wxString& aFileName );
+
+    /// Remove sheet symbols referencing a parse-stack file (an unrepresentable cycle), converting
+    /// their pins to hierarchical labels and clearing their sheet-instance records.
+    void pruneCyclicSheets( const std::vector<SCH_SHEET*>& aCyclicSheets, SCH_SCREEN* aScreen );
+
     void ParseStorage( const ALTIUM_COMPOUND_FILE& aAltiumSchFile );
     void ParseAdditional( const ALTIUM_COMPOUND_FILE& aAltiumSchFile );
     void ParseFileHeader( const ALTIUM_COMPOUND_FILE& aAltiumSchFile );
@@ -151,6 +152,10 @@ private:
     bool ShouldPutItemOnSheet( int aOwnerindex );
     const ASCH_STORAGE_FILE* GetFileFromStorage( const wxString& aFilename ) const;
     void CreateAliases();
+    void PostProcessBusLabels();
+    void EnsureSheetSymbolNames();
+    wxFileName ResolveSheetFileName( const wxString& aParentPath, const wxString& aSheetFileName ) const;
+    void NormalizeRepeatedSheetInstances();
     void AddTextBox( const ASCH_TEXT_FRAME* aElem );
     void AddLibTextBox( const ASCH_TEXT_FRAME* aElem, std::vector<LIB_SYMBOL*>& aSymbol = nullsym,
                         std::vector<int>& aFontSize = nullint );
@@ -264,6 +269,12 @@ private:
 
     // Cache the error messages to avoid duplicate messages
     std::unordered_map<wxString, SEVERITY > m_errorMessages;
+
+    // Canonical parse-stack paths, ref-counted so a multi-page block holds all sibling members at
+    // once. Breaks cyclic OrCad sheet references. See PARSE_FILE_GUARD.
+    std::map<wxString, int> m_parsingFiles;
+
+    friend struct PARSE_FILE_GUARD;
 };
 
 #endif // _SCH_IO_ALTIUM_H_

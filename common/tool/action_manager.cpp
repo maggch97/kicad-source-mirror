@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <eda_draw_frame.h>
@@ -31,6 +27,7 @@
 #include <wx/log.h>
 
 #include <hotkeys_basic.h>
+#include <algorithm>
 #include <cctype>
 
 
@@ -151,7 +148,8 @@ bool ACTION_MANAGER::RunHotKey( int aHotKey ) const
     wxLogTrace( kicadTraceToolStack, wxS( "ACTION_MANAGER::RunHotKey Key: %s" ),
                 KeyNameFromKeyCode( aHotKey ) );
 
-    HOTKEY_LIST::const_iterator it = m_actionHotKeys.find( key | mod );
+    int                         matchedHotKey = key | mod;
+    HOTKEY_LIST::const_iterator it = m_actionHotKeys.find( matchedHotKey );
 
     // If no luck, try without Shift, to handle keys that require it
     // e.g. to get ? you need to press Shift+/ without US keyboard layout
@@ -160,11 +158,12 @@ bool ACTION_MANAGER::RunHotKey( int aHotKey ) const
     // This doesn't apply for letters, as we already handled case normalisation.
     if( it == m_actionHotKeys.end() && !std::isalpha( key ) )
     {
-        wxLogTrace( kicadTraceToolStack,
-                    wxS( "ACTION_MANAGER::RunHotKey No actions found, searching with key: %s" ),
-                    KeyNameFromKeyCode( key | ( mod & ~MD_SHIFT ) ) );
+        matchedHotKey = key | ( mod & ~MD_SHIFT );
 
-        it = m_actionHotKeys.find( key | ( mod & ~MD_SHIFT ) );
+        wxLogTrace( kicadTraceToolStack, wxS( "ACTION_MANAGER::RunHotKey No actions found, searching with key: %s" ),
+                    KeyNameFromKeyCode( matchedHotKey ) );
+
+        it = m_actionHotKeys.find( matchedHotKey );
     }
 
     // Still no luck, we're done without a match
@@ -205,6 +204,12 @@ bool ACTION_MANAGER::RunHotKey( int aHotKey ) const
         }
     }
 
+    if( !context && global.size() > 1 )
+    {
+        if( EDA_BASE_FRAME* frame = dynamic_cast<EDA_BASE_FRAME*>( m_toolMgr->GetToolHolder() ) )
+            PromoteUserBoundFrameAction( global, frame->GetFrameType(), matchedHotKey );
+    }
+
     // Get the selection to use to test if the action is enabled
     SELECTION& sel = m_toolMgr->GetToolHolder()->GetCurrentSelection();
 
@@ -213,7 +218,7 @@ bool ACTION_MANAGER::RunHotKey( int aHotKey ) const
         bool runAction = true;
 
         if( const ACTION_CONDITIONS* aCond = GetCondition( *context ) )
-            runAction = aCond->enableCondition( sel );
+            runAction = aCond->GetHotkeyCondition()( sel );
 
         wxLogTrace( kicadTraceToolStack,
                     wxS( "ACTION_MANAGER::RunHotKey %s context action: %s for hotkey %s" ),
@@ -231,7 +236,7 @@ bool ACTION_MANAGER::RunHotKey( int aHotKey ) const
             bool runAction = true;
 
             if( const ACTION_CONDITIONS* aCond = GetCondition( *act ) )
-                runAction = aCond->enableCondition( sel );
+                runAction = aCond->GetHotkeyCondition()( sel );
 
             wxLogTrace( kicadTraceToolStack,
                         wxS( "ACTION_MANAGER::RunHotKey %s global action: %s for hotkey %s" ),
@@ -249,6 +254,46 @@ bool ACTION_MANAGER::RunHotKey( int aHotKey ) const
                 KeyNameFromKeyCode( aHotKey ) );
 
     return false;
+}
+
+
+std::string ACTION_MANAGER::FrameNamespacePrefix( FRAME_T aFrameType )
+{
+    switch( aFrameType )
+    {
+    case FRAME_PCB_EDITOR:
+    case FRAME_FOOTPRINT_EDITOR:
+    case FRAME_FOOTPRINT_VIEWER: return "pcbnew.";
+
+    case FRAME_SCH:
+    case FRAME_SCH_SYMBOL_EDITOR:
+    case FRAME_SCH_VIEWER:
+    case FRAME_SIMULATOR: return "eeschema.";
+
+    case FRAME_GERBER: return "gerbview.";
+
+    case FRAME_PL_EDITOR: return "plEditor.";
+
+    default: return "";
+    }
+}
+
+
+void ACTION_MANAGER::PromoteUserBoundFrameAction( std::vector<const TOOL_ACTION*>& aGlobalActions, FRAME_T aFrameType,
+                                                  int aMatchedHotKey )
+{
+    const std::string framePrefix = FrameNamespacePrefix( aFrameType );
+
+    if( framePrefix.empty() )
+        return;
+
+    auto userBoundInFrame = [&]( const TOOL_ACTION* aAction )
+    {
+        return aAction->GetName().starts_with( framePrefix ) && aAction->IsHotKeyUserBound( aMatchedHotKey );
+    };
+
+    if( std::any_of( aGlobalActions.begin(), aGlobalActions.end(), userBoundInFrame ) )
+        std::stable_partition( aGlobalActions.begin(), aGlobalActions.end(), userBoundInFrame );
 }
 
 

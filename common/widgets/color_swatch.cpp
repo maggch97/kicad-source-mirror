@@ -14,16 +14,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <kiplatform/ui.h>
 #include <widgets/color_swatch.h>
 #include <wx/dcmemory.h>
+#include <wx/weakref.h>
 
 #include <dpi_scaling_common.h>
 #include <dialogs/dialog_color_picker.h>
@@ -309,7 +306,14 @@ void COLOR_SWATCH::GetNewSwatchColor()
 
     DIALOG_COLOR_PICKER dialog( ::wxGetTopLevelParent( this ), m_color, m_supportsOpacity, m_userColors, m_default );
 
-    if( dialog.ShowModal() == wxID_OK )
+    // ShowModal()'s event pump can let our owning panel rebuild or destroy us; guard `this`.
+    wxWeakRef<COLOR_SWATCH> self( this );
+    int                     result = dialog.ShowModal();
+
+    if( !self )
+        return;
+
+    if( result == wxID_OK )
     {
         COLOR4D newColor = dialog.GetColor();
 

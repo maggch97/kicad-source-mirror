@@ -1,4 +1,4 @@
-/*
+﻿/*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>
@@ -42,7 +42,11 @@
 #include <pgm_base.h>
 #include <pcb_edit_frame.h>
 #include <3d_viewer/eda_3d_viewer_frame.h>
+#include <api/api_handler_common.h>
+#include <api/api_handler_pcb.h>
 #include <api/api_plugin_manager.h>
+#include <api/api_server.h>
+#include <api/api_utils.h>
 #include <geometry/geometry_utils.h>
 #include <bitmaps.h>
 #include <confirm.h>
@@ -99,6 +103,7 @@
 #include <tools/pcb_edit_table_tool.h>
 #include <tools/pcb_group_tool.h>
 #include <tools/generator_tool.h>
+#include <tools/diff_phase_skew_tool.h>
 #include <tools/drc_tool.h>
 #include <tools/drc_rule_editor_tool.h>
 #include <tools/global_edit_tool.h>
@@ -141,13 +146,6 @@
 #include <footprint_chooser_frame.h>
 #include <toolbars_pcb_editor.h>
 #include <drc/rule_editor/dialog_drc_rule_editor.h>
-
-#ifdef KICAD_IPC_API
-#include <api/api_server.h>
-#include <api/api_handler_pcb.h>
-#include <api/api_handler_common.h>
-#include <api/api_utils.h>
-#endif
 
 #include <richio.h>
 
@@ -283,10 +281,8 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     ReCreateMenuBar();
 
-#ifdef KICAD_IPC_API
     wxTheApp->Bind( EDA_EVT_PLUGIN_AVAILABILITY_CHANGED,
                     &PCB_EDIT_FRAME::onPluginAvailabilityChanged, this );
-#endif
 
     // Fetch a COPY of the config as a lot of these initializations are going to overwrite our
     // data.
@@ -527,7 +523,6 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     // Sync action plugins in case they changed since the last time the frame opened
     GetToolManager()->RunAction( ACTIONS::pluginsReload );
 
-#ifdef KICAD_IPC_API
     m_apiHandler = std::make_unique<API_HANDLER_PCB>( this );
     Pgm().GetApiServer().RegisterHandler( m_apiHandler.get() );
 
@@ -536,7 +531,6 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
         m_apiHandlerCommon = std::make_unique<API_HANDLER_COMMON>();
         Pgm().GetApiServer().RegisterHandler( m_apiHandlerCommon.get() );
     }
-#endif
 
     GetCanvas()->SwitchBackend( m_canvasType );
     ActivateGalCanvas();
@@ -765,6 +759,10 @@ void PCB_EDIT_FRAME::OnCrossProbeFlashTimer( wxTimerEvent& aEvent )
 
 PCB_EDIT_FRAME::~PCB_EDIT_FRAME()
 {
+    // Always ensure that we are unregistered even in a close without graceful doCloseWindow()
+    if( GetBoard() )
+        Kiway().LocalHistory().UnregisterSaver( GetBoard() );
+
     // PCB_BASE_FRAME's dtor deletes m_pcb; canvas children outlive it.  Drop
     // every cached TEXT_VAR_TRACKER* before the tracker is freed.
     detachTextVarTracker();
@@ -1039,6 +1037,7 @@ void PCB_EDIT_FRAME::setupTools()
     m_toolManager->RegisterTool( new MULTICHANNEL_TOOL );
     m_toolManager->RegisterTool( new EMBED_TOOL );
     m_toolManager->RegisterTool( new DRC_RULE_EDITOR_TOOL );
+    m_toolManager->RegisterTool( new DIFF_PHASE_SKEW_TOOL );
     m_toolManager->InitTools();
 
     for( TOOL_BASE* tool : m_toolManager->Tools() )
@@ -1112,6 +1111,24 @@ void PCB_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( ACTIONS::doDelete,     ENABLE( cond.HasItems() ) );
     mgr->SetConditions( ACTIONS::duplicate,    ENABLE( cond.HasItems() ) );
 
+    // Keep immediate-mode dispatch alive while a tool is mid-edit on an empty board, where
+    // HasItems() is still false but an item is under construction under the cursor.
+    auto hasElements =
+            [ this ] ( const SELECTION& aSel )
+            {
+                return GetBoard() &&
+                        ( !GetBoard()->IsEmpty() || !SELECTION_CONDITIONS::Idle( aSel ) );
+            };
+
+    mgr->SetConditions( PCB_ACTIONS::rotateCw,
+                        ENABLE( SELECTION_CONDITIONS::NotEmpty ).HotkeyEnable( hasElements ) );
+    mgr->SetConditions( PCB_ACTIONS::rotateCcw,
+                        ENABLE( SELECTION_CONDITIONS::NotEmpty ).HotkeyEnable( hasElements ) );
+    mgr->SetConditions( PCB_ACTIONS::mirrorH,
+                        ENABLE( SELECTION_CONDITIONS::NotEmpty ).HotkeyEnable( hasElements ) );
+    mgr->SetConditions( PCB_ACTIONS::mirrorV,
+                        ENABLE( SELECTION_CONDITIONS::NotEmpty ).HotkeyEnable( hasElements ) );
+
     static const std::vector<KICAD_T> groupTypes = { PCB_GROUP_T, PCB_GENERATOR_T };
 
     mgr->SetConditions( ACTIONS::group,        ENABLE( SELECTION_CONDITIONS::MoreThan( 1 ) ) );
@@ -1149,13 +1166,6 @@ void PCB_EDIT_FRAME::setupUIConditions()
                         .Check( cond.ZoneDisplayMode( ZONE_DISPLAY_MODE::SHOW_TRIANGULATION ) ) );
 
     mgr->SetConditions( ACTIONS::toggleBoundingBoxes, CHECK( cond.BoundingBoxes() ) );
-
-    auto hasElements =
-            [ this ] ( const SELECTION& aSel )
-            {
-                return GetBoard() &&
-                        ( !GetBoard()->IsEmpty() || !SELECTION_CONDITIONS::Idle( aSel ) );
-            };
 
     auto boardFlippedCond =
             [this]( const SELECTION& )
@@ -1326,6 +1336,24 @@ void PCB_EDIT_FRAME::setupUIConditions()
                 return false;
             };
 
+    auto connectedOrFootprintCond =
+            [] ( const SELECTION& aSel )
+            {
+                if( aSel.Empty() )
+                    return false;
+
+                for( EDA_ITEM* item : aSel )
+                {
+                    if( item->Type() == PCB_FOOTPRINT_T )
+                        continue;
+
+                    if( !dynamic_cast<BOARD_CONNECTED_ITEM*>( item ) )
+                        return false;
+                }
+
+                return true;
+            };
+
     mgr->SetConditions( PCB_ACTIONS::showNetInRatsnest,     ENABLE( haveNetCond ) );
     mgr->SetConditions( PCB_ACTIONS::hideNetInRatsnest,     ENABLE( haveNetCond ) );
     mgr->SetConditions( PCB_ACTIONS::highlightNet,          ENABLE( SELECTION_CONDITIONS::ShowAlways ) );
@@ -1340,6 +1368,7 @@ void PCB_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( PCB_ACTIONS::selectNet,         ENABLE( SELECTION_CONDITIONS::OnlyTypes( trackTypes ) ) );
     mgr->SetConditions( PCB_ACTIONS::deselectNet,       ENABLE( SELECTION_CONDITIONS::OnlyTypes( trackTypes ) ) );
     mgr->SetConditions( PCB_ACTIONS::selectUnconnected, ENABLE( SELECTION_CONDITIONS::OnlyTypes( padOwnerTypes ) ) );
+    mgr->SetConditions( PCB_ACTIONS::grabUnconnected,   ENABLE( connectedOrFootprintCond ) );
     mgr->SetConditions( PCB_ACTIONS::selectSameSheet,   ENABLE( SELECTION_CONDITIONS::OnlyTypes( footprintTypes ) ) );
     mgr->SetConditions( PCB_ACTIONS::selectOnSchematic, ENABLE( SELECTION_CONDITIONS::HasTypes( crossProbeTypes ) ) );
 
@@ -1387,6 +1416,7 @@ void PCB_EDIT_FRAME::setupUIConditions()
     CURRENT_EDIT_TOOL( PCB_ACTIONS::tuneSingleTrack);
     CURRENT_EDIT_TOOL( PCB_ACTIONS::tuneDiffPair );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::tuneSkew );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::showDiffPhaseSkew );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawVia );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawZone );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawRuleArea );
@@ -1559,10 +1589,8 @@ void PCB_EDIT_FRAME::doCloseWindow()
 
     GetCanvas()->StopDrawing();
 
-#ifdef KICAD_IPC_API
     Pgm().GetApiServer().DeregisterHandler( m_apiHandler.get() );
     wxTheApp->Unbind( EDA_EVT_PLUGIN_AVAILABILITY_CHANGED, &PCB_EDIT_FRAME::onPluginAvailabilityChanged, this );
-#endif
 
     // Clean up mode-less dialogs.
     Unbind( EDA_EVT_CLOSE_DIALOG_BOOK_REPORTER, &PCB_EDIT_FRAME::onCloseModelessBookReporterDialogs, this );
@@ -1932,59 +1960,20 @@ void PCB_EDIT_FRAME::SetActiveLayer( PCB_LAYER_ID aLayer, bool aForceRedraw )
     if( std::optional<int> newClearanceLayer = getClearanceLayerForActive( aLayer ) )
         GetCanvas()->GetView()->SetLayerVisible( *newClearanceLayer, true );
 
-    GetCanvas()->GetView()->UpdateAllItemsConditionally(
-            [&]( KIGFX::VIEW_ITEM* aItem ) -> int
-            {
-                if( !aItem->IsBOARD_ITEM() )
-                    return 0;
+    // per-layer view groups already hold each layer geometry so an active-layer change needs no
+    // re-tessellation just clearance visibility above and the recolour in SetHighContrastLayer
 
-                BOARD_ITEM* item = static_cast<BOARD_ITEM*>( aItem );
-
-                // Note: KIGFX::REPAINT isn't enough for things that go from invisible to visible
-                // as they won't be found in the view layer's itemset for re-painting.
-                if( GetDisplayOptions().m_ContrastModeDisplay == HIGH_CONTRAST_MODE::HIDDEN )
-                {
-                    if( item->IsOnLayer( oldLayer ) || item->IsOnLayer( aLayer ) )
-                        return KIGFX::ALL;
-                }
-
-                if( item->Type() == PCB_VIA_T )
-                {
-                    PCB_VIA* via = static_cast<PCB_VIA*>( item );
-
-                    // Vias on a restricted layer set must be redrawn when the active layer
-                    // is changed
-                    if( via->GetViaType() == VIATYPE::BLIND
-                            || via->GetViaType() == VIATYPE::BURIED
-                            || via->GetViaType() == VIATYPE::MICROVIA )
-                    {
-                        return KIGFX::REPAINT;
-                    }
-
-                    if( via->GetRemoveUnconnected() )
-                        return KIGFX::ALL;
-                }
-                else if( item->Type() == PCB_PAD_T )
-                {
-                    PAD* pad = static_cast<PAD*>( item );
-
-                    if( pad->GetRemoveUnconnected() )
-                        return KIGFX::ALL;
-                }
-
-                return 0;
-            } );
-
-    GetCanvas()->Refresh();
+    // idle refresh coalesces mashed hotkeys into one repaint forced redraws stay immediate
+    if( aForceRedraw )
+        GetCanvas()->Refresh();
+    else
+        GetCanvas()->RequestRefresh();
 }
 
 
 void PCB_EDIT_FRAME::OnBoardLoaded()
 {
     wxFileName fn( GetBoard()->GetFileName() );
-
-    if( !Prj().IsNullProject() )
-        Kiway().LocalHistory().Init( Prj().GetProjectPath() );
 
     ENUM_MAP<PCB_LAYER_ID>& layerEnum = ENUM_MAP<PCB_LAYER_ID>::Instance();
 
@@ -2004,7 +1993,7 @@ void PCB_EDIT_FRAME::OnBoardLoaded()
 
     try
     {
-        drcTool->GetDRCEngine()->InitEngine( GetDesignRulesPath() );
+        drcTool->GetDRCEngine()->InitEngine( GetBoard()->GetDesignRulesPath() );
     }
     catch( PARSE_ERROR& )
     {
@@ -2554,643 +2543,6 @@ int PCB_EDIT_FRAME::ShowExchangeFootprintsDialog( FOOTPRINT* aFootprint, bool aU
 }
 
 
-/**
- * copy text settings from aSrc to aDest
- * @param aSrc is the PCB_TEXT source
- * @param aDest is the PCB_TEXT target
- * @param aPosShift is the position shift to apply to aDest
- * @param aAngleShift is the angle shift to apply to aDest
- * @param aResetText is true to keep the default target text (false to use the aSrc text)
- * @param aResetTextLayers is true to keep the default target layers setting
- * (false to use the aSrc setting)
- * @param aResetTextEffects is true to keep the default target text effects
- * (false to use the aSrc effect)
- * @param aUpdated is a refrence to a bool to keep trace of changes
- */
-static void processTextItem( const PCB_TEXT& aSrc, PCB_TEXT& aDest, const VECTOR2I& aPosShift,
-                             const EDA_ANGLE& aAngleShift, bool aResetText, bool aResetTextLayers,
-                             bool aResetTextEffects, bool aResetTextPositions, bool* aUpdated )
-{
-    if( aResetText )
-        *aUpdated |= aSrc.GetText() != aDest.GetText();
-    else
-        aDest.SetText( aSrc.GetText() );
-
-    if( aResetTextLayers )
-    {
-        *aUpdated |= aSrc.GetLayer() != aDest.GetLayer();
-        *aUpdated |= aSrc.IsVisible() != aDest.IsVisible();
-    }
-    else
-    {
-        aDest.SetLayer( aSrc.GetLayer() );
-        aDest.SetVisible( aSrc.IsVisible() );
-    }
-
-    VECTOR2I origPos = aDest.GetFPRelativePosition();
-
-    if( aResetTextEffects )
-    {
-        *aUpdated |= aSrc.GetHorizJustify() != aDest.GetHorizJustify();
-        *aUpdated |= aSrc.GetVertJustify() != aDest.GetVertJustify();
-        *aUpdated |= aSrc.GetTextSize() != aDest.GetTextSize();
-        *aUpdated |= aSrc.GetTextThickness() != aDest.GetTextThickness();
-    }
-    else
-    {
-        EDA_ANGLE origAngle = aDest.GetTextAngle();
-        aDest.SetAttributes( aSrc );
-        aDest.SetTextAngle( origAngle ); // apply rotation as part of position shift
-    }
-
-    if( aResetTextPositions )
-    {
-        *aUpdated |= aSrc.GetFPRelativePosition() != origPos;
-        *aUpdated |= aSrc.GetTextAngle() != aDest.GetTextAngle();
-
-        aDest.SetFPRelativePosition( origPos );
-    }
-    else
-    {
-        VECTOR2I rotatedShift = GetRotated( aSrc.GetFPRelativePosition() - aPosShift, -aAngleShift );
-
-        aDest.SetFPRelativePosition( rotatedShift );
-        aDest.SetTextAngle( aSrc.GetTextAngle() );
-    }
-
-    aDest.SetLocked( aSrc.IsLocked() );
-    aDest.SetUuid( aSrc.m_Uuid );
-}
-
-
-template<typename T>
-static std::vector<std::pair<T*, T*>> matchItemsBySimilarity( const std::vector<T*>& aExisting,
-                                                              const std::vector<T*>& aNew )
-{
-    struct MATCH_CANDIDATE
-    {
-        T*      existing;
-        T*      updated;
-        double  score;
-    };
-
-    std::vector<MATCH_CANDIDATE> candidates;
-
-    for( T* existing : aExisting )
-    {
-        for( T* updated : aNew )
-        {
-            if( existing->Type() != updated->Type() )
-                continue;
-
-            double similarity = existing->Similarity( *updated );
-
-            if constexpr( std::is_same_v<T, PAD> )
-            {
-                if( existing->GetNumber() == updated->GetNumber() )
-                    similarity += 2.0;
-            }
-
-            if( similarity <= 0.0 )
-                continue;
-
-            candidates.push_back( { existing, updated, similarity } );
-        }
-    }
-
-    std::sort( candidates.begin(), candidates.end(),
-               []( const MATCH_CANDIDATE& a, const MATCH_CANDIDATE& b )
-               {
-                   if( a.score != b.score )
-                       return a.score > b.score;
-
-                   if( a.existing != b.existing )
-                       return a.existing < b.existing;
-
-                   return a.updated < b.updated;
-               } );
-
-    std::vector<std::pair<T*, T*>> matches;
-    matches.reserve( candidates.size() );
-
-    std::unordered_set<T*> matchedExisting;
-    std::unordered_set<T*> matchedNew;
-
-    for( const MATCH_CANDIDATE& candidate : candidates )
-    {
-        if( matchedExisting.find( candidate.existing ) != matchedExisting.end() )
-            continue;
-
-        if( matchedNew.find( candidate.updated ) != matchedNew.end() )
-            continue;
-
-        matchedExisting.insert( candidate.existing );
-        matchedNew.insert( candidate.updated );
-        matches.emplace_back( candidate.existing, candidate.updated );
-    }
-
-    return matches;
-}
-
-
-void PCB_EDIT_FRAME::ExchangeFootprint( FOOTPRINT* aExisting, FOOTPRINT* aNew,
-                                        BOARD_COMMIT& aCommit,
-                                        bool matchPadPositions,
-                                        bool deleteExtraTexts,
-                                        bool resetTextLayers,
-                                        bool resetTextEffects,
-                                        bool resetTextPositions,
-                                        bool resetTextContent,
-                                        bool resetFabricationAttrs,
-                                        bool resetClearanceOverrides,
-                                        bool reset3DModels,
-                                        bool* aUpdated )
-{
-    EDA_GROUP* parentGroup = aExisting->GetParentGroup();
-    bool       dummyBool   = false;
-
-    if( !aUpdated )
-        aUpdated = &dummyBool;
-
-    if( parentGroup )
-    {
-        aCommit.Modify( parentGroup->AsEdaItem(), nullptr, RECURSE_MODE::NO_RECURSE );
-        parentGroup->RemoveItem( aExisting );
-        parentGroup->AddItem( aNew );
-    }
-
-    aNew->SetParent( GetBoard() );
-
-    // This is the position and angle shift to apply to the new footprint if the footprint
-    // has a change anchor point or rotation compared to the existing footprint.
-    VECTOR2I  posShift( 0, 0 );
-    EDA_ANGLE angleShift = ANGLE_0;
-
-    VECTOR2I  position = aExisting->GetPosition();
-    EDA_ANGLE orientation = aExisting->GetOrientation();
-
-    if( matchPadPositions )
-    {
-        if( ComputeFootprintShift( *aExisting, *aNew, posShift, angleShift ) )
-        {
-            position += posShift;
-            orientation += angleShift;
-        }
-    }
-
-    PlaceFootprint( aNew, false, position );
-
-    if( aNew->GetLayer() != aExisting->GetLayer() )
-        aNew->Flip( aNew->GetPosition(), GetPcbNewSettings()->m_FlipDirection );
-
-    if( aNew->GetOrientation() != orientation )
-        aNew->SetOrientation( orientation );
-
-    aNew->SetLocked( aExisting->IsLocked() );
-
-    aNew->SetUuid( aExisting->m_Uuid );
-    aNew->Reference().SetUuid( aExisting->Reference().m_Uuid );
-    aNew->Value().SetUuid( aExisting->Value().m_Uuid );
-
-    std::vector<PAD*> oldPads;
-    oldPads.reserve( aExisting->Pads().size() );
-
-    for( PAD* pad : aExisting->Pads() )
-        oldPads.push_back( pad );
-
-    std::vector<PAD*> newPads;
-    newPads.reserve( aNew->Pads().size() );
-
-    for( PAD* pad : aNew->Pads() )
-        newPads.push_back( pad );
-
-    auto padMatches = matchItemsBySimilarity<PAD>( oldPads, newPads );
-    std::unordered_set<PAD*> matchedNewPads;
-
-    for( const auto& match : padMatches )
-    {
-        PAD* oldPad = match.first;
-        PAD* newPad = match.second;
-
-        matchedNewPads.insert( newPad );
-        newPad->SetUuid( oldPad->m_Uuid );
-        newPad->SetLocalRatsnestVisible( oldPad->GetLocalRatsnestVisible() );
-        newPad->SetPinFunction( oldPad->GetPinFunction() );
-        newPad->SetPinType( oldPad->GetPinType() );
-
-        if( newPad->IsOnCopperLayer() )
-            newPad->SetNetCode( oldPad->GetNetCode() );
-        else
-            newPad->SetNetCode( NETINFO_LIST::UNCONNECTED );
-    }
-
-    for( PAD* newPad : aNew->Pads() )
-    {
-        if( matchedNewPads.find( newPad ) != matchedNewPads.end() )
-            continue;
-
-        newPad->ResetUuid();
-        newPad->SetNetCode( NETINFO_LIST::UNCONNECTED );
-    }
-
-    std::vector<BOARD_ITEM*> oldDrawings;
-    oldDrawings.reserve( aExisting->GraphicalItems().size() );
-
-    for( BOARD_ITEM* item : aExisting->GraphicalItems() )
-        oldDrawings.push_back( item );
-
-    std::vector<BOARD_ITEM*> newDrawings;
-    newDrawings.reserve( aNew->GraphicalItems().size() );
-
-    for( BOARD_ITEM* item : aNew->GraphicalItems() )
-        newDrawings.push_back( item );
-
-    auto drawingMatches = matchItemsBySimilarity<BOARD_ITEM>( oldDrawings, newDrawings );
-    std::unordered_map<BOARD_ITEM*, BOARD_ITEM*> oldToNewDrawings;
-    std::unordered_set<BOARD_ITEM*> matchedNewDrawings;
-
-    for( const auto& match : drawingMatches )
-    {
-        BOARD_ITEM* oldItem = match.first;
-        BOARD_ITEM* newItem = match.second;
-
-        oldToNewDrawings[ oldItem ] = newItem;
-        matchedNewDrawings.insert( newItem );
-        newItem->SetUuid( oldItem->m_Uuid );
-    }
-
-    for( BOARD_ITEM* newItem : newDrawings )
-    {
-        if( matchedNewDrawings.find( newItem ) == matchedNewDrawings.end() )
-            newItem->ResetUuid();
-    }
-
-    std::vector<ZONE*> oldZones;
-    oldZones.reserve( aExisting->Zones().size() );
-
-    for( ZONE* zone : aExisting->Zones() )
-        oldZones.push_back( zone );
-
-    std::vector<ZONE*> newZones;
-    newZones.reserve( aNew->Zones().size() );
-
-    for( ZONE* zone : aNew->Zones() )
-        newZones.push_back( zone );
-
-    auto zoneMatches = matchItemsBySimilarity<ZONE>( oldZones, newZones );
-    std::unordered_set<ZONE*> matchedNewZones;
-
-    for( const auto& match : zoneMatches )
-    {
-        ZONE* oldZone = match.first;
-        ZONE* newZone = match.second;
-
-        matchedNewZones.insert( newZone );
-        newZone->SetUuid( oldZone->m_Uuid );
-    }
-
-    for( ZONE* newZone : newZones )
-    {
-        if( matchedNewZones.find( newZone ) == matchedNewZones.end() )
-            newZone->ResetUuid();
-    }
-
-    std::vector<PCB_POINT*> oldPoints;
-    oldPoints.reserve( aExisting->Points().size() );
-
-    for( PCB_POINT* point : aExisting->Points() )
-        oldPoints.push_back( point );
-
-    std::vector<PCB_POINT*> newPoints;
-    newPoints.reserve( aNew->Points().size() );
-
-    for( PCB_POINT* point : aNew->Points() )
-        newPoints.push_back( point );
-
-    auto pointMatches = matchItemsBySimilarity<PCB_POINT>( oldPoints, newPoints );
-    std::unordered_set<PCB_POINT*> matchedNewPoints;
-
-    for( const auto& match : pointMatches )
-    {
-        PCB_POINT* oldPoint = match.first;
-        PCB_POINT* newPoint = match.second;
-
-        matchedNewPoints.insert( newPoint );
-        newPoint->SetUuid( oldPoint->m_Uuid );
-    }
-
-    for( PCB_POINT* newPoint : newPoints )
-    {
-        if( matchedNewPoints.find( newPoint ) == matchedNewPoints.end() )
-            newPoint->ResetUuid();
-    }
-
-    std::vector<PCB_GROUP*> oldGroups;
-    oldGroups.reserve( aExisting->Groups().size() );
-
-    for( PCB_GROUP* group : aExisting->Groups() )
-        oldGroups.push_back( group );
-
-    std::vector<PCB_GROUP*> newGroups;
-    newGroups.reserve( aNew->Groups().size() );
-
-    for( PCB_GROUP* group : aNew->Groups() )
-        newGroups.push_back( group );
-
-    auto groupMatches = matchItemsBySimilarity<PCB_GROUP>( oldGroups, newGroups );
-    std::unordered_set<PCB_GROUP*> matchedNewGroups;
-
-    for( const auto& match : groupMatches )
-    {
-        PCB_GROUP* oldGroup = match.first;
-        PCB_GROUP* newGroup = match.second;
-
-        matchedNewGroups.insert( newGroup );
-        newGroup->SetUuid( oldGroup->m_Uuid );
-    }
-
-    for( PCB_GROUP* newGroup : newGroups )
-    {
-        if( matchedNewGroups.find( newGroup ) == matchedNewGroups.end() )
-            newGroup->ResetUuid();
-    }
-
-    std::vector<PCB_FIELD*> oldFieldsVec;
-    std::vector<PCB_FIELD*> newFieldsVec;
-
-    oldFieldsVec.reserve( aExisting->GetFields().size() );
-
-    for( PCB_FIELD* field : aExisting->GetFields() )
-    {
-        wxCHECK2( field, continue );
-
-        if( field->IsReference() || field->IsValue() )
-            continue;
-
-        oldFieldsVec.push_back( field );
-    }
-
-    newFieldsVec.reserve( aNew->GetFields().size() );
-
-    for( PCB_FIELD* field : aNew->GetFields() )
-    {
-        wxCHECK2( field, continue );
-
-        if( field->IsReference() || field->IsValue() )
-            continue;
-
-        newFieldsVec.push_back( field );
-    }
-
-    auto fieldMatches = matchItemsBySimilarity<PCB_FIELD>( oldFieldsVec, newFieldsVec );
-    std::unordered_map<PCB_FIELD*, PCB_FIELD*> oldToNewFields;
-    std::unordered_set<PCB_FIELD*> matchedNewFields;
-
-    for( const auto& match : fieldMatches )
-    {
-        PCB_FIELD* oldField = match.first;
-        PCB_FIELD* newField = match.second;
-
-        oldToNewFields[ oldField ] = newField;
-        matchedNewFields.insert( newField );
-        newField->SetUuid( oldField->m_Uuid );
-    }
-
-    for( PCB_FIELD* newField : newFieldsVec )
-    {
-        if( matchedNewFields.find( newField ) == matchedNewFields.end() )
-            newField->ResetUuid();
-    }
-
-    std::unordered_map<PCB_TEXT*, PCB_TEXT*> oldToNewTexts;
-
-    for( const auto& match : drawingMatches )
-    {
-        PCB_TEXT* oldText = dynamic_cast<PCB_TEXT*>( match.first );
-        PCB_TEXT* newText = dynamic_cast<PCB_TEXT*>( match.second );
-
-        if( oldText && newText )
-            oldToNewTexts[ oldText ] = newText;
-    }
-
-    std::set<PCB_TEXT*> handledTextItems;
-
-    for( BOARD_ITEM* oldItem : aExisting->GraphicalItems() )
-    {
-        PCB_TEXT* oldTextItem = dynamic_cast<PCB_TEXT*>( oldItem );
-
-        if( oldTextItem )
-        {
-            // Dimensions have PCB_TEXT base but are not treated like texts in the updater
-            if( dynamic_cast<PCB_DIMENSION_BASE*>( oldTextItem ) )
-                continue;
-
-            PCB_TEXT* newTextItem = nullptr;
-
-            auto textMatchIt = oldToNewTexts.find( oldTextItem );
-
-            if( textMatchIt != oldToNewTexts.end() )
-                newTextItem = textMatchIt->second;
-
-            if( newTextItem )
-            {
-                handledTextItems.insert( newTextItem );
-                processTextItem( *oldTextItem, *newTextItem, posShift, angleShift, resetTextContent, resetTextLayers,
-                                 resetTextEffects, resetTextPositions, aUpdated );
-            }
-            else if( deleteExtraTexts )
-            {
-                *aUpdated = true;
-            }
-            else
-            {
-                newTextItem = static_cast<PCB_TEXT*>( oldTextItem->Clone() );
-                handledTextItems.insert( newTextItem );
-                aNew->Add( newTextItem );
-            }
-        }
-    }
-
-    // Check for any newly-added text items and set the update flag as appropriate
-    for( BOARD_ITEM* newItem : aNew->GraphicalItems() )
-    {
-        PCB_TEXT* newTextItem = dynamic_cast<PCB_TEXT*>( newItem );
-
-        if( newTextItem )
-        {
-            // Dimensions have PCB_TEXT base but are not treated like texts in the updater
-            if( dynamic_cast<PCB_DIMENSION_BASE*>( newTextItem ) )
-                continue;
-
-            if( !handledTextItems.contains( newTextItem ) )
-            {
-                *aUpdated = true;
-                break;
-            }
-        }
-    }
-
-    // Copy reference. The initial text is always used, never resetted
-    processTextItem( aExisting->Reference(), aNew->Reference(), posShift, angleShift, false, resetTextLayers,
-                     resetTextEffects, resetTextPositions, aUpdated );
-
-    // Copy value
-    processTextItem( aExisting->Value(), aNew->Value(), posShift, angleShift,
-                     // reset value text only when it is a proxy for the footprint ID
-                     // (cf replacing value "MountingHole-2.5mm" with "MountingHole-4.0mm")
-                     aExisting->GetValue() == aExisting->GetFPID().GetLibItemName().wx_str(),
-                     resetTextLayers, resetTextEffects, resetTextPositions, aUpdated );
-
-    std::set<PCB_FIELD*> handledFields;
-
-    // Copy fields in accordance with the reset* flags
-    for( PCB_FIELD* oldField : aExisting->GetFields() )
-    {
-        wxCHECK2( oldField, continue );
-
-        // Reference and value are already handled
-        if( oldField->IsReference() || oldField->IsValue() )
-            continue;
-
-        PCB_FIELD* newField = nullptr;
-
-        auto fieldMatchIt = oldToNewFields.find( oldField );
-
-        if( fieldMatchIt != oldToNewFields.end() )
-            newField = fieldMatchIt->second;
-
-        if( newField )
-        {
-            handledFields.insert( newField );
-            processTextItem( *oldField, *newField, posShift, angleShift, resetTextContent, resetTextLayers,
-                             resetTextEffects, resetTextPositions, aUpdated );
-        }
-        else if( deleteExtraTexts )
-        {
-            *aUpdated = true;
-        }
-        else
-        {
-            newField = new PCB_FIELD( *oldField );
-            handledFields.insert( newField );
-            aNew->Add( newField );
-        }
-    }
-
-    // Check for any newly-added fields and set the update flag as appropriate
-    for( PCB_FIELD* newField : aNew->GetFields() )
-    {
-        wxCHECK2( newField, continue );
-
-        // Reference and value are already handled
-        if( newField->IsReference() || newField->IsValue() )
-            continue;
-
-        if( !handledFields.contains( newField ) )
-        {
-            *aUpdated = true;
-            break;
-        }
-    }
-
-    if( resetFabricationAttrs )
-    {
-        // We've replaced the existing footprint with the library one, so the fabrication attrs
-        // are already reset.  Just set the aUpdated flag if appropriate.
-        if( aNew->GetAttributes() != aExisting->GetAttributes() )
-            *aUpdated = true;
-    }
-    else
-    {
-        aNew->SetAttributes( aExisting->GetAttributes() );
-    }
-
-    if( resetClearanceOverrides )
-    {
-        if( aExisting->AllowSolderMaskBridges() != aNew->AllowSolderMaskBridges() )
-            *aUpdated = true;
-
-        if( ( aExisting->GetLocalClearance() != aNew->GetLocalClearance() )
-                || ( aExisting->GetLocalSolderMaskMargin() != aNew->GetLocalSolderMaskMargin() )
-                || ( aExisting->GetLocalSolderPasteMargin() != aNew->GetLocalSolderPasteMargin() )
-                || ( aExisting->GetLocalSolderPasteMarginRatio() != aNew->GetLocalSolderPasteMarginRatio() )
-                || ( aExisting->GetLocalZoneConnection() != aNew->GetLocalZoneConnection() ) )
-        {
-            *aUpdated = true;
-        }
-    }
-    else
-    {
-        aNew->SetLocalClearance( aExisting->GetLocalClearance() );
-        aNew->SetLocalSolderMaskMargin( aExisting->GetLocalSolderMaskMargin() );
-        aNew->SetLocalSolderPasteMargin( aExisting->GetLocalSolderPasteMargin() );
-        aNew->SetLocalSolderPasteMarginRatio( aExisting->GetLocalSolderPasteMarginRatio() );
-        aNew->SetLocalZoneConnection( aExisting->GetLocalZoneConnection() );
-        aNew->SetAllowSolderMaskBridges( aExisting->AllowSolderMaskBridges() );
-    }
-
-    if( reset3DModels )
-    {
-        // We've replaced the existing footprint with the library one, so the 3D models are
-        // already reset.  Just set the aUpdated flag if appropriate.
-        if( aNew->Models().size() != aExisting->Models().size() )
-        {
-            *aUpdated = true;
-        }
-        else
-        {
-            for( size_t ii = 0; ii < aNew->Models().size(); ++ii )
-            {
-                if( aNew->Models()[ii] != aExisting->Models()[ii] )
-                {
-                    *aUpdated = true;
-                    break;
-                }
-            }
-        }
-    }
-    else
-    {
-        // Preserve model references and all embedded model data.
-        aNew->Models() = aExisting->Models();
-
-        // Preserve extruded 3D body settings.
-        if( aExisting->HasExtrudedBody() )
-            aNew->SetExtrudedBody( std::make_unique<EXTRUDED_3D_BODY>( *aExisting->GetExtrudedBody() ) );
-        else
-            aNew->ClearExtrudedBody();
-
-        for( const auto& [name, file] : aExisting->GetEmbeddedFiles()->EmbeddedFileMap() )
-        {
-            if( file->type != EMBEDDED_FILES::EMBEDDED_FILE::FILE_TYPE::MODEL )
-                continue;
-
-            aNew->GetEmbeddedFiles()->RemoveFile( name, true );
-            aNew->GetEmbeddedFiles()->AddFile( new EMBEDDED_FILES::EMBEDDED_FILE( *file ) );
-        }
-    }
-
-    // Updating other parameters
-    aNew->SetPath( aExisting->GetPath() );
-    aNew->SetSheetfile( aExisting->GetSheetfile() );
-    aNew->SetSheetname( aExisting->GetSheetname() );
-    aNew->SetFilters( aExisting->GetFilters() );
-    aNew->SetStaticComponentClass( aExisting->GetComponentClass() );
-
-    if( *aUpdated == false )
-    {
-        // Check pad shapes, graphics, zones, etc. for changes
-        if( aNew->FootprintNeedsUpdate( aExisting, BOARD_ITEM::COMPARE_FLAGS::INSTANCE_TO_INSTANCE ) )
-            *aUpdated = true;
-    }
-
-    aCommit.Remove( aExisting );
-    aCommit.Add( aNew );
-
-    aNew->ClearFlags();
-}
-
-
 void PCB_EDIT_FRAME::CommonSettingsChanged( int aFlags )
 {
     PCB_BASE_EDIT_FRAME::CommonSettingsChanged( aFlags );
@@ -3211,7 +2563,7 @@ void PCB_EDIT_FRAME::CommonSettingsChanged( int aFlags )
 
     try
     {
-        drcTool->GetDRCEngine()->InitEngine( GetDesignRulesPath() );
+        drcTool->GetDRCEngine()->InitEngine( GetBoard()->GetDesignRulesPath() );
 
         if( infobar->GetMessageType() == WX_INFOBAR::MESSAGE_TYPE::DRC_RULES_ERROR )
             infobar->Dismiss();
@@ -3262,47 +2614,73 @@ void PCB_EDIT_FRAME::ProjectChanged()
                     // See SCHEMATIC::SaveToHistory: the dirty check is only valid in ZIP
                     // mode.  In INCREMENTAL mode the manual-save flow clears the dirty
                     // flag before the saver runs, so filtering would drop the snapshot.
-                    bool filterClean = Pgm().GetCommonSettings()->m_Backup.format == BACKUP_FORMAT::ZIP;
+                    bool filterClean = !Pgm().GetCommonSettings()->AutosaveUsesLocalHistory();
 
                     if( filterClean && !IsContentModified() )
                         return;
 
                     GetBoard()->SaveToHistory( aProjectPath, aFileData );
-                } );
+                },
+                GetBoard()->GetHistoryLifetimeToken() );
     }
+}
+
+
+bool PCB_EDIT_FRAME::interactiveOperationInProgress() const
+{
+    TOOL_MANAGER* mgr = GetToolManager();
+
+    if( !mgr )
+        return false;
+
+    TOOL_BASE* currentTool = mgr->GetCurrentTool();
+
+    // When a single item that can be point-edited is selected, the point editor
+    // tool will be active instead of the selection tool.  It blocks undo/redo
+    // while the user is actually dragging points around, though, so we can use
+    // this as an initial check.
+    if( UndoRedoBlocked() )
+        return true;
+
+    // A tool other than passive selection or point editing is actively modifying
+    // the model (drawing, dragging, routing, etc.).
+    if( currentTool != mgr->GetTool<PCB_SELECTION_TOOL>()
+        && currentTool != mgr->GetTool<PCB_POINT_EDITOR>() )
+    {
+        return true;
+    }
+
+    if( ZONE_FILLER_TOOL* zoneFillerTool = mgr->GetTool<ZONE_FILLER_TOOL>();
+        zoneFillerTool && zoneFillerTool->IsBusy() )
+    {
+        return true;
+    }
+
+    if( ROUTER_TOOL* routerTool = mgr->GetTool<ROUTER_TOOL>();
+        routerTool && routerTool->RoutingInProgress() )
+    {
+        return true;
+    }
+
+    return false;
 }
 
 
 bool PCB_EDIT_FRAME::CanAcceptApiCommands()
 {
-    TOOL_BASE* currentTool = GetToolManager()->GetCurrentTool();
-
-    // When a single item that can be point-edited is selected, the point editor
-    // tool will be active instead of the selection tool.  It blocks undo/redo
-    // while the user is actually dragging points around, though, so we can use
-    // this as an initial check to prevent API actions when points are being edited.
-    if( UndoRedoBlocked() )
-        return false;
-
-    // Don't allow any API use while the user is using a tool that could
-    // modify the model in the middle of the message stream
-    if( currentTool != GetToolManager()->GetTool<PCB_SELECTION_TOOL>() &&
-        currentTool != GetToolManager()->GetTool<PCB_POINT_EDITOR>() )
-    {
-        return false;
-    }
-
-    ZONE_FILLER_TOOL* zoneFillerTool = m_toolManager->GetTool<ZONE_FILLER_TOOL>();
-
-    if( zoneFillerTool->IsBusy() )
-        return false;
-
-    ROUTER_TOOL* routerTool = m_toolManager->GetTool<ROUTER_TOOL>();
-
-    if( routerTool && routerTool->RoutingInProgress() )
+    if( interactiveOperationInProgress() )
         return false;
 
     return EDA_BASE_FRAME::CanAcceptApiCommands();
+}
+
+
+bool PCB_EDIT_FRAME::canRunAutoSave() const
+{
+    // Serializing a large board on the UI thread freezes the editor; never do it while the
+    // user is mid-operation or the deferred input gets misinterpreted (e.g. a routed track
+    // ending where the cursor lands once the editor unfreezes).
+    return !interactiveOperationInProgress();
 }
 
 
@@ -3464,14 +2842,12 @@ void PCB_EDIT_FRAME::onCloseModelessBookReporterDialogs( wxCommandEvent& aEvent 
 }
 
 
-#ifdef KICAD_IPC_API
 void PCB_EDIT_FRAME::onPluginAvailabilityChanged( wxCommandEvent& aEvt )
 {
     wxLogTrace( traceApi, "PCB frame: EDA_EVT_PLUGIN_AVAILABILITY_CHANGED" );
     RecreateToolbars();
     aEvt.Skip();
 }
-#endif
 
 
 void PCB_EDIT_FRAME::SwitchLayer( PCB_LAYER_ID layer )

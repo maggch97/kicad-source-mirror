@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "length_delay_calculation/length_delay_calculation.h"
@@ -150,11 +146,10 @@ void LENGTH_DELAY_CALCULATION::clipLineToPad( SHAPE_LINE_CHAIN& aLine, const PAD
 }
 
 
-LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector<LENGTH_DELAY_CALCULATION_ITEM>& aItems,
-                                                                     const PATH_OPTIMISATIONS aOptimisations,
-                                                                     const PAD* aStartPad, const PAD* aEndPad,
-                                                                     const LENGTH_DELAY_LAYER_OPT  aLayerOpt,
-                                                                     const LENGTH_DELAY_DOMAIN_OPT aDomain ) const
+LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails(
+        std::vector<LENGTH_DELAY_CALCULATION_ITEM>& aItems, const PATH_OPTIMISATIONS aOptimisations,
+        const PAD* aStartPad, const PAD* aEndPad, const LENGTH_DELAY_LAYER_OPT aLayerOpt,
+        const LENGTH_DELAY_DOMAIN_OPT aDomain, LENGTH_DELAY_ITEM_DETAILS* aPerItemLengthDelays ) const
 {
     const bool doTrace = wxLog::IsAllowedTraceMask( wxT( "PNS_TUNE" ) );
 
@@ -291,20 +286,56 @@ LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector
         if( doTrace )
             wxLogTrace( wxT( "PNS_TUNE" ), wxT( "CalculateLengthDetails: inferring vias in pads" ) );
 
-        const bool withDelayDetail = aDomain == LENGTH_DELAY_DOMAIN_OPT::WITH_DELAY_DETAIL;
-        inferViaInPad( aStartPad, aItems.front(), details, withDelayDetail );
-        inferViaInPad( aEndPad, aItems.back(), details, withDelayDetail );
+        std::pair<int64_t, int64_t> inferredStartPadViaDetails{ 0, 0 };
+        std::pair<int64_t, int64_t> inferredEndPadViaDetails{ 0, 0 };
+
+        const bool withDelay = aDomain == LENGTH_DELAY_DOMAIN_OPT::WITH_DELAY_DETAIL;
+        inferViaInPad( aStartPad, aItems.front(), details, inferredStartPadViaDetails, withDelay );
+        inferViaInPad( aEndPad, aItems.back(), details, inferredEndPadViaDetails, withDelay );
+
+        if( aPerItemLengthDelays )
+        {
+            aPerItemLengthDelays->InferredStartViaLength = inferredStartPadViaDetails.first;
+            aPerItemLengthDelays->InferredStartViaDelay = inferredStartPadViaDetails.second;
+            aPerItemLengthDelays->InferredEndViaLength = inferredEndPadViaDetails.first;
+            aPerItemLengthDelays->InferredEndViaDelay = inferredEndPadViaDetails.second;
+        }
     }
 
     // Add stats for each item
     int processedPads = 0, processedVias = 0, processedLines = 0;
     int mergedRetired = 0, unknownType = 0;
 
+    // Output per-item details if required
+    if( aPerItemLengthDelays )
+    {
+        aPerItemLengthDelays->LengthsAndDelays.clear();
+        aPerItemLengthDelays->LengthsAndDelays.resize( aItems.size(), { 0, 0 } );
+    }
+
+    auto setPerItemLengthDetail = [aPerItemLengthDelays]( const size_t idx, const int64_t value )
+    {
+        if( !aPerItemLengthDelays )
+            return;
+
+        aPerItemLengthDelays->LengthsAndDelays[idx].first = value;
+    };
+
+    auto setPerItemDelayDetail = [aPerItemLengthDelays]( const size_t idx, const int64_t value )
+    {
+        if( !aPerItemLengthDelays )
+            return;
+
+        aPerItemLengthDelays->LengthsAndDelays[idx].second = value;
+    };
+
     if( doTrace )
         wxLogTrace( wxT( "PNS_TUNE" ), wxT( "CalculateLengthDetails: processing %zu items..." ), aItems.size() );
 
-    for( const LENGTH_DELAY_CALCULATION_ITEM& item : aItems )
+    for( size_t i = 0; i < aItems.size(); ++i )
     {
+        const LENGTH_DELAY_CALCULATION_ITEM& item = aItems[i];
+
         // Don't include merged items
         if( item.GetMergeStatus() == LENGTH_DELAY_CALCULATION_ITEM::MERGE_STATUS::MERGED_RETIRED
             || item.Type() == LENGTH_DELAY_CALCULATION_ITEM::TYPE::UNKNOWN )
@@ -321,6 +352,7 @@ LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector
         {
             const int64_t length = item.GetLine().Length();
 
+            setPerItemLengthDetail( i, length );
             details.TrackLength += length;
             processedLines++;
 
@@ -331,6 +363,7 @@ LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector
         {
             const auto [layerStart, layerEnd] = item.GetLayers();
             int64_t viaHeight = StackupHeight( layerStart, layerEnd );
+            setPerItemLengthDetail( i, viaHeight );
             details.ViaLength += static_cast<int>( viaHeight );
             details.NumVias += 1;
             processedVias++;
@@ -342,6 +375,7 @@ LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector
         else if( item.Type() == LENGTH_DELAY_CALCULATION_ITEM::TYPE::PAD )
         {
             int64_t padToDie = item.GetPad()->GetPadToDieLength();
+            setPerItemLengthDetail( i, padToDie );
             details.PadToDieLength += static_cast<int>( padToDie );
             details.NumPads += 1;
             processedPads++;
@@ -383,6 +417,8 @@ LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector
                 continue;
             }
 
+            setPerItemDelayDetail( i, itemDelays[i] );
+
             if( item.Type() == LENGTH_DELAY_CALCULATION_ITEM::TYPE::LINE )
             {
                 details.TrackDelay += itemDelays[i];
@@ -421,7 +457,9 @@ LENGTH_DELAY_STATS LENGTH_DELAY_CALCULATION::CalculateLengthDetails( std::vector
 
 
 void LENGTH_DELAY_CALCULATION::inferViaInPad( const PAD* aPad, const LENGTH_DELAY_CALCULATION_ITEM& aItem,
-                                              LENGTH_DELAY_STATS& aDetails, const bool aWithDelayDetail ) const
+                                              LENGTH_DELAY_STATS&          aDetails,
+                                              std::pair<int64_t, int64_t>& aInferredViaLengthDelay,
+                                              const bool                   aWithDelayDetail ) const
 {
     if( aPad && aItem.Type() == LENGTH_DELAY_CALCULATION_ITEM::TYPE::LINE )
     {
@@ -434,7 +472,9 @@ void LENGTH_DELAY_CALCULATION::inferViaInPad( const PAD* aPad, const LENGTH_DELA
             const PCB_LAYER_ID padLayer = padLayers.Contains( F_Cu ) ? F_Cu : B_Cu;
 
             aDetails.NumVias += 1;
-            aDetails.ViaLength += StackupHeight( startBottomLayer, padLayer );
+            const int64_t height = StackupHeight( startBottomLayer, padLayer );
+            aDetails.ViaLength += height;
+            aInferredViaLengthDelay.first = height;
 
             // Look up via delay details if required
             if( aWithDelayDetail )
@@ -444,6 +484,7 @@ void LENGTH_DELAY_CALCULATION::inferViaInPad( const PAD* aPad, const LENGTH_DELA
                 const int64_t delay = m_tuningProfileParameters->GetViaPropagationDelay( startBottomLayer, padLayer,
                                                                                          F_Cu, B_Cu, ctx );
                 aDetails.ViaDelay += delay;
+                aInferredViaLengthDelay.second = delay;
             }
         }
     }
@@ -518,10 +559,6 @@ void LENGTH_DELAY_CALCULATION::mergeLines(
 
         LENGTH_DELAY_CALCULATION_ITEM* lineToMerge = *startItems.begin();
 
-        // Don't merge if line is an arc
-        if( !lineToMerge->GetLine().CArcs().empty() )
-            return;
-
         // Don't merge if lines are on different layers
         if( aPrimaryItem->GetStartLayer() != lineToMerge->GetStartLayer() )
             return;
@@ -569,34 +606,29 @@ void LENGTH_DELAY_CALCULATION::mergeLines(
 void LENGTH_DELAY_CALCULATION::mergeShapeLineChains( SHAPE_LINE_CHAIN& aPrimary, const SHAPE_LINE_CHAIN& aSecondary,
                                                      const MERGE_POINT aMergePoint )
 {
+    // Append carries the arcs across and drops the shared point. Orient the
+    // secondary so its joining end meets the primary.
     if( aMergePoint == MERGE_POINT::START )
     {
-        if( aSecondary.GetPoint( 0 ) == aPrimary.GetPoint( 0 ) )
-        {
-            for( auto itr = aSecondary.CPoints().begin() + 1; itr != aSecondary.CPoints().end(); ++itr )
-                aPrimary.Insert( 0, *itr );
-        }
-        else
-        {
-            wxASSERT( aSecondary.CLastPoint() == aPrimary.GetPoint( 0 ) );
+        // Secondary joins the primary's start, so build secondary + primary.
+        SHAPE_LINE_CHAIN merged =
+                ( aSecondary.GetPoint( 0 ) == aPrimary.GetPoint( 0 ) ) ? aSecondary.Reverse() : aSecondary;
 
-            for( auto itr = aSecondary.CPoints().rbegin() + 1; itr != aSecondary.CPoints().rend(); ++itr )
-                aPrimary.Insert( 0, *itr );
-        }
+        wxASSERT( merged.CLastPoint() == aPrimary.GetPoint( 0 ) );
+
+        merged.Append( aPrimary );
+        aPrimary = merged;
     }
     else
     {
         if( aSecondary.GetPoint( 0 ) == aPrimary.CLastPoint() )
         {
-            for( auto itr = aSecondary.CPoints().begin() + 1; itr != aSecondary.CPoints().end(); ++itr )
-                aPrimary.Append( *itr );
+            aPrimary.Append( aSecondary );
         }
         else
         {
             wxASSERT( aSecondary.CLastPoint() == aPrimary.CLastPoint() );
-
-            for( auto itr = aSecondary.CPoints().rbegin() + 1; itr != aSecondary.CPoints().rend(); ++itr )
-                aPrimary.Append( *itr );
+            aPrimary.Append( aSecondary.Reverse() );
         }
     }
 }

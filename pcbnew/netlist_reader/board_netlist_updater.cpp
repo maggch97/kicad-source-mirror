@@ -19,11 +19,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -37,17 +33,20 @@
 #include <component_classes/component_class_manager.h>
 #include <netinfo.h>
 #include <footprint.h>
+#include <netlist_reader/pcb_netlist_utils.h>
 #include <pad.h>
 #include <pcb_group.h>
 #include <pcb_track.h>
 #include <zone.h>
 #include <string_utils.h>
 #include <limits>
-#include <pcbnew_settings.h>
 #include <pcb_edit_frame.h>
+#include <pcbnew_settings.h>
 #include <netlist_reader/pcb_netlist.h>
 #include <connectivity/connectivity_data.h>
 #include <reporter.h>
+#include <settings/settings_manager.h>
+#include <tool/tool_manager.h>
 #include <wx/log.h>
 
 #include "board_netlist_updater.h"
@@ -55,23 +54,21 @@
 
 BOARD_NETLIST_UPDATER::BOARD_NETLIST_UPDATER( PCB_EDIT_FRAME* aFrame, BOARD* aBoard ) :
     m_frame( aFrame ),
-    m_commit( aFrame ),
-    m_board( aBoard )
+    m_settings( GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" ) ),
+    m_commit( aFrame->GetToolManager() ),
+    m_board( aBoard ),
+    m_reporter( &NULL_REPORTER::GetInstance() )
 {
-    m_reporter = &NULL_REPORTER::GetInstance();
+}
 
-    m_deleteUnusedFootprints = false;
-    m_isDryRun = false;
-    m_replaceFootprints = true;
-    m_lookupByTimestamp = false;
-    m_transferGroups = false;
-    m_overrideLocks = false;
-    m_updateFields = false;
-    m_removeExtraFields = false;
 
-    m_warningCount = 0;
-    m_errorCount = 0;
-    m_newFootprintsCount = 0;
+BOARD_NETLIST_UPDATER::BOARD_NETLIST_UPDATER( TOOL_MANAGER* aToolManager, BOARD* aBoard ) :
+    m_frame( nullptr ),
+    m_settings( GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" ) ),
+    m_commit( aToolManager ),
+    m_board( aBoard ),
+    m_reporter( &NULL_REPORTER::GetInstance() )
+{
 }
 
 
@@ -192,7 +189,7 @@ FOOTPRINT* BOARD_NETLIST_UPDATER::addNewFootprint( COMPONENT* aComponent, const 
         return nullptr;
     }
 
-    FOOTPRINT* footprint = m_frame->LoadFootprint( aFootprintId );
+    FOOTPRINT* footprint = LoadFootprintFromProject( m_board, aFootprintId );
 
     if( footprint == nullptr )
     {
@@ -220,8 +217,12 @@ FOOTPRINT* BOARD_NETLIST_UPDATER::addNewFootprint( COMPONENT* aComponent, const 
     {
         for( PAD* pad : footprint->Pads() )
         {
-            // Set the pads ratsnest settings to the global settings
-            pad->SetLocalRatsnestVisible( m_frame->GetPcbNewSettings()->m_Display.m_ShowGlobalRatsnest );
+            bool showRatsnest = true;
+
+            if( m_settings )
+                showRatsnest = m_settings->m_Display.m_ShowGlobalRatsnest;
+
+            pad->SetLocalRatsnestVisible( showRatsnest );
 
             // Pads in the library all have orphaned nets.  Replace with Default.
             pad->SetNetCode( 0 );
@@ -357,7 +358,7 @@ FOOTPRINT* BOARD_NETLIST_UPDATER::replaceFootprint( NETLIST& aNetlist, FOOTPRINT
         return nullptr;
     }
 
-    FOOTPRINT* newFootprint = m_frame->LoadFootprint( aNewComponent->GetFPID() );
+    FOOTPRINT* newFootprint = LoadFootprintFromProject( m_board, aNewComponent->GetFPID() );
 
     if( newFootprint == nullptr )
     {
@@ -412,7 +413,7 @@ FOOTPRINT* BOARD_NETLIST_UPDATER::replaceFootprint( NETLIST& aNetlist, FOOTPRINT
              // Expand the footprint pad layers
              newFootprint->FixUpPadsForBoard( m_board );
 
-             m_frame->ExchangeFootprint( aFootprint, newFootprint, m_commit, true );
+             m_board->ExchangeFootprint( aFootprint, newFootprint, m_commit, true );
 
              msg.Printf( _( "Changed %s footprint from '%s' to '%s'."),
                          aFootprint->GetReference(),
@@ -650,8 +651,7 @@ bool BOARD_NETLIST_UPDATER::updateFootprintParameters( FOOTPRINT* aFootprint, CO
                         // Give the footprint orientation
                         newField->Rotate( aFootprint->GetPosition(), aFootprint->GetOrientation() );
 
-                        if( m_frame )
-                            newField->StyleFromSettings( m_frame->GetDesignSettings(), true );
+                        newField->StyleFromSettings( m_board->GetDesignSettings(), true );
                     }
                 }
             }
@@ -768,7 +768,7 @@ bool BOARD_NETLIST_UPDATER::updateFootprintParameters( FOOTPRINT* aFootprint, CO
     if( firstAssociatedVariant != nullptr && firstAssociatedVariant->m_hasExcludedFromBOM )
         netlistExcludeFromBOM = firstAssociatedVariant->m_excludedFromBOM;
 
-    if( netlistExcludeFromBOM != ( ( aFootprint->GetAttributes() & FP_EXCLUDE_FROM_BOM ) > 0 ) )
+    if( m_updateFields && netlistExcludeFromBOM != ( ( aFootprint->GetAttributes() & FP_EXCLUDE_FROM_BOM ) > 0 ) )
     {
         if( m_isDryRun )
         {
@@ -804,7 +804,7 @@ bool BOARD_NETLIST_UPDATER::updateFootprintParameters( FOOTPRINT* aFootprint, CO
     if( firstAssociatedVariant != nullptr && firstAssociatedVariant->m_hasDnp )
         netlistDNP = firstAssociatedVariant->m_dnp;
 
-    if( netlistDNP != ( ( aFootprint->GetAttributes() & FP_DNP ) > 0 ) )
+    if( m_updateFields && netlistDNP != ( ( aFootprint->GetAttributes() & FP_DNP ) > 0 ) )
     {
         if( m_isDryRun )
         {
@@ -840,7 +840,8 @@ bool BOARD_NETLIST_UPDATER::updateFootprintParameters( FOOTPRINT* aFootprint, CO
     if( firstAssociatedVariant != nullptr && firstAssociatedVariant->m_hasExcludedFromPosFiles )
         netlistExcludeFromPosFiles = firstAssociatedVariant->m_excludedFromPosFiles;
 
-    if( netlistExcludeFromPosFiles != ( ( aFootprint->GetAttributes() & FP_EXCLUDE_FROM_POS_FILES ) > 0 ) )
+    if( m_updateFields
+        && netlistExcludeFromPosFiles != ( ( aFootprint->GetAttributes() & FP_EXCLUDE_FROM_POS_FILES ) > 0 ) )
     {
         if( m_isDryRun )
         {
@@ -879,8 +880,8 @@ bool BOARD_NETLIST_UPDATER::updateFootprintParameters( FOOTPRINT* aFootprint, CO
         m_reporter->Report( msg, RPT_SEVERITY_ACTION );
     }
 
-    if( aNetlistComponent->GetDuplicatePadNumbersAreJumpers()
-        != aFootprint->GetDuplicatePadNumbersAreJumpers() )
+    if( m_updateFields
+        && aNetlistComponent->GetDuplicatePadNumbersAreJumpers() != aFootprint->GetDuplicatePadNumbersAreJumpers() )
     {
         bool value = aNetlistComponent->GetDuplicatePadNumbersAreJumpers();
 
@@ -917,7 +918,7 @@ bool BOARD_NETLIST_UPDATER::updateFootprintParameters( FOOTPRINT* aFootprint, CO
         m_reporter->Report( msg, RPT_SEVERITY_ACTION );
     }
 
-    if( aNetlistComponent->JumperPadGroups() != aFootprint->JumperPadGroups() )
+    if( m_updateFields && aNetlistComponent->JumperPadGroups() != aFootprint->JumperPadGroups() )
     {
         if( !m_isDryRun )
         {
@@ -1040,6 +1041,7 @@ bool BOARD_NETLIST_UPDATER::updateFootprintGroup( FOOTPRINT* aPcbFootprint,
                 // board groups for later footprints that are checking for existing groups
                 m_board->Add( newGroup );
                 m_commit.Added( newGroup );
+                m_addedGroups.push_back( newGroup );
             }
             else
             {
@@ -1352,6 +1354,15 @@ bool BOARD_NETLIST_UPDATER::updateComponentUnits( FOOTPRINT* aFootprint, COMPONE
 }
 
 
+bool BOARD_NETLIST_UPDATER::fpidsEquivalent( const LIB_ID& aBoardFpid, const LIB_ID& aSchematicFpid )
+{
+    if( aSchematicFpid.IsLegacy() )
+        return aBoardFpid.GetLibItemName() == aSchematicFpid.GetLibItemName();
+
+    return aBoardFpid == aSchematicFpid;
+}
+
+
 void BOARD_NETLIST_UPDATER::applyComponentVariants( COMPONENT* aComponent,
                                                     const std::vector<FOOTPRINT*>& aFootprints,
                                                     const LIB_ID& aBaseFpid )
@@ -1462,6 +1473,36 @@ void BOARD_NETLIST_UPDATER::applyComponentVariants( COMPONENT* aComponent,
                     }
                 };
 
+        bool isBaseFootprint = fpidsEquivalent( footprint->GetFPID(), aBaseFpid );
+
+        // The footprint's own DNP flag before this pass forces the default-variant hiding below.
+        // The per-variant target for a footprint that IS the active choice must fall back to this
+        // original flag, not the forced one, so the active footprint stays populated.
+        const bool baseFootprintDnp = footprint->IsDNP();
+        bool       effectiveFootprintDnp = baseFootprintDnp;
+
+        // A footprint that is not the component's base footprint is DNP by default (it stands in
+        // only for the variants that select it).  This runs before the per-variant loop so the loop
+        // sees the correct effective DNP when deciding whether an explicit per-variant override is
+        // needed; otherwise a footprint kept populated for its own variant would not converge until
+        // a second netlist update.
+        if( !isBaseFootprint && !effectiveFootprintDnp )
+        {
+            msg.Printf( m_isDryRun ? _( "Add %s 'Do not place' fabrication attribute." )
+                                   : _( "Added %s 'Do not place' fabrication attribute." ),
+                        footprint->GetReference() );
+
+            m_reporter->Report( msg, RPT_SEVERITY_ACTION );
+
+            if( !m_isDryRun )
+                footprint->SetDNP( true );
+
+            // Track the forced DNP locally so the per-variant loop below sees the correct effective
+            // state even in dry run, where SetDNP() is intentionally not applied.
+            effectiveFootprintDnp = true;
+            changed = true;
+        }
+
         std::set<wxString> excessVariants;
 
         for( const auto& [variantName, _] : footprint->GetVariants() )
@@ -1475,17 +1516,40 @@ void BOARD_NETLIST_UPDATER::applyComponentVariants( COMPONENT* aComponent,
             const FOOTPRINT_VARIANT* currentVariant = footprint->GetVariant( info.name );
 
             // Check if this footprint is the active one for this variant
-            bool isAssociatedFootprint = ( footprint->GetFPID() == info.variantFPID );
+            bool isAssociatedFootprint = fpidsEquivalent( footprint->GetFPID(), info.variantFPID );
 
-            // If this footprint is not active for this variant, it doesn't need variant info for it.
-            // Otherwise, apply explicit overrides from schematic, or reset to base footprint value.
-
+            // When multiple footprints share a RefDes (one per variant), a footprint that is not
+            // the active choice for this variant must be DNP for it so the 3D viewer and other
+            // consumers hide it.  The base footprint carries no global DNP flag, so it needs an
+            // explicit per-variant override; non-base footprints are already globally DNP above.
             if( !isAssociatedFootprint )
+            {
+                if( aFootprints.size() > 1 )
+                {
+                    excessVariants.erase( info.name );
+                    bool currentDnp = currentVariant ? currentVariant->GetDNP() : effectiveFootprintDnp;
+
+                    if( !currentDnp )
+                    {
+                        printAttributeMessage( true, _( "Do not place" ), info.name );
+
+                        if( !m_isDryRun )
+                        {
+                            if( FOOTPRINT_VARIANT* fpVariant = footprint->AddVariant( info.name ) )
+                                fpVariant->SetDNP( true );
+                        }
+
+                        m_reporter->Report( msg, RPT_SEVERITY_ACTION );
+                        changed = true;
+                    }
+                }
+
                 continue;
+            }
 
             excessVariants.erase( info.name );
-            bool targetDnp = variant.m_hasDnp ? variant.m_dnp : footprint->IsDNP();
-            bool currentDnp = currentVariant ? currentVariant->GetDNP() : footprint->IsDNP();
+            bool targetDnp = variant.m_hasDnp ? variant.m_dnp : baseFootprintDnp;
+            bool currentDnp = currentVariant ? currentVariant->GetDNP() : effectiveFootprintDnp;
 
             if( currentDnp != targetDnp )
             {
@@ -1619,24 +1683,6 @@ void BOARD_NETLIST_UPDATER::applyComponentVariants( COMPONENT* aComponent,
             }
 
             m_reporter->Report( msg, RPT_SEVERITY_ACTION );
-            changed = true;
-        }
-
-        // For the default variant: if this footprint is not the base footprint
-        // it should be DNP by default
-        bool isBaseFootprint = ( footprint->GetFPID() == aBaseFpid );
-
-        if( !isBaseFootprint && !footprint->IsDNP() )
-        {
-            msg.Printf( m_isDryRun ? _( "Add %s 'Do not place' fabrication attribute." )
-                                   : _( "Added %s 'Do not place' fabrication attribute." ),
-                        footprint->GetReference() );
-
-            m_reporter->Report( msg, RPT_SEVERITY_ACTION );
-
-            if( !m_isDryRun )
-                footprint->SetDNP( true );
-
             changed = true;
         }
 
@@ -1851,21 +1897,25 @@ bool BOARD_NETLIST_UPDATER::updateCopperZoneNets( NETLIST& aNetlist )
                     wxString layerNames = zone->LayerMaskDescribe();
                     VECTOR2I         pt = zone->GetPosition();
 
-                    if( m_frame && m_frame->GetPcbNewSettings() )
+                    if( m_settings )
                     {
-                        if( m_frame->GetPcbNewSettings()->m_Display.m_DisplayInvertXAxis )
+                        if( m_settings->m_Display.m_DisplayInvertXAxis )
                             pt.x *= -1;
 
-                        if( m_frame->GetPcbNewSettings()->m_Display.m_DisplayInvertYAxis )
+                        if( m_settings->m_Display.m_DisplayInvertYAxis )
                             pt.y *= -1;
                     }
 
                     msg.Printf( _( "Copper zone on %s at (%s, %s) has no pads connected to net \"%s\"." ),
                                 EscapeHTML( layerNames ),
                                 m_frame ? m_frame->MessageTextFromValue( pt.x )
-                                        : EDA_UNIT_UTILS::UI::MessageTextFromValue( pcbIUScale, EDA_UNITS::MM, pt.x ),
+                                        : EDA_UNIT_UTILS::UI::MessageTextFromValue( pcbIUScale,
+                                                                                    EDA_UNITS::MM,
+                                                                                    pt.x ),
                                 m_frame ? m_frame->MessageTextFromValue( pt.y )
-                                        : EDA_UNIT_UTILS::UI::MessageTextFromValue( pcbIUScale, EDA_UNITS::MM, pt.y ),
+                                        : EDA_UNIT_UTILS::UI::MessageTextFromValue( pcbIUScale,
+                                                                                    EDA_UNITS::MM,
+                                                                                    pt.y ),
                                 zone->GetNetname() );
                 }
 
@@ -1928,6 +1978,49 @@ bool BOARD_NETLIST_UPDATER::updateGroups( NETLIST& aNetlist )
                             EscapeHTML( netlistGroup->libId.GetUniStringLibId() ) );
                 m_commit.Modify( pcbGroup->AsEdaItem(), nullptr, RECURSE_MODE::NO_RECURSE );
                 pcbGroup->SetDesignBlockLibId( netlistGroup->libId );
+            }
+
+            m_reporter->Report( msg, RPT_SEVERITY_ACTION );
+        }
+
+        // A group member may be another group's uuid (a nested group).  Restore that
+        // parent/child relationship on the board.
+        for( const KIID_PATH& member : netlistGroup->members )
+        {
+            if( member.empty() )
+                continue;
+
+            KIID memberGroupUuid =
+                    member.size() == 1 ? member.front() : KIID::FromName( std::string( member.AsString().ToUTF8() ) );
+
+            PCB_GROUP* childGroup = nullptr;
+
+            for( PCB_GROUP* candidate : m_board->Groups() )
+            {
+                if( candidate->m_Uuid == memberGroupUuid )
+                {
+                    childGroup = candidate;
+                    break;
+                }
+            }
+
+            if( !childGroup || childGroup == pcbGroup || childGroup->GetParentGroup() == pcbGroup )
+            {
+                continue;
+            }
+
+            if( m_isDryRun )
+            {
+                msg.Printf( _( "Add group '%s' to group '%s'." ), EscapeHTML( childGroup->GetName() ),
+                            EscapeHTML( pcbGroup->GetName() ) );
+            }
+            else
+            {
+                msg.Printf( _( "Added group '%s' to group '%s'." ), EscapeHTML( childGroup->GetName() ),
+                            EscapeHTML( pcbGroup->GetName() ) );
+                m_commit.Modify( pcbGroup->AsEdaItem(), nullptr, RECURSE_MODE::NO_RECURSE );
+                m_commit.Modify( childGroup->AsEdaItem(), nullptr, RECURSE_MODE::NO_RECURSE );
+                pcbGroup->AddItem( childGroup );
             }
 
             m_reporter->Report( msg, RPT_SEVERITY_ACTION );
@@ -2132,19 +2225,6 @@ bool BOARD_NETLIST_UPDATER::UpdateNetlist( NETLIST& aNetlist )
             addExpectedFpid( parsedId );
         }
 
-        // When the schematic-side FPID has no library nickname (legacy format like
-        // "DGG56" instead of "Package_SO:DGG56"), matching should compare only the
-        // footprint item name. Otherwise the board footprint (which always has a library
-        // nickname) will never match, causing perpetual "change footprint" notifications.
-        auto fpidMatches =
-                [&]( const LIB_ID& aBoardFpid, const LIB_ID& aExpectedFpid ) -> bool
-                {
-                    if( aExpectedFpid.IsLegacy() )
-                        return aBoardFpid.GetLibItemName() == aExpectedFpid.GetLibItemName();
-
-                    return aBoardFpid == aExpectedFpid;
-                };
-
         auto isExpectedFpid =
                 [&]( const LIB_ID& aFpid ) -> bool
                 {
@@ -2156,7 +2236,7 @@ bool BOARD_NETLIST_UPDATER::UpdateNetlist( NETLIST& aNetlist )
 
                     for( const LIB_ID& expected : expectedFpids )
                     {
-                        if( fpidMatches( aFpid, expected ) )
+                        if( fpidsEquivalent( aFpid, expected ) )
                             return true;
                     }
 
@@ -2171,7 +2251,7 @@ bool BOARD_NETLIST_UPDATER::UpdateNetlist( NETLIST& aNetlist )
                         if( usedFootprints.count( footprint ) )
                             continue;
 
-                        if( fpidMatches( footprint->GetFPID(), aFpid ) )
+                        if( fpidsEquivalent( footprint->GetFPID(), aFpid ) )
                             return footprint;
                     }
 
@@ -2214,6 +2294,21 @@ bool BOARD_NETLIST_UPDATER::UpdateNetlist( NETLIST& aNetlist )
             }
         }
 
+        if( !baseFootprint && !m_replaceFootprints )
+        {
+            for( FOOTPRINT* footprint : matchingFootprints )
+            {
+                if( usedFootprints.count( footprint ) )
+                    continue;
+
+                if( isExpectedFpid( footprint->GetFPID() ) )
+                    continue;
+
+                baseFootprint = footprint;
+                break;
+            }
+        }
+
         if( !baseFootprint && ( hasBaseFpid || expectedFpids.empty() ) )
             baseFootprint = addNewFootprint( component, baseFpid );
 
@@ -2226,7 +2321,10 @@ bool BOARD_NETLIST_UPDATER::UpdateNetlist( NETLIST& aNetlist )
 
         for( const LIB_ID& fpid : expectedFpids )
         {
-            if( fpid == baseFpid )
+            // Both IDs are schematic-derived, so either side may be legacy; compare in both
+            // directions so a bare base name and a qualified variant name for the same
+            // footprint are not split into a duplicate.
+            if( fpidsEquivalent( fpid, baseFpid ) || fpidsEquivalent( baseFpid, fpid ) )
                 continue;
 
             FOOTPRINT* footprint = takeMatchingFootprint( fpid );

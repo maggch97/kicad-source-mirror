@@ -90,13 +90,23 @@ set( EESCHEMA_SCH_IO
 
     # EasyEDA Pro IO plugin
     sch_io/easyedapro/sch_easyedapro_parser.cpp
+    sch_io/easyedapro/sch_easyedapro_v3_parser.cpp
     sch_io/easyedapro/sch_io_easyedapro.cpp
+    sch_io/easyedapro/sch_io_easyedapro_v3.cpp
 
     # PADS Logic IO plugin
     sch_io/pads/sch_io_pads.cpp
     sch_io/pads/pads_sch_parser.cpp
     sch_io/pads/pads_sch_symbol_builder.cpp
     sch_io/pads/pads_sch_schematic_builder.cpp
+
+    # DipTrace IO plugin
+    sch_io/diptrace/sch_io_diptrace.cpp
+    sch_io/diptrace/diptrace_sch_parser.cpp
+
+    # P-CAD 2006 ASCII IO plugin
+    sch_io/pcad/sch_io_pcad.cpp
+    sch_io/pcad/pcad_sch_parser.cpp
     )
 
 set( EESCHEMA_DLGS
@@ -204,6 +214,8 @@ set( EESCHEMA_DLGS
     dialogs/panel_setup_formatting_base.cpp
     dialogs/panel_setup_pinmap.cpp
     dialogs/panel_setup_pinmap_base.cpp
+    dialogs/panel_symbol_pin_map.cpp
+    dialogs/panel_symbol_pin_map_base.cpp
     dialogs/panel_simulator_preferences.cpp
     dialogs/panel_simulator_preferences_base.cpp
     dialogs/panel_sch_data_sources.cpp
@@ -263,6 +275,7 @@ set( EESCHEMA_SIM_SRCS
     sim/sim_model_r_pot.cpp
     sim/sim_model_raw_spice.cpp
     sim/sim_model_source.cpp
+    sim/sim_model_multiunit.cpp
     sim/sim_model_spice.cpp
     sim/sim_model_spice_fallback.cpp
     sim/sim_model_subckt.cpp
@@ -323,7 +336,9 @@ set ( EESCHEMA_LIBEDIT_SRCS
     symbol_editor/lib_symbol_library_manager.cpp
     symbol_editor/menubar_symbol_editor.cpp
     symbol_editor/symbol_edit_frame.cpp
+    symbol_editor/symbol_edit_frame_tabs.cpp
     symbol_editor/symbol_editor.cpp
+    symbol_editor/symbol_editor_tab_context.cpp
     symbol_editor/symbol_editor_import_export.cpp
     symbol_editor/symbol_editor_plotter.cpp
     symbol_editor/symbol_editor_settings.cpp
@@ -363,6 +378,16 @@ set( EESCHEMA_ERC_SRCS
     erc/erc_settings.cpp
     )
 
+set( EESCHEMA_DIFF_MERGE_SRCS
+    diff_merge/sch_differ.cpp
+    diff_merge/sch_geometry_extractor.cpp
+    diff_merge/sch_diff_canvas_context.cpp
+    diff_merge/sch_merge_applier.cpp
+    diff_merge/sym_lib_differ.cpp
+    diff_merge/sym_item_diff.cpp
+    diff_merge/sym_diff_canvas_context.cpp
+    )
+
 set( EESCHEMA_SRCS
     ${EESCHEMA_DLGS}
     ${EESCHEMA_ERC_SRCS}
@@ -372,6 +397,7 @@ set( EESCHEMA_SRCS
     ${EESCHEMA_WIDGETS}
     ${EESCHEMA_IMPORT_GFX}
     ${SYNC_SHEET_PIN_SRCS}
+    ${EESCHEMA_DIFF_MERGE_SRCS}
     annotate.cpp
     autoplace_fields.cpp
     bom_plugins.cpp
@@ -408,6 +434,7 @@ set( EESCHEMA_SRCS
     sch_draw_panel.cpp
     sch_edit_frame.cpp
     sch_field.cpp
+    sch_footprint_field_reconciler.cpp
     sch_group.cpp
     sch_item.cpp
     sch_item_alignment.cpp
@@ -456,6 +483,10 @@ set( EESCHEMA_SRCS
 
     api/api_sch_enums.cpp
     api/api_sch_utils.cpp
+    api/api_handler_sch.cpp
+    api/headless_sch_context.cpp
+    api/sch_api_save.cpp
+    api/sch_context.cpp
 
     libraries/legacy_symbol_library.cpp
     libraries/symbol_library_adapter.cpp
@@ -500,15 +531,6 @@ set( EESCHEMA_SRCS
     tools/symbol_editor_move_tool.cpp
     tools/symbol_editor_pin_tool.cpp
     )
-
-if( KICAD_IPC_API )
-    set( EESCHEMA_SRCS
-        ${EESCHEMA_SRCS}
-        api/api_handler_sch.cpp
-        api/headless_sch_context.cpp
-        api/sch_context.cpp
-    )
-endif()
 
 if( WIN32 )
     if( MINGW )

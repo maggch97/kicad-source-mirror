@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <common.h>
@@ -712,7 +712,7 @@ DRC_TEST_PROVIDER_MATCHED_LENGTH::zoneUnionFor( PCB_LAYER_ID aRefLayer,
         }
         else if( zone->Outline() )
         {
-            refUnion.BooleanAdd( *zone->Outline() );
+            refUnion.BooleanAdd( zone->GetBoardOutline() );
         }
     }
 

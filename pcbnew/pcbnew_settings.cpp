@@ -14,11 +14,7 @@
 * GNU General Public License for more details.
 *
 * You should have received a copy of the GNU General Public License
-* along with this program; if not, you may find one here:
-* http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
-* or you may search the http://www.gnu.org website for the version 2 license,
-* or you may write to the Free Software Foundation, Inc.,
-* 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include <common.h>
@@ -320,6 +316,21 @@ PCBNEW_SETTINGS::PCBNEW_SETTINGS()
 
     m_params.emplace_back( new PARAM<bool>( "DRC.scroll_on_crossprobe",
             &m_DRCDialog.scroll_on_crossprobe, true ) );
+
+    m_params.emplace_back( new PARAM<COLOR4D>( "diff_phase_skew.zero_color", &m_DiffPhaseSkewSettings.m_ZeroSkewColor,
+                                               COLOR4D( 1.0, 1.0, 1.0, 1.0 ) ) );
+
+    m_params.emplace_back( new PARAM<COLOR4D>( "diff_phase_skew.positive_color",
+                                               &m_DiffPhaseSkewSettings.m_PositiveSkewColor,
+                                               COLOR4D( 0.0, 0.0, 1.0, 1.0 ) ) );
+
+    m_params.emplace_back( new PARAM<COLOR4D>( "diff_phase_skew.negative_color",
+                                               &m_DiffPhaseSkewSettings.m_NegativeSkewColor,
+                                               COLOR4D( 1.0, 0.0, 0.0, 1.0 ) ) );
+
+    m_params.emplace_back( new PARAM<COLOR4D>( "diff_phase_skew.unknown_color",
+                                               &m_DiffPhaseSkewSettings.m_UnknownSkewColor,
+                                               COLOR4D( 0.5, 0.5, 0.5, 1.0 ) ) );
 
     registerMigration( 0, 1,
             [&]()

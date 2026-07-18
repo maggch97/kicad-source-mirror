@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef KICAD_HEADLESS_SCH_CONTEXT_H
@@ -53,6 +53,10 @@ public:
     bool CanAcceptApiCommands() const override { return true; }
 
     std::optional<SCH_SHEET_PATH> GetCurrentSheet() const override { return std::nullopt; }
+
+    bool SaveSchematic() override;
+
+    bool SaveSchematicCopy( const wxString& aFileName, bool aCreateProject ) override;
 
 private:
     // All owned by caller (the kiface)

@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <preview_items/angle_item.h>
@@ -82,8 +78,8 @@ void ANGLE_ITEM::drawPreviewShape( KIGFX::VIEW* aView ) const
         {
             anglePoints.push_back( &point );
 
-            EDIT_POINT* prev = points->Previous( point );
-            EDIT_POINT* next = points->Next( point );
+            EDIT_POINT* prev = points->Previous( point, false );
+            EDIT_POINT* next = points->Next( point, false );
 
             if( prev )
                 anglePoints.push_back( prev );
@@ -114,8 +110,8 @@ void ANGLE_ITEM::drawPreviewShape( KIGFX::VIEW* aView ) const
 
     for( const EDIT_POINT* pt : anglePoints )
     {
-        EDIT_POINT* prev = points->Previous( *pt );
-        EDIT_POINT* next = points->Next( *pt );
+        EDIT_POINT* prev = points->Previous( *pt, false );
+        EDIT_POINT* next = points->Next( *pt, false );
 
         if( !( prev && next ) )
             continue;

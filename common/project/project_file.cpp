@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <project.h>
@@ -92,6 +92,8 @@ PROJECT_FILE::PROJECT_FILE( const wxString& aFullPath ) :
 
     m_params.emplace_back( new PARAM_PATH( "pcbnew.last_paths.plot",
             &m_PcbLastPath[LAST_PATH_PLOT], "" ) );
+
+    m_params.emplace_back( new PARAM_PATH( "pcbnew.last_paths.step", &m_PcbLastPath[LAST_PATH_STEP], "" ) );
 
     m_params.emplace_back( new PARAM<wxString>( "schematic.legacy_lib_dir",
             &m_LegacyLibDir, "" ) );

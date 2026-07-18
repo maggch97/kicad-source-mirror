@@ -1,4 +1,4 @@
-﻿/*
+/*
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright (C) 2023 Alex Shvartzkop <dudesuchamazing@gmail.com>
@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "sch_easyedapro_parser.h"
@@ -227,9 +223,7 @@ static LIB_SYMBOL* loadSymbol( nlohmann::json project, const wxString& aLibraryP
 
             symInfo.libSymbol->SetKeyWords( keywords );
 
-            description.Replace( wxS( "\u2103" ), wxS( "\u00B0C" ), true ); // ℃ -> °C
-
-            symInfo.libSymbol->SetDescription( description );
+            symInfo.libSymbol->SetDescription( EASYEDAPRO::NormalizeEasyEDAText( description ) );
 
             symbol = symInfo.libSymbol.release();
 
@@ -387,9 +381,7 @@ void SCH_IO_EASYEDAPRO::LoadAllDataFromProject( const wxString& aProjectPath )
 
             symInfo.libSymbol->SetKeyWords( keywords );
 
-            description.Replace( wxS( "\u2103" ), wxS( "\u00B0C" ), true ); // ℃ -> °C
-
-            symInfo.libSymbol->SetDescription( description );
+            symInfo.libSymbol->SetDescription( EASYEDAPRO::NormalizeEasyEDAText( description ) );
 
             m_projectData->m_Symbols.emplace( baseName, std::move( symInfo ) );
         }

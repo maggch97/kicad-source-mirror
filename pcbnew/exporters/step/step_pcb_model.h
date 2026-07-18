@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef OCE_VIS_OCE_UTILS_H
@@ -39,6 +35,7 @@
 #include <math/vector3.h>
 #include <geometry/shape_poly_set.h>
 #include <board_stackup_manager/board_stackup.h>
+#include <reporter.h>
 
 /**
  * Default distance between points to treat them as separate ones (mm)
@@ -423,6 +420,11 @@ private:
 
     /// The current output format for created file
     OUTPUT_FORMAT m_outFmt;
+
+    /// Thread-safe wrapper around the caller's reporter.  CreatePCB fuses and cuts on worker
+    /// threads that report through m_reporter, so it points at this wrapper rather than the raw
+    /// reporter to serialize those calls.
+    SYNC_REPORTER m_syncReporter;
     REPORTER*     m_reporter;
 };
 

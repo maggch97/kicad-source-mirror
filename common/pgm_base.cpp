@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -44,6 +40,9 @@
 #include <wx/tooltip.h>
 
 #include <advanced_config.h>
+#include <api/api_plugin_manager.h>
+#include <api/api_server.h>
+#include <api/python_manager.h>
 #include <app_monitor.h>
 #include <background_jobs_monitor.h>
 #include <bitmaps.h>
@@ -70,12 +69,6 @@
 
 #include <widgets/kistatusbar.h>
 #include <widgets/wx_splash.h>
-
-#ifdef KICAD_IPC_API
-#include <api/api_plugin_manager.h>
-#include <api/api_server.h>
-#include <api/python_manager.h>
-#endif
 
 #ifdef _MSC_VER
 #include <winrt/base.h>
@@ -114,6 +107,7 @@ LANGUAGE_DESCR LanguagesList[] =
     { wxLANGUAGE_CROATIAN,   ID_LANGUAGE_CROATIAN,   wxT( "Hrvatski" ), true },
     { wxLANGUAGE_KOREAN,     ID_LANGUAGE_KOREAN,     wxT( "한국어"),       true },
     { wxLANGUAGE_ITALIAN,    ID_LANGUAGE_ITALIAN,    wxT( "Italiano" ), true },
+    { wxLANGUAGE_LAOTHIAN,   ID_LANGUAGE_LAOTHIAN,   wxT( "ພາສາລາວ" ), true  },
     { wxLANGUAGE_LATVIAN,    ID_LANGUAGE_LATVIAN,    wxT( "Latviešu" ), true },
     { wxLANGUAGE_LITHUANIAN, ID_LANGUAGE_LITHUANIAN, wxT( "Lietuvių" ), true },
     { wxLANGUAGE_HUNGARIAN,  ID_LANGUAGE_HUNGARIAN,  wxT( "Magyar" ),   true },
@@ -324,6 +318,28 @@ void PGM_BASE::HideSplash()
 }
 
 
+wxString PGM_BASE::DesktopAppIdForProgram( const wxString& aPgmName )
+{
+#if defined( __WXGTK__ ) && defined( KICAD_DESKTOP_APP_NAME )
+    // The prefix varies by build (regular, Flatpak, Nightly) and is supplied by CMake. The main
+    // manager keeps the bare app name; the other GUI apps are prefixed.
+    if( aPgmName == wxT( "kicad" ) )
+        return wxT( KICAD_DESKTOP_APP_NAME );
+
+    if( aPgmName == wxT( "eeschema" ) || aPgmName == wxT( "pcbnew" )
+        || aPgmName == wxT( "gerbview" ) || aPgmName == wxT( "bitmap2component" )
+        || aPgmName == wxT( "pcb_calculator" ) )
+    {
+        // pcb_calculator installs as pcbcalculator to satisfy freedesktop naming rules.
+        wxString appName = aPgmName == wxT( "pcb_calculator" ) ? wxT( "pcbcalculator" ) : aPgmName;
+        return wxString( wxT( KICAD_DESKTOP_APP_PREFIX ) ) + wxT( "." ) + appName;
+    }
+#endif
+
+    return wxEmptyString;
+}
+
+
 bool PGM_BASE::InitPgm( bool aHeadless, bool aIsUnitTest )
 {
 #if defined( __WXMAC__ )
@@ -405,6 +421,17 @@ bool PGM_BASE::InitPgm( bool aHeadless, bool aIsUnitTest )
     App().SetVendorName(  wxT( "KiCad" ) );
     App().SetAppName( pgm_name );
 
+    m_desktopAppId = DesktopAppIdForProgram( pgm_name );
+
+#if defined( __WXGTK__ ) && defined( KICAD_DESKTOP_APP_NAME )
+    // On wx >= 3.3.1 wxGTK feeds the class name to gdk_wayland_window_set_application_id(),
+    // which lets Wayland compositors resolve the correct window icon and launch feedback. The
+    // X11 WM_CLASS is applied per window in EDA_BASE_FRAME instead, because wxGTK derives it
+    // from the (human-facing) app display name and would otherwise not match the launcher.
+    if( !m_desktopAppId.IsEmpty() )
+        App().SetClassName( m_desktopAppId );
+#endif
+
     // Analyze the command line & initialize the binary path
     wxString tmp;
     SetLanguagePath();
@@ -430,9 +457,7 @@ bool PGM_BASE::InitPgm( bool aHeadless, bool aIsUnitTest )
     m_background_jobs_monitor = std::make_unique<BACKGROUND_JOBS_MONITOR>();
     m_notifications_manager = std::make_unique<NOTIFICATIONS_MANAGER>();
 
-#ifdef KICAD_IPC_API
     m_plugin_manager = std::make_unique<API_PLUGIN_MANAGER>( &App() );
-#endif
 
     // Our unit test mocks break if we continue
     // A bug caused InitPgm to terminate early in unit tests and the mocks are...simplistic
@@ -454,11 +479,9 @@ bool PGM_BASE::InitPgm( bool aHeadless, bool aIsUnitTest )
     // Load common settings from disk after setting up env vars
     GetSettingsManager().Load( commonSettings );
 
-#ifdef KICAD_IPC_API
     // If user doesn't have a saved Python interpreter, try (potentially again) to find one
     if( commonSettings->m_Api.python_interpreter.IsEmpty() )
         commonSettings->m_Api.python_interpreter = PYTHON_MANAGER::FindPythonInterpreter();
-#endif
 
     // Init user language *before* calling loadSettings, because
     // env vars could be incorrectly initialized on Linux
@@ -478,10 +501,8 @@ bool PGM_BASE::InitPgm( bool aHeadless, bool aIsUnitTest )
     // Need to create a project early for now (it can have an empty path for the moment)
     GetSettingsManager().LoadProject( "" );
 
-#ifdef KICAD_IPC_API
     if( commonSettings->m_Api.enable_server )
         m_plugin_manager->ReloadPlugins();
-#endif
 
     // This sets the maximum tooltip display duration to 10s (up from 5) but only affects
     // Windows as other platforms display tooltips while the mouse is not moving
@@ -905,11 +926,10 @@ void PGM_BASE::PreloadDesignBlockLibraries( KIWAY* aKiway )
             DESIGN_BLOCK_LIBRARY_ADAPTER* adapter = aKiway->Prj().DesignBlockLibs();
 
             int elapsed = 0;
+            bool aborted = false;
 
             reporter->Report( _( "Loading Design Block Libraries" ) );
             adapter->AsyncLoad();
-
-            bool aborted = false;
 
             while( true )
             {

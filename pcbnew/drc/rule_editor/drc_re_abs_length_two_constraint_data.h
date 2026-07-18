@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DRC_RE_ABSOLUTE_LENGTH_TWO_CONSTRAINT_DATA_H_
@@ -52,13 +48,11 @@ public:
 
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        // Format: { xStart, xEnd, yTop, tabOrder }
+        // Format: { xStart, xEnd, yCenter, tabOrder }
         // Two fields side-by-side, opt_length and tolerance
         return {
-            { 80 + DRC_RE_OVERLAY_XO, 120 + DRC_RE_OVERLAY_XO, 115 + DRC_RE_OVERLAY_YO, 1, wxS( "mm" ),
-              LABEL_POSITION::RIGHT }, // opt_length
-            { 160 + DRC_RE_OVERLAY_XO, 200 + DRC_RE_OVERLAY_XO, 115 + DRC_RE_OVERLAY_YO, 2, wxS( "mm" ),
-              LABEL_POSITION::RIGHT }, // tolerance
+            { 80, 135, 127, 1, wxS( "mm" ), LABEL_POSITION::RIGHT },                   // opt_length
+            { 185, 240, 127, 2, wxS( "mm" ), LABEL_POSITION::RIGHT, wxS( "\u00B1" ) }, // tolerance (±)
         };
     }
 
@@ -144,12 +138,10 @@ public:
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
         return {
-            { 80 + DRC_RE_OVERLAY_XO, 120 + DRC_RE_OVERLAY_XO, 130 + DRC_RE_OVERLAY_YO, 1, wxS( "mm" ),
-              LABEL_POSITION::RIGHT }, // opt_length
-            { 160 + DRC_RE_OVERLAY_XO, 200 + DRC_RE_OVERLAY_XO, 130 + DRC_RE_OVERLAY_YO, 2, wxS( "mm" ),
-              LABEL_POSITION::RIGHT }, // tolerance
-            { 25 + DRC_RE_OVERLAY_XO, 65 + DRC_RE_OVERLAY_XO, 0 + DRC_RE_OVERLAY_YO, 3, wxS( "mm" ),
-              LABEL_POSITION::RIGHT }, // max_skew
+            { 80, 135, 142, 1, wxS( "mm" ), LABEL_POSITION::RIGHT },                   // opt_length
+            { 185, 240, 142, 2, wxS( "mm" ), LABEL_POSITION::RIGHT, wxS( "\u00B1" ) }, // tolerance (±)
+            { 17, 72, 15, 3, wxS( "mm" ), LABEL_POSITION::RIGHT },                     // max_skew
+            { 113, 313, 15, 4, _( "Within diff pairs" ), LABEL_POSITION::RIGHT },      // checkbox (within_diff_pairs)
         };
     }
 

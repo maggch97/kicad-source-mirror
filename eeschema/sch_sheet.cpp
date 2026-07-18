@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <cstdlib>
@@ -2048,11 +2044,11 @@ void SCH_SHEET::SetDNP( bool aEnable, const SCH_SHEET_PATH* aInstance, const wxS
     }
     else
     {
-        if( instance->m_Variants.contains( aVariantName ) && ( aEnable != instance->m_Variants[aVariantName].m_DNP ) )
+        if( instance->m_Variants.contains( aVariantName ) )
         {
             instance->m_Variants[aVariantName].m_DNP = aEnable;
         }
-        else
+        else if( aEnable != m_DNP )
         {
             SCH_SHEET_VARIANT variant( aVariantName );
 
@@ -2114,12 +2110,11 @@ void SCH_SHEET::SetExcludedFromSim( bool aEnable, const SCH_SHEET_PATH* aInstanc
     }
     else
     {
-        if( instance->m_Variants.contains( aVariantName )
-          && ( aEnable != instance->m_Variants[aVariantName].m_ExcludedFromSim ) )
+        if( instance->m_Variants.contains( aVariantName ) )
         {
             instance->m_Variants[aVariantName].m_ExcludedFromSim = aEnable;
         }
-        else
+        else if( aEnable != m_excludedFromSim )
         {
             SCH_SHEET_VARIANT variant( aVariantName );
 
@@ -2181,12 +2176,11 @@ void SCH_SHEET::SetExcludedFromBOM( bool aEnable, const SCH_SHEET_PATH* aInstanc
     }
     else
     {
-        if( instance->m_Variants.contains( aVariantName )
-          && ( aEnable != instance->m_Variants[aVariantName].m_ExcludedFromBOM ) )
+        if( instance->m_Variants.contains( aVariantName ) )
         {
             instance->m_Variants[aVariantName].m_ExcludedFromBOM = aEnable;
         }
-        else
+        else if( aEnable != m_excludedFromBOM )
         {
             SCH_SHEET_VARIANT variant( aVariantName );
 

@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -392,7 +388,13 @@ void RC_TREE_MODEL::rebuildModel( std::shared_ptr<RC_ITEMS_PROVIDER> aProvider, 
     if( !m_enableHyperlinks )
     {
         m_view->ClearColumns();
-        m_view->AppendTextColumn( wxEmptyString, 0, wxDATAVIEW_CELL_INERT, wxCOL_WIDTH_AUTOSIZE );
+
+        int width = m_view->GetClientSize().GetWidth() - WX_DATAVIEW_WINDOW_PADDING;
+
+        if( width <= 0 )
+            width = 600;
+
+        m_view->AppendTextColumn( wxEmptyString, 0, wxDATAVIEW_CELL_INERT, width );
     }
 
     ExpandAll();
@@ -635,7 +637,7 @@ void RC_TREE_MODEL::ValueChanged( RC_TREE_NODE* aNode )
     if( marker )
     {
         bool          needsCommentNode = marker->IsExcluded() && !marker->GetComment().IsEmpty();
-        RC_TREE_NODE* commentNode = aNode->m_Children.back();
+        RC_TREE_NODE* commentNode = aNode->m_Children.empty() ? nullptr : aNode->m_Children.back();
 
         if( commentNode && commentNode->m_Type != RC_TREE_NODE::COMMENT )
             commentNode = nullptr;

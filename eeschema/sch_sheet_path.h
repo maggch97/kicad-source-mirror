@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -36,6 +32,7 @@
 #include <optional>
 
 #include <kiid.h>
+#include <pin_map.h>
 #include <wx/string.h>
 
 class SCH_SYMBOL;
@@ -94,7 +91,14 @@ public:
 
     void InitializeAttributes( const SCH_SYMBOL& aSymbol );
 
+    /// Return true if the variant carries any differential against the base symbol values,
+    /// a variant without differentials resolves identically to no variant at all.
+    bool HasDifferentials( const SCH_SYMBOL& aSymbol ) const;
+
     virtual ~SCH_SYMBOL_VARIANT() = default;
+
+    /// Per-instance pin-to-pad map override for this variant (issue #2282).
+    PIN_MAP_INSTANCE_OVERRIDE m_PinMapOverride;
 };
 
 
@@ -148,6 +152,9 @@ public:
     virtual ~SCH_SHEET_VARIANT() = default;
 
     void InitializeAttributes( const SCH_SHEET& aSheet );
+
+    /// Return true if the variant carries any differential against the base sheet values.
+    bool HasDifferentials( const SCH_SHEET& aSheet ) const;
 };
 
 
@@ -279,7 +286,12 @@ public:
 
     std::vector<SCH_SHEET*>::iterator erase( std::vector<SCH_SHEET*>::const_iterator aPosition )
     {
-        return m_sheets.erase( aPosition );
+        std::vector<SCH_SHEET*>::iterator ret = m_sheets.erase( aPosition );
+
+        // Rehash to keep m_current_hash and the cached path consistent with the shortened list.
+        Rehash();
+
+        return ret;
     }
 
     void Rehash();
@@ -525,6 +537,19 @@ public:
 
     void CheckForMissingSymbolInstances( const wxString& aProjectName );
 
+    /**
+     * Determine if this sheet path is shared in a complex hierarchy.
+     *
+     * In order to properly determine if a given sheet in a sheet path is shared multiple times, each
+     * sheet in the path must be check all the way up to the root sheet.  This is necessary because
+     * when schematics are loaded, only the first instance of a sheet on the way down the hierarchy
+     * gets a reference count greater than one.  This means that all sheets below the highest sheet
+     * path level that is shared are implicitly shared as well.
+     *
+     * @return True if the sheet path is shared.  Otherwise false.
+     */
+    bool IsSharedPath() const;
+
     bool operator==( const SCH_SHEET_PATH& d1 ) const;
 
     bool operator!=( const SCH_SHEET_PATH& d1 ) const { return !( *this == d1 ) ; }
@@ -539,6 +564,8 @@ protected:
 
     size_t                  m_current_hash;
     mutable wxString        m_cached_page_number;
+    mutable bool            m_cached_path_valid = false;
+    mutable KIID_PATH       m_cached_path;
 
     int m_virtualPageNumber;           ///< Page numbers are maintained by the sheet load order.
 
@@ -803,6 +830,18 @@ public:
      * the implementation of user definable sheet page numbers.
      */
     void SetInitialPageNumbers();
+
+    /**
+     * Assign valid page numbers to sheet paths whose stored page number is missing or collides
+     * with an earlier sheet.
+     *
+     * Existing, unique numeric page numbers and any non-numeric page numbers are preserved so
+     * user-chosen numbering is respected.  Blank sheets and the second and subsequent sheets
+     * sharing a number are reassigned to the next unused positive integer.
+     *
+     * @return true if any page number was changed.
+     */
+    bool RepairPageNumbers();
 
     /**
      * Attempt to add new symbol instances for all symbols in this list of sheet paths prefixed

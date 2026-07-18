@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "project_git_utils.h"
@@ -159,6 +155,20 @@ wxString PROJECT_GIT_UTILS::ComputeSymlinkPreservingWorkDir( const wxString& aUs
 
     return userFn.GetPathWithSep();
 #endif
+}
+
+
+bool PROJECT_GIT_UTILS::IsWithinProjectPath( const wxString& aAbsPath, const wxString& aProjectPath )
+{
+    if( aProjectPath.IsEmpty() )
+        return false;
+
+    wxString projectPath = aProjectPath;
+
+    if( !projectPath.EndsWith( wxT( "/" ) ) && !projectPath.EndsWith( wxT( "\\" ) ) )
+        projectPath += wxT( "/" );
+
+    return aAbsPath.StartsWith( projectPath );
 }
 
 } // namespace KIGIT

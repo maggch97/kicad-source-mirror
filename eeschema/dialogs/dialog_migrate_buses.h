@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -42,6 +42,14 @@ class DIALOG_MIGRATE_BUSES : public DIALOG_MIGRATE_BUSES_BASE
 public:
     DIALOG_MIGRATE_BUSES( SCH_EDIT_FRAME* aParent );
     ~DIALOG_MIGRATE_BUSES();
+
+    /**
+     * Multiple differently-named labels on a single bus subgraph were only permitted before
+     * KiCad 6.0.  A file saved in the 6.0+ s-expression format cannot store that ambiguity, so a
+     * nonzero migration count reported for such a file is a transient artifact of connectivity
+     * recalculation rather than persisted data and must not re-prompt the user on every load.
+     */
+    static bool ShouldPrompt( int aFileFormatVersionAtLoad, size_t aBusesNeedingMigration );
 
 private:
     void loadGraphData();

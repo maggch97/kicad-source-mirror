@@ -15,18 +15,16 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef CLASS_BOARD_H_
 #define CLASS_BOARD_H_
 
+#include <atomic>
 #include <board_item_container.h>
 #include <board_stackup_manager/board_stackup.h>
+#include <core/mirror.h>
 #include <embedded_files.h>
 #include <convert_shape_list_to_polygon.h> // for OUTLINE_ERROR_HANDLER
 #include <geometry/shape_poly_set.h>
@@ -39,6 +37,7 @@
 #include <title_block.h>
 #include <zone_settings.h>
 #include <shared_mutex>
+#include <sharded_cache.h>
 #include <unordered_set>
 #include <project.h>
 #include <list>
@@ -55,6 +54,7 @@ class PICKED_ITEMS_LIST;
 class LENGTH_DELAY_CALCULATION;
 class BOARD;
 class FOOTPRINT;
+class FOOTPRINT_COURTYARD_INDEX;
 class ZONE;
 class PCB_TRACK;
 class PAD;
@@ -125,6 +125,34 @@ struct PTR_PTR_LAYER_CACHE_KEY
     }
 };
 
+// Caches the whole-predicate result of a footprint-selector query (e.g. intersectsCourtyard)
+// for one item, so a rule set that repeats the same condition does not re-scan every footprint.
+struct ITEM_SELECTOR_LAYER_CACHE_KEY
+{
+    const BOARD_ITEM* A;
+    wxString          Selector;     // the selector argument string, compared verbatim
+    PCB_LAYER_ID      Layer;
+    int               Constraint;   // some predicates (intersectsArea) branch on the constraint
+
+    bool operator==( const ITEM_SELECTOR_LAYER_CACHE_KEY& other ) const
+    {
+        return A == other.A && Selector == other.Selector && Layer == other.Layer
+               && Constraint == other.Constraint;
+    }
+};
+
+// Caches getField('x') text per (item, field name)
+struct ITEM_FIELD_CACHE_KEY
+{
+    const BOARD_ITEM* A;
+    std::size_t       FieldHash;
+
+    bool operator==( const ITEM_FIELD_CACHE_KEY& other ) const
+    {
+        return A == other.A && FieldHash == other.FieldHash;
+    }
+};
+
 struct LAYERS_CHECKED
 {
     LAYERS_CHECKED() :
@@ -173,6 +201,28 @@ namespace std
         {
             std::size_t seed = 0xa82de1c0;
             hash_combine( seed, k.A, k.B, k.Layer );
+            return seed;
+        }
+    };
+
+    template <>
+    struct hash<ITEM_SELECTOR_LAYER_CACHE_KEY>
+    {
+        std::size_t operator()( const ITEM_SELECTOR_LAYER_CACHE_KEY& k ) const
+        {
+            std::size_t seed = 0xa82de1c0;
+            hash_combine( seed, k.A, k.Selector, k.Layer, k.Constraint );
+            return seed;
+        }
+    };
+
+    template <>
+    struct hash<ITEM_FIELD_CACHE_KEY>
+    {
+        std::size_t operator()( const ITEM_FIELD_CACHE_KEY& k ) const
+        {
+            std::size_t seed = 0xa82de1c0;
+            hash_combine( seed, k.A, k.FieldHash );
             return seed;
         }
     };
@@ -343,7 +393,7 @@ public:
 
     void IncrementTimeStamp();
 
-    int GetTimeStamp() const { return m_timeStamp; }
+    int GetTimeStamp() const { return m_timeStamp.load( std::memory_order_acquire ); }
 
     /**
      * Find out if the board is being used to hold a single footprint for editing/viewing.
@@ -359,6 +409,13 @@ public:
 
     const wxString &GetFileName() const { return m_fileName; }
 
+    /**
+     * Return the absolute path to the design rules file for this board.
+     *
+     * @note There is no guarantee that this file actually exists and can be opened.
+     */
+    wxString GetDesignRulesPath() const;
+
     const TRACKS& Tracks() const { return m_tracks; }
 
     const FOOTPRINTS& Footprints() const { return m_footprints; }
@@ -366,6 +423,13 @@ public:
     const DRAWINGS& Drawings() const { return m_drawings; }
 
     const ZONES& Zones() const { return m_zones; }
+
+    /**
+     * Return a name based on aBaseName that is not used by any other zone or rule area on
+     * the board. An empty or already-unique name is returned unchanged. aExclude is skipped
+     * during the search, used when renaming an existing zone so it does not collide with itself.
+     */
+    wxString GetUniqueZoneName( const wxString& aBaseName, const ZONE* aExclude = nullptr ) const;
 
     const GENERATORS& Generators() const { return m_generators; }
 
@@ -377,7 +441,14 @@ public:
 
     const PCB_POINTS& Points() const { return m_points; }
 
+    /// Collect every owned item (tracks, zones, generators, footprints,
+    /// drawings, markers, groups, points) into a UUID-sorted set.
     const BOARD_ITEM_SET GetItemSet();
+
+    /// Const overload of GetItemSet().  Used by the diff/merge subsystem to
+    /// walk three BOARDs (ancestor / ours / theirs) without forcing a
+    /// const_cast at every call site.
+    const BOARD_ITEM_SET GetItemSet() const;
 
     /**
      * The groups must maintain the following invariants. These are checked by
@@ -616,6 +687,25 @@ public:
      * Update the visibility flags on the current unconnected ratsnest lines.
      */
     void UpdateRatsnestExclusions();
+
+    /**
+     * Rebuild the entire board ratsnest.
+     *
+     * Must be called after a board change (changes to pads, footprints, or a netlist read).
+     */
+    void CompileRatsnest();
+
+    /**
+     * Replace @a aExisting with @a aNew, preserving connectivity and metadata.
+     */
+    void ExchangeFootprint( FOOTPRINT* aExisting, FOOTPRINT* aNew, BOARD_COMMIT& aCommit,
+                            bool matchPadPositions,
+                            bool deleteExtraTexts = true, bool resetTextLayers = true,
+                            bool resetTextEffects = true, bool resetTextPositions = true,
+                            bool resetTextContent = true, bool resetFabricationAttrs = true,
+                            bool resetClearanceOverrides = true, bool reset3DModels = true,
+                            bool resetTransform = false,
+                            bool* aUpdated = nullptr );
 
     /**
      * Reset all high light data to the init state
@@ -1451,6 +1541,12 @@ public:
      */
     void SaveToHistory( const wxString& aProjectPath, std::vector<HISTORY_FILE_DATA>& aFileData );
 
+    /**
+     * Liveness token handed to LOCAL_HISTORY::RegisterSaver so a shared autosave timer skips this
+     * board's saver once the board is destroyed instead of serializing freed memory.
+     */
+    std::weak_ptr<void> GetHistoryLifetimeToken() const { return m_historyLifetime; }
+
     const std::unordered_map<KIID, BOARD_ITEM*>& GetItemByIdCache() const
     {
         return m_itemByIdCache;
@@ -1550,6 +1646,8 @@ public:
 
     BOARD_ITEM* CacheAndReturnItemById( const KIID& aId, BOARD_ITEM* aItem ) const;
 
+    void ClearItemByIdCache();
+
     // --------- Item order comparators ---------
 
     struct cmp_items
@@ -1563,13 +1661,32 @@ public:
     };
 
 public:
+    /**
+     * Return a spatial index of footprint courtyards, building it on first use.  Lets
+     * intersectsCourtyard()-style predicates query only nearby footprints instead of scanning
+     * the whole board.  Invalidated, like the other run-time caches, by IncrementTimeStamp().
+     *
+     * Returned by shared_ptr so a caller mid-query keeps the index alive even if a concurrent
+     * IncrementTimeStamp() detaches it; the held copy simply goes stale (the FOOTPRINT* it yields
+     * follow the same invalidation contract as the other run-time caches).
+     */
+    std::shared_ptr<const FOOTPRINT_COURTYARD_INDEX> GetFootprintCourtyardIndex();
+
     // ------------ Run-time caches -------------
     mutable std::shared_mutex                             m_CachesMutex;
-    std::unordered_map<PTR_PTR_CACHE_KEY, bool>           m_IntersectsCourtyardCache;
-    std::unordered_map<PTR_PTR_CACHE_KEY, bool>           m_IntersectsFCourtyardCache;
-    std::unordered_map<PTR_PTR_CACHE_KEY, bool>           m_IntersectsBCourtyardCache;
-    std::unordered_map<PTR_PTR_LAYER_CACHE_KEY, bool>     m_IntersectsAreaCache;
-    std::unordered_map<PTR_PTR_LAYER_CACHE_KEY, bool>     m_EnclosedByAreaCache;
+    // These predicate caches are written per item-pair from every DRC worker thread, so they
+    // carry their own internal sharded locks and are NOT covered by m_CachesMutex.
+    SHARDED_CACHE<PTR_PTR_CACHE_KEY, bool>                m_IntersectsCourtyardCache;
+    SHARDED_CACHE<PTR_PTR_CACHE_KEY, bool>                m_IntersectsFCourtyardCache;
+    SHARDED_CACHE<PTR_PTR_CACHE_KEY, bool>                m_IntersectsBCourtyardCache;
+    SHARDED_CACHE<PTR_PTR_LAYER_CACHE_KEY, bool>          m_IntersectsAreaCache;
+    SHARDED_CACHE<PTR_PTR_LAYER_CACHE_KEY, bool>          m_EnclosedByAreaCache;
+    SHARDED_CACHE<ITEM_SELECTOR_LAYER_CACHE_KEY, bool>    m_IntersectsCourtyardResultCache;
+    SHARDED_CACHE<ITEM_SELECTOR_LAYER_CACHE_KEY, bool>    m_IntersectsFCourtyardResultCache;
+    SHARDED_CACHE<ITEM_SELECTOR_LAYER_CACHE_KEY, bool>    m_IntersectsBCourtyardResultCache;
+    SHARDED_CACHE<ITEM_SELECTOR_LAYER_CACHE_KEY, bool>    m_IntersectsAreaResultCache;
+    SHARDED_CACHE<ITEM_SELECTOR_LAYER_CACHE_KEY, bool>    m_EnclosedByAreaResultCache;
+    SHARDED_CACHE<ITEM_FIELD_CACHE_KEY, wxString>         m_ItemFieldCache;
     std::unordered_map< wxString, LSET >                  m_LayerExpressionCache;
     std::unordered_map<ZONE*, std::unique_ptr<DRC_RTREE>> m_CopperZoneRTreeCache;
     std::shared_ptr<DRC_RTREE>                            m_CopperItemRTreeCache;
@@ -1585,6 +1702,9 @@ public:
     // Deflated zone outline cache for DRC area checks. Caches the deflated outline for each zone
     // to avoid repeated expensive deflation operations during collidesWithArea calls.
     mutable std::unordered_map<const ZONE*, SHAPE_POLY_SET> m_DeflatedZoneOutlineCache;
+
+    // Spatial index of footprint courtyards, built lazily by GetFootprintCourtyardIndex().
+    std::shared_ptr<const FOOTPRINT_COURTYARD_INDEX>     m_footprintCourtyardIndex;
 
     // ------------ DRC caches -------------
     std::vector<ZONE*>                       m_DRCZones;
@@ -1620,7 +1740,7 @@ private:
 
     /// What is this board being used for
     BOARD_USE           m_boardUse;
-    int                 m_timeStamp;                // actually a modification counter
+    std::atomic<int>    m_timeStamp;                // actually a modification counter
 
     wxString            m_fileName;
 
@@ -1653,6 +1773,9 @@ private:
 
     std::map<wxString, wxString>        m_properties;
     std::shared_ptr<CONNECTIVITY_DATA>  m_connectivity;
+
+    // Sentinel whose expiry signals to LOCAL_HISTORY that this board has been destroyed.
+    std::shared_ptr<void>               m_historyLifetime = std::make_shared<char>();
 
     PAGE_INFO           m_paper;
     TITLE_BLOCK         m_titles;                   // text in lower right of screen and plots

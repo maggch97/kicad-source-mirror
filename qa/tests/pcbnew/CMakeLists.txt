@@ -13,11 +13,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program; if not, you may find one here:
-# http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
-# or you may search the http://www.gnu.org website for the version 2 license,
-# or you may write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 set( QA_PCBNEW_SRCS
     # This is needed for the global mock objects
@@ -34,6 +30,7 @@ set( QA_PCBNEW_SRCS
     drc/drc_test_utils.cpp
 
     # test compilation units (start test_)
+    test_3d_viewer_layer_presets.cpp
     test_array_pad_name_provider.cpp
     test_barcode_load_save.cpp
     test_extruded_body_load_save.cpp
@@ -47,48 +44,86 @@ set( QA_PCBNEW_SRCS
     test_clipboard_group.cpp
     test_board_statistics.cpp
     test_cam_backdrill.cpp
+    test_backdrill_properties.cpp
     test_clip_line_to_pad.cpp
+    test_clip_line_to_via.cpp
     test_component_classes.cpp
+    test_via_validation.cpp
+    test_convert_tool.cpp
     test_generator_load_save.cpp
+    test_glb_utils.cpp
     test_graphics_load_save.cpp
     test_graphics_import_mgr.cpp
     test_group_load_save.cpp
-    test_headless_board_context.cpp
+    test_group_mirror.cpp
+    test_group_save_perf.cpp
+    test_headless_pcb_context.cpp
     test_history_autosave.cpp
     test_footprint.cpp
+    test_footprint_editor_tabs.cpp
+    test_footprint_import_reconciler.cpp
+    test_footprint_library_adapter.cpp
     test_footprint_load_save.cpp
     test_footprint_realignment.cpp
+    test_footprint_transform_sync.cpp
     test_footprint_rescue_layer.cpp
+    test_issue24735.cpp
+    test_issue24901.cpp
     test_fp_lib_load_save.cpp
     test_io_mgr.cpp
     test_ellipse_roundtrip.cpp
+    test_custom_pad_primitive_roundtrip.cpp
+    test_active_layer_update.cpp
     test_lset.cpp
     test_meander_corner_radius.cpp
+    test_odb_dimension_export.cpp
+    test_odb_soldermask_shape_export.cpp
+    test_pcb_control_rehatch.cpp
     test_pns_basics.cpp
     test_pad_flashing.cpp
     test_pad_numbering.cpp
+    test_pcb_differ.cpp
+    test_diff_canvas_context.cpp
+    test_pcb_merge_applier.cpp
+    test_net_classes_diff_merge.cpp
+    test_custom_drc_diff_merge.cpp
+    test_lib_table_diff_merge.cpp
+    test_applier_helpers.cpp
+    test_fp_lib_differ.cpp
     test_pad_size_setters.cpp
     test_pad_swap_positions.cpp
     test_pad_tenting.cpp
     test_plot_edge_cuts_drill_marks.cpp
     test_plot_pad_mask.cpp
+    test_plot_footprint_scaled_text.cpp
     test_pcb_textbox.cpp
     test_prettifier.cpp
     test_pcb_render_settings.cpp
     test_libeval_compiler.cpp
     test_reference_image_load.cpp
     test_gencad_export.cpp
+    test_idf_export.cpp
+    test_d356_export.cpp
     test_step_model_color_transfer.cpp
+    test_board_netlist_updater_fpid_change.cpp
+    test_board_netlist_updater_nested_groups.cpp
+    test_netlist_group_instances.cpp
+    test_step_export_modified_board.cpp
     test_pdf_output_path.cpp
     test_shape_corner_radius.cpp
+    test_shape_hatch_knockout.cpp
+    test_connect_board_shapes.cpp
     test_pcb_grid_helper.cpp
     test_save_load.cpp
     test_stacked_pin_netlist.cpp
     test_teardrop_uuid.cpp
     test_tracks_cleaner.cpp
     test_triangulation.cpp
+    test_tuning_pattern_layer.cpp
     test_multichannel.cpp
+    test_pns_tuning_path_through_pad.cpp
     test_variant.cpp
+    test_text_variable_resolution.cpp
     test_zone.cpp
     test_zone_filler.cpp
     test_poly_simplify.cpp
@@ -98,20 +133,26 @@ set( QA_PCBNEW_SRCS
     net_chains/test_net_chain_terminal_pad_assignment.cpp
     net_chains/test_net_chain_terminal_pad_stale.cpp
     net_chains/test_apply_chain_assignments_dry_run.cpp
+    net_chains/test_update_pcb_legacy_fpid_dnp.cpp
     # Net chain aggregation / skew / total length tests
     net_chains/test_net_chain_skew_tuning.cpp
     net_chains/test_net_chain_total_length.cpp
     net_chains/test_net_chain_total_length_sexpr.cpp
     net_chains/test_net_chain_bridging_delay.cpp
     net_chains/test_net_chain_partition.cpp
+    net_chains/test_net_chain_trunk_delay.cpp
     net_chains/test_tuning_bridging_clamp.cpp
 
     drc/test_custom_rule_severities.cpp
     drc/test_drc_backdrill_postmachining.cpp
     drc/test_drc_courtyard_invalid.cpp
     drc/test_drc_courtyard_overlap.cpp
+    drc/test_drc_error_limit.cpp
+    drc/test_footprint_courtyard_index.cpp
     drc/test_drc_regressions.cpp
     drc/test_drc_issue23469.cpp
+    drc/test_drc_issue24525.cpp
+    drc/test_drc_arc_arc_edge_clearance.cpp
     drc/test_drc_solder_mask_expansion.cpp
     drc/test_drc_copper_conn.cpp
     drc/test_drc_copper_graphics.cpp
@@ -125,6 +166,7 @@ set( QA_PCBNEW_SRCS
     drc/test_drc_skew.cpp
     drc/test_drc_component_classes.cpp
     drc/test_drc_incorrect_text_mirror.cpp
+    drc/test_drc_text_var_issue24442.cpp
     drc/test_drc_starved_thermal.cpp
     drc/test_drc_orientation.cpp
     drc/test_drc_lengths.cpp
@@ -138,6 +180,7 @@ set( QA_PCBNEW_SRCS
     drc/test_drc_tuner_chain_bridging_agreement.cpp
     drc/test_drc_stub_length.cpp
     drc/test_drc_tuner_agreement.cpp
+    drc/test_drc_skew_arc.cpp
     drc/test_drc_unconnected_items_exclusion_loss.cpp
     drc/test_drc_via_dangling.cpp
     drc/test_drc_keepout_disallow.cpp
@@ -149,22 +192,38 @@ set( QA_PCBNEW_SRCS
     drc/test_drc_creepage_issue23389.cpp
     drc/test_drc_creepage_issue23576.cpp
     drc/test_drc_creepage_issue23658.cpp
+    drc/test_drc_creepage_issue23578.cpp
+    drc/test_drc_creepage_issue24286.cpp
+    drc/test_drc_creepage_issue24523.cpp
+    drc/test_drc_creepage_issue24543.cpp
+    drc/test_drc_creepage_issue24544.cpp
+    drc/test_drc_creepage_issue24524.cpp
+    drc/test_drc_creepage_issue24597.cpp
+    drc/test_drc_creepage_issue24875.cpp
+    drc/test_drc_creepage_issue24885.cpp
+    drc/test_creepage_engine_parity.cpp
+    drc/test_creepage_engine_incremental.cpp
     drc/test_drc_invalid_outline_issue24078.cpp
     drc/test_drc_invalid_outline_issue24241.cpp
+    drc/test_drc_silk_rule_area_issue24177.cpp
     drc/test_drc_annular_overlap_issue24340.cpp
     drc/test_drc_hole_clearance_issue24355.cpp
+    drc/test_drc_hole_to_hole_npth_slot_issue24541.cpp
+    drc/test_drc_npth_slot_clearance_issue24799.cpp
     drc/test_drc_issue24264.cpp
     drc/test_drc_issue23868.cpp
     drc/test_drc_issue24211.cpp
     drc/test_drc_physical_clearance.cpp
     drc/test_drc_rule_editor.cpp
     drc/test_drc_bitmap_overlay_panel.cpp
+    drc/test_drc_violation_layers_issue24941.cpp
 
     pcb_io/altium/test_altium_rule_transformer.cpp
     pcb_io/altium/test_altium_pcblib_import.cpp
     pcb_io/altium/test_altium_pcb_import.cpp
     pcb_io/cadstar/test_cadstar_footprints.cpp
     pcb_io/eagle/test_eagle_board_import.cpp
+    pcb_io/eagle/test_eagle_binary_import.cpp
     pcb_io/eagle/test_eagle_lbr_import.cpp
     pcb_io/eagle/test_eagle_managed_lib_naming.cpp
     pcb_io/pads/test_pads_import.cpp
@@ -178,18 +237,35 @@ set( QA_PCBNEW_SRCS
     pcb_io/kicad_sexpr/test_kicad_sexpr.cpp
 
     pcb_io/easyedapro/test_easyedapro_import.cpp
+    pcb_io/easyedapro/test_easyedapro_v3_import.cpp
+
+    pcb_io/diptrace/test_diptrace_import.cpp
+    pcb_io/diptrace/test_diptrace_cross_link.cpp
+    pcb_io/diptrace/test_diptrace_benchmarks.cpp
+
+    pcb_io/autotrax/test_autotrax_import.cpp
 
     pcb_io/fabmaster/test_fabmaster_import.cpp
 
     pcb_io/allegro/allegro_test_utils.cpp
     pcb_io/allegro/test_allegro_boards.cpp
+    pcb_io/allegro/test_allegro_drill_spans.cpp
     pcb_io/allegro/test_allegro_import.cpp
     pcb_io/allegro/test_block_additional.cpp
 
+    pcb_io/ipc2581/test_ipc2581.cpp
     pcb_io/ipc2581/test_ipc2581_export.cpp
+
+    pcb_io/odbpp/test_odbpp_netlist.cpp
 
     group_saveload.cpp
 )
+
+# DipTrace PCB benchmark tests that exercise proprietary reference designs kept outside the source
+# tree. The file is intentionally not committed; include it only when a developer has it.
+if( EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/pcb_io/diptrace/test_diptrace_benchmarks_local.cpp" )
+    list( APPEND QA_PCBNEW_SRCS pcb_io/diptrace/test_diptrace_benchmarks_local.cpp )
+endif()
 
 if( WIN32 )
     # We want to declare a resource manifest on Windows to enable UTF8 mode
@@ -312,6 +388,7 @@ set( PCBNEW_ZONE_TESTS
 :RegressionShallowArcZoneFill\
 :RegressionIterativeRefillRespectsKeepouts\
 :RegressionTHPadInnerLayerFlashing\
+:RegressionThermalReliefAnnularRing45\
 :RegressionRoundRectTeardropGeometry\
 :OvalPadTeardropGeometry\
 :LargeCircleTeardropGeometry\
@@ -320,6 +397,7 @@ set( PCBNEW_ZONE_TESTS
 :ZoneLayerSpecificRules\
 :RegressionZoneFillMinWidthAfterKnockout\
 :RegressionSameNetOverlappingZones\
+:RegressionSameNetZoneFillScheduler\
 :RegressionDiffNetOverlappingZones\
 :RegressionThermalReliefsToNowhere\
 :OffCenterTeardropSymmetry\
@@ -331,7 +409,7 @@ set( PCBNEW_ZONE_TESTS
 
 # Allegro importer tests (~31s)
 set( PCBNEW_ALLEGRO_TESTS
-    "AllegroBlocks:AllegroBoards:AllegroImport:AllegroComprehensive" )
+    "AllegroBlocks:AllegroBoards:AllegroImport:AllegroComprehensive:AllegroDrillSpans" )
 
 # Creepage DRC tests (~16s, heavily multi-threaded internally)
 set( PCBNEW_CREEPAGE_TESTS
@@ -340,7 +418,12 @@ set( PCBNEW_CREEPAGE_TESTS
 :CreepagePerformanceIssue21482\
 :CreepageDualSlotsIssue23364\
 :CreepageNPTHSlotIssue23389\
-:CreepagePathStartPointIssue23576" )
+:CreepagePathStartPointIssue23576\
+:CreepageTwoNPTHSlotsIssue24523\
+:CreepageRotatedRectPadIssue24543\
+:CreepageRoundedSlotIssue24544\
+:CreepageStadiumCapsBlockOuterSide\
+:CreepageStadiumCapsArcOutward" )
 
 # IPC-2581 export tests (~15s)
 set( PCBNEW_IPC2581_TESTS "Ipc2581Export" )
@@ -402,6 +485,7 @@ set( PCBNEW_EXCLUDED_FROM_OTHER
 :!ZoneLayerSpecificRules\
 :!RegressionZoneFillMinWidthAfterKnockout\
 :!RegressionSameNetOverlappingZones\
+:!RegressionSameNetZoneFillScheduler\
 :!RegressionDiffNetOverlappingZones\
 :!RegressionThermalReliefsToNowhere\
 :!OffCenterTeardropSymmetry\
@@ -414,12 +498,18 @@ set( PCBNEW_EXCLUDED_FROM_OTHER
 :!AllegroBoards\
 :!AllegroImport\
 :!AllegroComprehensive\
+:!AllegroDrillSpans\
 :!CreepageHVvsGND\
 :!CreepageAroundSlotIssue20480\
 :!CreepagePerformanceIssue21482\
 :!CreepageDualSlotsIssue23364\
 :!CreepageNPTHSlotIssue23389\
 :!CreepagePathStartPointIssue23576\
+:!CreepageTwoNPTHSlotsIssue24523\
+:!CreepageRotatedRectPadIssue24543\
+:!CreepageRoundedSlotIssue24544\
+:!CreepageStadiumCapsBlockOuterSide\
+:!CreepageStadiumCapsArcOutward\
 :!Ipc2581Export\
 :!FailedToCleanRegressionTests\
 :!TrackCleanerRegressionTests\

@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef FIELDS_GRID_TABLE_H
@@ -169,6 +165,11 @@ private:
     SCH_BASE_FRAME*              m_frame;
     DIALOG_SHIM*                 m_dialog;
     KICAD_T                      m_parentType;
+
+    // Owns a private copy of the schematic symbol's library part when the source is a unique_ptr
+    // that the still-live schematic could free while this quasi-modal dialog is open.  Null for
+    // the symbol-editor path, where m_part points at an externally-owned working symbol.
+    std::unique_ptr<LIB_SYMBOL>  m_ownedPart;
     LIB_SYMBOL*                  m_part;
     std::vector<EMBEDDED_FILES*> m_filesStack;
     wxString                     m_symbolNetlist;

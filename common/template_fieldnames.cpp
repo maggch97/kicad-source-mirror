@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "template_fieldnames.h"
@@ -93,6 +89,35 @@ wxString GetUserFieldName( int aFieldNdx, bool aTranslateForHI )
         return wxString::Format( wxS( USER_FIELD_CANONICAL ), aFieldNdx );
     else
         return wxString::Format( _( USER_FIELD_CANONICAL ), aFieldNdx );
+}
+
+
+bool FieldNamesAreDuplicates( const wxString& aLhs, const wxString& aRhs,
+                              std::initializer_list<FIELD_T> aMandatoryFields )
+{
+    if( aLhs == aRhs )
+        return true;
+
+    // If they don't even match case-insensitively they can't both be variants of the same
+    // canonical mandatory field name.
+    if( aLhs.CmpNoCase( aRhs ) != 0 )
+        return false;
+
+    // Mandatory field names are folded case-insensitively by the s-expression parser, so any
+    // case variant of a mandatory canonical name collides with the canonical mandatory field.
+    for( FIELD_T fieldId : aMandatoryFields )
+    {
+        if( aLhs.CmpNoCase( GetCanonicalFieldName( fieldId ) ) == 0 )
+            return true;
+    }
+
+    return false;
+}
+
+
+bool FieldNamesAreDuplicates( const wxString& aLhs, const wxString& aRhs )
+{
+    return FieldNamesAreDuplicates( aLhs, aRhs, MANDATORY_FIELDS );
 }
 
 
@@ -247,10 +272,11 @@ void TEMPLATES::resolveTemplates()
 
 void TEMPLATES::AddTemplateFieldName( const TEMPLATE_FIELDNAME& aFieldName, bool aGlobal )
 {
-    // Ensure that the template fieldname does not match a fixed fieldname.
+    // Reject any case variant of a mandatory fieldname; the s-expression parser folds those
+    // onto the canonical mandatory field, so they can never become a distinct user field.
     for( FIELD_T fieldId : MANDATORY_FIELDS )
     {
-        if( GetCanonicalFieldName( fieldId ) == aFieldName.m_Name )
+        if( GetCanonicalFieldName( fieldId ).CmpNoCase( aFieldName.m_Name ) == 0 )
             return;
     }
 

@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * https://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef SIMULATOR_FRAME_UI_H
@@ -243,6 +239,28 @@ public:
     int GetSimTabIndex( SIM_TAB* aPlot ) const
     {
         return m_plotNotebook->GetPageIndex( aPlot );
+    }
+
+    /**
+     * Return true if a tab other than @p aExcept records @p aPlotName as its ngspice plot.
+     *
+     * Guards plot destruction so a rerun never frees a plot another tab still references (e.g. an
+     * FFT that consumes a TRAN plot, or a run that produced no new plot and reported a stale one).
+     */
+    bool IsPlotOwnedByOtherTab( const SIM_TAB* aExcept, const wxString& aPlotName ) const
+    {
+        if( aPlotName.IsEmpty() )
+            return false;
+
+        for( int ii = 0; ii < (int) m_plotNotebook->GetPageCount(); ++ii )
+        {
+            SIM_TAB* candidate = dynamic_cast<SIM_TAB*>( m_plotNotebook->GetPage( ii ) );
+
+            if( candidate && candidate != aExcept && candidate->GetSpicePlotName() == aPlotName )
+                return true;
+        }
+
+        return false;
     }
 
     void OnPlotSettingsChanged();

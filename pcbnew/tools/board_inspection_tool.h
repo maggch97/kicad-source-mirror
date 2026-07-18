@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef BOARD_INSPECTION_TOOL_H
@@ -94,6 +90,12 @@ public:
     int DiffFootprint( const TOOL_EVENT& aEvent );
     void DiffFootprint( FOOTPRINT* aFootprint, wxTopLevelWindow* aReparentTo = nullptr );
 
+    /// Diff the current board against a user-selected .kicad_pcb file.
+    int CompareBoardWithFile( const TOOL_EVENT& aEvent );
+
+    /// Diff the current board against the most recent local-history commit.
+    int CompareBoardWithHistory( const TOOL_EVENT& aEvent );
+
     /**
      * @return true if a net or nets to highlight have been set
      */
@@ -105,6 +107,10 @@ public:
     wxString m_highlightedNetChain;
 
 private:
+    /// Diff the board at aOtherPath against the live one and show the dialog.
+    int showBoardComparison( const wxString& aOtherPath, const wxString& aProjectPath,
+                             const wxString& aComparisonLabel );
+
     ///< Recalculate dynamic ratsnest for the current selection.
     void calculateSelectionRatsnest( const VECTOR2I& aDelta );
 

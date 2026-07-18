@@ -15,14 +15,11 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <common.h>
+#include <gestfich.h>
 #include <json_common.h>
 #include <i18n_utility.h>
 #include <kiplatform/io.h>
@@ -46,11 +43,13 @@
 
 const wxString DESIGN_BLOCK_IO_MGR::ShowType( DESIGN_BLOCK_FILE_T aFileType )
 {
+    // This token is serialized into the design-block-lib-table file, so it must stay
+    // locale-independent. "KiCad" is a product name and is never translated.
     switch( aFileType )
     {
-    case KICAD_SEXP:   return _( "KiCad" );
+    case KICAD_SEXP:   return wxT( "KiCad" );
     case NESTED_TABLE: return LIBRARY_TABLE_ROW::TABLE_TYPE_NAME;
-    default:           return wxString::Format( _( "UNKNOWN (%d)" ), aFileType );
+    default:           return wxString::Format( wxT( "UNKNOWN (%d)" ), aFileType );
     }
 }
 
@@ -58,10 +57,16 @@ const wxString DESIGN_BLOCK_IO_MGR::ShowType( DESIGN_BLOCK_FILE_T aFileType )
 DESIGN_BLOCK_IO_MGR::DESIGN_BLOCK_FILE_T
 DESIGN_BLOCK_IO_MGR::EnumFromStr( const wxString& aFileType )
 {
-    if( aFileType == _( "KiCad" ) )
+    if( aFileType.CmpNoCase( wxT( "KiCad" ) ) == 0 )
         return DESIGN_BLOCK_FILE_T::KICAD_SEXP;
     else if( aFileType == LIBRARY_TABLE_ROW::TABLE_TYPE_NAME )
         return DESIGN_BLOCK_FILE_T::NESTED_TABLE;
+    else if( aFileType == _( "KiCad" ) )
+    {
+        // Accept the legacy translated token so tables written by older releases under a
+        // locale that translated "KiCad" still load.
+        return DESIGN_BLOCK_FILE_T::KICAD_SEXP;
+    }
 
     return DESIGN_BLOCK_FILE_T( DESIGN_BLOCK_FILE_UNKNOWN );
 }
@@ -105,9 +110,17 @@ bool DESIGN_BLOCK_IO_MGR::ConvertLibrary( std::map<std::string, UTF8>* aOldFileP
     if( oldFileType == DESIGN_BLOCK_IO_MGR::FILE_TYPE_NONE )
         return false;
 
+    // A nested library table has no plugin to enumerate it; reject it before dereferencing
+    // the null plugin below.
+    if( oldFileType == DESIGN_BLOCK_IO_MGR::NESTED_TABLE )
+        return false;
 
     IO_RELEASER<DESIGN_BLOCK_IO> oldFilePI( DESIGN_BLOCK_IO_MGR::FindPlugin( oldFileType ) );
     IO_RELEASER<DESIGN_BLOCK_IO> kicadPI( DESIGN_BLOCK_IO_MGR::FindPlugin( DESIGN_BLOCK_IO_MGR::KICAD_SEXP ) );
+
+    if( !oldFilePI || !kicadPI )
+        return false;
+
     wxArrayString dbNames;
     wxFileName    newFileName( aNewFilePath );
 
@@ -230,7 +243,7 @@ bool DESIGN_BLOCK_IO::DeleteLibrary( const wxString&                    aLibrary
         wxArrayString dirs;
 
         // Get all sub-directories in the library path
-        dir.GetAllFiles( aLibraryPath, &dirs, wxEmptyString, wxDIR_DIRS );
+        CollectSubdirsLoopSafe( aLibraryPath, dirs );
 
         for( size_t i = 0; i < dirs.GetCount(); i++ )
         {

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DRC_ITEM_H
@@ -27,6 +23,7 @@
 
 #include <rc_item.h>
 #include <marker_base.h>
+#include <lset.h>
 
 class PCB_BASE_FRAME;
 class DRC_RULE;
@@ -79,25 +76,26 @@ enum PCB_DRC_CODE
     DRCE_SCHEMATIC_PARITY,    // footprint attributes don't match symbol attributes
     DRCE_FOOTPRINT_FILTERS,   // footprint doesn't match symbol's footprint filters
 
-    DRCE_FOOTPRINT_TYPE_MISMATCH, // footprint attribute does not match actual pads
-    DRCE_LIB_FOOTPRINT_ISSUES,    // footprint not found in active libraries
-    DRCE_LIB_FOOTPRINT_MISMATCH,  // footprint does not match the current library
-    DRCE_PAD_TH_WITH_NO_HOLE,     // footprint has Plated Through-Hole with no hole
-    DRCE_FOOTPRINT,               // error in footprint definition
+    DRCE_FOOTPRINT_TYPE_MISMATCH,    // footprint attribute does not match actual pads
+    DRCE_LIB_FOOTPRINT_ISSUES,       // footprint not found in active libraries
+    DRCE_LIB_FOOTPRINT_MISMATCH,     // footprint does not match the current library
+    DRCE_PAD_TH_WITH_NO_HOLE,        // footprint has Plated Through-Hole with no hole
+    DRCE_FOOTPRINT,                  // error in footprint definition
+    DRCE_FOOTPRINT_SCALED_WITH_PADS, // scale != 1 on a footprint that has pads
 
     DRCE_UNRESOLVED_VARIABLE,
-    DRCE_ASSERTION_FAILURE,       // user-defined (custom rule) assertion
-    DRCE_GENERIC_WARNING,         // generic warning
-    DRCE_GENERIC_ERROR,           // generic error
+    DRCE_ASSERTION_FAILURE, // user-defined (custom rule) assertion
+    DRCE_GENERIC_WARNING,   // generic warning
+    DRCE_GENERIC_ERROR,     // generic error
 
     DRCE_COPPER_SLIVER,
-    DRCE_SOLDERMASK_BRIDGE,       // failure to maintain min soldermask web thickness
-                                  //   between copper items with different nets
+    DRCE_SOLDERMASK_BRIDGE, // failure to maintain min soldermask web thickness
+                            //   between copper items with different nets
 
-    DRCE_SILK_MASK_CLEARANCE,     // silkscreen clipped by mask (potentially leaving it
-                                  //   over pads, exposed copper, etc.)
+    DRCE_SILK_MASK_CLEARANCE, // silkscreen clipped by mask (potentially leaving it
+                              //   over pads, exposed copper, etc.)
     DRCE_SILK_EDGE_CLEARANCE,
-    DRCE_SILK_CLEARANCE,          // silk-to-silk or silk-to-other clearance error
+    DRCE_SILK_CLEARANCE, // silk-to-silk or silk-to-other clearance error
     DRCE_TEXT_HEIGHT,
     DRCE_TEXT_THICKNESS,
 
@@ -115,9 +113,9 @@ enum PCB_DRC_CODE
     DRCE_MISSING_TUNING_PROFILE,        // Tuning profile used in net class is not defined
     DRCE_TUNING_PROFILE_IMPLICIT_RULES, // Pseudo-code for setting severities
 
-    DRCE_TRACK_ON_POST_MACHINED_LAYER,  // Track connected to pad/via on post-machined/backdrilled layer
+    DRCE_TRACK_ON_POST_MACHINED_LAYER, // Track connected to pad/via on post-machined/backdrilled layer
 
-    DRCE_TRACK_NOT_CENTERED_ON_VIA,     // Track endpoint within via pad but not at via center
+    DRCE_TRACK_NOT_CENTERED_ON_VIA, // Track endpoint within via pad but not at via center
 
     DRCE_SCHEMATIC_FIELDS_PARITY, // Mismatch with schematic fields
 
@@ -141,6 +139,13 @@ public:
      * @return the created item
      */
     static std::shared_ptr<DRC_ITEM> Create( const wxString& aErrorKey );
+
+    /**
+     * Work out which layer to focus on and which layers a violation involves.
+     * The marker layer wins, except for error types tied to a fixed layer.
+     */
+    static void GetViolationLayers( BOARD* aBoard, const std::shared_ptr<RC_ITEM>& aItem, PCB_MARKER* aMarker,
+                                    PCB_LAYER_ID& aPrincipalLayer, LSET& aViolationLayers );
 
     static std::vector<std::reference_wrapper<RC_ITEM>> GetItemsWithSeverities()
     {
@@ -254,6 +259,7 @@ private:
     static DRC_ITEM footprint;
     static DRC_ITEM footprintTypeMismatch;
     static DRC_ITEM footprintTHPadhasNoHole;
+    static DRC_ITEM footprintScaledWithPads;
     static DRC_ITEM mirroredTextOnFrontLayer;
     static DRC_ITEM nonMirroredTextOnBackLayer;
     static DRC_ITEM missingTuningProfile;

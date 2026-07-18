@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <board.h>
@@ -213,6 +213,10 @@ void PCB_DESIGN_BLOCK_PREVIEW_WIDGET::DisplayDesignBlock( DESIGN_BLOCK* aDesignB
 
         if( m_previewItem )
         {
+            // The preview panel was built around a 2-layer dummy board. Re-sync layer
+            // visibility to the loaded block so inner copper layers are shown.
+            static_cast<PCB_DRAW_PANEL_GAL*>( m_preview )->SyncLayersVisibility( m_previewItem );
+
             for( BOARD_ITEM* item : m_previewItem->GetItemSet() )
             {
                 view->Add( item );

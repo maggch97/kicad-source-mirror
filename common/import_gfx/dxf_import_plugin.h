@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DXF2BRD_ITEMS_H
@@ -68,6 +64,7 @@ public:
         m_EntityType = DL_UNKNOWN;
         m_EntityParseStatus = 0;
         m_EntityFlag = 0;
+        m_LayerName.clear();
         m_SplineDegree = 1;
         m_SplineKnotsCount = 0;
         m_SplineControlCount = 0;
@@ -88,6 +85,8 @@ public:
                                 // 1 = first item of entity
                                 // 2 = entity in progress
     int m_EntityFlag;           // a info flag to parse entities
+                                //
+    wxString m_LayerName;       // the source DXF layer for the current entity
 
     VECTOR2D m_LastCoordinate;  // the last vertex coordinate read (unit = mm)
     VECTOR2D m_PolylineStart;   // The first point of the polyline entity, when reading a
@@ -235,6 +234,8 @@ public:
     double GetImageHeight() const override;
     BOX2D GetImageBBox() const override;
 
+    std::vector<wxString> GetSourceLayers() const { return m_internalImporter.GetSourceLayers(); }
+
     void updateImageLimits( const VECTOR2D& aPoint );
 
     virtual void SetImporter( GRAPHICS_IMPORTER* aImporter ) override;
@@ -331,6 +332,7 @@ private:
     double mapDim( double aDxfValue );
     double lineWeightToWidth( int lw, DXF_IMPORT_LAYER* aLayer );
     double getCurrentUnitScale();
+    wxString getDxfLayerName( const std::string& aLayerName ) const;
 
     MATRIX3x3D getArbitraryAxis( DL_Extrusion* aData );
 

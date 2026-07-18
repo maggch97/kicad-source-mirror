@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -123,7 +119,9 @@ void IPC356D_WRITER::build_pad_testpoints( BOARD *aPcb, std::vector <D356_RECORD
             rk.netname = pad->GetNetname();
             rk.pin = pad->GetNumber();
             rk.refdes = footprint->GetReference();
-            rk.midpoint = false; // XXX MAYBE need to be computed (how?)
+            // A named pad is a component terminal (end-net point); an unnamed copper
+            // feature is only reachable mid-net, so it is a midpoint per IPC-D-356A
+            rk.midpoint = rk.pin.IsEmpty();
             const VECTOR2I& drill = pad->GetDrillSize();
             rk.drill = std::min( drill.x, drill.y );
             rk.hole = (rk.drill != 0);
@@ -227,8 +225,12 @@ static void build_via_testpoints( BOARD *aPcb, std::vector <D356_RECORD>& aRecor
             rk.y_size = 0; // Round so height = 0
             rk.rotation = 0;
 
+            // the value indicates which sides are *not* accessible
+            rk.soldermask = 0;
+
             if( via->IsTented( F_Mask ) )
                 rk.soldermask |= 1;
+
             if( via->IsTented( B_Mask ) )
                 rk.soldermask |= 2;
 

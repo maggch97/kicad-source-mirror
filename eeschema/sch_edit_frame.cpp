@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>
@@ -40,6 +36,9 @@
 #include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/menu.h>
+#include <api/api_handler_common.h>
+#include <api/api_plugin_manager.h>
+#include <api/api_utils.h>
 #include <local_history.h>
 #include <eeschema_id.h>
 #include <executable_names.h>
@@ -96,6 +95,7 @@
 #include <tools/sch_line_wire_bus_tool.h>
 #include <tools/sch_move_tool.h>
 #include <tools/sch_navigate_tool.h>
+#include <tools/sch_selection_tool.h>
 #include <tools/sch_find_replace_tool.h>
 #include <trace_helpers.h>
 #include <unordered_set>
@@ -121,11 +121,6 @@
 #include <wx/textdlg.h>
 #include <wx/generic/treectlg.h>
 
-
-#ifdef KICAD_IPC_API
-#include <api/api_plugin_manager.h>
-#include <api/api_utils.h>
-#endif
 
 #include <dialog_change_symbols.h>
 
@@ -217,9 +212,7 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     if( GetToolManager() )
         GetToolManager()->RunAction( SCH_ACTIONS::angleSnapModeChanged );
 
-#ifdef KICAD_IPC_API
     wxTheApp->Bind( EDA_EVT_PLUGIN_AVAILABILITY_CHANGED, &SCH_EDIT_FRAME::onPluginAvailabilityChanged, this );
-#endif
 
     m_hierarchy = new HIERARCHY_PANE( this );
 
@@ -455,10 +448,14 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     updateTitle();
     m_toolManager->GetTool<SCH_NAVIGATE_TOOL>()->ResetHistory();
 
-#ifdef KICAD_IPC_API
     m_apiHandler = std::make_unique<API_HANDLER_SCH>( this );
     Pgm().GetApiServer().RegisterHandler( m_apiHandler.get() );
-#endif
+
+    if( Kiface().IsSingle() )
+    {
+        m_apiHandlerCommon = std::make_unique<API_HANDLER_COMMON>();
+        Pgm().GetApiServer().RegisterHandler( m_apiHandlerCommon.get() );
+    }
 
     // Default shutdown reason until a file is loaded
     KIPLATFORM::APP::SetShutdownBlockReason( this, _( "New schematic file is unsaved" ) );
@@ -588,6 +585,23 @@ void SCH_EDIT_FRAME::OnCrossProbeFlashTimer( wxTimerEvent& aEvent )
 
 SCH_EDIT_FRAME::~SCH_EDIT_FRAME()
 {
+    // Ensure that teardowns without doCloseWindow are fully unregistered
+    if( m_schematic )
+        Kiway().LocalHistory().UnregisterSaver( m_schematic );
+
+    // A forced teardown (wx deletes every top level window at session end) skips doCloseWindow,
+    // leaving live tools.  When we SetScreen(nullptr), we dispatch another tool call, potentially
+    // crashing when the frame is gone
+    if( m_toolManager )
+    {
+        GetCanvas()->SetEvtHandlerEnabled( false );
+        GetCanvas()->StopDrawing();
+        m_toolManager->ShutdownAllTools();
+
+        delete m_toolManager;
+        m_toolManager = nullptr;
+    }
+
     m_hierarchy->Unbind( wxEVT_SIZE, &SCH_EDIT_FRAME::OnResizeHierarchyNavigator, this );
 
     // Ensure m_canvasType is up to date, to save it in config
@@ -820,10 +834,14 @@ void SCH_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( ACTIONS::selectAll,           ENABLE( hasElements ) );
     mgr->SetConditions( ACTIONS::unselectAll,         ENABLE( hasElements ) );
 
-    mgr->SetConditions( SCH_ACTIONS::rotateCW,        ENABLE( hasElements ) );
-    mgr->SetConditions( SCH_ACTIONS::rotateCCW,       ENABLE( hasElements ) );
-    mgr->SetConditions( SCH_ACTIONS::mirrorH,         ENABLE( hasElements ) );
-    mgr->SetConditions( SCH_ACTIONS::mirrorV,         ENABLE( hasElements ) );
+    mgr->SetConditions( SCH_ACTIONS::rotateCW,
+                        ENABLE( SELECTION_CONDITIONS::NotEmpty ).HotkeyEnable( hasElements ) );
+    mgr->SetConditions( SCH_ACTIONS::rotateCCW,
+                        ENABLE( SELECTION_CONDITIONS::NotEmpty ).HotkeyEnable( hasElements ) );
+    mgr->SetConditions( SCH_ACTIONS::mirrorH,
+                        ENABLE( SELECTION_CONDITIONS::NotEmpty ).HotkeyEnable( hasElements ) );
+    mgr->SetConditions( SCH_ACTIONS::mirrorV,
+                        ENABLE( SELECTION_CONDITIONS::NotEmpty ).HotkeyEnable( hasElements ) );
     mgr->SetConditions( ACTIONS::group,               ENABLE( SELECTION_CONDITIONS::MoreThan( 1 ) ) );
     mgr->SetConditions( ACTIONS::ungroup,             ENABLE( SELECTION_CONDITIONS::HasType( SCH_GROUP_T ) ) );
 
@@ -1096,6 +1114,7 @@ void SCH_EDIT_FRAME::SetCurrentSheet( const SCH_SHEET_PATH& aSheet )
                    aSheet.size() );
 
         Schematic().SetCurrentSheet( aSheet );
+        SetSheetNumberAndCount();
         GetCanvas()->DisplaySheet( aSheet.LastScreen() );
     }
 }
@@ -1247,10 +1266,8 @@ void SCH_EDIT_FRAME::doCloseWindow()
         Kiway().LocalHistory().RemoveAutosaveFiles( Prj().GetProjectPath(), sheetSrcs );
     }
 
-#ifdef KICAD_IPC_API
     Pgm().GetApiServer().DeregisterHandler( m_apiHandler.get() );
     wxTheApp->Unbind( EDA_EVT_PLUGIN_AVAILABILITY_CHANGED, &SCH_EDIT_FRAME::onPluginAvailabilityChanged, this );
-#endif
 
     // Close modeless dialogs.  They're trouble when they get destroyed after the frame.
     Unbind( EDA_EVT_CLOSE_DIALOG_BOOK_REPORTER, &SCH_EDIT_FRAME::onCloseSymbolDiffDialog, this );
@@ -1509,7 +1526,8 @@ void SCH_EDIT_FRAME::ProjectChanged()
             [this]( const wxString& aProjectPath, std::vector<HISTORY_FILE_DATA>& aFileData )
             {
                 m_schematic->SaveToHistory( aProjectPath, aFileData );
-            } );
+            },
+            m_schematic->GetHistoryLifetimeToken() );
 
     m_designBlocksPane->ProjectChanged();
 }
@@ -1517,9 +1535,13 @@ void SCH_EDIT_FRAME::ProjectChanged()
 
 void SCH_EDIT_FRAME::OnOpenPcbnew()
 {
-    wxFileName kicad_board = Prj().AbsolutePath( Schematic().GetFileName() );
+    // Use the project's board, not the active sheet's name, which may belong to another project.
+    wxString projectName = Prj().GetProjectFullName();
 
-    if( kicad_board.IsOk() && !Schematic().GetFileName().IsEmpty() )
+    wxFileName kicad_board =
+            projectName.IsEmpty() ? Prj().AbsolutePath( Schematic().GetFileName() ) : wxFileName( projectName );
+
+    if( kicad_board.IsOk() && !kicad_board.GetName().IsEmpty() )
     {
         kicad_board.SetExt( FILEEXT::PcbFileExtension );
         wxFileName legacy_board( kicad_board );
@@ -2004,6 +2026,7 @@ void SCH_EDIT_FRAME::CommonSettingsChanged( int aFlags )
         view->SetLayerVisible( LAYER_OP_CURRENTS, cfg->m_Appearance.show_op_currents );
 
         GetRenderSettings()->m_ShowPinAltIcons = cfg->m_Appearance.show_pin_alt_icons;
+        GetRenderSettings()->m_ShowRemappedPinNumbers = cfg->m_Appearance.show_remapped_pin_numbers;
 
         RefreshOperatingPointDisplay();
 
@@ -2129,6 +2152,12 @@ void SCH_EDIT_FRAME::SetScreen( BASE_SCREEN* aScreen )
         m_toolManager->RunAction( ACTIONS::selectionClear );
 
     SCH_BASE_FRAME::SetScreen( aScreen );
+
+    // SetSheetNumberAndCount() dereferences the current sheet's screen, which is absent on the
+    // unload paths that pass a null screen.
+    if( aScreen )
+        SetSheetNumberAndCount();
+
     GetCanvas()->DisplaySheet( static_cast<SCH_SCREEN*>( aScreen ) );
 
     if( m_toolManager )
@@ -2230,7 +2259,9 @@ SELECTION& SCH_EDIT_FRAME::GetCurrentSelection()
 
 void SCH_EDIT_FRAME::onSize( wxSizeEvent& aEvent )
 {
-    if( IsShown() )
+    // doCloseWindow() destroys the tool manager and then updates the AUI layout, which can
+    // dispatch a deferred size event back to this still-bound handler.
+    if( IsShown() && GetToolManager() )
     {
         // We only need this until the frame is done resizing and the final client size is
         // established.
@@ -2849,14 +2880,12 @@ void SCH_EDIT_FRAME::updateSelectionFilterVisbility()
 }
 
 
-#ifdef KICAD_IPC_API
 void SCH_EDIT_FRAME::onPluginAvailabilityChanged( wxCommandEvent& aEvt )
 {
     wxLogTrace( traceApi, "SCH frame: EDA_EVT_PLUGIN_AVAILABILITY_CHANGED" );
     RecreateToolbars();
     aEvt.Skip();
 }
-#endif
 
 
 void SCH_EDIT_FRAME::ToggleSearch()
@@ -2986,7 +3015,7 @@ void SCH_EDIT_FRAME::ToggleLibraryTree()
                                           cfg->m_AuiPanels.design_blocks_panel_float_height );
             m_auimgr.Update();
         }
-        else if( cfg->m_AuiPanels.design_blocks_panel_docked_width > 0 )
+        else
         {
             // SetAuiPaneSize also updates m_auimgr
             SetAuiPaneSize( m_auimgr, db_library_pane,
@@ -3198,8 +3227,180 @@ void SCH_EDIT_FRAME::RemoveVariant()
 }
 
 
+bool SCH_EDIT_FRAME::validateNewVariantName( const wxString& aName, const wxString& aExcludeName )
+{
+    if( aName.IsEmpty() )
+    {
+        GetInfoBar()->ShowMessageFor( _( "Variant name cannot be empty." ), 10000, wxICON_ERROR );
+        return false;
+    }
+
+    if( aName.CmpNoCase( GetDefaultVariantName() ) == 0 )
+    {
+        GetInfoBar()->ShowMessageFor(
+                wxString::Format( _( "'%s' is a reserved variant name." ), GetDefaultVariantName() ),
+                10000, wxICON_ERROR );
+        return false;
+    }
+
+    for( const wxString& existingName : Schematic().GetVariantNames() )
+    {
+        if( existingName.CmpNoCase( aName ) == 0 && existingName.CmpNoCase( aExcludeName ) != 0 )
+        {
+            GetInfoBar()->ShowMessageFor(
+                    wxString::Format( _( "Variant '%s' already exists." ), existingName ),
+                    10000, wxICON_ERROR );
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+void SCH_EDIT_FRAME::RenameVariant()
+{
+    wxArrayString choices = Schematic().GetVariantNamesForUI();
+
+    // Default variant cannot be renamed.
+    choices.RemoveAt( 0 );
+
+    if( choices.IsEmpty() )
+    {
+        GetInfoBar()->ShowMessageFor( _( "No variants to rename." ), 10000, wxICON_INFORMATION );
+        return;
+    }
+
+    wxSingleChoiceDialog selDlg( this,
+                                 _( "Select variant to rename:" ) + wxS( "                " ),
+                                 _( "Rename Design Variant" ), choices );
+    selDlg.Layout();
+
+    if( selDlg.ShowModal() == wxID_CANCEL )
+        return;
+
+    wxString oldName = selDlg.GetStringSelection();
+
+    if( oldName.IsEmpty() )
+        return;
+
+    wxTextEntryDialog nameDlg( this, _( "Enter new variant name:" ),
+                               _( "Rename Design Variant" ), oldName,
+                               wxOK | wxCANCEL | wxCENTER );
+
+    if( nameDlg.ShowModal() == wxID_CANCEL )
+        return;
+
+    wxString newName = nameDlg.GetValue().Trim().Trim( false );
+
+    if( newName == oldName )
+        return;
+
+    if( !validateNewVariantName( newName, oldName ) )
+        return;
+
+    // The model retargets the current variant to the new name, so capture whether the toolbar was
+    // showing the variant being renamed before the rename runs.
+    bool wasCurrent = Schematic().GetCurrentVariant() == oldName;
+
+    SCH_COMMIT commit( this );
+    Schematic().RenameVariant( oldName, newName, &commit );
+
+    if( !commit.Empty() )
+        commit.Push( wxString::Format( _( "Rename variant '%s' to '%s'" ), oldName, newName ) );
+
+    // The registry entry changes even when no symbol carries an override, so always mark dirty.
+    OnModify();
+
+    UpdateVariantSelectionCtrl( Schematic().GetVariantNamesForUI() );
+
+    // The renamed label just disappeared from the control, so a plain repopulate falls back to the
+    // default selection.  Re-selecting the new name resyncs the toolbar and (via SetCurrentVariant)
+    // repaints ${VARIANT} text; a non-current rename needs no redraw.
+    if( wasCurrent )
+        SetCurrentVariant( newName );
+}
+
+
+void SCH_EDIT_FRAME::CopyVariant()
+{
+    wxArrayString choices = Schematic().GetVariantNamesForUI();
+
+    // Default variant cannot be copied.
+    choices.RemoveAt( 0 );
+
+    if( choices.IsEmpty() )
+    {
+        GetInfoBar()->ShowMessageFor( _( "No variants to copy." ), 10000, wxICON_INFORMATION );
+        return;
+    }
+
+    wxSingleChoiceDialog selDlg( this,
+                                 _( "Select variant to copy:" ) + wxS( "                " ),
+                                 _( "Copy Design Variant" ), choices );
+    selDlg.Layout();
+
+    if( selDlg.ShowModal() == wxID_CANCEL )
+        return;
+
+    wxString sourceName = selDlg.GetStringSelection();
+
+    if( sourceName.IsEmpty() )
+        return;
+
+    wxTextEntryDialog nameDlg( this, _( "Enter name for the copied variant:" ),
+                               _( "Copy Design Variant" ),
+                               sourceName + wxS( "_copy" ),
+                               wxOK | wxCANCEL | wxCENTER );
+
+    if( nameDlg.ShowModal() == wxID_CANCEL )
+        return;
+
+    wxString newName = nameDlg.GetValue().Trim().Trim( false );
+
+    if( !validateNewVariantName( newName, wxEmptyString ) )
+        return;
+
+    SCH_COMMIT commit( this );
+    Schematic().CopyVariant( sourceName, newName, &commit );
+
+    if( !commit.Empty() )
+        commit.Push( wxString::Format( _( "Copy variant '%s' to '%s'" ), sourceName, newName ) );
+
+    // The new registry entry changes project state even when no symbol carries an override.
+    OnModify();
+
+    UpdateVariantSelectionCtrl( Schematic().GetVariantNamesForUI() );
+
+    // Switching to the freshly-created variant already refreshes properties and redraws.
+    SetCurrentVariant( newName );
+}
+
+
 bool SCH_EDIT_FRAME::doAutoSave()
 {
     // Delegate to base auto-save behavior (commits pending local history) for now.
     return EDA_BASE_FRAME::doAutoSave();
+}
+
+
+bool SCH_EDIT_FRAME::canRunAutoSave() const
+{
+    // Serializing the schematic on the UI thread freezes the editor; defer it while the user
+    // is mid-operation (any tool other than passive selection or point editing is active) so
+    // the snapshot waits for the timer to retry once the edit finishes.
+    TOOL_MANAGER* mgr = GetToolManager();
+
+    if( !mgr )
+        return true;
+
+    TOOL_BASE*        currentTool = mgr->GetCurrentTool();
+    SCH_POINT_EDITOR* pointEditor = mgr->GetTool<SCH_POINT_EDITOR>();
+
+    // The point editor is the active tool whenever a point-editable item is selected, even while
+    // idle, so it is safe to snapshot unless a drag is actively mutating the model.
+    if( currentTool == pointEditor )
+        return pointEditor && !pointEditor->IsDragging();
+
+    return currentTool == mgr->GetTool<SCH_SELECTION_TOOL>();
 }

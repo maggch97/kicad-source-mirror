@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "drc_re_routing_width_overlay_panel.h"
@@ -75,21 +71,6 @@ DRC_RE_ROUTING_WIDTH_OVERLAY_PANEL::DRC_RE_ROUTING_WIDTH_OVERLAY_PANEL(
                                            widthTolField->GetLabel(), false, false );
     widthTolField->SetUnitBinder( m_widthToleranceBinder.get() );
     widthTolField->GetControl()->SetValidator( VALIDATOR_NUMERIC_CTRL( false, false ) );
-
-    // Add ± label between opt width and tolerance
-    {
-        const DRC_RE_FIELD_POSITION& optPos = positions[0];
-        const DRC_RE_FIELD_POSITION& tolPos = positions[1];
-        int                          fieldHeight = optWidthField->GetControl()->GetBestSize().GetHeight();
-
-        auto*         plusMinus = new wxStaticText( this, wxID_ANY, wxS( "\u00B1" ) );
-        wxSize        pmSize = plusMinus->GetBestSize();
-        wxStaticText* optMmLabel = optWidthField->GetLabel();
-        int           afterOptLabel = optMmLabel->GetPosition().x + optMmLabel->GetBestSize().GetWidth();
-        int           gapMid = ( afterOptLabel + tolPos.xStart ) / 2;
-        plusMinus->SetPosition(
-                wxPoint( gapMid - pmSize.GetWidth() / 2, optPos.yTop + ( fieldHeight - pmSize.GetHeight() ) / 2 ) );
-    }
 
     auto notifyModified = [this]( wxCommandEvent& )
     {

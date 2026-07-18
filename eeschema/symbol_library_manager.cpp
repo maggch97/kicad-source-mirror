@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * https://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "symbol_library_manager.h"
@@ -125,6 +121,11 @@ wxArrayString SYMBOL_LIBRARY_MANAGER::GetLibraryNames() const
 
         res.Add( row->Nickname() );
     }
+
+    res.Sort( []( const wxString& lhs, const wxString& rhs ) -> int
+              {
+                  return StrNumCmp( lhs, rhs, true );
+              } );
 
     return res;
 }
@@ -455,6 +456,19 @@ SCH_SCREEN* SYMBOL_LIBRARY_MANAGER::GetScreen( const wxString& aSymbolName, cons
     std::shared_ptr<SYMBOL_BUFFER> symbolBuf = buf.GetBuffer( aSymbolName );
 
     return symbolBuf ? symbolBuf->GetScreen() : nullptr;
+}
+
+
+SYMBOL_BUFFER* SYMBOL_LIBRARY_MANAGER::GetBuffer( const wxString& aSymbolName,
+                                                  const wxString& aLibrary )
+{
+    if( !LibraryExists( aLibrary ) )
+        return nullptr;
+
+    LIB_BUFFER& libBuf = getLibraryBuffer( aLibrary );
+
+    // Buffers live as long as the manager, so the raw pointer dangles only if a caller outlives it.
+    return libBuf.GetBuffer( aSymbolName ).get();
 }
 
 

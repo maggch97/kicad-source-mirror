@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "altium_pcb.h"
@@ -27,6 +23,7 @@
 #include <altium_pcb_compound_file.h>
 #include <io/altium/altium_binary_parser.h>
 #include <io/altium/altium_parser_utils.h>
+#include <io/altium/altium_project_variants.h>
 
 #include <board.h>
 #include <board_design_settings.h>
@@ -40,6 +37,10 @@
 #include <pcb_textbox.h>
 #include <pcb_track.h>
 #include <pcb_barcode.h>
+#include <pcb_generator.h>
+#include <generators_mgr.h>
+#include <generators/pcb_tuning_pattern.h>
+#include <router/pns_meander.h>
 #include <core/profile.h>
 #include <string_utils.h>
 #include <tools/pad_tool.h>
@@ -417,6 +418,11 @@ void ALTIUM_PCB::Parse( const ALTIUM_PCB_COMPOUND_FILE&                  altiumP
           {
               this->ParseTracks6Data( aFile, fileHeader );
           } },
+        { false, ALTIUM_PCB_DIR::SMARTUNIONS,
+          [this]( const ALTIUM_PCB_COMPOUND_FILE& aFile, auto fileHeader )
+          {
+              this->ParseSmartUnions6Data( aFile, fileHeader );
+          } },
         { false, ALTIUM_PCB_DIR::WIDESTRINGS6,
           [this]( const ALTIUM_PCB_COMPOUND_FILE& aFile, auto fileHeader )
           {
@@ -562,6 +568,10 @@ void ALTIUM_PCB::Parse( const ALTIUM_PCB_COMPOUND_FILE&                  altiumP
             }
         }
     }
+
+    // Rebuild interactive length-tuning meanders from the SmartUnions definitions now that all
+    // copper that the unions reference has been created and added to the board.
+    HelperCreateTuningPatterns();
 
     // fixup zone priorities since Altium stores them in the opposite order
     for( ZONE* zone : m_polygons )
@@ -1108,6 +1118,9 @@ void ALTIUM_PCB::ParseBoard6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcb
                                               wxString( layer.dielectricmaterial ) );
         ( *it )->SetEpsilonR( layer.dielectricconst, 0 );
 
+        if( layer.dielectriclosstangent > 0. )
+            ( *it )->SetLossTangent( layer.dielectriclosstangent, 0 );
+
         ++it;
     }
 
@@ -1556,7 +1569,7 @@ void ALTIUM_PCB::ParseComponents6Data( const ALTIUM_PCB_COMPOUND_FILE& aAltiumPc
 
         footprint->SetReference( reference );
 
-        KIID id( elem.sourceUniqueID );
+        KIID id = AltiumUniqueIdToKiid( elem.sourceUniqueID );
         KIID pathid( elem.sourceHierachicalPath );
         KIID_PATH path;
         path.push_back( pathid );
@@ -3379,7 +3392,11 @@ void ALTIUM_PCB::ConvertArcs6ToBoardItemOnLayer( const AARC6& aElem, PCB_LAYER_I
             arc->SetLayer( aLayer );
             arc->SetNetCode( GetNetCode( aElem.net ) );
 
-            m_board->Add( arc.release(), ADD_MODE::APPEND );
+            PCB_ARC* added = arc.release();
+            m_board->Add( added, ADD_MODE::APPEND );
+
+            if( aElem.unionindex != 0 )
+                m_unionToBoardItems[static_cast<int>( aElem.unionindex )].push_back( added );
         }
     }
     else
@@ -4245,13 +4262,22 @@ void ALTIUM_PCB::ParseVias6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcbF
         }
         }
 
-        if( elem.soldermask_expansion_manual )
-        {
-            via->SetFrontTentingMode( elem.is_tent_top ? TENTING_MODE::TENTED
-                                                       : TENTING_MODE::NOT_TENTED );
-            via->SetBackTentingMode( elem.is_tent_bottom ? TENTING_MODE::TENTED
-                                                         : TENTING_MODE::NOT_TENTED );
-        }
+        // Altium can size the solder mask opening from the hole edge instead of the via land.
+        // KiCad vias cannot represent a hole-referenced opening, so when the resulting opening
+        // does not clear the via land the pad copper is covered and the via is effectively tented.
+        bool tentTop = altiumViaSideIsTented( elem.is_tent_top, elem.soldermask_expansion_manual,
+                                              elem.soldermask_expansion_from_hole, elem.holesize,
+                                              elem.soldermask_expansion_front,
+                                              via->GetWidth( F_Cu ) );
+
+        bool tentBottom = altiumViaSideIsTented( elem.is_tent_bottom,
+                                                 elem.soldermask_expansion_manual,
+                                                 elem.soldermask_expansion_from_hole, elem.holesize,
+                                                 elem.soldermask_expansion_back,
+                                                 via->GetWidth( B_Cu ) );
+
+        via->SetFrontTentingMode( tentTop ? TENTING_MODE::TENTED : TENTING_MODE::NOT_TENTED );
+        via->SetBackTentingMode( tentBottom ? TENTING_MODE::TENTED : TENTING_MODE::NOT_TENTED );
 
         m_board->Add( via.release(), ADD_MODE::APPEND );
     }
@@ -4447,7 +4473,11 @@ void ALTIUM_PCB::ConvertTracks6ToBoardItemOnLayer( const ATRACK6& aElem, PCB_LAY
         track->SetLayer( aLayer );
         track->SetNetCode( GetNetCode( aElem.net ) );
 
-        m_board->Add( track.release(), ADD_MODE::APPEND );
+        PCB_TRACK* added = track.release();
+        m_board->Add( added, ADD_MODE::APPEND );
+
+        if( aElem.unionindex != 0 )
+            m_unionToBoardItems[static_cast<int>( aElem.unionindex )].push_back( added );
     }
     else
     {
@@ -4490,6 +4520,114 @@ void ALTIUM_PCB::ParseWideStrings6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAlt
     if( reader.GetRemainingBytes() != 0 )
         THROW_IO_ERROR( wxT( "WideStrings6 stream is not fully parsed" ) );
 }
+
+void ALTIUM_PCB::ParseSmartUnions6Data( const ALTIUM_PCB_COMPOUND_FILE&  aAltiumPcbFile,
+                                        const CFB::COMPOUND_FILE_ENTRY* aEntry )
+{
+    ALTIUM_BINARY_PARSER reader( aAltiumPcbFile, aEntry );
+
+    while( reader.GetRemainingBytes() >= 4 )
+    {
+        checkpoint();
+        ASMARTUNION6 elem( reader );
+
+        if( elem.is_tuning && elem.unionindex != 0 )
+            m_tuningUnions.emplace_back( std::move( elem ) );
+    }
+
+    if( reader.GetRemainingBytes() != 0 )
+        THROW_IO_ERROR( wxT( "SmartUnions6 stream is not fully parsed" ) );
+}
+
+
+void ALTIUM_PCB::HelperCreateTuningPatterns()
+{
+    int created = 0;
+
+    for( const ASMARTUNION6& tuning : m_tuningUnions )
+    {
+        auto itemsIt = m_unionToBoardItems.find( tuning.unionindex );
+
+        // Altium commits the tuned copper as ordinary tracks and arcs.  Without those primitives
+        // there is nothing to wrap, so drop the meander rather than fabricate geometry.
+        if( itemsIt == m_unionToBoardItems.end() || itemsIt->second.empty() )
+            continue;
+
+        const std::vector<BOARD_ITEM*>& items = itemsIt->second;
+
+        LENGTH_TUNING_MODE mode = tuning.is_diffpair ? LENGTH_TUNING_MODE::DIFF_PAIR
+                                                     : LENGTH_TUNING_MODE::SINGLE;
+
+        PCB_LAYER_ID layer = items.front()->GetLayer();
+
+        PCB_GENERATOR* generator = GENERATORS_MGR::Instance().CreateFromType( wxS( "tuning_pattern" ) );
+
+        if( !generator )
+            continue;
+
+        std::unique_ptr<PCB_TUNING_PATTERN> pattern( static_cast<PCB_TUNING_PATTERN*>( generator ) );
+        pattern->SetParent( m_board );
+        pattern->SetLayer( layer );
+        pattern->SetTuningMode( mode );
+
+        pattern->SetMaxAmplitude( tuning.amplitude );
+        pattern->SetMinAmplitude( tuning.minamplitude );
+        pattern->SetSpacing( tuning.gap );
+        pattern->SetSingleSided( tuning.singleside );
+
+        // Altium "Style" selects mitered (chamfered) versus rounded corners.  The committed
+        // copper carries the real geometry; this only governs a later interactive re-tune.
+        pattern->SetRounded( tuning.style != 0 );
+
+        if( tuning.mitterradiusratio > 0.0 )
+        {
+            int percent = KiROUND( tuning.mitterradiusratio * 100.0 );
+            pattern->SetCornerRadiusPercentage( std::clamp( percent, 0, 100 ) );
+        }
+
+        BOX2I bbox;
+        int   netCode = -1;
+        bool  singleNet = true;
+
+        for( BOARD_ITEM* item : items )
+        {
+            pattern->AddItem( item );
+            bbox.Merge( item->GetBoundingBox() );
+
+            if( BOARD_CONNECTED_ITEM* bci = dynamic_cast<BOARD_CONNECTED_ITEM*>( item ) )
+            {
+                if( netCode < 0 )
+                    netCode = bci->GetNetCode();
+                else if( netCode != bci->GetNetCode() )
+                    singleNet = false;
+            }
+        }
+
+        // SetNetCode reassigns the net of every member, so only apply it when the union is on a
+        // single net.  Differential-pair meanders span two nets that must both be preserved.
+        if( netCode >= 0 && singleNet )
+            pattern->SetNetCode( netCode );
+
+        if( PCB_TRACK* track = dynamic_cast<PCB_TRACK*>( items.front() ) )
+            pattern->SetWidth( track->GetWidth() );
+
+        // The router rebuilds the baseline from the member tracks when the pattern is edited;
+        // the stored endpoints are only an initial hint, so the member extents suffice.
+        pattern->SetPosition( bbox.GetOrigin() );
+        pattern->SetEnd( bbox.GetEnd() );
+
+        m_board->Add( pattern.release(), ADD_MODE::INSERT );
+        created++;
+    }
+
+    if( m_reporter && created > 0 )
+    {
+        m_reporter->Report( wxString::Format( _( "Imported %d length-tuning pattern(s)." ),
+                                              created ),
+                            RPT_SEVERITY_INFO );
+    }
+}
+
 
 void ALTIUM_PCB::ParseTexts6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcbFile,
                                   const CFB::COMPOUND_FILE_ENTRY* aEntry )
@@ -4568,18 +4706,21 @@ void ALTIUM_PCB::ConvertTexts6ToBoardItemOnLayer( const ATEXT6& aElem, PCB_LAYER
     {
         item = pcbTextbox.get();
         text = pcbTextbox.get();
-
-        ConvertTexts6ToEdaTextSettings( aElem, *text );
-        HelperSetTextboxAlignmentAndPos( aElem, pcbTextbox.get() );
-    }
-    else
-    {
-        ConvertTexts6ToEdaTextSettings( aElem, *text );
-        HelperSetTextAlignmentAndPos( aElem, text );
     }
 
     text->SetText( kicadText );
+
+    // Set the layer before the alignment helpers run.  HelperSetTextAlignmentAndPos measures the
+    // text via GetTextBox(), which resolves layer-dependent special strings such as ${LAYER}.
     item->SetLayer( aLayer );
+
+    ConvertTexts6ToEdaTextSettings( aElem, *text );
+
+    if( isTextbox )
+        HelperSetTextboxAlignmentAndPos( aElem, pcbTextbox.get() );
+    else
+        HelperSetTextAlignmentAndPos( aElem, text );
+
     item->SetIsKnockout( aElem.isInverted );
 
     if( isTextbox )
@@ -4630,21 +4771,24 @@ void ALTIUM_PCB::ConvertTexts6ToFootprintItemOnLayer( FOOTPRINT* aFootprint, con
     {
         item = fpTextbox.get();
         text = fpTextbox.get();
-
-        ConvertTexts6ToEdaTextSettings( aElem, *text );
-        HelperSetTextboxAlignmentAndPos( aElem, fpTextbox.get() );
-    }
-    else
-    {
-        ConvertTexts6ToEdaTextSettings( aElem, *text );
-        HelperSetTextAlignmentAndPos( aElem, text );
     }
 
     wxString kicadText = AltiumPcbSpecialStringsToKiCadStrings( aElem.text, variableMap );
 
     text->SetText( kicadText );
-    text->SetKeepUpright( false );
+
+    // Set the layer before the alignment helpers run.  HelperSetTextAlignmentAndPos measures the
+    // text via GetTextBox(), which resolves layer-dependent special strings such as ${LAYER}.
     item->SetLayer( aLayer );
+
+    ConvertTexts6ToEdaTextSettings( aElem, *text );
+
+    if( isTextbox )
+        HelperSetTextboxAlignmentAndPos( aElem, fpTextbox.get() );
+    else
+        HelperSetTextAlignmentAndPos( aElem, text );
+
+    text->SetKeepUpright( false );
     item->SetIsKnockout( aElem.isInverted );
 
     if( toAdd )
@@ -4801,6 +4945,21 @@ void ALTIUM_PCB::HelperSetTextAlignmentAndPos( const ATEXT6& aElem, EDA_TEXT* aT
     int margin = aElem.isOffsetBorder ? aElem.text_offset_width : aElem.margin_border_width;
     int rectWidth = aElem.textbox_rect_width - margin * 2;
     int rectHeight = aElem.height;
+
+    // Altium auto-sizes the bounding box of a free string (non-frame text) from its own glyph
+    // rasterizer, and stores a slightly different width for otherwise identical strings placed on
+    // different layers (e.g. the copper and soldermask copies of the same label, which Altium may
+    // also give different stroke widths).  Anchoring the KiCad text to that per-record width drives
+    // the two copies apart.  Center the text on its bare glyph run instead, measured from the
+    // already-populated EDA_TEXT with the pen inflation removed, so copies that share a glyph run
+    // stay coincident regardless of stroke width.
+    if( !aElem.isFrame )
+    {
+        rectWidth = aText->GetTextBox( nullptr ).GetWidth();
+
+        if( KIFONT::FONT* font = aText->GetFont(); !font || font->IsStroke() )
+            rectWidth -= 3 * aText->GetEffectiveTextPenWidth();
+    }
 
     if( aElem.isMirrored )
         rectWidth = -rectWidth;

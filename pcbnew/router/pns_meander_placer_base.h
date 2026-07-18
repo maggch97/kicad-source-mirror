@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef __PNS_MEANDER_PLACER_BASE_H
@@ -130,8 +130,6 @@ protected:
      * length by \a aElongation.
      */
     void tuneLineLength( MEANDERED_LINE& aTuned, long long int aElongation );
-
-    VECTOR2I getSnappedStartPoint( LINKED_ITEM* aStartItem, VECTOR2I aStartPoint );
 
     /**
      * Calculate the total length of the line represented by an item set (tracks and vias)

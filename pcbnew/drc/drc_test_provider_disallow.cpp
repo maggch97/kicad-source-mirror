@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <atomic>
@@ -130,7 +126,7 @@ bool DRC_TEST_PROVIDER_DISALLOW::Run()
                     // Collisions include touching, so we need to deflate outline by enough to
                     // exclude it.  This is particularly important for detecting copper fills as
                     // they will be exactly touching along the entire exclusion border.
-                    SHAPE_POLY_SET areaPoly = ruleArea->Outline()->CloneDropTriangulation();
+                    SHAPE_POLY_SET areaPoly = ruleArea->GetBoardOutline();
                     areaPoly.Fracture();
                     areaPoly.Deflate( epsilon, CORNER_STRATEGY::ALLOW_ACUTE_CORNERS, ARC_LOW_DEF );
 
@@ -161,11 +157,7 @@ bool DRC_TEST_PROVIDER_DISALLOW::Run()
                     return 0;
 
                 PTR_PTR_LAYER_CACHE_KEY key = { ruleArea, copperZone, UNDEFINED_LAYER };
-
-                {
-                    std::unique_lock<std::shared_mutex> writeLock( board->m_CachesMutex );
-                    board->m_IntersectsAreaCache[ key ] = isInside;
-                }
+                board->m_IntersectsAreaCache.Set( key, isInside );
 
                 done.fetch_add( 1 );
 
@@ -205,19 +197,19 @@ bool DRC_TEST_PROVIDER_DISALLOW::Run()
     std::atomic<size_t> itemsDone( 0 );
     size_t              itemCount = allItems.size();
 
-    auto checkTextOnEdgeCuts =
-            []( BOARD_ITEM* item ) -> bool
-            {
-                if( item->Type() == PCB_FIELD_T
-                        || item->Type() == PCB_TEXT_T
-                        || item->Type() == PCB_TEXTBOX_T
-                        || BaseType( item->Type() ) == PCB_DIMENSION_T )
-                {
-                    return item->GetLayer() == Edge_Cuts;
-                }
+    auto checkTextOnEdgeCuts = []( BOARD_ITEM* item ) -> bool
+    {
+        // Items that plot geometry onto Edge.Cuts corrupt the board outline.
+        // Reference images are excluded on purpose because they are never plotted.
+        if( item->Type() == PCB_FIELD_T || item->Type() == PCB_TEXT_T || item->Type() == PCB_TEXTBOX_T
+            || item->Type() == PCB_TABLE_T || item->Type() == PCB_BARCODE_T
+            || BaseType( item->Type() ) == PCB_DIMENSION_T )
+        {
+            return item->GetLayer() == Edge_Cuts;
+        }
 
-                return false;
-            };
+        return false;
+    };
 
     auto processItem =
             [&]( const int idx ) -> size_t
@@ -277,8 +269,9 @@ bool DRC_TEST_PROVIDER_DISALLOW::Run()
                                     int                    dummyActual;
                                     VECTOR2I               pos;
 
-                                    if( static_cast<ZONE*>( other )->Outline()->Collide( shape.get(), 0, &dummyActual,
-                                                                                         &pos ) )
+                                    SHAPE_POLY_SET zoneOutline = static_cast<ZONE*>( other )->GetBoardOutline();
+
+                                    if( zoneOutline.Collide( shape.get(), 0, &dummyActual, &pos ) )
                                     {
                                         std::shared_ptr<DRC_ITEM> drcItem =
                                                 DRC_ITEM::Create( DRCE_ALLOWED_ITEMS );
@@ -328,7 +321,8 @@ bool DRC_TEST_PROVIDER_DISALLOW::Run()
                                                 item->GetEffectiveShape( layer );
                                         int dummyActual;
 
-                                        keepout->Outline()->Collide( shape.get(), 0, &dummyActual, &pos );
+                                        SHAPE_POLY_SET keepoutOutline = keepout->GetBoardOutline();
+                                        keepoutOutline.Collide( shape.get(), 0, &dummyActual, &pos );
                                     }
                                 }
 

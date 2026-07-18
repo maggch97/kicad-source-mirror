@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <lib_tree_model.h>
@@ -284,7 +284,8 @@ LIB_TREE_NODE_LIBRARY::LIB_TREE_NODE_LIBRARY( LIB_TREE_NODE* aParent, wxString c
     m_Parent = aParent;
     m_LibId.SetLibNickname( aName );
 
-    m_SearchTerms.emplace_back( SEARCH_TERM( aName, 8 ) );
+    // Use the source list, otherwise RebuildSearchTerms wipes it on the next rebuild.
+    m_sourceSearchTerms.emplace_back( SEARCH_TERM( aName, 8, true ) );
 }
 
 

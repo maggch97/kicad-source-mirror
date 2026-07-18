@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>
@@ -75,6 +75,7 @@ JSON_SETTINGS::JSON_SETTINGS( const wxString& aFilename, SETTINGS_LOC aLocation,
         m_createIfDefault( aCreateIfDefault ),
         m_writeFile( aWriteFile ),
         m_modified( false ),
+        m_fileSynced( false ),
         m_deleteLegacyAfterMigration( true ),
         m_resetParamsIfMissing( true ),
         m_schemaVersion( aSchemaVersion ),
@@ -101,6 +102,13 @@ JSON_SETTINGS::JSON_SETTINGS( const wxString& aFilename, SETTINGS_LOC aLocation,
 
 JSON_SETTINGS::~JSON_SETTINGS()
 {
+    // ReleaseNestedSettings erases from m_nested_settings, so snapshot first to avoid
+    // iterating an invalidated container
+    std::vector<NESTED_SETTINGS*> nestedToRelease( m_nested_settings );
+
+    for( NESTED_SETTINGS* nested : nestedToRelease )
+        ReleaseNestedSettings( nested );
+
     for( PARAM_BASE* param: m_params )
         delete param;
 
@@ -361,6 +369,10 @@ bool JSON_SETTINGS::LoadFromFile( const wxString& aDirectory )
 
     m_modified = false;
 
+    // A missing backing file leaves the store empty, which must not count as synchronized
+    if( success )
+        m_fileSynced = true;
+
     // If we migrated, clean up the legacy file (with no extension). Save the migrated
     // contents FIRST so that if the save fails we still have the legacy file on disk to
     // fall back to -- otherwise a crash mid-migration leaves the user with neither copy.
@@ -549,7 +561,10 @@ bool JSON_SETTINGS::SaveToFile( const wxString& aDirectory, bool aForce )
     }
 
     if( success )
+    {
         m_modified = false;
+        m_fileSynced = true;
+    }
 
     return success;
 }

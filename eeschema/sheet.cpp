@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <sch_draw_panel.h>
@@ -77,7 +73,7 @@ bool SCH_EDIT_FRAME::CheckSheetForRecursion( SCH_SHEET* aSheet, SCH_SHEET_PATH* 
 
     // SCH_SCREEN object file paths are expected to be absolute.  If this assert fires,
     // something is seriously broken.
-    wxASSERT( wxFileName( destFilePath ).IsAbsolute() );
+    wxASSERT_MSG( wxFileName( destFilePath ).IsAbsolute(), destFilePath + wxS( " is not absolute" ) );
 
     if( schematicSheets.TestForRecursion( loadedSheets, destFilePath ) )
     {
@@ -179,8 +175,10 @@ bool SCH_EDIT_FRAME::ChangeSheetFile( SCH_SHEET* aSheet, const wxString& aNewFil
                                       const wxString* aSourceSheetFilename )
 {
     wxString    msg;
-    wxFileName  sheetFileName( aNewFilename );
     SCHEMATIC&  schematic = Schematic();
+
+    // Resolve text variables before touching disk. The field keeps the raw text for portability.
+    wxFileName  sheetFileName( ExpandTextVars( aNewFilename, &schematic.Project() ) );
     SCH_SCREEN* currentScreen = GetCurrentSheet().LastScreen();
 
     wxCHECK( currentScreen, false );
@@ -836,8 +834,8 @@ bool SCH_EDIT_FRAME::LoadSheetFromFile( SCH_SHEET* aSheet, SCH_SHEET_PATH* aCurr
     else
         aSheet->GetScreen()->Append( newScreen );
 
-    SCH_SCREENS allLoadedScreens( aSheet );
-    allLoadedScreens.ReplaceDuplicateTimeStamps();
+    SCH_SCREENS allProjectScreens( &Schematic().Root() );
+    allProjectScreens.ReplaceDuplicateTimeStamps();
 
     return true;
 }

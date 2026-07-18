@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef ALTIUM_PCB_H
@@ -85,6 +81,7 @@ enum class ALTIUM_PCB_DIR
 
 
 class BOARD;
+class BOARD_ITEM;
 class EDA_TEXT;
 class FP_SHAPE;
 class PCB_SHAPE;
@@ -200,6 +197,9 @@ private:
     void ConvertTracks6ToBoardItemOnLayer( const ATRACK6& aElem, PCB_LAYER_ID aLayer );
     void ConvertTracks6ToFootprintItemOnLayer( FOOTPRINT* aFootprint, const ATRACK6& aElem,
                                                PCB_LAYER_ID aLayer );
+    void ParseSmartUnions6Data( const ALTIUM_PCB_COMPOUND_FILE&  aAltiumPcbFile,
+                                const CFB::COMPOUND_FILE_ENTRY* aEntry );
+    void HelperCreateTuningPatterns();
     void ParseTexts6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcbFile,
                           const CFB::COMPOUND_FILE_ENTRY* aEntry );
     void ConvertTexts6ToBoardItem( const ATEXT6& aElem );
@@ -284,6 +284,9 @@ private:
     std::map<ALTIUM_RULE_KIND, std::vector<ARULE6>> m_rules;
     std::map<ALTIUM_RECORD, std::multimap<int, const AEXTENDED_PRIMITIVE_INFORMATION>>
             m_extendedPrimitiveInformationMaps;
+
+    std::vector<ASMARTUNION6>                  m_tuningUnions;
+    std::map<int, std::vector<BOARD_ITEM*>>    m_unionToBoardItems;
 
     std::map<ALTIUM_LAYER, ZONE*>        m_outer_plane;
 

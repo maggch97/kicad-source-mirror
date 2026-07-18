@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "dialog_git_commit.h"
@@ -171,21 +167,37 @@ DIALOG_GIT_COMMIT::DIALOG_GIT_COMMIT( wxWindow* parent, git_repository* repo,
     m_repo = repo;
     m_defaultAuthorName = defaultAuthorName;
     m_defaultAuthorEmail = defaultAuthorEmail;
+
+    updateOkButton();
+}
+
+
+void DIALOG_GIT_COMMIT::SetFileSelectionRequired( bool aRequired )
+{
+    m_requireFiles = aRequired;
+    updateOkButton();
+}
+
+
+void DIALOG_GIT_COMMIT::updateOkButton()
+{
+    bool hasMessage = !m_commitMessageTextCtrl->GetValue().IsEmpty();
+    bool needFiles = m_requireFiles && GetSelectedFiles().empty();
+
+    m_okButton->Enable( hasMessage && !needFiles );
+
+    if( !hasMessage )
+        m_okButton->SetToolTip( _( "Commit message cannot be empty" ) );
+    else if( needFiles )
+        m_okButton->SetToolTip( _( "Select at least one file to commit" ) );
+    else
+        m_okButton->SetToolTip( wxEmptyString );
 }
 
 
 void DIALOG_GIT_COMMIT::OnTextChanged( wxCommandEvent& aEvent )
 {
-    if( m_commitMessageTextCtrl->GetValue().IsEmpty() )
-    {
-        m_okButton->Disable();
-        m_okButton->SetToolTip( _( "Commit message cannot be empty" ) );
-    }
-    else
-    {
-        m_okButton->Enable();
-        m_okButton->SetToolTip( wxEmptyString );
-    }
+    updateOkButton();
 }
 
 
@@ -256,6 +268,8 @@ void DIALOG_GIT_COMMIT::OnItemChecked( wxListEvent& aEvent )
                 m_listCtrl->CheckItem( item, true );
         }
     }
+
+    updateOkButton();
 }
 
 
@@ -273,4 +287,6 @@ void DIALOG_GIT_COMMIT::OnItemUnchecked( wxListEvent& aEvent )
                 m_listCtrl->CheckItem( item, false );
         }
     }
+
+    updateOkButton();
 }

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_TEXT_H
@@ -94,17 +90,50 @@ public:
 
     bool Matches( const EDA_SEARCH_DATA& aSearchData, void* aAuxData ) const override;
 
-    virtual VECTOR2I GetPosition() const override { return EDA_TEXT::GetTextPos(); }
+    virtual VECTOR2I GetPosition() const override { return GetTextPos(); }
 
-    virtual void SetPosition( const VECTOR2I& aPos ) override { EDA_TEXT::SetTextPos( aPos ); }
+    virtual void SetPosition( const VECTOR2I& aPos ) override { SetTextPos( aPos ); }
 
-    void Move( const VECTOR2I& aMoveVector ) override { EDA_TEXT::Offset( aMoveVector ); }
+    void Move( const VECTOR2I& aMoveVector ) override { Offset( aMoveVector ); }
+
+    VECTOR2I GetTextPos() const override;
+    void     Offset( const VECTOR2I& aOffset ) override;
+
+    // Lib-frame setters for the parser (board-frame setters bake the parent scale).
+    void SetLibTextPos( const VECTOR2I& aPos );
+    void SetLibTextSize( const VECTOR2I& aSize );
+    void SetLibTextThickness( int aWidth );
+
+    VECTOR2I GetTextSize() const override;
+    void     SetTextSize( VECTOR2I aNewSize, bool aEnforceMinTextSize = true ) override;
+
+    int  GetTextThickness() const override;
+    void SetTextThickness( int aWidth ) override;
+
+    EDA_ANGLE GetTextAngle() const override;
+    void      SetTextAngle( const EDA_ANGLE& aAngle ) override;
+
+    /**
+     * Text angle in the parent footprint's lib frame, or absolute when not
+     * in a footprint.
+     */
+    const EDA_ANGLE& GetLibTextAngle() const { return m_libTextAngle; }
+    void             SetLibTextAngle( const EDA_ANGLE& aAngle )
+    {
+        m_libTextAngle = aAngle;
+        m_libTextAngle.Normalize();
+    }
 
     void Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle ) override;
 
     void Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
 
     void Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
+
+    void OnFootprintRescaled( double aRatioX, double aRatioY, double aLinearFactor, const VECTOR2I& aAnchor,
+                              const EDA_ANGLE& aParentRotate ) override;
+
+    void OnFootprintTransformed() override;
 
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
@@ -203,6 +232,8 @@ protected:
 
 private:
     mutable std::unique_ptr<PCB_TEXT_KNOCKOUT_CACHE_DATA> m_knockout_cache;
+
+    EDA_ANGLE m_libTextAngle; // Text angle in parent footprint's lib frame
 };
 
 #endif // #define PCB_TEXT_H

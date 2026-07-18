@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <cstring>
@@ -31,6 +27,23 @@
 #include <ki_exception.h>
 #include <macros.h>     // TO_UTF8()
 #include <lib_id.h>
+#include <name_validation.h>
+
+
+const wxString& GetLibIdForbiddenChars()
+{
+    static const wxString chars = wxS( "<>\"\\:\t\n\r" );
+    return chars;
+}
+
+
+const wxString& GetLibFilenameForbiddenChars()
+{
+    // Filenames additionally forbid these path and format characters, which a LIB_ID name
+    // is allowed to contain.
+    static const wxString chars = GetLibIdForbiddenChars() + wxS( "%$/" );
+    return chars;
+}
 
 
 static int checkLibNickname( const UTF8& aField )
@@ -208,29 +221,7 @@ UTF8 LIB_ID::FixIllegalChars( const UTF8& aLibItemName, bool aLib )
 
 bool LIB_ID::isLegalChar( unsigned aUniChar )
 {
-    bool const space_allowed = true;
-    bool const illegal_filename_chars_allowed = false;
-
-    switch( aUniChar )
-    {
-    case ':':
-    case '\t':
-    case '\n':
-    case '\r':
-        return false;
-
-    case '\\':
-    case '<':
-    case '>':
-    case '"':
-        return illegal_filename_chars_allowed;
-
-    case ' ':
-        return space_allowed;
-
-    default:
-        return true;
-    }
+    return GetLibIdForbiddenChars().Find( wxUniChar( aUniChar ) ) == wxNOT_FOUND;
 }
 
 

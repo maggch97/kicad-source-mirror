@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCBNEW_JOBS_HANDLER_H
@@ -23,6 +23,7 @@
 
 #include <jobs/job_dispatcher.h>
 #include <pcb_plot_params.h>
+#include <diff_merge/diff_doc_kind.h>
 
 class KIWAY;
 class BOARD;
@@ -32,6 +33,8 @@ class JOB_EXPORT_PCB_GERBER;
 class JOB_EXPORT_PCB_GERBERS;
 class JOB_FP_EXPORT_SVG;
 class TOOL_MANAGER;
+class REPORTER;
+class wxWindow;
 
 class PCBNEW_JOBS_HANDLER : public JOB_DISPATCHER
 {
@@ -60,6 +63,25 @@ public:
     int JobExportStats( JOB* aJob );
     int JobUpgrade( JOB* aJob );
     int JobImport( JOB* aJob );
+    int JobDiff( JOB* aJob );
+    int JobFpDiff( JOB* aJob );
+
+    /// Non-job entry points (reached via the kiface KIFACE_MERGE_DOCUMENT /
+    /// KIFACE_OPEN_DIFF_DIALOG function exports, not the JOB system).
+    int RunMerge( KICAD_DIFF::DOC_KIND aKind, const wxString& aAncestor, const wxString& aOurs,
+                  const wxString& aTheirs, const wxString& aOutput, bool aInteractive,
+                  bool aSingleFile, REPORTER* aReporter );
+    int OpenDiffDialog( KICAD_DIFF::DOC_KIND aKind, const wxString& aFileA, const wxString& aFileB,
+                        const wxString& aLabelA, const wxString& aLabelB, wxWindow* aParent,
+                        REPORTER* aReporter );
+
+private:
+    int runPcbMerge( const wxString& aAncestor, const wxString& aOurs, const wxString& aTheirs,
+                     const wxString& aOutput, bool aInteractive );
+    int runFpLibMerge( const wxString& aAncestor, const wxString& aOurs, const wxString& aTheirs,
+                       const wxString& aOutput, bool aSingleFile );
+
+public:
 
     /**
      * Clear the cached CLI board so the next job reloads from the current project.
@@ -83,7 +105,7 @@ private:
 
     TOOL_MANAGER* getToolManager( BOARD* aBrd );
 
-    BOARD* m_cliBoard;
+    std::unique_ptr<BOARD> m_cliBoard;
     std::unique_ptr<TOOL_MANAGER> m_toolManager;
 };
 

@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PADS_COMMON_H
@@ -23,6 +23,7 @@
 #include <kiid.h>
 #include <string>
 
+#include <font/text_attributes.h>
 #include <stroke_params.h>
 #include <wx/string.h>
 
@@ -133,12 +134,42 @@ double ParseDouble( const std::string& aStr, double aDefault = 0.0,
 wxString ConvertInvertedNetName( const std::string& aNetName );
 
 /**
+ * Decode text from a PADS file, which uses an 8-bit codepage rather than UTF-8.
+ *
+ * A direct UTF-8 conversion discards the whole string on the first high byte, so
+ * decode UTF-8 when valid and otherwise fall back to Windows-1252 / ISO-8859-1.
+ *
+ * @param aText Raw text bytes from the PADS file.
+ * @return Decoded wxString.
+ */
+wxString ConvertText( const std::string& aText );
+
+/**
  * Convert a PADS line style integer to a KiCad LINE_STYLE enum value.
  *
  * PADS stores line style as an unsigned int that should be interpreted as
  * a signed int8_t for mapping.
  */
 LINE_STYLE PadsLineStyleToKiCad( int aPadsStyle );
+
+/**
+ * Decode a PADS text justification code into KiCad horizontal and vertical alignment.
+ *
+ * PADS encodes the anchor of a text string as a single integer combining a vertical
+ * band and a horizontal code:
+ *   value = vertical_band + horizontal_code
+ *   vertical bands  bottom (0..1), top (2..7), middle (8..)
+ *   horizontal codes  left=0, right=1, center=4
+ *
+ * The same encoding is used for free text, part field labels and net name labels, so
+ * both the PCB and schematic importers share this decode to stay consistent.
+ *
+ * @param aJustification Raw PADS justification code.
+ * @param aHJustify Receives the decoded horizontal alignment.
+ * @param aVJustify Receives the decoded vertical alignment.
+ */
+void DecodeJustification( int aJustification, GR_TEXT_H_ALIGN_T& aHJustify,
+                          GR_TEXT_V_ALIGN_T& aVJustify );
 
 } // namespace PADS_COMMON
 

@@ -15,21 +15,34 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef HASHTABLES_H_
 #define HASHTABLES_H_
 
+#include <cstddef>
 #include <unordered_map>
 
 #include <wx/string.h>
 
 // First some utility classes and functions
+
+
+/**
+ * Fold @p aValue into the running hash @p aSeed using the well-known Boost
+ * hash_combine mixing step. The magic constant is the 32-bit fractional part of
+ * the golden ratio; the shifts spread bits so combining values is order-
+ * sensitive and collisions stay rare.
+ *
+ * Used to build content hashes that must stay stable across runs (e.g. the
+ * diff-engine summary strings), so the mixing formula must not change once
+ * persisted output depends on it.
+ */
+inline std::size_t KiHashCombine( std::size_t aSeed, std::size_t aValue )
+{
+    return aSeed ^ ( aValue + 0x9e3779b9 + ( aSeed << 6 ) + ( aSeed >> 2 ) );
+}
 
 /// Equality test for "const char*" type used in very specialized KEYWORD_MAP below
 struct iequal_to

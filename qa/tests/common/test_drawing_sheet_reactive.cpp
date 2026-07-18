@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #define BOOST_TEST_NO_MAIN
@@ -22,7 +22,9 @@
 
 #include <algorithm>
 #include <base_units.h>
+#include <drawing_sheet/ds_data_item.h>
 #include <drawing_sheet/ds_data_model.h>
+#include <drawing_sheet/ds_draw_item.h>
 #include <drawing_sheet/ds_proxy_view_item.h>
 #include <page_info.h>
 #include <text_var_dependency.h>
@@ -157,6 +159,83 @@ BOOST_AUTO_TEST_CASE( DestructorAutoUnregisters )
     // Proxy destructor must clean up the index so no dangling pointer remains
     // for a future invalidation to match against.
     BOOST_CHECK_EQUAL( tracker.Index().ItemCount(), 0u );
+}
+
+
+BOOST_AUTO_TEST_CASE( RepeatedTextKeepsAllInstancesWithNegativeStep )
+{
+    // Regression: a repeated text used to lose every copy when the step was
+    // negative, because IsInsidePage() tested a phantom end point anchored to
+    // the bottom-right corner (text has no real end point). See #24309.
+    DS_DATA_MODEL& model = DS_DATA_MODEL::GetTheInstance();
+    model.ClearList();
+
+    DS_DATA_ITEM_TEXT* text = new DS_DATA_ITEM_TEXT( wxT( "1" ) );
+    text->SetStart( 60.0, 60.0, LT_CORNER );
+    text->m_RepeatCount = 8;
+    text->m_IncrementLabel = 1;
+    text->m_IncrementVector = VECTOR2D( -5.0, -5.0 );
+    model.Append( text );
+
+    PAGE_INFO   page;
+    TITLE_BLOCK tb;
+
+    DS_DRAW_ITEM_LIST drawList( unityScale );
+    drawList.BuildDrawItemsList( page, tb );
+
+    int textCount = 0;
+
+    for( DS_DRAW_ITEM_BASE* item = drawList.GetFirst(); item; item = drawList.GetNext() )
+    {
+        if( item->Type() == WSG_TEXT_T )
+            textCount++;
+    }
+
+    BOOST_CHECK_EQUAL( textCount, 8 );
+}
+
+
+static std::vector<wxString> repeatTexts( const wxString& aBase, int aCount, int aLabelStep )
+{
+    DS_DATA_MODEL& model = DS_DATA_MODEL::GetTheInstance();
+    model.ClearList();
+
+    DS_DATA_ITEM_TEXT* text = new DS_DATA_ITEM_TEXT( aBase );
+    text->SetStart( 60.0, 60.0, LT_CORNER );
+    text->m_RepeatCount = aCount;
+    text->m_IncrementLabel = aLabelStep;
+    text->m_IncrementVector = VECTOR2D( 2.0, 2.0 );
+    model.Append( text );
+
+    PAGE_INFO   page;
+    TITLE_BLOCK tb;
+
+    DS_DRAW_ITEM_LIST drawList( unityScale );
+    drawList.BuildDrawItemsList( page, tb );
+
+    std::vector<wxString> out;
+
+    for( DS_DRAW_ITEM_BASE* item = drawList.GetFirst(); item; item = drawList.GetNext() )
+    {
+        if( item->Type() == WSG_TEXT_T )
+            out.push_back( static_cast<DS_DRAW_ITEM_TEXT*>( item )->GetText() );
+    }
+
+    return out;
+}
+
+
+BOOST_AUTO_TEST_CASE( RepeatedLabelStepsLettersAndNumbersCleanly )
+{
+    // A trailing letter must roll z -> aa, never into punctuation, and a
+    // trailing multi-digit number must carry (19 -> 20, not 110).
+    const std::vector<wxString> letters = repeatTexts( wxT( "y" ), 5, 1 );
+    const std::vector<wxString> expLetters = { wxT( "y" ), wxT( "z" ), wxT( "aa" ), wxT( "ab" ), wxT( "ac" ) };
+    BOOST_CHECK_EQUAL_COLLECTIONS( letters.begin(), letters.end(), expLetters.begin(), expLetters.end() );
+
+    const std::vector<wxString> numbers = repeatTexts( wxT( "19" ), 3, 1 );
+    const std::vector<wxString> expNumbers = { wxT( "19" ), wxT( "20" ), wxT( "21" ) };
+    BOOST_CHECK_EQUAL_COLLECTIONS( numbers.begin(), numbers.end(), expNumbers.begin(), expNumbers.end() );
 }
 
 

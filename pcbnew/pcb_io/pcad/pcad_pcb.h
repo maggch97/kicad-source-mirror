@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_H_
@@ -31,7 +27,10 @@
 #include <pcad/pcad_callbacks.h>
 #include <pcad/pcad_footprint.h>
 
+class REPORTER;
+
 #include <map>
+#include <set>
 #include <wx/arrstr.h>
 
 class BOARD;
@@ -84,7 +83,16 @@ public:
     PCAD_COMPONENTS_ARRAY   m_PcbComponents;    // PCB footprints,Lines,Routes,Texts, .... and so on
     PCAD_NETS_ARRAY         m_PcbNetlist;       // net objects collection
     wxString                m_DefaultMeasurementUnit;
+    void reportUnknownLayer( int aPCadLayer ) const;
+
     std::map<int, TLAYER>   m_LayersMap;        // flexible layers mapping
+    mutable std::set<int>   m_reportedLayers;   // unknown layers already warned about
+
+public:
+    void SetReporter( REPORTER* aReporter ) { m_reporter = aReporter; }
+
+private:
+    REPORTER* m_reporter = nullptr;
     int                     m_SizeX;
     int                     m_SizeY;
 

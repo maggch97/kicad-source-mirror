@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * https://www.gnu.org/licenses/gpl-3.0.en.html
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -121,6 +120,39 @@ BOOST_AUTO_TEST_CASE( DatabaseLibraryRejectedByConvertLibrary )
     BOOST_CHECK( !outLib.Exists() );
 
     wxRemoveFile( settings.GetFullPath() );
+    wxRemoveFile( outLib.GetFullPath() );
+}
+
+
+/// Issue #23291: a sym-lib-table file is a nested table, not a symbol library, and must be
+/// rejected by ConvertLibrary rather than written out as an empty .kicad_sym.
+BOOST_AUTO_TEST_CASE( NestedTableRejectedByConvertLibrary )
+{
+    wxFileName table( wxFileName::CreateTempFileName( "kicad_qa_issue23291_sym_" ) );
+
+    {
+        wxFFileOutputStream out( table.GetFullPath() );
+        BOOST_REQUIRE( out.IsOk() );
+        const char* contents =
+                "(sym_lib_table\n"
+                "  (version 7)\n"
+                "  (lib (name \"Device\") (type \"KiCad\")"
+                " (uri \"${KICAD9_SYMBOL_DIR}/Device.kicad_sym\") (options \"\") (descr \"\"))\n"
+                ")\n";
+        out.WriteAll( contents, std::strlen( contents ) );
+    }
+
+    BOOST_REQUIRE_EQUAL( SCH_IO_MGR::GuessPluginTypeFromLibPath( table.GetFullPath() ),
+                         SCH_IO_MGR::SCH_NESTED_TABLE );
+
+    wxFileName outLib( table );
+    outLib.SetExt( "kicad_sym" );
+    wxRemoveFile( outLib.GetFullPath() );
+
+    BOOST_CHECK( !SCH_IO_MGR::ConvertLibrary( nullptr, table.GetFullPath(), outLib.GetFullPath() ) );
+    BOOST_CHECK( !outLib.Exists() );
+
+    wxRemoveFile( table.GetFullPath() );
     wxRemoveFile( outLib.GetFullPath() );
 }
 

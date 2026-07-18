@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <drc/rule_editor/panel_drc_group_header.h>
@@ -28,20 +24,12 @@ PANEL_DRC_GROUP_HEADER::PANEL_DRC_GROUP_HEADER( wxWindow* aParent, const std::ve
         PANEL_DRC_GROUP_HEADER_BASE( aParent ),
         m_rows( aRows )
 {
-    int cols = m_dataGrid->GetNumberCols();
-
-    if( cols )
-        m_dataGrid->DeleteCols( 0, cols );
+    wxASSERT( m_dataGrid->GetNumberCols() == 3 );
 
     int rows = m_dataGrid->GetNumberRows();
 
     if( rows )
         m_dataGrid->DeleteRows( 0, rows );
-
-    m_dataGrid->AppendCols( 3 );
-    m_dataGrid->SetColLabelValue( 0, _( "Rule type" ) );
-    m_dataGrid->SetColLabelValue( 1, _( "Rule name" ) );
-    m_dataGrid->SetColLabelValue( 2, _( "Comment" ) );
 
     m_dataGrid->AppendRows( m_rows.size() );
 

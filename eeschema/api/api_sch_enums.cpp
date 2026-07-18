@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <api/api_enums.h>
@@ -288,5 +288,40 @@ GRAPHIC_PINSHAPE FromProtoEnum( types::SchematicPinShape aValue )
     default:
         wxCHECK_MSG( false, GRAPHIC_PINSHAPE::LINE,
                      "Unhandled case in FromProtoEnum<types::SchematicPinShape>" );
+    }
+}
+
+
+template <>
+types::PinMapOverrideMode ToProtoEnum( PIN_MAP_OVERRIDE_MODE aValue )
+{
+    switch( aValue )
+    {
+    case PIN_MAP_OVERRIDE_MODE::USE_LIBRARY_DEFAULT: return types::PinMapOverrideMode::PMOM_USE_LIBRARY_DEFAULT;
+    case PIN_MAP_OVERRIDE_MODE::USE_NAMED_MAP: return types::PinMapOverrideMode::PMOM_USE_NAMED_MAP;
+    case PIN_MAP_OVERRIDE_MODE::FORCE_IDENTITY: return types::PinMapOverrideMode::PMOM_FORCE_IDENTITY;
+    case PIN_MAP_OVERRIDE_MODE::DELEGATE_TO_UNIT_1: return types::PinMapOverrideMode::PMOM_DELEGATE_TO_UNIT_1;
+
+    default:
+        wxCHECK_MSG( false, types::PinMapOverrideMode::PMOM_USE_LIBRARY_DEFAULT,
+                     "Unhandled case in ToProtoEnum<PIN_MAP_OVERRIDE_MODE>" );
+    }
+}
+
+
+template <>
+PIN_MAP_OVERRIDE_MODE FromProtoEnum( types::PinMapOverrideMode aValue )
+{
+    switch( aValue )
+    {
+    case types::PinMapOverrideMode::PMOM_UNKNOWN:
+    case types::PinMapOverrideMode::PMOM_USE_LIBRARY_DEFAULT: return PIN_MAP_OVERRIDE_MODE::USE_LIBRARY_DEFAULT;
+    case types::PinMapOverrideMode::PMOM_USE_NAMED_MAP: return PIN_MAP_OVERRIDE_MODE::USE_NAMED_MAP;
+    case types::PinMapOverrideMode::PMOM_FORCE_IDENTITY: return PIN_MAP_OVERRIDE_MODE::FORCE_IDENTITY;
+    case types::PinMapOverrideMode::PMOM_DELEGATE_TO_UNIT_1: return PIN_MAP_OVERRIDE_MODE::DELEGATE_TO_UNIT_1;
+
+    default:
+        wxCHECK_MSG( false, PIN_MAP_OVERRIDE_MODE::USE_LIBRARY_DEFAULT,
+                     "Unhandled case in FromProtoEnum<types::PinMapOverrideMode>" );
     }
 }

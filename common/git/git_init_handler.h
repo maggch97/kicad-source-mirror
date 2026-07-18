@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef GIT_INIT_HANDLER_H
@@ -73,5 +69,22 @@ public:
 
     void UpdateProgress( int aCurrent, int aTotal, const wxString& aMessage ) override;
 };
+
+
+/**
+ * Apply KiCad's standard repo conventions to a project directory:
+ *   - seed .gitignore with KiCad-generated paths
+ *   - seed .gitattributes with `merge=kicad-*` lines so the in-process
+ *     libgit2 drivers and external `git merge` both route design files
+ *   - configure repo-local merge.kicad-*.driver / mergetool.kicad.cmd
+ *     pointing at the kicad-cli binary alongside the running process
+ *
+ * Each step is append-only: existing user content is preserved, never
+ * overwritten. Safe to call repeatedly. Used by both GIT_INIT_HANDLER
+ * (after init) and GIT_CLONE_HANDLER (after clone) so freshly-cloned
+ * repos get the same setup as freshly-init'd ones.
+ */
+APIEXPORT void ApplyKicadGitConventions( const wxString& aProjectPath );
+
 
 #endif // GIT_INIT_HANDLER_H

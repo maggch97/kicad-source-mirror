@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "footprint_editor_settings.h"
@@ -144,6 +144,48 @@ FOOTPRINT_EDITOR_SETTINGS::FOOTPRINT_EDITOR_SETTINGS() :
 
     m_params.emplace_back( new PARAM<wxString>( "pcb_display.active_layer_preset",
             &m_ActiveLayerPreset, "" ) );
+
+    m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "tabs.open",
+            [&]() -> nlohmann::json
+            {
+                nlohmann::json js = nlohmann::json::array();
+
+                for( const OPEN_TAB& tab : m_OpenTabs )
+                {
+                    js.push_back( nlohmann::json( { { "lib", tab.m_lib.ToUTF8() },
+                                                    { "fp_name", tab.m_fpName.ToUTF8() },
+                                                    { "preview", tab.m_preview } } ) );
+                }
+
+                return js;
+            },
+            [&]( const nlohmann::json& aObj )
+            {
+                m_OpenTabs.clear();
+
+                if( !aObj.is_array() )
+                    return;
+
+                for( const nlohmann::json& entry : aObj )
+                {
+                    if( !entry.is_object() || !entry.contains( "lib" ) || !entry.contains( "fp_name" ) )
+                        continue;
+
+                    OPEN_TAB tab;
+                    tab.m_lib = entry.at( "lib" ).get<wxString>();
+                    tab.m_fpName = entry.at( "fp_name" ).get<wxString>();
+
+                    // Older configs predate the preview flag and default to a permanent tab.
+                    if( entry.contains( "preview" ) )
+                        tab.m_preview = entry.at( "preview" ).get<bool>();
+
+                    m_OpenTabs.push_back( std::move( tab ) );
+                }
+            },
+            nlohmann::json::array() ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "tabs.active",
+            &m_ActiveTab, "" ) );
 
     m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>(
             "design_settings.default_footprint_text_items",

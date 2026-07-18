@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <map>
@@ -128,7 +124,7 @@ protected:
         { IPC4761_PRESET::IVA,           _( "Type IV-a (plugged and tented top)" ) },
         { IPC4761_PRESET::IVB,           _( "Type IV-b (plugged and tented both sides)" ) },
         { IPC4761_PRESET::IVA_INVERTED,  _( "Type IV-a (plugged and tented bottom)" ) },
-        { IPC4761_PRESET::V,             _( "Type V (filled )" ) },
+        { IPC4761_PRESET::V,             _( "Type V (filled)" ) },
         { IPC4761_PRESET::VIA,           _( "Type VI-a (filled and tented top)" ) },
         { IPC4761_PRESET::VIB,           _( "Type VI-b (filled and tented both sides)" ) },
         { IPC4761_PRESET::VIA_INVERTED,  _( "Type VI-a (filled and tented bottom)" ) },

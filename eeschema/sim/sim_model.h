@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * https://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef SIM_MODEL_H
@@ -44,6 +40,7 @@ class SPICE_GENERATOR;
 class SIM_MODEL_SERIALIZER;
 class PROJECT;
 class REPORTER;
+class SCHEMATIC;
 
 
 #define SIM_REFERENCE_FIELD wxT( "Reference" )
@@ -52,6 +49,7 @@ class REPORTER;
 #define SIM_DEVICE_FIELD wxT( "Sim.Device" )
 #define SIM_DEVICE_SUBTYPE_FIELD wxT( "Sim.Type" )
 #define SIM_PINS_FIELD wxT( "Sim.Pins" )
+#define SIM_DECOMPOSITION_FIELD wxT( "Sim.Decomposition" )
 #define SIM_PARAMS_FIELD wxT( "Sim.Params" )
 #define SIM_LIBRARY_FIELD wxT( "Sim.Library" )
 #define SIM_NAME_FIELD wxT( "Sim.Name" )
@@ -430,6 +428,18 @@ public:
 
     const SPICE_GENERATOR& SpiceGenerator() const { return *m_spiceGenerator; }
     const SIM_MODEL_SERIALIZER& Serializer() const { return *m_serializer; }
+
+    /**
+     * Return the external files this model must pull into the netlist as `.include` directives,
+     * writing out any that have to be generated on the fly.  Raw-Spice models point at their
+     * library file and IBIS models emit a per-reference device cache; every other model
+     * contributes nothing.  Overrides that resolve library paths need a non-null aSchematic.
+     */
+    virtual std::vector<wxString> GetSpiceIncludes( const SPICE_ITEM& aItem, SCHEMATIC* aSchematic,
+                                                    REPORTER& aReporter ) const
+    {
+        return {};
+    }
 
 
     // Move semantics.

@@ -14,12 +14,7 @@
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with this program; if not, you may find one here:
-
-#  http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
-#  or you may search the http://www.gnu.org website for the version 2 license,
-#  or you may write to the Free Software Foundation, Inc.,
-#  51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
 if( MSVC )
@@ -279,10 +274,6 @@ option( KICAD_GAL_PROFILE
     "Enable profiling info for GAL"
     OFF )
 
-option( KICAD_IPC_API
-    "Enable IPC API"
-    ON )
-
 option( KICAD_IDF_TOOLS
     "Build additional idf tools"
     ON )
@@ -320,10 +311,6 @@ add_compile_definitions( $<$<BOOL:${KICAD_USE_VALGRIND}>:KICAD_USE_VALGRIND> )
 add_compile_definitions( $<$<BOOL:${KICAD_GAL_PROFILE}>:KICAD_GAL_PROFILE> )
 add_compile_definitions( $<$<BOOL:${KICAD_WIN32_VERIFY_CODESIGN}>:KICAD_WIN32_VERIFY_CODESIGN> )
 add_compile_definitions( $<$<BOOL:${KICAD_UPDATE_CHECK}>:KICAD_UPDATE_CHECK> )
-
-if( KICAD_IPC_API )
-    add_definitions( -DKICAD_IPC_API )
-endif()
 
 # Ensure DEBUG is defined for all platforms in Debug builds
 add_compile_definitions( $<$<CONFIG:Debug>:DEBUG> )
@@ -1060,9 +1047,7 @@ if( KICAD_USE_SENTRY )
     add_compile_definitions( KICAD_USE_SENTRY )
 endif()
 
-if( KICAD_IPC_API )
-    find_package( nng REQUIRED )
-endif()
+find_package( nng REQUIRED )
 
 #================================================
 # Add the doxygen target
@@ -1074,6 +1059,11 @@ add_subdirectory( doxygen )
 # Generate config.h.
 configure_file( ${PROJECT_SOURCE_DIR}/cmake/config.h.cmake
     ${CMAKE_BINARY_DIR}/config.h )
+
+# Generate the shared S-expression file-format version header for standalone tools
+# (bitmap2component) that cannot link pcbnew/eeschema. The values are extracted from the
+# authoritative ledgers so they can never drift.
+include( ${KICAD_CMAKE_MODULE_PATH}/WriteSexprVersionHeader.cmake )
 
 
 #================================================
@@ -1100,6 +1090,12 @@ list( APPEND CMAKE_CTEST_ARGUMENTS "--output-on-failure" )
 # Let CMake look in these directories for nested
 # 'CMakeLists.txt' files to process
 #================================================
+
+# Desktop application identifiers, shared by resource metadata generation and the
+# runtime Wayland app_id in kicommon (must be visible before both subdirectories).
+if( UNIX AND NOT APPLE )
+    include( ${KICAD_CMAKE_MODULE_PATH}/KiCadAppNames.cmake )
+endif()
 
 # Binaries ( CMake targets )
 add_subdirectory( api )

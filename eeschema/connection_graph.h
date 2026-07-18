@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef _CONNECTION_GRAPH_H
@@ -549,6 +549,17 @@ public:
     const std::vector<CONNECTION_SUBGRAPH*>& GetAllSubgraphs( const wxString& aNetName ) const;
 
     /**
+     * Map a bus group name between its alias and expanded forms ({MIXED_BUS} <-> {FOO BAR HAM EGGS}).
+     *
+     * Any sheet-path prefix on the input is preserved on the results so they resolve against the
+     * graph's net-name map.
+     *
+     * @param aBusName is the bus group name, optionally sheet-path qualified.
+     * @return the equivalent bus names, empty if none.
+     */
+    std::vector<wxString> GetEquivalentBusNames( const wxString& aBusName ) const;
+
+    /**
      * Return the fully-resolved netname for a given subgraph.
      *
      * @param aSubGraph Reference to the subgraph.
@@ -862,6 +873,12 @@ private:
     bool ercCheckDanglingWireEndpoints( const CONNECTION_SUBGRAPH* aSubgraph );
 
     /**
+     * Find bus members on other sheets that share aBusParent's bus and member name.
+     */
+    void collectBusMemberSiblings( const CONNECTION_SUBGRAPH* aBusParent, const wxString& aMemberName,
+                                   std::unordered_set<const CONNECTION_SUBGRAPH*>& aOut ) const;
+
+    /**
      * Check one subgraph for proper connection of labels.
      *
      * Labels should be connected to something.
@@ -942,6 +959,16 @@ public:
 
     /** Return user-created (committed) net chains (legacy accessor retained under net-chain API). */
     const std::vector<std::unique_ptr<SCH_NETCHAIN>>& GetCommittedNetChains() const { return m_committedNetChains; }
+
+    /**
+     * Mirror each committed net chain's netclass override into the project NET_SETTINGS as a
+     * chain-derived pattern assignment, so SCH_ITEM::GetEffectiveNetClass() resolves the chain's
+     * netclass for member nets the same way board_netlist_updater does on the PCB side.  Existing
+     * chain-derived assignments are cleared first so removed or renamed chains leave no stale
+     * entries.  Synthetic per-run member keys can't be matched against a resolved net name and
+     * are skipped, and a chain whose netclass no longer exists is ignored.
+     */
+    void ApplyNetChainNetclasses();
 
     /** Returns true once RebuildNetChains() has completed at least once on this graph. */
     bool NetChainsBuilt() const { return m_netChainsBuilt; }
@@ -1079,7 +1106,9 @@ private:
 
     std::unordered_map<wxString, std::vector<CONNECTION_SUBGRAPH*>> m_net_name_to_subgraphs_map;
 
-    std::unordered_map<SCH_ITEM*, CONNECTION_SUBGRAPH*> m_item_to_subgraph_map;
+    /// Every subgraph referencing the item, one per instantiating sheet path for items on shared
+    /// screens.  Removal must purge all of them or a freed item leaves a dangling driver behind.
+    std::unordered_map<SCH_ITEM*, std::vector<CONNECTION_SUBGRAPH*>> m_item_to_subgraph_map;
 
     NET_MAP m_net_code_to_subgraphs_map;
 

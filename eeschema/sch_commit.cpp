@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <macros.h>
@@ -198,22 +194,28 @@ void SCH_COMMIT::pushSchEdit( const wxString& aMessage, int aCommitFlags )
 
     // We don't know that anything will be added to the entered group, but it does no harm to
     // add it to the commit anyway.
-    if( enteredGroup )
+    if( enteredGroup && frame )
         Modify( enteredGroup, frame->GetScreen() );
 
-    // Handle wires with Hop Over shapes:
-    for( COMMIT_LINE& entry : m_entries )
+    // Handle wires with Hop Over shapes (view update only; skipped headless):
+    if( frame )
     {
-        SCH_ITEM* schCopyItem = dynamic_cast<SCH_ITEM*>( entry.m_copy );
-        SCH_ITEM* schItem = dynamic_cast<SCH_ITEM*>( entry.m_item );
+        for( COMMIT_LINE& entry : m_entries )
+        {
+            SCH_ITEM* schCopyItem = dynamic_cast<SCH_ITEM*>( entry.m_copy );
+            SCH_ITEM* schItem = dynamic_cast<SCH_ITEM*>( entry.m_item );
 
-        if( schCopyItem && schCopyItem->Type() == SCH_LINE_T )
-            frame->UpdateHopOveredWires( schCopyItem );
+            if( schCopyItem && schCopyItem->Type() == SCH_LINE_T )
+                frame->UpdateHopOveredWires( schCopyItem );
 
-        if( schItem && schItem->Type() == SCH_LINE_T )
-            frame->UpdateHopOveredWires( schItem );
+            if( schItem && schItem->Type() == SCH_LINE_T )
+                frame->UpdateHopOveredWires( schItem );
+        }
     }
 
+
+    // Modify() appends to m_entries, so collect first and stage after the loop.
+    std::vector<std::pair<EDA_GROUP*, BASE_SCREEN*>> removedItemGroups;
 
     for( COMMIT_LINE& entry : m_entries )
     {
@@ -223,8 +225,11 @@ void SCH_COMMIT::pushSchEdit( const wxString& aMessage, int aCommitFlags )
         wxCHECK2( schItem, continue );
 
         if( changeType == CHT_REMOVE && schItem->GetParentGroup() )
-            Modify( schItem->GetParentGroup()->AsEdaItem(), entry.m_screen );
+            removedItemGroups.emplace_back( schItem->GetParentGroup(), entry.m_screen );
     }
+
+    for( const auto& [group, screen] : removedItemGroups )
+        Modify( group->AsEdaItem(), screen );
 
     for( COMMIT_LINE& entry : m_entries )
     {
@@ -445,21 +450,19 @@ void SCH_COMMIT::pushSchEdit( const wxString& aMessage, int aCommitFlags )
         }
     }
 
-    if( !( aCommitFlags & SKIP_UNDO ) )
-    {
-        if( frame )
-        {
-            if( undoList.GetCount() > 0 )
-                frame->SaveCopyInUndoList( undoList, UNDO_REDO::UNSPECIFIED, false );
+    if( !( aCommitFlags & SKIP_UNDO ) && frame && undoList.GetCount() > 0 )
+        frame->SaveCopyInUndoList( undoList, UNDO_REDO::UNSPECIFIED, false );
 
-            if( dirtyConnectivity )
-            {
-                wxLogTrace( wxS( "CONN_PROFILE" ),
-                            wxS( "SCH_COMMIT::pushSchEdit() %s clean up connectivity rebuild." ),
-                            connectivityCleanUp == LOCAL_CLEANUP ? wxS( "local" ) : wxS( "global" ) );
-                frame->RecalculateConnections( this, connectivityCleanUp );
-            }
-        }
+    if( dirtyConnectivity )
+    {
+        wxLogTrace( wxS( "CONN_PROFILE" ),
+                    wxS( "SCH_COMMIT::pushSchEdit() %s clean up connectivity rebuild." ),
+                    connectivityCleanUp == LOCAL_CLEANUP ? wxS( "local" ) : wxS( "global" ) );
+
+        if( frame )
+            frame->RecalculateConnections( this, connectivityCleanUp );
+        else if( schematic )
+            schematic->RecalculateConnections( this, connectivityCleanUp, m_toolMgr );
     }
 
     m_toolMgr->PostEvent( { TC_MESSAGE, TA_MODEL_CHANGE, AS_GLOBAL } );

@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef __TOOL_ACTION_H
@@ -348,6 +344,14 @@ public:
     int GetHotKey() const { return m_hotKey; }
     int GetHotKeyAlt() const { return m_hotKeyAlt; }
     void SetHotKey( int aKeycode, int aKeycodeAlt = 0 );
+
+    /**
+     * Return true if the matched hotkey slot (primary or alternate) holds a
+     * value different from its compile-time default. See
+     * ACTION_MANAGER::RunHotKey for how this drives same-key dispatch
+     * tiebreaking. See https://gitlab.com/kicad/code/kicad/-/issues/5916.
+     */
+    bool IsHotKeyUserBound( int aMatchedHotKey ) const;
 
     /**
      * Return the unique id of the TOOL_ACTION object.

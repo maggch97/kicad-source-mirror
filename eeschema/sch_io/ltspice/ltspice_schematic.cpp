@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -207,56 +207,58 @@ void LTSPICE_SCHEMATIC::GetAscAndAsyFilePaths( const wxDir& aDir, bool aRecursiv
 {
     wxString filename;
 
+    if( !aDir.IsOpened() )
+        return;
+
+    bool cont = aDir.GetFirst( &filename, wxEmptyString, wxDIR_FILES | wxDIR_HIDDEN );
+
+    while( cont )
     {
-        bool cont = aDir.GetFirst( &filename, wxEmptyString, wxDIR_FILES | wxDIR_HIDDEN );
+        wxFileName path( aDir.GetName(), filename );
 
-        while( cont )
-        {
-            wxFileName path( aDir.GetName(), filename );
-
-            auto logToMap = [&]( std::map<wxString, wxString>& aMapToLogTo, const wxString& aKey )
-            {
-                if( aMapToLogTo.count( aKey ) )
+        auto logToMap =
+                [&]( std::map<wxString, wxString>& aMapToLogTo, const wxString& aKey )
                 {
-                    if( m_reporter )
+                    if( aMapToLogTo.count( aKey ) )
                     {
-                        m_reporter->Report( wxString::Format( _( "File at '%s' was ignored. Using previously "
-                                                                 "found file at '%s' instead." ),
-                                                              path.GetFullPath(),
-                                                              aMapToLogTo.at( aKey ) ) );
+                        if( m_reporter )
+                        {
+                            m_reporter->Report( wxString::Format( _( "File at '%s' was ignored. Using previously "
+                                                                     "found file at '%s' instead." ),
+                                                                  path.GetFullPath(),
+                                                                  aMapToLogTo.at( aKey ) ) );
+                        }
                     }
-                }
-                else
-                {
-                    aMapToLogTo.emplace( aKey, path.GetFullPath() );
-                }
-            };
+                    else
+                    {
+                        aMapToLogTo.emplace( aKey, path.GetFullPath() );
+                    }
+                };
 
-            // Add dir1/dir2/cmp, dir2/cmp, cmp
-            wxString extension = path.GetExt().Lower();
+        // Add dir1/dir2/cmp, dir2/cmp, cmp
+        wxString extension = path.GetExt().Lower();
 
-            for( size_t i = 0; i < aBaseDirs.size() + 1; i++ )
-            {
-                wxString alias;
+        for( size_t i = 0; i < aBaseDirs.size() + 1; i++ )
+        {
+            wxString alias;
 
-                for( size_t j = i; j < aBaseDirs.size(); j++ )
-                    alias << aBaseDirs[j].Lower() << '/';
+            for( size_t j = i; j < aBaseDirs.size(); j++ )
+                alias << aBaseDirs[j].Lower() << '/';
 
-                alias << path.GetName().Lower();
+            alias << path.GetName().Lower();
 
-                if( extension == wxS( "asc" ) )
-                    logToMap( aMapOfAscFiles, alias );
-                else if( extension == wxS( "asy" ) )
-                    logToMap( aMapOfAsyFiles, alias );
-            }
-
-            cont = aDir.GetNext( &filename );
+            if( extension == wxS( "asc" ) )
+                logToMap( aMapOfAscFiles, alias );
+            else if( extension == wxS( "asy" ) )
+                logToMap( aMapOfAsyFiles, alias );
         }
+
+        cont = aDir.GetNext( &filename );
     }
 
     if( aRecursive )
     {
-        bool cont = aDir.GetFirst( &filename, wxEmptyString, wxDIR_DIRS | wxDIR_HIDDEN );
+        cont = aDir.GetFirst( &filename, wxEmptyString, wxDIR_DIRS | wxDIR_HIDDEN );
 
         while( cont )
         {

@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef LIB_TREE_MODEL_ADAPTER_H
@@ -111,6 +111,15 @@ public:
     {
         return wxString::FromUTF8( "☆ " );
     }
+
+    /// Upper bound for a persisted column width; larger values are treated as corrupt settings.
+    /// Set well above any plausible multi-monitor span so only true corruption is rejected.
+    static constexpr int MAX_COL_WIDTH = 100000;
+
+    /**
+     * @return true if @p aWidth is a plausible persisted column width, false if it is corrupt.
+     */
+    static bool IsValidColumnWidth( int aWidth );
 
 public:
     /**
@@ -408,6 +417,35 @@ protected:
     virtual PROJECT::LIB_TYPE_T getLibType() = 0;
 
     void resortTree();
+
+    /**
+     * RAII guard that detaches the GtkTreeView from the model across a tree rebuild so a deferred
+     * frame-clock tick cannot validate rows pointing at nodes the rebuild frees.
+     *
+     * Construct before any node is freed.
+     */
+    class ResetTreeView
+    {
+    public:
+        explicit ResetTreeView( LIB_TREE_MODEL_ADAPTER& aAdapter ) :
+                m_adapter( aAdapter )
+        {
+            m_adapter.Freeze();
+            m_adapter.BeforeReset();
+        }
+
+        ~ResetTreeView()
+        {
+            m_adapter.AfterReset();
+            m_adapter.Thaw();
+        }
+
+        ResetTreeView( const ResetTreeView& ) = delete;
+        ResetTreeView& operator=( const ResetTreeView& ) = delete;
+
+    private:
+        LIB_TREE_MODEL_ADAPTER& m_adapter;
+    };
 
 private:
     /**

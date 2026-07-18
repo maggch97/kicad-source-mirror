@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <widgets/lib_tree.h>
@@ -374,7 +370,13 @@ int LIB_TREE::GetSelectedTreeNodes( std::vector<LIB_TREE_NODE*>& aSelection ) co
 
 void LIB_TREE::SelectLibId( const LIB_ID& aLibId )
 {
-    selectIfValid( m_adapter->FindItem( aLibId ) );
+    wxDataViewItem item = m_adapter->FindItem( aLibId );
+
+    // Expand the parent library so the row is visible and can be selected/scrolled to.
+    if( item.IsOk() )
+        m_tree_ctrl->ExpandAncestors( item );
+
+    selectIfValid( item );
 }
 
 
@@ -395,6 +397,25 @@ void LIB_TREE::Unselect()
 void LIB_TREE::ExpandLibId( const LIB_ID& aLibId )
 {
     expandIfValid( m_adapter->FindItem( aLibId ) );
+}
+
+
+std::vector<LIB_ID> LIB_TREE::GetExpandedLibraries() const
+{
+    std::vector<LIB_ID> expanded;
+    wxDataViewItemArray items;
+    m_adapter->GetChildren( wxDataViewItem( nullptr ), items );
+
+    for( const wxDataViewItem& item : items )
+    {
+        if( m_tree_ctrl->IsExpanded( item ) )
+        {
+            if( LIB_TREE_NODE* node = m_adapter->GetTreeNodeFor( item ) )
+                expanded.push_back( node->m_LibId );
+        }
+    }
+
+    return expanded;
 }
 
 
@@ -882,6 +903,28 @@ void LIB_TREE::onHoverTimer( wxTimerEvent& aEvent )
 
 void LIB_TREE::onTreeCharHook( wxKeyEvent& aKeyStroke )
 {
+    // Bare Left/Right collapse/expand the focused node. Consume them here so they
+    // do not fall through to the global cursorLeft/cursorRight canvas actions. This
+    // is the tree-only hook, so the search box keeps normal caret movement.
+    if( aKeyStroke.GetModifiers() == wxMOD_NONE
+        && ( aKeyStroke.GetKeyCode() == WXK_LEFT || aKeyStroke.GetKeyCode() == WXK_RIGHT ) )
+    {
+        wxDataViewItem sel = m_tree_ctrl->GetSelection();
+
+        if( !sel.IsOk() )
+            sel = m_adapter->GetCurrentDataViewItem();
+
+        if( sel.IsOk() )
+        {
+            if( aKeyStroke.GetKeyCode() == WXK_RIGHT )
+                m_tree_ctrl->Expand( sel );
+            else
+                m_tree_ctrl->Collapse( sel );
+        }
+
+        return;
+    }
+
     onQueryCharHook( aKeyStroke );
 
     if( aKeyStroke.GetSkipped() )
@@ -990,24 +1033,24 @@ void LIB_TREE::onItemContextMenu( wxDataViewEvent& aEvent )
 
     m_previewDisabled = true;
 
+    // Select the item under the cursor before showing the context menu. On some platforms
+    // (notably macOS), right-clicking does not automatically change the selection.
+    wxDataViewItem item = aEvent.GetItem();
+
+    if( item.IsOk() )
+    {
+        m_tree_ctrl->SetFocus();
+
+        if( !m_tree_ctrl->IsSelected( item ) )
+        {
+            m_tree_ctrl->UnselectAll();
+            m_tree_ctrl->Select( item );
+            wxSafeYield();
+        }
+    }
+
     if( TOOL_INTERACTIVE* tool = m_adapter->GetContextMenuTool() )
     {
-        if( !GetCurrentTreeNode() )
-        {
-            wxPoint pos = m_tree_ctrl->ScreenToClient( wxGetMousePosition() );
-
-            wxDataViewItem    item;
-            wxDataViewColumn* col;
-            m_tree_ctrl->HitTest( pos, item, col );
-
-            if( item.IsOk() )
-            {
-                m_tree_ctrl->SetFocus();
-                m_tree_ctrl->Select( item );
-                wxSafeYield();
-            }
-        }
-
         tool->Activate();
         tool->GetManager()->VetoContextMenuMouseWarp();
         tool->GetToolMenu().ShowContextMenu();

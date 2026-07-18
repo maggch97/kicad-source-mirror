@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 syntax = "proto3";
@@ -568,6 +568,13 @@ enum PadType
   PT_NPTH = 4;
 }
 
+enum PadSimElectricalType
+{
+    PSET_NONE = 0;
+    PSET_SOURCE = 1;
+    PSET_SINK = 2;
+}
+
 enum CustomPadShapeZoneFillStrategy
 {
   CPSZ_UNKNOWN = 0;
@@ -618,6 +625,9 @@ message Pad
 
   // Since: 10.0.0
   kiapi.common.types.Time pad_to_die_delay = 11;
+
+  // Since: 11.0.0
+  PadSimElectricalType sim_electrical_type = 12;
 }
 
 enum ZoneType

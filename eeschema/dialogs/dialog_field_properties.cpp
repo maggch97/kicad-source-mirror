@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <widgets/bitmap_button.h>
@@ -630,6 +626,7 @@ void DIALOG_FIELD_PROPERTIES::UpdateField( SCH_COMMIT* aCommit, SCH_FIELD* aFiel
     // convert any text variable cross-references to their UUIDs
     m_text = aField->Schematic()->ConvertRefsToKIIDs( m_text );
 
+    if( aField->GetId() != FIELD_T::SHEET_FILENAME )
     {
         SCH_BASE_FRAME* parentFrame = GetParent();
 
@@ -750,7 +747,7 @@ void DIALOG_FIELD_PROPERTIES::UpdateField( SCH_COMMIT* aCommit, SCH_FIELD* aFiel
                 for( SCH_SYMBOL* otherUnit : otherUnits )
                 {
                     aCommit->Modify( otherUnit, screen );
-                    otherUnit->GetField( m_fieldId )->SetText( m_text );
+                    otherUnit->GetField( m_fieldId )->SetText( m_text, &sheet, variantName );
                     editFrame->UpdateItem( otherUnit, false, true );
                 }
             }

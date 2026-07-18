@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * https://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialog_ibis_parser_reporter.h>
@@ -28,6 +24,7 @@
 #include <sim/sim_property.h>
 #include <sim/sim_library_ibis.h>
 #include <sim/sim_model.h>
+#include <sim/sim_model_multiunit.h>
 #include <sim/sim_model_ibis.h>
 #include <sim/sim_model_raw_spice.h>
 #include <sim/sim_model_spice_fallback.h>
@@ -70,6 +67,7 @@ DIALOG_SIM_MODEL<T>::DIALOG_SIM_MODEL( wxWindow* aParent, EDA_BASE_FRAME* aFrame
         m_frame( aFrame ),
         m_symbol( aSymbol ),
         m_fields( aFields ),
+        m_inferredValueOverwritten( false ),
         m_libraryModelsMgr( &Prj() ),
         m_builtinModelsMgr( &Prj() ),
         m_prevModel( nullptr ),
@@ -207,9 +205,13 @@ bool DIALOG_SIM_MODEL<T>::TransferDataToWindow()
 
         storeInValue = true;
 
-        // In case the storeInValue checkbox is turned off (if it's left on then we'll overwrite
-        // this field with the actual value):
-        FindField( m_fields, FIELD_T::VALUE )->SetText( wxT( "${SIM.PARAMS}" ) );
+        // WriteFields() only rewrites Value when storeInValue stays on, so remember the original
+        // text first to restore it verbatim if the user turns storeInValue off.
+        SCH_FIELD* valueField = FindField( m_fields, FIELD_T::VALUE );
+
+        m_inferredValueRestore = valueField->GetText();
+        m_inferredValueOverwritten = true;
+        valueField->SetText( wxT( "${SIM.PARAMS}" ) );
     }
 
     wxString libraryFilename = GetFieldValue( &m_fields, SIM_LIBRARY::LIBRARY_FIELD, true, 0 );
@@ -304,6 +306,17 @@ bool DIALOG_SIM_MODEL<T>::TransferDataToWindow()
                     ibismodel->SwitchSingleEndedDiff( false );
                     m_differentialCheckbox->SetValue( false );
                 }
+
+                // SetIbisModel derives the IO mode from KIBIS_MODEL::m_type
+                // (Series / Series_switch override the differential layout).
+                auto ibisLibrary = static_cast<const SIM_LIBRARY_IBIS*>( library() );
+                std::string pinNum = GetFieldValue( &m_fields, SIM_LIBRARY_IBIS::PIN_FIELD,
+                                                    true, 0 );
+                std::string modelNm = GetFieldValue( &m_fields, SIM_LIBRARY_IBIS::MODEL_FIELD,
+                                                     true, 0 );
+
+                if( ibisLibrary && !pinNum.empty() && !modelNm.empty() )
+                    ibismodel->SetIbisModel( *ibisLibrary, pinNum, modelNm );
             }
         }
     }
@@ -348,6 +361,8 @@ bool DIALOG_SIM_MODEL<T>::TransferDataToWindow()
         curModel().SetIsStoredInValue( true );
 
     m_saveInValueCheckbox->SetValue( curModel().IsStoredInValue() );
+
+    updateDecompositionControls();
 
     onRadioButton( dummyEvent );
     return DIALOG_SIM_MODEL_BASE::TransferDataToWindow();
@@ -443,7 +458,95 @@ bool DIALOG_SIM_MODEL<T>::TransferDataFromWindow()
 
     curModel().WriteFields( m_fields );
 
+    RestoreInferredValue( m_fields, m_inferredValueRestore, m_inferredValueOverwritten,
+                          model.IsStoredInValue() );
+
+    // Decomposition is a component-level choice and is independent of the model fields written
+    // above.  Only multi-unit symbols expose it; write it after WriteFields() so it is preserved.
+    if( m_symbol.GetUnitCount() > 1 )
+    {
+        SIM_DECOMPOSITION decomposition;
+
+        if( m_decompositionChoice->GetSelection() == 1 )
+        {
+            decomposition.mode = SIM_DECOMPOSITION::MODE::REPEAT_PER_UNIT;
+
+            wxStringTokenizer sharedTokens( m_sharedPinsText->GetValue(), wxS( ", \t" ),
+                                            wxTOKEN_STRTOK );
+
+            while( sharedTokens.HasMoreTokens() )
+                decomposition.sharedModelPins.push_back( sharedTokens.GetNextToken() );
+        }
+
+        // Whole-device formats to an empty string, which clears any previous repeat selection.
+        SetFieldValue( m_fields, SIM_DECOMPOSITION_FIELD, decomposition.Format().ToStdString(),
+                       false );
+    }
+
     return true;
+}
+
+
+template <typename T>
+void DIALOG_SIM_MODEL<T>::RestoreInferredValue( std::vector<SCH_FIELD>& aFields,
+                                                const wxString& aOriginalValue, bool aOverwritten,
+                                                bool aStoredInValue )
+{
+    if( !aOverwritten || aStoredInValue )
+        return;
+
+    if( SCH_FIELD* valueField = FindField( aFields, FIELD_T::VALUE ) )
+        valueField->SetText( aOriginalValue );
+}
+
+
+template <typename T>
+void DIALOG_SIM_MODEL<T>::updateDecompositionControls()
+{
+    bool multiUnit = m_symbol.GetUnitCount() > 1;
+
+    m_decompositionLabel->Show( multiUnit );
+    m_decompositionChoice->Show( multiUnit );
+    m_sharedPinsLabel->Show( multiUnit );
+    m_sharedPinsText->Show( multiUnit );
+
+    if( multiUnit )
+    {
+        SIM_DECOMPOSITION decomposition = SIM_DECOMPOSITION::Parse(
+                GetFieldValue( &m_fields, SIM_DECOMPOSITION_FIELD, false, 0 ) );
+
+        bool repeat = decomposition.mode == SIM_DECOMPOSITION::MODE::REPEAT_PER_UNIT;
+
+        m_decompositionChoice->SetSelection( repeat ? 1 : 0 );
+
+        wxString shared;
+
+        for( const wxString& pin : decomposition.sharedModelPins )
+        {
+            if( !shared.IsEmpty() )
+                shared += wxS( ", " );
+
+            shared += pin;
+        }
+
+        m_sharedPinsText->SetValue( shared );
+        m_sharedPinsLabel->Enable( repeat );
+        m_sharedPinsText->Enable( repeat );
+    }
+
+    m_pinAssignmentsPanel->Layout();
+}
+
+
+template <typename T>
+void DIALOG_SIM_MODEL<T>::onDecompositionModeChoice( wxCommandEvent& aEvent )
+{
+    bool repeat = m_decompositionChoice->GetSelection() == 1;
+
+    m_sharedPinsLabel->Enable( repeat );
+    m_sharedPinsText->Enable( repeat );
+
+    aEvent.Skip();
 }
 
 
@@ -736,6 +839,8 @@ void DIALOG_SIM_MODEL<T>::updateModelCodeTab( SIM_MODEL* aModel )
 template <typename T>
 void DIALOG_SIM_MODEL<T>::updatePinAssignments( SIM_MODEL* aModel, bool aForceRefreshFromModel )
 {
+    m_pinAssignmentsGrid->CommitPendingChanges( true );
+
     if( m_pinAssignmentsGrid->GetNumberRows() == 0 )
     {
         m_pinAssignmentsGrid->AppendRows( (int) m_sortedPartPins.size() );
@@ -1283,7 +1388,7 @@ void DIALOG_SIM_MODEL<T>::onBrowseButtonClick( wxCommandEvent& aEvent )
 
     wxString                path = s_mruPath.IsEmpty() ? Prj().GetProjectPath() : s_mruPath;
     wxFileDialog            dlg( this, _( "Browse Models" ), path );
-    FILEDLG_HOOK_EMBED_FILE customize( false );
+    FILEDLG_HOOK_EMBED_FILE customize( false, EMBED_FILE_CONTEXT::SIM_MODEL );
 
     dlg.SetCustomizeHook( customize );
 
@@ -1488,6 +1593,24 @@ void DIALOG_SIM_MODEL<T>::onPinComboboxTextEnter( wxCommandEvent& aEvent )
 template <typename T>
 void DIALOG_SIM_MODEL<T>::onPinModelCombobox( wxCommandEvent& aEvent )
 {
+    if( SIM_MODEL_IBIS* ibismodel = dynamic_cast<SIM_MODEL_IBIS*>( &curModel() ) )
+    {
+        const SIM_LIBRARY_IBIS* ibisLibrary = dynamic_cast<const SIM_LIBRARY_IBIS*>( library() );
+
+        // Skip uncommitted combobox text so SetIbisModel doesn't silently fail.
+        if( ibisLibrary
+            && m_pinCombobox->GetSelection() >= 0
+            && m_pinModelCombobox->GetSelection() >= 0 )
+        {
+            std::string pinNumber = ibismodel->GetIbisPins()
+                                            .at( m_pinCombobox->GetSelection() )
+                                            .first;
+            std::string modelName = m_pinModelCombobox->GetStringSelection().ToStdString();
+
+            ibismodel->SetIbisModel( *ibisLibrary, pinNumber, modelName );
+        }
+    }
+
     updateWidgets();
 }
 

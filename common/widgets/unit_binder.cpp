@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/clipbrd.h>
@@ -67,7 +63,8 @@ UNIT_BINDER::UNIT_BINDER( UNITS_PROVIDER* aUnitsProvider, wxWindow* aEventSource
         m_selEnd( 0 ),
         m_unitsInValue( false ),
         m_originTransforms( aUnitsProvider->GetOriginTransforms() ),
-        m_coordType( ORIGIN_TRANSFORMS::NOT_A_COORD )
+        m_coordType( ORIGIN_TRANSFORMS::NOT_A_COORD ),
+        m_dialogShim( nullptr )
 {
     if( m_valueCtrl )
     {
@@ -78,7 +75,10 @@ UNIT_BINDER::UNIT_BINDER( UNITS_PROVIDER* aUnitsProvider, wxWindow* aEventSource
             parent = parent->GetParent();
 
         if( parent )
-            static_cast<DIALOG_SHIM*>( parent )->RegisterUnitBinder( this, m_valueCtrl );
+        {
+            m_dialogShim = static_cast<DIALOG_SHIM*>( parent );
+            m_dialogShim->RegisterUnitBinder( this, m_valueCtrl );
+        }
     }
 
     wxTextEntry* textEntry = dynamic_cast<wxTextEntry*>( m_valueCtrl );
@@ -107,6 +107,8 @@ UNIT_BINDER::UNIT_BINDER( UNITS_PROVIDER* aUnitsProvider, wxWindow* aEventSource
 
     if( m_valueCtrl )
     {
+        m_valueCtrl->Connect( wxEVT_DESTROY, wxWindowDestroyEventHandler( UNIT_BINDER::onValueCtrlDestroyed ),
+                              nullptr, this );
         m_valueCtrl->Connect( wxEVT_SET_FOCUS, wxFocusEventHandler( UNIT_BINDER::onSetFocus ), nullptr, this );
         m_valueCtrl->Connect( wxEVT_KILL_FOCUS, wxFocusEventHandler( UNIT_BINDER::onKillFocus ), nullptr, this );
         m_valueCtrl->Connect( wxEVT_LEFT_UP, wxMouseEventHandler( UNIT_BINDER::onClick ), nullptr, this );
@@ -126,8 +128,13 @@ UNIT_BINDER::UNIT_BINDER( UNITS_PROVIDER* aUnitsProvider, wxWindow* aEventSource
 
 UNIT_BINDER::~UNIT_BINDER()
 {
+    if( m_dialogShim )
+        m_dialogShim->UnregisterUnitBinder( this );
+
     if( m_valueCtrl )
     {
+        m_valueCtrl->Disconnect( wxEVT_DESTROY, wxWindowDestroyEventHandler( UNIT_BINDER::onValueCtrlDestroyed ),
+                                 nullptr, this );
         m_valueCtrl->Disconnect( wxEVT_SET_FOCUS, wxFocusEventHandler( UNIT_BINDER::onSetFocus ), nullptr, this );
         m_valueCtrl->Disconnect( wxEVT_KILL_FOCUS, wxFocusEventHandler( UNIT_BINDER::onKillFocus ), nullptr, this );
         m_valueCtrl->Disconnect( wxEVT_LEFT_UP, wxMouseEventHandler( UNIT_BINDER::onClick ), nullptr, this );
@@ -245,6 +252,26 @@ void UNIT_BINDER::onComboBox( wxCommandEvent& aEvent )
 }
 
 
+void UNIT_BINDER::onValueCtrlDestroyed( wxWindowDestroyEvent& aEvent )
+{
+    // The bound control is being destroyed before this binder. Drop the dialog registration and
+    // the control reference so neither the binder destructor nor SaveControlState() touches the
+    // freed window.
+    if( aEvent.GetEventObject() == m_valueCtrl )
+    {
+        if( m_dialogShim )
+        {
+            m_dialogShim->UnregisterUnitBinder( this );
+            m_dialogShim = nullptr;
+        }
+
+        m_valueCtrl = nullptr;
+    }
+
+    aEvent.Skip();
+}
+
+
 void UNIT_BINDER::onSetFocus( wxFocusEvent& aEvent )
 {
     wxTextEntry* textEntry = dynamic_cast<wxTextEntry*>( m_valueCtrl );
@@ -341,6 +368,36 @@ void UNIT_BINDER::delayedFocusHandler( wxCommandEvent& )
 }
 
 
+UNIT_BINDER::RANGE_BOUND UNIT_BINDER::ConvertRangeBound( const EDA_IU_SCALE& aIuScale,
+                                                        EDA_UNITS aBoundUnits, double aBound,
+                                                        EDA_UNITS aDisplayUnits,
+                                                        EDA_DATA_TYPE aDataType )
+{
+    // StringFromValue scales the user value once per dimension (twice for area, thrice for
+    // volume), so invert that same chain to bring the bound into internal units.
+    int conversions = 1;
+
+    switch( aDataType )
+    {
+    case EDA_DATA_TYPE::AREA:     conversions = 2; break;
+    case EDA_DATA_TYPE::VOLUME:   conversions = 3; break;
+    case EDA_DATA_TYPE::UNITLESS: conversions = 0; break;
+    default:                      conversions = 1; break;
+    }
+
+    double boundIU = aBound;
+
+    for( int i = 0; i < conversions; ++i )
+        boundIU = FromUserUnit( aIuScale, aBoundUnits, boundIU );
+
+    // GetText has no UNITLESS label, so asking for units text would assert
+    bool addUnitsText = aDataType != EDA_DATA_TYPE::UNITLESS;
+
+    return { boundIU,
+             StringFromValue( aIuScale, aDisplayUnits, boundIU, addUnitsText, aDataType ) };
+}
+
+
 bool UNIT_BINDER::Validate( double aMin, double aMax, EDA_UNITS aUnits )
 {
     wxTextEntry* textEntry = dynamic_cast<wxTextEntry*>( m_valueCtrl );
@@ -352,14 +409,15 @@ bool UNIT_BINDER::Validate( double aMin, double aMax, EDA_UNITS aUnits )
         return true;
     }
 
-    // TODO: Validate() does not currently support m_dataType being anything other than DISTANCE
     // Note: aMin and aMax are not always given in internal units
-    if( GetValue() < FromUserUnit( *m_iuScale, aUnits, aMin ) )
+    RANGE_BOUND minBound = ConvertRangeBound( *m_iuScale, aUnits, aMin, m_units, m_dataType );
+    RANGE_BOUND maxBound = ConvertRangeBound( *m_iuScale, aUnits, aMax, m_units, m_dataType );
+
+    if( GetValue() < minBound.internalUnits )
     {
-        double val_min_iu = FromUserUnit( *m_iuScale, aUnits, aMin );
         m_errorMessage = wxString::Format( _( "%s must be at least %s." ),
                                            valueDescriptionFromLabel( m_label ),
-                                           StringFromValue( *m_iuScale, m_units, val_min_iu, true ) );
+                                           minBound.displayText );
 
         textEntry->SelectAll();
 
@@ -369,12 +427,11 @@ bool UNIT_BINDER::Validate( double aMin, double aMax, EDA_UNITS aUnits )
         return false;
     }
 
-    if( GetValue() > FromUserUnit( *m_iuScale, aUnits, aMax ) )
+    if( GetValue() > maxBound.internalUnits )
     {
-        double val_max_iu = FromUserUnit( *m_iuScale, aUnits, aMax );
         m_errorMessage = wxString::Format( _( "%s must be less than %s." ),
                                            valueDescriptionFromLabel( m_label ),
-                                           StringFromValue( *m_iuScale, m_units, val_max_iu, true ) );
+                                           maxBound.displayText );
 
         textEntry->SelectAll();
 

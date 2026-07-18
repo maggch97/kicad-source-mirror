@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pgm_base.h>
@@ -28,6 +24,12 @@
 #include <background_jobs_monitor.h>
 #include <cli_progress_reporter.h>
 #include <confirm.h>
+#include <api/api_handler_footprint.h>
+#include <api/api_handler_pcb.h>
+#include <api/api_server.h>
+#include <api/api_utils.h>
+#include <api/headless_footprint_context.h>
+#include <api/headless_pcb_context.h>
 #include <kiface_base.h>
 #include <kiface_ids.h>
 #include <kiway_holder.h>
@@ -50,6 +52,9 @@
 #include <footprint_preview_panel.h>
 #include <footprint_info_impl.h>
 #include <footprint.h>
+#include <board.h>
+#include <board_loader.h>
+#include <lib_id.h>
 #include <nlohmann/json.hpp>
 #include <dialogs/dialog_configure_paths.h>
 #include <dialogs/panel_grid_settings.h>
@@ -76,6 +81,11 @@
 #include "invoke_pcb_dialog.h"
 #include <wildcards_and_files_ext.h>
 #include "pcbnew_jobs_handler.h"
+#include <diff_merge/diff_doc_kind.h>
+#include <reporter.h>
+#include "git/kigit_pcb_merge.h"
+#include "git/kigit_fp_merge.h"
+#include <git/kigit_driver_registry.h>
 
 #include <dialogs/panel_toolbar_customization.h>
 #include <3d_viewer/toolbars_3d.h>
@@ -83,15 +93,6 @@
 #include <toolbars_pcb_editor.h>
 
 #include <wx/crt.h>
-
-#if defined( KICAD_IPC_API )
-#include <api/api_handler_pcb.h>
-#include <api/api_server.h>
-#include <api/api_utils.h>
-#include <api/headless_board_context.h>
-#include <board.h>
-#include <board_loader.h>
-#endif
 
 
 /**
@@ -233,6 +234,16 @@ static wxString filterFootprints( const wxString& aFilterJson )
 
 
 namespace PCB {
+
+// Non-job kiface exports for diff/merge (returned by IfaceOrAddress). Defined
+// after the kiface instance so they can route into its jobs handler.
+static int pcbnewMergeExport( int aKind, const wxString& aAncestor, const wxString& aOurs,
+                              const wxString& aTheirs, const wxString& aOutput, bool aInteractive,
+                              bool aSingleFile, REPORTER* aReporter );
+static int pcbnewOpenDiffDialogExport( int aKind, const wxString& aFileA, const wxString& aFileB,
+                                       const wxString& aLabelA, const wxString& aLabelB,
+                                       wxWindow* aParent, REPORTER* aReporter );
+
 
 static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
 {
@@ -545,10 +556,19 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
             return reinterpret_cast<void*>( &filterFootprints );
         }
 
+        case KIFACE_MERGE_DOCUMENT:
+            return reinterpret_cast<void*>( &pcbnewMergeExport );
+
+        case KIFACE_OPEN_DIFF_DIALOG:
+            return reinterpret_cast<void*>( &pcbnewOpenDiffDialogExport );
+
         default:
             return nullptr;
         }
     }
+
+    /// Accessor for the non-job diff/merge exports (pcbnewMergeExport etc.).
+    PCBNEW_JOBS_HANDLER* JobHandler() const { return m_jobHandler.get(); }
 
     /**
      * Saving a file under a different name is delegated to the various KIFACEs because
@@ -563,7 +583,6 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
 
     bool HandleJobConfig( JOB* aJob, wxWindow* aParent ) override;
 
-#if defined( KICAD_IPC_API )
     bool HandleApiOpenDocument( const wxString& aPath,
                                 KICAD_API_SERVER* aServer,
                                 wxString* aError ) override;
@@ -571,7 +590,11 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
     bool HandleApiCloseDocument( const wxString& aBoardFileName,
                                  KICAD_API_SERVER* aServer,
                                  wxString* aError ) override;
-#endif
+
+    bool handleOpenPcb( const wxString& aPath, KICAD_API_SERVER* aServer, wxString* aError );
+
+    bool handleOpenFootprint( const wxString& aProjectPath, const wxString& aLibIdStr, KICAD_API_SERVER* aServer,
+                              wxString* aError );
 
     void PreloadLibraries( KIWAY* aKiway ) override;
     void ProjectChanged() override;
@@ -584,15 +607,34 @@ private:
     std::atomic_bool                     m_libraryPreloadInProgress;
     std::atomic_bool                     m_libraryPreloadAbort;
 
-#if defined( KICAD_IPC_API )
     void closeCurrentDocument( KICAD_API_SERVER* aServer );
 
     KIWAY* m_kiway = nullptr;
-    std::shared_ptr<HEADLESS_BOARD_CONTEXT> m_openContext;
-    std::unique_ptr<API_HANDLER_PCB>        m_openHandler;
-#endif
+    std::shared_ptr<HEADLESS_PCB_CONTEXT>       m_openContext;
+    std::unique_ptr<API_HANDLER_PCB>            m_openHandler;
+    std::shared_ptr<HEADLESS_FOOTPRINT_CONTEXT> m_openFpContext;
+    std::unique_ptr<API_HANDLER_FOOTPRINT>      m_openFpHandler;
 
 } kiface( "pcbnew", KIWAY::FACE_PCB );
+
+
+int pcbnewMergeExport( int aKind, const wxString& aAncestor, const wxString& aOurs,
+                       const wxString& aTheirs, const wxString& aOutput, bool aInteractive,
+                       bool aSingleFile, REPORTER* aReporter )
+{
+    return kiface.JobHandler()->RunMerge( static_cast<KICAD_DIFF::DOC_KIND>( aKind ), aAncestor,
+                                          aOurs, aTheirs, aOutput, aInteractive, aSingleFile,
+                                          aReporter );
+}
+
+
+int pcbnewOpenDiffDialogExport( int aKind, const wxString& aFileA, const wxString& aFileB,
+                                const wxString& aLabelA, const wxString& aLabelB,
+                                wxWindow* aParent, REPORTER* aReporter )
+{
+    return kiface.JobHandler()->OpenDiffDialog( static_cast<KICAD_DIFF::DOC_KIND>( aKind ), aFileA,
+                                                aFileB, aLabelA, aLabelB, aParent, aReporter );
+}
 
 } // namespace
 
@@ -634,9 +676,7 @@ bool IFACE::OnKifaceStart( PGM_BASE* aProgram, int aCtlBits, KIWAY* aKiway )
 
     start_common( aCtlBits );
 
-#if defined( KICAD_IPC_API )
     m_kiway = aKiway;
-#endif
 
     m_jobHandler = std::make_unique<PCBNEW_JOBS_HANDLER>( aKiway );
 
@@ -645,6 +685,14 @@ bool IFACE::OnKifaceStart( PGM_BASE* aProgram, int aCtlBits, KIWAY* aKiway )
         m_jobHandler->SetReporter( &CLI_REPORTER::GetInstance() );
         m_jobHandler->SetProgressReporter( &CLI_PROGRESS_REPORTER::GetInstance() );
     }
+
+    // Register the PCB and footprint merge drivers with libgit2 so
+    // .gitattributes entries `merge=kicad-pcb` and `merge=kicad-fp` route
+    // through our 3-way merge pipeline. git_merge_driver_register is not
+    // thread-safe; this runs once at kiface init before any background work
+    // spawns. The registry is idempotent so re-loads of the kiface are safe.
+    KIGIT::RegisterMergeDriver( "kicad-pcb", &KIGIT_PCB_MERGE::Apply );
+    KIGIT::RegisterMergeDriver( "kicad-fp",  &KIGIT_FP_MERGE::Apply );
 
     return true;
 }
@@ -657,6 +705,11 @@ void IFACE::Reset()
 
 void IFACE::OnKifaceEnd()
 {
+    // Release the CLI-cached board while the static DRC_ITEM tables it serializes against are
+    // still alive; deferring to static teardown crashes reading dangling severity keys
+    if( m_jobHandler )
+        m_jobHandler->ClearCachedBoard();
+
     end_common();
 }
 
@@ -788,7 +841,6 @@ bool IFACE::HandleJobConfig( JOB* aJob, wxWindow* aParent )
 }
 
 
-#if defined( KICAD_IPC_API )
 void IFACE::closeCurrentDocument( KICAD_API_SERVER* aServer )
 {
     if( m_openHandler )
@@ -804,6 +856,16 @@ void IFACE::closeCurrentDocument( KICAD_API_SERVER* aServer )
     // The jobs handler caches the last-loaded board. Clear it so the next job
     // uses the board from the newly opened document rather than a stale copy.
     m_jobHandler->ClearCachedBoard();
+
+    if( m_openFpHandler )
+    {
+        if( aServer )
+            aServer->DeregisterHandler( m_openFpHandler.get() );
+
+        m_openFpHandler.reset();
+    }
+
+    m_openFpContext.reset();
 }
 
 
@@ -819,6 +881,83 @@ bool IFACE::HandleApiOpenDocument( const wxString& aPath, KICAD_API_SERVER* aSer
         return false;
     }
 
+    return handleOpenPcb( aPath, aServer, aError );
+}
+
+
+bool IFACE::handleOpenFootprint( const wxString& aProjectPath, const wxString& aLibIdStr, KICAD_API_SERVER* aServer,
+                                 wxString* aError )
+{
+    LIB_ID fpid;
+
+    if( fpid.Parse( aLibIdStr ) >= 0 )
+    {
+        if( aError )
+            *aError = wxString::Format( wxS( "Invalid footprint LIB_ID: %s" ), aLibIdStr );
+
+        return false;
+    }
+
+    wxFileName projectPath( aProjectPath );
+    projectPath.MakeAbsolute();
+
+    SETTINGS_MANAGER& settingsManager = Pgm().GetSettingsManager();
+
+    if( !settingsManager.LoadProject( projectPath.GetFullPath(), true ) )
+    {
+        wxLogTrace( traceApi, "Warning: no project file found for %s", aProjectPath );
+    }
+
+    PROJECT* project = settingsManager.GetProject( projectPath.GetFullPath() );
+
+    if( !project )
+    {
+        if( aError )
+            *aError = wxString::Format( wxS( "Error loading project for %s" ), aProjectPath );
+
+        return false;
+    }
+
+    std::shared_ptr<HEADLESS_FOOTPRINT_CONTEXT> newContext;
+
+    try
+    {
+        FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( project );
+        adapter->AsyncLoad();
+        adapter->BlockUntilLoaded();
+        std::unique_ptr<FOOTPRINT> footprint( adapter->LoadFootprintWithOptionalNickname( fpid, true ) );
+
+        if( !footprint )
+        {
+            if( aError )
+                *aError = wxString::Format( wxS( "Footprint not found: %s" ), aLibIdStr );
+
+            return false;
+        }
+
+        newContext = std::make_shared<HEADLESS_FOOTPRINT_CONTEXT>(
+                std::move( footprint ), fpid, project, GetAppSettings<FOOTPRINT_EDITOR_SETTINGS>( "fpedit" ), m_kiway );
+    }
+    catch( ... )
+    {
+        if( aError )
+            *aError = wxString::Format( wxS( "Failed to load footprint: %s" ), aLibIdStr );
+
+        return false;
+    }
+
+    closeCurrentDocument( aServer );
+    m_openFpContext = std::move( newContext );
+
+    m_openFpHandler = std::make_unique<API_HANDLER_FOOTPRINT>( m_openFpContext, nullptr );
+    aServer->RegisterHandler( m_openFpHandler.get() );
+
+    return true;
+}
+
+
+bool IFACE::handleOpenPcb( const wxString& aPath, KICAD_API_SERVER* aServer, wxString* aError )
+{
     wxFileName projectPath( aPath );
 
     if( projectPath.GetExt() == FILEEXT::KiCadPcbFileExtension )
@@ -872,7 +1011,7 @@ bool IFACE::HandleApiOpenDocument( const wxString& aPath, KICAD_API_SERVER* aSer
         return false;
     }
 
-    std::shared_ptr<HEADLESS_BOARD_CONTEXT> newContext;
+    std::shared_ptr<HEADLESS_PCB_CONTEXT> newContext;
 
     try
     {
@@ -886,9 +1025,15 @@ bool IFACE::HandleApiOpenDocument( const wxString& aPath, KICAD_API_SERVER* aSer
             return false;
         }
 
-        newContext = std::make_shared<HEADLESS_BOARD_CONTEXT>( std::move( loadedBoard ), project,
-                                       GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" ),
-                                       m_kiway );
+        newContext = std::make_shared<HEADLESS_PCB_CONTEXT>( std::move( loadedBoard ), project,
+                                                             GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" ), m_kiway );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        if( aError )
+            *aError = wxString::Format( wxS( "Failed to load board: %s" ), ioe.What() );
+
+        return false;
     }
     catch( ... )
     {
@@ -911,7 +1056,7 @@ bool IFACE::HandleApiCloseDocument( const wxString& aFileName, KICAD_API_SERVER*
 {
     wxCHECK( aServer, false );
 
-    if( !m_openContext )
+    if( !m_openContext && !m_openFpContext )
     {
         if( aError )
             *aError = wxS( "No document is currently open" );
@@ -919,7 +1064,7 @@ bool IFACE::HandleApiCloseDocument( const wxString& aFileName, KICAD_API_SERVER*
         return false;
     }
 
-    if( !aFileName.IsEmpty() )
+    if( !aFileName.IsEmpty() && m_openContext )
     {
         wxFileName currentBoard( m_openContext->GetCurrentFileName() );
 
@@ -935,7 +1080,6 @@ bool IFACE::HandleApiCloseDocument( const wxString& aFileName, KICAD_API_SERVER*
     closeCurrentDocument( aServer );
     return true;
 }
-#endif
 
 
 void IFACE::PreloadLibraries( KIWAY* aKiway )
@@ -976,6 +1120,7 @@ void IFACE::PreloadLibraries( KIWAY* aKiway )
             {
                 if( m_libraryPreloadAbort.load() )
                 {
+                    m_libraryPreloadAbort.store( false );
                     aborted = true;
                     break;
                 }
@@ -1002,11 +1147,14 @@ void IFACE::PreloadLibraries( KIWAY* aKiway )
                     break;
             }
 
-            adapter->BlockUntilLoaded();
-
-            // Check again after blocking - abort may have been requested while we were waiting
-            if( m_libraryPreloadAbort.load() )
-                aborted = true;
+            // AbortAsyncLoad() sets the adapter's worker abort flag and then blocks,
+            // so workers exit at their next checkpoint. BlockUntilLoaded() alone just
+            // waits for each future to complete naturally, which can hang indefinitely
+            // if a worker is stuck on a stalled network or filesystem operation.
+            if( aborted )
+                adapter->AbortAsyncLoad();
+            else
+                adapter->BlockUntilLoaded();
 
             // If aborted, skip operations that use the adapter since the project may have changed
             // and the adapter's project reference could be stale. This prevents use-after-free
@@ -1056,8 +1204,8 @@ void IFACE::PreloadLibraries( KIWAY* aKiway )
             }
         };
 
-    thread_pool& tp = GetKiCadThreadPool();
-    m_libraryPreloadReturn = tp.submit_task( preload );
+    std::future<void> preloadFuture = std::async( std::launch::async, preload );
+    m_libraryPreloadReturn = std::move( preloadFuture );
 }
 
 

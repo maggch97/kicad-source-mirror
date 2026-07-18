@@ -13,13 +13,14 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "command_pcb_import.h"
 #include <cli/exit_codes.h>
 #include <jobs/job_pcb_import.h>
+#include <jobs/job_import_utils.h>
 #include <kiface_base.h>
 #include <string_utils.h>
 #include <macros.h>
@@ -30,6 +31,7 @@
 #define ARG_FORMAT "--format"
 #define ARG_REPORT_FORMAT "--report-format"
 #define ARG_REPORT_FILE "--report-file"
+#define ARG_LAYER_MAP "--layer-map"
 
 
 CLI::PCB_IMPORT_COMMAND::PCB_IMPORT_COMMAND() : COMMAND( "import" )
@@ -53,6 +55,12 @@ CLI::PCB_IMPORT_COMMAND::PCB_IMPORT_COMMAND() : COMMAND( "import" )
     m_argParser.add_argument( ARG_REPORT_FILE )
             .default_value( std::string( "" ) )
             .help( UTF8STDSTR( _( "File path for import report (default: stdout)" ) ) )
+            .metavar( "FILE" );
+
+    m_argParser.add_argument( ARG_LAYER_MAP )
+            .default_value( std::string( "" ) )
+            .help( UTF8STDSTR( _( "JSON file mapping source layer names to KiCad layer names; "
+                                  "unmapped layers use the automatic best-guess" ) ) )
             .metavar( "FILE" );
 }
 
@@ -106,19 +114,7 @@ int CLI::PCB_IMPORT_COMMAND::doPerform( KIWAY& aKiway )
 
     wxString reportFormat = From_UTF8( m_argParser.get<std::string>( ARG_REPORT_FORMAT ).c_str() );
 
-    if( reportFormat == wxS( "none" ) )
-    {
-        importJob->m_reportFormat = JOB_PCB_IMPORT::REPORT_FORMAT::NONE;
-    }
-    else if( reportFormat == wxS( "json" ) )
-    {
-        importJob->m_reportFormat = JOB_PCB_IMPORT::REPORT_FORMAT::JSON;
-    }
-    else if( reportFormat == wxS( "text" ) )
-    {
-        importJob->m_reportFormat = JOB_PCB_IMPORT::REPORT_FORMAT::TEXT;
-    }
-    else
+    if( !ParseImportReportFormat( reportFormat, importJob->m_reportFormat ) )
     {
         wxFprintf( stderr, _( "Invalid report format: %s\n" ), reportFormat );
         return EXIT_CODES::ERR_ARGS;
@@ -127,7 +123,24 @@ int CLI::PCB_IMPORT_COMMAND::doPerform( KIWAY& aKiway )
     wxString reportFile = From_UTF8( m_argParser.get<std::string>( ARG_REPORT_FILE ).c_str() );
     importJob->m_reportFile = reportFile;
 
+    wxString layerMapFile = From_UTF8( m_argParser.get<std::string>( ARG_LAYER_MAP ).c_str() );
+
+    if( !layerMapFile.IsEmpty() )
+    {
+        wxString error;
+
+        if( !LoadLayerMapFile( layerMapFile, importJob->m_layerMap, error ) )
+        {
+            wxFprintf( stderr, wxS( "%s\n" ), error );
+            return EXIT_CODES::ERR_ARGS;
+        }
+    }
+
     int exitCode = aKiway.ProcessJob( KIWAY::FACE_PCB, importJob.get() );
+
+    // The sentinel is internal to the top-level `import` classifier; standalone, it is invalid input.
+    if( exitCode == EXIT_CODES::ERR_UNKNOWN_FILE_FORMAT )
+        exitCode = EXIT_CODES::ERR_INVALID_INPUT_FILE;
 
     return exitCode;
 }

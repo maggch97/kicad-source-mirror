@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <widgets/margin_offset_binder.h>
@@ -61,6 +57,9 @@ MARGIN_OFFSET_BINDER::MARGIN_OFFSET_BINDER( UNITS_PROVIDER* aUnitsProvider,
         m_valueCtrl->Connect( wxEVT_KILL_FOCUS,
                               wxFocusEventHandler( MARGIN_OFFSET_BINDER::onKillFocus ),
                               nullptr, this );
+        m_valueCtrl->Connect( wxEVT_TEXT,
+                              wxCommandEventHandler( MARGIN_OFFSET_BINDER::onTextChanged ),
+                              nullptr, this );
     }
 
     if( m_eventSource )
@@ -85,6 +84,9 @@ MARGIN_OFFSET_BINDER::~MARGIN_OFFSET_BINDER()
                                  nullptr, this );
         m_valueCtrl->Disconnect( wxEVT_KILL_FOCUS,
                                  wxFocusEventHandler( MARGIN_OFFSET_BINDER::onKillFocus ),
+                                 nullptr, this );
+        m_valueCtrl->Disconnect( wxEVT_TEXT,
+                                 wxCommandEventHandler( MARGIN_OFFSET_BINDER::onTextChanged ),
                                  nullptr, this );
     }
 
@@ -205,6 +207,15 @@ void MARGIN_OFFSET_BINDER::Show( bool aShow, bool aResize )
 
 void MARGIN_OFFSET_BINDER::onSetFocus( wxFocusEvent& aEvent )
 {
+    m_needsParsing = true;
+    aEvent.Skip();
+}
+
+
+void MARGIN_OFFSET_BINDER::onTextChanged( wxCommandEvent& aEvent )
+{
+    // GetOffsetValue/GetRatioValue clear m_needsParsing after each parse, so any subsequent
+    // text edit within the same focus session must re-arm it.
     m_needsParsing = true;
     aEvent.Skip();
 }

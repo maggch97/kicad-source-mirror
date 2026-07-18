@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <optional>
@@ -947,6 +947,12 @@ bool LINE_PLACER::rhShoveOnly( const VECTOR2I& aP, LINE& aNewHead, LINE& aNewTai
     {
         // Make sure the springback algorithm won't erase the NODE that owns m_endItem.
         m_shove->SetSpringbackDoNotTouchNode( static_cast<const NODE*>( m_endItem->Owner() ) );
+    }
+    else
+    {
+        // No end item under the cursor anymore. Clear the DoNotTouchNode so springback
+        // can roll back past frames pinned by an earlier obstacle touch.
+        m_shove->SetSpringbackDoNotTouchNode( nullptr );
     }
 
     LINE newHead( walkSolids );

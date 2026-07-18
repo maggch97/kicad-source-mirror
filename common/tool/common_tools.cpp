@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <base_screen.h>
@@ -117,7 +113,14 @@ int COMMON_TOOLS::CursorControl( const TOOL_EVENT& aEvent )
         gridSize = getView()->GetGAL()->GetGridSize();
 
     bool     mirroredX = getView()->IsMirroredX();
-    VECTOR2D cursor = getViewControls()->GetRawCursorPosition( false );
+    VECTOR2D cursor = getViewControls()->GetCursorPosition( false );
+
+    SELECTION& selection = m_frame->GetCurrentSelection();
+
+    if( !getViewControls()->GetSettings().m_lastKeyboardCursorPositionValid && selection.HasReferencePoint() )
+    {
+        cursor = selection.GetReferencePoint();
+    }
 
     switch( type )
     {

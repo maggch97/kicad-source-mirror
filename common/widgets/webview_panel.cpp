@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <build_version.h>
@@ -308,10 +308,10 @@ void WEBVIEW_PANEL::OnScriptMessage( wxWebViewEvent& aEvt )
 
     if( handler.IsEmpty() )
     {
-        for( auto handlerPair : m_msgHandlers )
+        for( const auto &[candidateName, candidateHandler] : m_msgHandlers )
         {
-            wxLogTrace( "webview", "No handler specified, trying: %s", handlerPair.first );
-            handlerPair.second( aEvt.GetString() );
+            wxLogTrace( "webview", "No handler specified, trying: %s", candidateName );
+            candidateHandler( aEvt.GetString() );
         }
 
         return;

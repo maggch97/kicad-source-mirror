@@ -14,11 +14,12 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <api/headless_sch_context.h>
+#include <api/sch_api_save.h>
 #include <project.h>
 #include <schematic.h>
 #include <tool/tool_manager.h>
@@ -69,4 +70,18 @@ wxString HEADLESS_SCH_CONTEXT::GetCurrentFileName() const
         return wxEmptyString;
 
     return m_schematic->GetFileName();
+}
+
+
+bool HEADLESS_SCH_CONTEXT::SaveSchematic()
+{
+    wxCHECK( m_schematic && m_project, false );
+    return SCH_API_SAVE::SaveSchematic( *m_schematic, *m_project );
+}
+
+
+bool HEADLESS_SCH_CONTEXT::SaveSchematicCopy( const wxString& aFileName, bool aCreateProject )
+{
+    wxCHECK( m_schematic && m_project, false );
+    return SCH_API_SAVE::SaveSchematicCopy( *m_schematic, *m_project, aFileName, aCreateProject );
 }

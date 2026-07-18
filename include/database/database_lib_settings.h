@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef KICAD_DATABASE_LIB_SETTINGS_H
@@ -90,6 +90,7 @@ struct KICOMMON_API DATABASE_LIB_TABLE
     std::string key_col;           ///< Unique key column name (will form part of the LIB_ID)
     std::string symbols_col;       ///< Column name containing KiCad symbol refs
     std::string footprints_col;    ///< Column name containing KiCad footprint refs
+    std::string pins_col;          ///< Column name containing JSON pin assignments (optional)
 
     MAPPABLE_SYMBOL_PROPERTIES properties;
     std::vector<DATABASE_FIELD_MAPPING> fields;

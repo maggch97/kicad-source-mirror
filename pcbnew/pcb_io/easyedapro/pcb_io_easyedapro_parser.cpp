@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "pcb_io_easyedapro_parser.h"
@@ -201,7 +197,7 @@ static void AlignText( EDA_TEXT* text, int align )
 }
 
 
-void PCB_IO_EASYEDAPRO_PARSER::fillFootprintModelInfo( FOOTPRINT* footprint,
+void PCB_IO_EASYEDAPRO_PARSER::FillFootprintModelInfo( FOOTPRINT* footprint,
                                                        const wxString& modelUuid,
                                                        const wxString& modelTitle,
                                                        const wxString& modelTransform ) const
@@ -416,13 +412,11 @@ PCB_IO_EASYEDAPRO_PARSER::ParsePoly( BOARD_ITEM_CONTAINER* aContainer, nlohmann:
 
                 if( aClosed )
                 {
-                    std::unique_ptr<PCB_SHAPE> shape =
-                            std::make_unique<PCB_SHAPE>( aContainer, SHAPE_T::POLY );
-
-                    wxASSERT( chain.PointCount() > 2 );
-
                     if( chain.PointCount() > 2 )
                     {
+                        std::unique_ptr<PCB_SHAPE> shape =
+                                std::make_unique<PCB_SHAPE>( aContainer, SHAPE_T::POLY );
+
                         chain.SetClosed( true );
                         shape->SetFilled( true );
                         shape->SetPolyShape( chain );
@@ -949,7 +943,7 @@ FOOTPRINT* PCB_IO_EASYEDAPRO_PARSER::ParseFootprint( const nlohmann::json&      
         modelTitle = get_def( compAttrs, "3D Model Title", modelUuid );
         modelTransform = get_def( compAttrs, "3D Model Transform", "" );
 
-        fillFootprintModelInfo( footprint, modelUuid, modelTitle, modelTransform );
+        FillFootprintModelInfo( footprint, modelUuid, modelTitle, modelTransform );
     }
 
     // Heal board outlines
@@ -1737,7 +1731,7 @@ void PCB_IO_EASYEDAPRO_PARSER::ParseBoard(
         else
             modelTransform = compAttrs.value<wxString>( "3D Model Transform", "" );
 
-        fillFootprintModelInfo( footprint.get(), modelUuid, modelTitle, modelTransform );
+        FillFootprintModelInfo( footprint.get(), modelUuid, modelTitle, modelTransform );
 
         footprint->SetParent( aBoard );
 
@@ -1797,10 +1791,10 @@ void PCB_IO_EASYEDAPRO_PARSER::ParseBoard(
                     }
                     else
                     {
-                        field->SetVisible( false );
                         field->SetText( attr.value );
                     }
 
+                    field->SetVisible( attr.keyVisible || attr.valVisible );
                     field->SetLayer( klayer );
                     field->SetPosition( ScalePos( attr.position ) );
                     field->SetTextAngleDegrees( footprint->IsFlipped() ? -attr.rotation

@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
  
 
@@ -23,6 +23,7 @@
 #define SYMBOL_LIBRARY_MANAGER_ADAPTER_H
 
 #include <future>
+#include <optional>
 #include <lib_id.h>
 #include <core/leak_at_exit.h>
 #include <libraries/library_manager.h>
@@ -55,6 +56,8 @@ public:
 
 public:
     SYMBOL_LIBRARY_ADAPTER( LIBRARY_MANAGER& aManager );
+
+    ~SYMBOL_LIBRARY_ADAPTER() override;
 
     LIBRARY_TABLE_TYPE Type() const override { return LIBRARY_TABLE_TYPE::SYMBOL; }
 
@@ -154,11 +157,23 @@ public:
 
     int GetModifyHash() const;
 
+    /**
+     * Return the modify hash of a single library if it is currently loaded.
+     *
+     * Unlike GetModifyHash(), which sums the hashes of every loaded library, this reports just the
+     * named library so callers can react to changes in a specific dependency without being disturbed
+     * by unrelated (for example asynchronously loading) libraries.
+     *
+     * @param aNickname is the library nickname in the symbol library table.
+     * @return the library's modify hash, or std::nullopt if it is not loaded.
+     */
+    std::optional<int> GetLibraryModifyHash( const wxString& aNickname ) const;
+
 protected:
     std::map<wxString, LIB_DATA>& globalLibs() override { return GlobalLibraries.Get(); }
     std::map<wxString, LIB_DATA>& globalLibs() const override { return GlobalLibraries.Get(); }
-    std::shared_mutex& globalLibsMutex() override { return GlobalLibraryMutex; }
-    std::shared_mutex& globalLibsMutex() const override { return GlobalLibraryMutex; }
+    std::shared_mutex& globalLibsMutex() override { return GlobalLibraryMutex.Get(); }
+    std::shared_mutex& globalLibsMutex() const override { return GlobalLibraryMutex.Get(); }
 
     void enumerateLibrary( LIB_DATA* aLib, const wxString& aUri ) override;
 
@@ -170,7 +185,10 @@ private:
     static SCH_IO* schplugin( const LIB_DATA* aRow );
 
     static LEAK_AT_EXIT<std::map<wxString, LIB_DATA>> GlobalLibraries;
-    static std::shared_mutex GlobalLibraryMutex;
+
+    // Leaked like GlobalLibraries so adapter destructors can still lock it to evict their entries
+    // even when they run during static teardown.
+    static LEAK_AT_EXIT<std::shared_mutex> GlobalLibraryMutex;
 };
 
 #endif //SYMBOL_LIBRARY_MANAGER_ADAPTER_H

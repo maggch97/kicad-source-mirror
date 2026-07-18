@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "altium_binary_parser.h"
@@ -445,15 +441,24 @@ std::map<wxString, wxString> ALTIUM_BINARY_PARSER::ReadProperties(
             value.Replace( wxT( "ÿ" ), wxT( " " ) );
         }
 
-        if( canonicalKey == wxT( "DESIGNATOR" )
-                || canonicalKey == wxT( "NAME" )
-                || canonicalKey == wxT( "TEXT" ) )
-        {
-            if( kv[ wxT( "RECORD" ) ] != wxT( "4" ) )
-                value = AltiumPropertyToKiCadString( value.Trim() );
-        }
-
         kv.insert( { canonicalKey, value.Trim() } );
+    }
+
+    // DESIGNATOR/NAME/TEXT carry Altium overbar markup that must be converted for every record
+    // type except RECORD=4 (LABEL). Older schematics emit those keys ahead of RECORD, so the type
+    // is only reliably known once the whole record has been read; deciding mid-stream both misses
+    // the exemption and, via operator[], leaves an empty RECORD that shadows the real value.
+    auto recordIt = kv.find( wxT( "RECORD" ) );
+
+    if( recordIt == kv.end() || recordIt->second != wxT( "4" ) )
+    {
+        for( const wxString& key : { wxT( "DESIGNATOR" ), wxT( "NAME" ), wxT( "TEXT" ) } )
+        {
+            auto valueIt = kv.find( key );
+
+            if( valueIt != kv.end() )
+                valueIt->second = AltiumPropertyToKiCadString( valueIt->second );
+        }
     }
 
     return kv;

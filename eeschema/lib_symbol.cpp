@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <font/outline_font.h>
@@ -42,6 +38,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <unordered_map>
 #include <unordered_set>
 #include <advanced_config.h>
 #include <properties/property.h>
@@ -122,8 +119,8 @@ void LIB_SYMBOL::cacheShownDescription()
 void LIB_SYMBOL::SetDescription( const wxString& aDescription )
 {
     GetDescriptionField().SetText( aDescription );
-    cacheSearchTerms();
     cacheShownDescription();
+    cacheSearchTerms();
 }
 
 
@@ -164,8 +161,8 @@ void LIB_SYMBOL::cacheSearchTerms()
 
     // Order matters, see SEARCH_TERM_CACHE_INDEX
     m_searchTermsCache.emplace_back( SEARCH_TERM( GetLibNickname(), 4 ) );
-    m_searchTermsCache.emplace_back( SEARCH_TERM( GetName(), 8 ) );
-    m_searchTermsCache.emplace_back( SEARCH_TERM( GetLIB_ID().Format(), 16 ) );
+    m_searchTermsCache.emplace_back( SEARCH_TERM( GetName(), 8, true ) );
+    m_searchTermsCache.emplace_back( SEARCH_TERM( GetLIB_ID().Format(), 16, true ) );
 
     wxStringTokenizer keywordTokenizer( GetShownKeyWords(), " \t\r\n", wxTOKEN_STRTOK );
 
@@ -268,6 +265,8 @@ LIB_SYMBOL::LIB_SYMBOL( const LIB_SYMBOL& aSymbol, LEGACY_SYMBOL_LIB* aLibrary, 
     m_library = aLibrary;
     m_name = aSymbol.m_name;
     m_fpFilters = wxArrayString( aSymbol.m_fpFilters );
+    m_pinMaps = aSymbol.m_pinMaps;
+    m_associatedFootprints = aSymbol.m_associatedFootprints;
     m_unitCount = aSymbol.m_unitCount;
     m_demorgan = aSymbol.m_demorgan;
     m_unitsLocked = aSymbol.m_unitsLocked;
@@ -321,6 +320,8 @@ const LIB_SYMBOL& LIB_SYMBOL::operator=( const LIB_SYMBOL& aSymbol )
     m_library = aSymbol.m_library;
     m_name = aSymbol.m_name;
     m_fpFilters = wxArrayString( aSymbol.m_fpFilters );
+    m_pinMaps = aSymbol.m_pinMaps;
+    m_associatedFootprints = aSymbol.m_associatedFootprints;
     m_unitCount = aSymbol.m_unitCount;
     m_demorgan = aSymbol.m_demorgan;
     m_unitsLocked = aSymbol.m_unitsLocked;
@@ -531,9 +532,15 @@ void LIB_SYMBOL::SetParent( LIB_SYMBOL* aParent )
         }
 
         m_parent = aParent->SharedPtr();
+
+        // Keep the recorded parent name in sync so serialization never has to dereference the live
+        // parent pointer (which can dangle, see SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol).
+        m_parentName = aParent->GetName();
     }
     else
     {
+        // Only drop the live pointer. The recorded parent name is left untouched so a derived
+        // symbol whose live parent has been lost can still be serialized by name.
         m_parent.reset();
     }
 }
@@ -692,6 +699,11 @@ std::unique_ptr<LIB_SYMBOL> LIB_SYMBOL::Flatten() const
             retv->SetExcludedFromBoard( parentChain.front()->GetExcludedFromBoard() );
             retv->SetExcludedFromPosFiles( parentChain.front()->GetExcludedFromPosFiles() );
         }
+
+        // Pin maps and associated footprints inherit as a coupled bundle; copy the resolved
+        // effective bundle so the flattened symbol is self-contained.
+        retv->m_pinMaps = GetEffectivePinMaps();
+        retv->m_associatedFootprints = GetEffectiveAssociatedFootprints();
 
         retv->m_parent.reset();
     }
@@ -1466,9 +1478,10 @@ const BOX2I LIB_SYMBOL::GetBodyBoundingBox( int aUnit, int aBodyStyle, bool aInc
 
 void LIB_SYMBOL::RefreshLibraryTreeCaches()
 {
+    // cacheSearchTerms() reads the shown-description cache, so refresh it first.
+    cacheShownDescription();
     cacheSearchTerms();
     cachePinCount();
-    cacheShownDescription();
     cacheChooserFields();
 }
 
@@ -1538,6 +1551,102 @@ void LIB_SYMBOL::CopyFields( std::vector<SCH_FIELD>& aList )
 
     for( SCH_FIELD* field : orderedFields )
         aList.emplace_back( *field );
+}
+
+
+void LIB_SYMBOL::SyncFieldsFromParent( const LIB_FIELD_SYNC_OPTIONS& aOptions )
+{
+    std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock();
+
+    if( !parent )
+        return;
+
+    std::unique_ptr<LIB_SYMBOL> flattenedParent = parent->Flatten();
+
+    auto selected =
+            [&]( const wxString& aFieldName )
+            {
+                return aOptions.m_updateAllFields
+                       || aOptions.m_updateFields.count( aFieldName ) > 0;
+            };
+
+    std::vector<SCH_FIELD> fields;
+    std::vector<SCH_FIELD> result;
+    CopyFields( fields );
+
+    for( SCH_FIELD& field : fields )
+    {
+        bool       copy = true;
+        SCH_FIELD* parentField = nullptr;
+
+        if( selected( field.GetName() ) )
+        {
+            if( field.IsMandatory() )
+                parentField = flattenedParent->GetField( field.GetId() );
+            else
+                parentField = flattenedParent->GetField( field.GetName() );
+
+            if( parentField )
+            {
+                bool resetText = parentField->GetText().IsEmpty() ? aOptions.m_resetEmptyText
+                                                                  : aOptions.m_resetText;
+
+                if( resetText )
+                    field.SetText( parentField->GetText() );
+
+                if( aOptions.m_resetVisibility )
+                {
+                    field.SetVisible( parentField->IsVisible() );
+                    field.SetNameShown( parentField->IsNameShown() );
+                }
+
+                if( aOptions.m_resetEffects )
+                {
+                    // SetAttributes() also overwrites the visible bit and position, so save
+                    // and restore them here.
+                    bool     visible = field.IsVisible();
+                    VECTOR2I pos = field.GetPosition();
+
+                    field.SetAttributes( *parentField );
+
+                    field.SetVisible( visible );
+                    field.SetPosition( pos );
+                }
+
+                if( aOptions.m_resetPositions )
+                    field.SetTextPos( parentField->GetTextPos() );
+            }
+            else if( aOptions.m_removeExtraFields )
+            {
+                copy = false;
+            }
+        }
+
+        if( copy )
+            result.emplace_back( std::move( field ) );
+    }
+
+    std::vector<SCH_FIELD*> parentFields;
+
+    flattenedParent->GetFields( parentFields );
+
+    for( SCH_FIELD* parentField : parentFields )
+    {
+        if( !selected( parentField->GetName() ) )
+            continue;
+
+        if( !GetField( parentField->GetName() ) )
+        {
+            result.emplace_back( this, FIELD_T::USER );
+            SCH_FIELD* newField = &result.back();
+
+            newField->SetName( parentField->GetCanonicalName() );
+            newField->SetText( parentField->GetText() );
+            newField->SetAttributes( *parentField );   // Includes visible bit and position
+        }
+    }
+
+    SetFields( result );
 }
 
 
@@ -1912,11 +2021,13 @@ int LIB_SYMBOL::GetUnitCount() const
 
 void LIB_SYMBOL::SetBodyStyleCount( int aCount, bool aDuplicateDrawItems, bool aDuplicatePins )
 {
-    if( GetBodyStyleCount() == aCount )
+    int prevCount = GetBodyStyleCount();
+
+    if( prevCount == aCount )
         return;
 
     // Duplicate items to create the converted shape
-    if( GetBodyStyleCount() < aCount )
+    if( prevCount < aCount )
     {
         if( aDuplicateDrawItems || aDuplicatePins )
         {
@@ -1929,9 +2040,12 @@ void LIB_SYMBOL::SetBodyStyleCount( int aCount, bool aDuplicateDrawItems, bool a
 
                 if( item.m_bodyStyle == 1 )
                 {
-                    SCH_ITEM* newItem = item.Duplicate( IGNORE_PARENT_GROUP );
-                    newItem->m_bodyStyle = 2;
-                    tmp.push_back( newItem );
+                    for( int j = prevCount + 1; j <= aCount; j++ )
+                    {
+                        SCH_ITEM* newItem = item.Duplicate( IGNORE_PARENT_GROUP );
+                        newItem->m_bodyStyle = j;
+                        tmp.push_back( newItem );
+                    }
                 }
             }
 
@@ -1947,7 +2061,7 @@ void LIB_SYMBOL::SetBodyStyleCount( int aCount, bool aDuplicateDrawItems, bool a
 
         while( i != m_drawings.end() )
         {
-            if( i->m_bodyStyle > 1 )
+            if( i->m_bodyStyle > aCount )
                 i = m_drawings.erase( i );
             else
                 ++i;
@@ -2185,8 +2299,15 @@ int LIB_SYMBOL::Compare( const LIB_SYMBOL& aRhs, int aCompareFlags, REPORTER* aR
 
             if( tmp == 0 )
             {
+                int fieldCompareFlags = aCompareFlags;
+
+                // SCH_FIELD::compare() injects SKIP_TST_POS for ERC, but it is bypassed
+                // by the base-class call below, so mirror it here (issue 24657).
+                if( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::ERC )
+                    fieldCompareFlags |= SCH_ITEM::COMPARE_FLAGS::SKIP_TST_POS;
+
                 // Fall back to base class comparison for other properties
-                tmp = aField->SCH_ITEM::compare( *bField, aCompareFlags );
+                tmp = aField->SCH_ITEM::compare( *bField, fieldCompareFlags );
             }
 
             if( tmp != 0 )
@@ -2241,6 +2362,40 @@ int LIB_SYMBOL::Compare( const LIB_SYMBOL& aRhs, int aCompareFlags, REPORTER* aR
                     return retv;
             }
         }
+    }
+
+    if( int tmp = static_cast<int>( m_pinMaps.GetAll().size() - aRhs.m_pinMaps.GetAll().size() ) )
+    {
+        retv = tmp;
+        REPORT( _( "Pin map count differs." ) );
+
+        if( !aReporter )
+            return retv;
+    }
+    else if( m_pinMaps != aRhs.m_pinMaps )
+    {
+        retv = 1;
+        REPORT( _( "Pin maps differ." ) );
+
+        if( !aReporter )
+            return retv;
+    }
+
+    if( int tmp = static_cast<int>( m_associatedFootprints.size() - aRhs.m_associatedFootprints.size() ) )
+    {
+        retv = tmp;
+        REPORT( _( "Associated footprint count differs." ) );
+
+        if( !aReporter )
+            return retv;
+    }
+    else if( m_associatedFootprints != aRhs.m_associatedFootprints )
+    {
+        retv = 1;
+        REPORT( _( "Associated footprints differ." ) );
+
+        if( !aReporter )
+            return retv;
     }
 
     if( int tmp = m_keyWords.Cmp( aRhs.m_keyWords ) )

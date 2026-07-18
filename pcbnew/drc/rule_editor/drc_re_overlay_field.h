@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DRC_RE_OVERLAY_FIELD_H
@@ -148,10 +144,21 @@ public:
     bool HasLabel() const { return m_label != nullptr; }
 
     /**
-     * Create and associate a label with this field.
-     * The label is positioned according to the LABEL_POSITION in the field position struct.
+     * @return The prefix label control, or nullptr if no prefix label was created.
      */
-    void CreateLabel();
+    wxStaticText* GetPrefixLabel() const { return m_prefixLabel; }
+
+    /**
+     * @return true if this field has a prefix label.
+     */
+    bool HasPrefixLabel() const { return m_prefixLabel != nullptr; }
+
+    /**
+     * Create and associate labels with this field.
+     * The label is positioned according to the LABEL_POSITION in the field position struct.
+     * The prefix label is always placed on the left, if specified.
+     */
+    void CreateLabels();
 
 private:
     void createErrorIcon();
@@ -169,6 +176,7 @@ private:
     bool                 m_showingError;
 
     wxStaticText*        m_label;
+    wxStaticText*        m_prefixLabel;
 };
 
 #endif // DRC_RE_OVERLAY_FIELD_H

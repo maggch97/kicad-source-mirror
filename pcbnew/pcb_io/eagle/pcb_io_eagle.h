@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_IO_EAGLE_H_
@@ -134,7 +130,8 @@ class PCB_IO_EAGLE : public PCB_IO, public LAYER_MAPPABLE_PLUGIN
 public:
     const IO_BASE::IO_FILE_DESC GetBoardFileDesc() const override
     {
-        return IO_BASE::IO_FILE_DESC( _HKI( "Eagle ver. 6.x XML PCB files" ), { "brd" } );
+        return IO_BASE::IO_FILE_DESC( _HKI( "Eagle PCB files (6.x XML and pre-v6 binary)" ),
+                                      { "brd" } );
     }
 
     const IO_BASE::IO_FILE_DESC GetLibraryDesc() const override
@@ -287,8 +284,8 @@ private:
     void orientFootprintAndText( FOOTPRINT* aFootprint, const EELEMENT& e, const EATTR* aNameAttr,
                                  const EATTR* aValueAttr );
 
-    void orientFPText( FOOTPRINT* aFootprint, const EELEMENT& e, PCB_TEXT* aFPText,
-                       const EATTR* aAttr );
+    void orientFPText( FOOTPRINT* aFootprint, const EELEMENT& e, PCB_TEXT* aFPText, const EATTR* aAttr,
+                       double aTextDefAngle = 0.0, bool aTextDefMirror = false, bool aTextDefSpin = false );
 
 
     /// move the BOARD into the center of the page

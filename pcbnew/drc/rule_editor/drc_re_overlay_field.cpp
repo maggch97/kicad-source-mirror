@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "drc_re_overlay_field.h"
@@ -44,7 +40,8 @@ DRC_RE_OVERLAY_FIELD::DRC_RE_OVERLAY_FIELD( wxWindow* aParent, const wxString& a
         m_unitBinder( nullptr ),
         m_errorIcon( nullptr ),
         m_showingError( false ),
-        m_label( nullptr )
+        m_label( nullptr ),
+        m_prefixLabel( nullptr )
 {
 }
 
@@ -142,13 +139,16 @@ bool DRC_RE_OVERLAY_FIELD::TransferFromWindow()
 }
 
 
-void DRC_RE_OVERLAY_FIELD::CreateLabel()
+void DRC_RE_OVERLAY_FIELD::CreateLabels()
 {
-    if( m_label )
-        return;
+    if( !m_label && !m_position.labelText.IsEmpty() && m_position.labelPosition != LABEL_POSITION::NONE
+        && GetControl()->GetLabel() != m_position.labelText )
+    {
+        m_label = new wxStaticText( m_parent, wxID_ANY, m_position.labelText );
+    }
 
-    if( m_position.labelText.IsEmpty() || m_position.labelPosition == LABEL_POSITION::NONE )
-        return;
-
-    m_label = new wxStaticText( m_parent, wxID_ANY, m_position.labelText );
+    if( !m_prefixLabel && !m_position.prefixText.IsEmpty() )
+    {
+        m_prefixLabel = new wxStaticText( m_parent, wxID_ANY, m_position.prefixText );
+    }
 }

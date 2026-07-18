@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -1005,7 +1005,11 @@ bool RULE_EDITOR_DIALOG_BASE::filterRuleTree( const wxTreeItemId& aItem, const w
 
 void RULE_EDITOR_DIALOG_BASE::saveRuleTreeState( const wxTreeItemId& aItem, const int& aNodeId )
 {
-    wxString         itemText = m_ruleTreeCtrl->GetItemText( aItem );
+    wxString itemText;
+
+    if( aItem != m_ruleTreeCtrl->GetRootItem() )
+        itemText = m_ruleTreeCtrl->GetItemText( aItem );
+
     std::vector<int> children;
 
     wxTreeItemIdValue cookie;

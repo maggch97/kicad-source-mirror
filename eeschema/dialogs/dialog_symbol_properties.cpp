@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "dialog_symbol_properties.h"
@@ -33,6 +29,7 @@
 #include <kiface_base.h>
 #include <pin_numbers.h>
 #include <string_utils.h>
+#include <template_fieldnames.h>
 #include <kiplatform/ui.h>
 #include <widgets/grid_icon_text_helpers.h>
 #include <widgets/grid_combobox.h>
@@ -49,6 +46,7 @@
 
 #include <dialog_sim_model.h>
 #include <panel_embedded_files.h>
+#include <panel_symbol_pin_map.h>
 
 
 wxDEFINE_EVENT( SYMBOL_DELAY_FOCUS, wxCommandEvent );
@@ -317,7 +315,8 @@ DIALOG_SYMBOL_PROPERTIES::DIALOG_SYMBOL_PROPERTIES( SCH_EDIT_FRAME* aParent, SCH
         m_editorShown( false ),
         m_fields( nullptr ),
         m_dataModel( nullptr ),
-        m_embeddedFiles( nullptr )
+        m_embeddedFiles( nullptr ),
+        m_pinMapPanel( nullptr )
 {
     m_symbol = aSymbol;
     m_part = m_symbol->GetLibSymbolRef().get();
@@ -347,6 +346,9 @@ DIALOG_SYMBOL_PROPERTIES::DIALOG_SYMBOL_PROPERTIES( SCH_EDIT_FRAME* aParent, SCH
         m_embeddedFiles = new PANEL_EMBEDDED_FILES( m_notebook1, m_symbol->GetEmbeddedFiles() );
         m_notebook1->AddPage( m_embeddedFiles, _( "Embedded Files" ) );
     }
+
+    m_pinMapPanel = new PANEL_SYMBOL_PIN_MAP( m_pinMapPage );
+    bPinMapPageSizer->Add( m_pinMapPanel, 1, wxEXPAND, 5 );
 
     if( m_part && m_part->IsMultiBodyStyle() )
     {
@@ -441,6 +443,12 @@ DIALOG_SYMBOL_PROPERTIES::~DIALOG_SYMBOL_PROPERTIES()
 SCH_EDIT_FRAME* DIALOG_SYMBOL_PROPERTIES::GetParent()
 {
     return dynamic_cast<SCH_EDIT_FRAME*>( wxDialog::GetParent() );
+}
+
+
+void DIALOG_SYMBOL_PROPERTIES::SelectPinMapPage()
+{
+    m_forcePinMapPage = true;
 }
 
 
@@ -583,8 +591,30 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataToWindow()
     if( m_embeddedFiles && !m_embeddedFiles->TransferDataToWindow() )
         return false;
 
+    m_pinMapPanel->SetSymbol( m_part );
+    m_pinMapPanel->TransferDataToWindow();
+
     m_fieldsGrid->Layout();
     Layout();
+    m_fieldsGrid->SetMinVisibleRows( this, 4 );
+
+    // Always open on the General page, unless the caller explicitly asked for the Pin Map
+    // tab (the Edit Pin Map button).  This overrides DIALOG_SHIM's remembered-tab restore.
+    int targetPage = 0;
+
+    if( m_forcePinMapPage )
+    {
+        for( size_t page = 0; page < m_notebook1->GetPageCount(); ++page )
+        {
+            if( m_notebook1->GetPage( page ) == m_pinMapPage )
+            {
+                targetPage = (int) page;
+                break;
+            }
+        }
+    }
+
+    m_notebook1->ChangeSelection( targetPage );
 
     return true;
 }
@@ -715,6 +745,9 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow()
     if( !m_pinGrid->CommitPendingChanges() )
         return false;
 
+    if( !m_pinMapPanel->CommitPendingChanges() )
+        return false;
+
     SCH_COMMIT     commit( GetParent() );
     SCH_SCREEN*    currentScreen = GetParent()->GetScreen();
     SCH_SHEET_PATH currentSheet = GetParent()->Schematic().CurrentSheet();
@@ -730,6 +763,10 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow()
     // save old cmp in undo list if not already in edit, or moving ...
     if( m_symbol->GetEditFlags() == 0 )
         commit.Modify( m_symbol, currentScreen );
+
+    // Apply pin-map edits after the undo snapshot so undo restores them (issue #2282).
+    if( m_part )
+        m_pinMapPanel->ApplyToSymbol( m_part );
 
     // Save current flags which could be modified by next change settings
     EDA_ITEM_FLAGS flags = m_symbol->GetFlags();
@@ -898,7 +935,7 @@ void DIALOG_SYMBOL_PROPERTIES::OnGridCellChanging( wxGridEvent& event )
             if( i == event.GetRow() )
                 continue;
 
-            if( newName.CmpNoCase( m_fieldsGrid->GetCellValue( i, FDC_NAME ) ) == 0 )
+            if( FieldNamesAreDuplicates( newName, m_fieldsGrid->GetCellValue( i, FDC_NAME ) ) )
             {
                 DisplayError( this, wxString::Format( _( "Field name '%s' already in use." ),
                                                       newName ) );
