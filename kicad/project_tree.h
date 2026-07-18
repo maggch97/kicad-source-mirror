@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PROJECT_TREE_H
@@ -46,7 +42,7 @@ class PROJECT_TREE : public wxTreeCtrl
 private:
     PROJECT_TREE_PANE*            m_projectTreePane;
     wxImageList*                  m_statusImageList;
-    std::unique_ptr<KIGIT_COMMON> m_gitCommon;
+    std::shared_ptr<KIGIT_COMMON> m_gitCommon;
 
 public:
     PROJECT_TREE_PANE* GetProjectTreePane() const { return m_projectTreePane; }
@@ -63,10 +59,13 @@ public:
 
     KIGIT_COMMON* GitCommon() const             { return m_gitCommon.get(); }
 
-    std::unique_ptr<KIGIT_COMMON> TakeGitCommon()
+    /// Shared handle for background workers so the common outlives a concurrent TakeGitCommon().
+    std::shared_ptr<KIGIT_COMMON> GitCommonPtr() const { return m_gitCommon; }
+
+    std::shared_ptr<KIGIT_COMMON> TakeGitCommon()
     {
         auto old = std::move( m_gitCommon );
-        m_gitCommon = std::make_unique<KIGIT_COMMON>( nullptr );
+        m_gitCommon = std::make_shared<KIGIT_COMMON>( nullptr );
         return old;
     }
 

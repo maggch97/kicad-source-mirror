@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -33,12 +33,18 @@
 
 LEAK_AT_EXIT<std::map<wxString, LIB_DATA>> DESIGN_BLOCK_LIBRARY_ADAPTER::GlobalLibraries;
 
-std::shared_mutex DESIGN_BLOCK_LIBRARY_ADAPTER::GlobalLibraryMutex;
+LEAK_AT_EXIT<std::shared_mutex> DESIGN_BLOCK_LIBRARY_ADAPTER::GlobalLibraryMutex;
 
 
 DESIGN_BLOCK_LIBRARY_ADAPTER::DESIGN_BLOCK_LIBRARY_ADAPTER( LIBRARY_MANAGER& aManager ) :
         LIBRARY_MANAGER_ADAPTER( aManager )
 {
+}
+
+
+DESIGN_BLOCK_LIBRARY_ADAPTER::~DESIGN_BLOCK_LIBRARY_ADAPTER()
+{
+    evictOwnedGlobalEntries();
 }
 
 

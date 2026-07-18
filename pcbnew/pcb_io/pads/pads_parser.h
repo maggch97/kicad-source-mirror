@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -783,6 +779,15 @@ private:
     bool readLine( std::ifstream& aStream, std::string& aLine );
     void pushBackLine( const std::string& aLine );
 
+    /**
+     * Parse the major version number from the file header version string.
+     *
+     * PADS version strings take the form "Vn.n" where n is a major version.
+     * The sequence is V3..V5, then V2003..V2007, V9, V9.4, V9.5, V10, etc.
+     * Returns 0 if parsing fails.
+     */
+    int parseMajorVersion() const;
+
     PARAMETERS m_parameters;
     std::vector<PART> m_parts;
     std::vector<NET> m_nets;
@@ -811,6 +816,7 @@ private:
     std::map<int, LAYER_INFO> m_layer_defs;      ///< Parsed layer definitions by layer number
     FILE_HEADER m_file_header;               ///< Parsed file header info
     bool m_is_basic_units = false;
+    bool m_has_font_lines = true;            ///< True if text/label entries include a font line
 
     std::string m_current_section;
     std::optional<std::string> m_pushed_line;

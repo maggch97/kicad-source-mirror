@@ -14,15 +14,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "tool/group_tool.h"
 
 #include <set>
+
+#include <wx/string.h>
 
 #include <eda_draw_frame.h>
 #include <kiplatform/ui.h>
@@ -199,6 +197,7 @@ int GROUP_TOOL::AddToGroup( const TOOL_EVENT& aEvent )
 
     EDA_GROUP* group = nullptr;
     EDA_ITEMS  toAdd;
+    wxString   errorMsg;
 
     for( EDA_ITEM* item : selection )
     {
@@ -210,14 +209,19 @@ int GROUP_TOOL::AddToGroup( const TOOL_EVENT& aEvent )
 
             group = dynamic_cast<EDA_GROUP*>( item );
         }
-        else if( !item->GetParentGroup() )
+        else if( !item->GetParentGroup() && canGroupItem( item, errorMsg ) )
         {
             toAdd.push_back( item );
         }
     }
 
     if( !group || toAdd.empty() )
+    {
+        if( !errorMsg.IsEmpty() )
+            m_frame->ShowInfoBarWarning( errorMsg );
+
         return 0;
+    }
 
     m_toolMgr->RunAction( ACTIONS::selectionClear );
 
@@ -243,6 +247,9 @@ int GROUP_TOOL::AddToGroup( const TOOL_EVENT& aEvent )
     m_selectionTool->AddItemToSel( group->AsEdaItem() );
     m_toolMgr->PostEvent( EVENTS::SelectedItemsModified );
     m_frame->OnModify();
+
+    if( !errorMsg.IsEmpty() )
+        m_frame->ShowInfoBarWarning( errorMsg );
 
     return 0;
 }

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/log.h>
@@ -679,7 +675,8 @@ bool SCH_FIELD::Matches( const EDA_SEARCH_DATA& aSearchData, void* aAuxData ) co
         if( !parentSymbol )
             return false;
 
-        if( parentSymbol->Matches( aSearchData, aAuxData ) )
+        // the search pane surfaces metadata hits through the reference field
+        if( aSearchData.searchMetadata && parentSymbol->Matches( aSearchData, aAuxData ) )
             return true;
 
         wxASSERT( aAuxData );
@@ -1570,6 +1567,33 @@ bool SCH_FIELD::operator==( const SCH_FIELD& aOther ) const
     }
 
     if( GetPosition() != aOther.GetPosition() )
+        return false;
+
+    if( IsGeneratedField() != aOther.IsGeneratedField() )
+        return false;
+
+    if( IsNameShown() != aOther.IsNameShown() )
+        return false;
+
+    if( CanAutoplace() != aOther.CanAutoplace() )
+        return false;
+
+    return EDA_TEXT::operator==( aOther );
+}
+
+
+bool SCH_FIELD::HasSameContent( const SCH_FIELD& aOther ) const
+{
+    if( GetCanonicalName() != aOther.GetCanonicalName() )
+        return false;
+
+    if( GetPosition() != aOther.GetPosition() )
+        return false;
+
+    if( IsVisible() != aOther.IsVisible() )
+        return false;
+
+    if( IsPrivate() != aOther.IsPrivate() )
         return false;
 
     if( IsGeneratedField() != aOther.IsGeneratedField() )

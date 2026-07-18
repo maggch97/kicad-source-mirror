@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <bitmaps.h>
@@ -1076,7 +1072,10 @@ void PANEL_SETUP_RULES::OnErrorLinkClicked( wxHtmlLinkEvent& event )
 
 bool PANEL_SETUP_RULES::TransferDataToWindow()
 {
-    wxFileName rulesFile( m_frame->GetDesignRulesPath() );
+    if( !m_frame->GetBoard() )
+        return true;
+
+    wxFileName rulesFile( m_frame->GetBoard()->GetDesignRulesPath() );
 
     if( rulesFile.FileExists() )
     {
@@ -1098,7 +1097,7 @@ bool PANEL_SETUP_RULES::TransferDataToWindow()
     }
     else
     {
-        m_textEditor->AddText( wxT( "(version 1)\n" ) );
+        m_textEditor->AddText( wxT( "(version 2)\n" ) );
     }
 
     m_originalText = m_textEditor->GetText();
@@ -1122,7 +1121,10 @@ bool PANEL_SETUP_RULES::TransferDataFromWindow()
     if( m_frame->Prj().IsNullProject() )
         return true;
 
-    wxString rulesFilepath = m_frame->GetDesignRulesPath();
+    if( !m_frame->GetBoard() )
+        return true;
+
+    wxString rulesFilepath = m_frame->GetBoard()->GetDesignRulesPath();
 
     wxString    content = m_textEditor->GetText();
     std::string utf8 = std::string( content.mb_str( wxConvUTF8 ) );

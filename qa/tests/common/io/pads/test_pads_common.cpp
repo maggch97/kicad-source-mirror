@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -243,6 +243,44 @@ BOOST_AUTO_TEST_CASE( ConvertInvertedNetName_SlashOnly )
     BOOST_CHECK_EQUAL( PADS_COMMON::ConvertInvertedNetName( "/" ), wxS( "~{}" ) );
 }
 
+
+BOOST_AUTO_TEST_SUITE_END()
+
+
+BOOST_AUTO_TEST_SUITE( PadsTextConversion )
+
+BOOST_AUTO_TEST_CASE( ConvertText_PlainAscii )
+{
+    BOOST_CHECK_EQUAL( PADS_COMMON::ConvertText( "6 RELAY 137D" ), wxS( "6 RELAY 137D" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ConvertText_Empty )
+{
+    BOOST_CHECK_EQUAL( PADS_COMMON::ConvertText( "" ), wxS( "" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ConvertText_Latin1Copyright )
+{
+    // Issue #23856: a lone 0xA9 (copyright) byte is invalid UTF-8 and used to
+    // drop the whole string.
+    std::string latin1 = std::string( "\xA9 2015 TEXMATE INC." );
+    wxString    result = PADS_COMMON::ConvertText( latin1 );
+
+    BOOST_CHECK( !result.IsEmpty() );
+    BOOST_CHECK( result.Contains( wxString::FromUTF8( "©" ) ) );
+    BOOST_CHECK( result.Contains( wxS( "2015 TEXMATE INC." ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ConvertText_Utf8Preferred )
+{
+    // Valid UTF-8 input must be decoded as UTF-8, not mangled as ISO-8859-1.
+    std::string utf8 = std::string( "\xC2\xA9 OK" );
+    BOOST_CHECK_EQUAL( PADS_COMMON::ConvertText( utf8 ),
+                       wxString::FromUTF8( "© OK" ) );
+}
 
 BOOST_AUTO_TEST_SUITE_END()
 

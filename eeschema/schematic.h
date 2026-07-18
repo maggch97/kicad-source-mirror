@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef KICAD_SCHEMATIC_H
@@ -22,6 +22,7 @@
 
 #include <eda_item.h>
 #include <embedded_files.h>
+#include <properties/property_mgr.h>
 #include <schematic_holder.h>
 #include <sch_sheet_path.h>
 #include <schematic_settings.h>
@@ -547,6 +548,12 @@ public:
      */
     void SaveToHistory( const wxString& aProjectPath, std::vector<HISTORY_FILE_DATA>& aFileData );
 
+    /**
+     * Liveness token handed to LOCAL_HISTORY::RegisterSaver so a shared autosave timer skips this
+     * schematic's saver once the schematic is destroyed instead of serializing freed memory.
+     */
+    std::weak_ptr<void> GetHistoryLifetimeToken() const { return m_historyLifetime; }
+
 private:
     friend class SCH_EDIT_FRAME;
 
@@ -563,6 +570,9 @@ private:
     void rebuildHierarchyState( bool aResetConnectionGraph );
 
     PROJECT* m_project;
+
+    /// Sentinel whose expiry signals to LOCAL_HISTORY that this schematic has been destroyed.
+    std::shared_ptr<void> m_historyLifetime = std::make_shared<char>();
 
     /// The virtual root sheet (has no screen, contains all top-level sheets)
     SCH_SHEET* m_rootSheet;
@@ -633,6 +643,11 @@ private:
     /// Reactive text-variable dependency adapter. Installed as a listener
     /// during SCHEMATIC construction.
     std::unique_ptr<class SCHEMATIC_TEXT_VAR_ADAPTER> m_textVarAdapter;
+
+    /// PROPERTY_MANAGER listener subscription installed in the ctor. RAII so
+    /// concurrent SCHEMATIC instances (e.g. a temporary one opened for a diff
+    /// compare) can come and go without clobbering each other's registrations.
+    PROPERTY_LISTENER_SUBSCRIPTION m_fieldListenerSubscription;
 
 public:
     class SCHEMATIC_TEXT_VAR_ADAPTER* GetTextVarAdapter() const { return m_textVarAdapter.get(); }

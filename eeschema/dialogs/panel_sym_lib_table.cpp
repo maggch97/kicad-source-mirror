@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <set>
@@ -202,6 +202,8 @@ protected:
         }
         else
         {
+            Pgm().GetLibraryManager().ApplyLibOverrides( *child );
+
             m_panel->OpenTable( child, aRow.Nickname() );
         }
     }
@@ -223,9 +225,14 @@ protected:
 
 void PANEL_SYM_LIB_TABLE::OpenTable( const std::shared_ptr<LIBRARY_TABLE>& aTable, const wxString& aTitle )
 {
+    wxString tabTitle = aTitle;
+
+    if( aTable->IsReadOnly() )
+        tabTitle += wxS( " " ) + _( "(read-only)" );
+
     for( int ii = 2; ii < (int) m_notebook->GetPageCount(); ++ii )
     {
-        if( m_notebook->GetPageText( ii ) == aTitle )
+        if( m_notebook->GetPageText( ii ) == tabTitle )
         {
             // Something is pretty fishy with wxAuiNotebook::ChangeSelection(); on Mac at least it
             // results in a re-entrant call where the second call is one page behind.
@@ -237,7 +244,7 @@ void PANEL_SYM_LIB_TABLE::OpenTable( const std::shared_ptr<LIBRARY_TABLE>& aTabl
     }
 
     m_nestedTables.push_back( aTable );
-    AddTable( aTable.get(), aTitle, true );
+    AddTable( aTable.get(), tabTitle, true );
 
     // Something is pretty fishy with wxAuiNotebook::ChangeSelection(); on Mac at least it
     // results in a re-entrant call where the second call is one page behind.
@@ -326,6 +333,8 @@ PANEL_SYM_LIB_TABLE::PANEL_SYM_LIB_TABLE( DIALOG_EDIT_LIBRARY_TABLES* aParent, P
         m_parent( aParent ),
         m_suppressNotebookPageEvents( false )
 {
+    m_notebook->SetArtProvider( new WX_AUI_TAB_ART() );
+
     m_lastProjectLibDir = m_project->GetProjectPath();
 
     populatePluginList();
@@ -355,8 +364,6 @@ PANEL_SYM_LIB_TABLE::PANEL_SYM_LIB_TABLE( DIALOG_EDIT_LIBRARY_TABLES* aParent, P
 
     if( projectTable.has_value() )
         AddTable( projectTable.value(), _( "Project Specific Libraries" ), false /* closable */ );
-
-    m_notebook->SetArtProvider( new WX_AUI_TAB_ART() );
 
     // add Cut, Copy, and Paste to wxGrids
     m_path_subs_grid->PushEventHandler( new GRID_TRICKS( m_path_subs_grid ) );
@@ -808,16 +815,18 @@ void PANEL_SYM_LIB_TABLE::onConvertLegacyLibraries( wxCommandEvent& event )
     wxString   databaseType = SCH_IO_MGR::ShowType( SCH_IO_MGR::SCH_DATABASE );
     wxString   httpType = SCH_IO_MGR::ShowType( SCH_IO_MGR::SCH_HTTP );
     wxString   kicadType = SCH_IO_MGR::ShowType( SCH_IO_MGR::SCH_KICAD );
+    wxString   nestedTableType = LIBRARY_TABLE_ROW::TABLE_TYPE_NAME;
     wxString   msg;
 
     // HTTP and Database libraries are live, dynamic backends that are not file-based.
     // Migrating them to a static .kicad_sym snapshot is not meaningful and would silently
-    // produce an empty library, destroying the original table entry.
+    // produce an empty library, destroying the original table entry.  Nested library tables
+    // are not symbol libraries at all and likewise cannot be migrated.
     for( int row : selectedRows )
     {
         const wxString& type = cur_grid()->GetCellValue( row, COL_TYPE );
 
-        if( type != databaseType && type != httpType && type != kicadType )
+        if( type != databaseType && type != httpType && type != kicadType && type != nestedTableType )
             legacyRows.push_back( row );
     }
 

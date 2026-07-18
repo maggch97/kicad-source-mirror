@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pgm_base.h>
@@ -51,16 +47,14 @@
 class SCH_PREVIEW_FRAME : public wxPreviewFrame
 {
 public:
-    SCH_PREVIEW_FRAME( wxPrintPreview* aPreview, wxWindow* aParent,
-                       const wxString& aTitle, const wxPoint& aPos = wxDefaultPosition,
-                       const wxSize& aSize = wxDefaultSize ) :
-            wxPreviewFrame( aPreview, aParent, aTitle, aPos, aSize )
+    SCH_PREVIEW_FRAME( wxPrintPreview* aPreview, wxWindow* aParent, const wxString& aTitle ) :
+            wxPreviewFrame( aPreview, aParent, aTitle )
     {
     }
 
     bool Show( bool show ) override
     {
-        bool        ret;
+        bool ret;
 
         // Show or hide the window.  If hiding, save current position and size.
         // If showing, use previous position and size.
@@ -100,7 +94,7 @@ DIALOG_PRINT::DIALOG_PRINT( SCH_EDIT_FRAME* aParent ) :
     wxASSERT( aParent );
 
     // Show m_panelPrinters only if there are printers to list:
-    m_panelPrinters->Show( m_panelPrinters->AsPrintersAvailable() );
+    m_panelPrinters->Show( m_panelPrinters->HasPrintersAvailable() );
 
     SetupStandardButtons( { { wxID_OK,     _( "Print" )         },
                             { wxID_APPLY,  _( "Print Preview" ) },
@@ -236,8 +230,7 @@ void DIALOG_PRINT::SavePrintOptions()
 
     cfg->m_Printing.use_theme   = m_checkUseColorTheme->IsChecked();
 
-    COLOR_SETTINGS* theme = static_cast<COLOR_SETTINGS*>(
-            m_colorTheme->GetClientData( m_colorTheme->GetSelection() ) );
+    COLOR_SETTINGS* theme = static_cast<COLOR_SETTINGS*>( m_colorTheme->GetClientData( m_colorTheme->GetSelection() ) );
 
     if( theme && m_checkUseColorTheme->IsChecked() )
         cfg->m_Printing.color_theme = theme->GetFilename();
@@ -318,9 +311,8 @@ bool DIALOG_PRINT::TransferDataFromWindow()
         renderSettings.m_ShowHiddenPins = false;
         renderSettings.m_ShowHiddenFields = false;
 
-        COLOR_SETTINGS* cs = ::GetColorSettings( cfg->m_Printing.use_theme
-                                                ? cfg->m_Printing.color_theme
-                                                : cfg->m_ColorTheme );
+        COLOR_SETTINGS* cs = ::GetColorSettings( cfg->m_Printing.use_theme ? cfg->m_Printing.color_theme
+                                                                           : cfg->m_ColorTheme );
         renderSettings.LoadColors( cs );
 
         SCH_PLOT_OPTS plotOpts;
@@ -344,8 +336,8 @@ bool DIALOG_PRINT::TransferDataFromWindow()
         KIPLATFORM::PRINTING::PRINT_RESULT result =
                 KIPLATFORM::PRINTING::PrintPDF( TO_UTF8( plotter.GetLastOutputFilePath() ) );
 
-        if( result != KIPLATFORM::PRINTING::PRINT_RESULT::OK &&
-            result != KIPLATFORM::PRINTING::PRINT_RESULT::CANCELLED )
+        if( result != KIPLATFORM::PRINTING::PRINT_RESULT::OK
+                && result != KIPLATFORM::PRINTING::PRINT_RESULT::CANCELLED )
         {
             DisplayError( this, KIPLATFORM::PRINTING::PrintResultToString( result ) );
         }
@@ -373,7 +365,8 @@ bool DIALOG_PRINT::TransferDataFromWindow()
     bool            havePaperType = false;
 
     // clang-format off
-    std::set<wxPaperSize> letterSizes = {
+    std::set<wxPaperSize> letterSizes =
+    {
         // na_letter
         wxPAPER_LETTER,
         wxPAPER_LETTERSMALL,
@@ -382,12 +375,14 @@ bool DIALOG_PRINT::TransferDataFromWindow()
         wxPAPER_LETTER_ROTATED
     };
 
-    std::set<wxPaperSize> legalSizes = {
+    std::set<wxPaperSize> legalSizes =
+    {
         // na_legal
         wxPAPER_LEGAL
     };
 
-    std::set<wxPaperSize> a4Sizes = {
+    std::set<wxPaperSize> a4Sizes =
+    {
         // iso_a4
         wxPAPER_A4,
         wxPAPER_A4SMALL,
@@ -417,11 +412,15 @@ bool DIALOG_PRINT::TransferDataFromWindow()
         PAGE_INFO pageInfo( paperType, data.GetOrientation() == wxPORTRAIT );
 
         if( pageInfo.IsPortrait() )
+        {
             data.SetPaperSize( wxSize( EDA_UNIT_UTILS::Mils2mm( pageInfo.GetWidthMils() ),
                                        EDA_UNIT_UTILS::Mils2mm( pageInfo.GetHeightMils() ) ) );
+        }
         else
+        {
             data.SetPaperSize( wxSize( EDA_UNIT_UTILS::Mils2mm( pageInfo.GetHeightMils() ),
                                        EDA_UNIT_UTILS::Mils2mm( pageInfo.GetWidthMils() ) ) );
+        }
 
         data.SetOrientation( pageInfo.GetWxOrientation() );
         data.SetPaperId( wxPAPER_NONE );
@@ -432,6 +431,7 @@ bool DIALOG_PRINT::TransferDataFromWindow()
 
     if( m_panelPrinters )
         selectedPrinterName = m_panelPrinters->GetSelectedPrinterName();
+
     data.SetPrinterName( selectedPrinterName );
 
     wxPrintDialogData printDialogData( data );
@@ -453,6 +453,7 @@ bool DIALOG_PRINT::TransferDataFromWindow()
         else
         {
             m_parent->GetPageSetupData() = printer.GetPrintDialogData().GetPrintData();
+            KIPLATFORM::PRINTING::ResetPrintToFilePath( m_parent->GetPageSetupData().GetPrintData() );
         }
     }
 

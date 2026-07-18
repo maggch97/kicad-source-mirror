@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCBNEW_LENGTH_DELAY_CALCULATION_ITEM_H
@@ -82,6 +78,12 @@ public:
     /// Gets the SHAPE_LINE_CHAIN associated with this item
     SHAPE_LINE_CHAIN& GetLine() const { return m_line; }
 
+    /// Sets the line width
+    void SetWidth( const int aWidth ) { m_width = aWidth; }
+
+    /// Gets the line width
+    int GetWidth() const { return m_width; }
+
     /// Sets the VIA associated with this item
     void SetVia( const PCB_VIA* aVia )
     {
@@ -139,6 +141,9 @@ protected:
 
     /// A proxied SHAPE_LINE_CHAIN object. Line is empty if not proxying a SHAPE_LINE_CHAIN.
     mutable SHAPE_LINE_CHAIN m_line;
+
+    /// The width of a line segment
+    int m_width{ 0 };
 
     /// A proxied PCB_VIA object. Set to nullptr if not proxying a VIA.
     const PCB_VIA* m_via{ nullptr };

@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "drc_re_rule_saver.h"
@@ -71,7 +67,7 @@ bool DRC_RULE_SAVER::SaveFile( const wxString&                               aPa
 wxString DRC_RULE_SAVER::GenerateRulesText( const std::vector<DRC_RE_LOADED_PANEL_ENTRY>& aEntries,
                                              const BOARD*                                  aBoard )
 {
-    wxString result = "(version 1)\n";
+    wxString result = "(version 2)\n";
 
     // Group entries by (ruleName, condition, layerSource) for merging same-rule constraints.
     // Including the layer source prevents rules with different layer scopes from being

@@ -17,17 +17,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <bitmaps.h>
 #include <file_history.h>
 #include <kiface_base.h>
+#include <pgm_base.h>
 #include <schematic.h>
+#include <settings/common_settings.h>
 #include <tool/action_manager.h>
 #include <tool/action_menu.h>
 #include <tool/tool_manager.h>
@@ -118,6 +116,19 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     fileMenu->Add( submenuExport );
 
     fileMenu->AppendSeparator();
+    fileMenu->Add( SCH_ACTIONS::compareSchematicWithFile );
+
+    wxMenuItem*       historyItem = fileMenu->Add( SCH_ACTIONS::compareSchematicWithHistory );
+    ACTION_CONDITIONS historyCond;
+    historyCond.Enable(
+            []( const SELECTION& )
+            {
+                COMMON_SETTINGS* cs = Pgm().GetCommonSettings();
+                return cs && cs->AutosaveUsesLocalHistory();
+            } );
+    RegisterUIUpdateHandler( historyItem->GetId(), historyCond );
+
+    fileMenu->AppendSeparator();
     fileMenu->Add( SCH_ACTIONS::schematicSetup );
 
     fileMenu->AppendSeparator();
@@ -164,6 +175,7 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     submenuAttributes->Add( SCH_ACTIONS::setExcludeFromSim,    ACTION_MENU::CHECK );
     submenuAttributes->Add( SCH_ACTIONS::setExcludeFromBOM,    ACTION_MENU::CHECK );
     submenuAttributes->Add( SCH_ACTIONS::setExcludeFromBoard,  ACTION_MENU::CHECK );
+    submenuAttributes->Add( SCH_ACTIONS::setExcludeFromPosFiles, ACTION_MENU::CHECK );
     submenuAttributes->Add( SCH_ACTIONS::setDNP,               ACTION_MENU::CHECK );
 
     editMenu->Add( submenuAttributes );
@@ -332,12 +344,12 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     submenuVariants->Add( SCH_ACTIONS::addVariant );
     submenuVariants->Add( SCH_ACTIONS::removeVariant );
     submenuVariants->Add( SCH_ACTIONS::editVariantDescription );
+    submenuVariants->Add( SCH_ACTIONS::renameVariant );
+    submenuVariants->Add( SCH_ACTIONS::copyVariant );
     toolsMenu->Add( submenuVariants );
 
-#ifdef KICAD_IPC_API
     toolsMenu->AppendSeparator();
     toolsMenu->Add( ACTIONS::pluginsReload );
-#endif
 
     //-- Preferences menu -----------------------------------------------
     //

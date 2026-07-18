@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "panel_zone_properties.h"
@@ -120,6 +116,16 @@ void PANEL_ZONE_PROPERTIES::SetZone( ZONE* aZone )
 
     m_zone = aZone;
     m_settings = m_zonesSettingsBag.GetZoneSettings( aZone );
+
+    if( !m_settings )
+    {
+        m_isTeardrop = false;
+        m_tcZoneName->ChangeValue( wxEmptyString );
+        Enable( false );
+        return;
+    }
+
+    Enable( true );
     m_isTeardrop = m_settings->m_TeardropType != TEARDROP_TYPE::TD_NONE;
 
     TransferZoneSettingsToWindow();
@@ -251,12 +257,17 @@ void PANEL_ZONE_PROPERTIES::OnCornerSmoothingSelection( wxCommandEvent& event )
 
 void PANEL_ZONE_PROPERTIES::OnZoneNameChanged( wxCommandEvent& aEvent )
 {
+    if( !m_settings )
+        return;
+
     // Propagate all the way out so that the MODEL_ZONES_OVERVIEW can pick it up
     m_settings->m_Name = m_tcZoneName->GetValue();
-    m_zonesSettingsBag.GetZoneSettings( m_zone )->m_Name = m_settings->m_Name;
 
     if( m_zone )
+    {
+        m_zonesSettingsBag.GetZoneSettings( m_zone )->m_Name = m_settings->m_Name;
         m_zone->SetZoneName( m_settings->m_Name );
+    }
 
     wxCommandEvent* evt = new wxCommandEvent( EVT_ZONE_NAME_UPDATE );
     wxQueueEvent( m_parent, evt );
@@ -408,6 +419,9 @@ bool PANEL_ZONE_PROPERTIES::AcceptOptions( bool aUseExportableSetupOnly )
         m_settings->m_Netcode = m_netSelector->GetSelectedNetcode();
 
     m_settings->m_Name = m_tcZoneName->GetValue();
+
+    if( BOARD* board = m_frame->GetBoard() )
+        m_settings->m_Name = board->GetUniqueZoneName( m_settings->m_Name, m_zone );
 
     // Avoid clobbering theiving zone properties
     if( m_settings->m_FillMode != ZONE_FILL_MODE::COPPER_THIEVING )

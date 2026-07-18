@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "zone_settings_bag.h"
@@ -96,6 +92,29 @@ void ZONE_SETTINGS_BAG::SetZonePriority( ZONE* aClone, unsigned aPriority )
 
     if( m_zoneSettings.contains( aClone ) )
         m_zoneSettings[aClone]->m_ZonePriority = aPriority;
+}
+
+
+void ZONE_SETTINGS_BAG::RemoveZone( ZONE* aOriginalZone )
+{
+    auto it = m_zonesCloneMap.find( aOriginalZone );
+
+    if( it != m_zonesCloneMap.end() )
+    {
+        ZONE* clone = it->second.get();
+
+        // Remove from cloned list
+        m_clonedZoneList.erase( std::remove( m_clonedZoneList.begin(), m_clonedZoneList.end(), clone ),
+                                m_clonedZoneList.end() );
+
+
+        // Remove from zone settings and priorities maps
+        m_zoneSettings.erase( clone );
+        m_zonePriorities.erase( clone );
+
+        // Remove from clone map
+        m_zonesCloneMap.erase( it );
+    }
 }
 
 

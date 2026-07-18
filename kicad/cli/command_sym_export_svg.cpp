@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "command_sym_export_svg.h"
@@ -27,6 +27,7 @@
 #include <wx/crt.h>
 
 #include <macros.h>
+#include <wx/dir.h>
 #include <wx/tokenzr.h>
 
 
@@ -79,7 +80,8 @@ int CLI::SYM_EXPORT_SVG_COMMAND::doPerform( KIWAY& aKiway )
     svgJob->m_includeHiddenFields = m_argParser.get<bool>( ARG_INC_HIDDEN_FIELDS );
     svgJob->m_includeHiddenPins = m_argParser.get<bool>( ARG_INC_HIDDEN_PINS );
 
-    if( !wxFile::Exists( svgJob->m_libraryPath ) )
+    // A symbol library may be a single .kicad_sym file or a .kicad_symdir directory.
+    if( !wxFile::Exists( svgJob->m_libraryPath ) && !wxDir::Exists( svgJob->m_libraryPath ) )
     {
         wxFprintf( stderr, _( "Symbol file does not exist or is not accessible\n" ) );
         return EXIT_CODES::ERR_INVALID_INPUT_FILE;

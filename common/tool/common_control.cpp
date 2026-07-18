@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 // kicad_curl_easy.h must be included before wxWidgets because on Windows (msys2), there are
 // collision with wx headers and curl.h defs
@@ -431,7 +427,6 @@ int COMMON_CONTROL::ReportBug( const TOOL_EVENT& aEvent )
 
 int COMMON_CONTROL::ReloadPlugins( const TOOL_EVENT& aEvent )
 {
-#ifdef KICAD_IPC_API
     if( Pgm().GetCommonSettings()->m_Api.enable_server )
     {
         std::shared_ptr<REPORTER> reporter;
@@ -441,7 +436,6 @@ int COMMON_CONTROL::ReloadPlugins( const TOOL_EVENT& aEvent )
 
         Pgm().GetPluginManager().ReloadPlugins( std::nullopt, reporter );
     }
-#endif
     return 0;
 }
 

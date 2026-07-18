@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -39,7 +35,7 @@
 
 #include <cctype>
 #include <set>
-#include <stdexcept>
+#include <cstdlib>
 
 #include "pgm_kicad.h"
 #include "kicad_manager_frame.h"
@@ -56,7 +52,13 @@
 #include "cli/command_jobset_run.h"
 #include "cli/command_pcb.h"
 #include "cli/command_pcb_export.h"
+#include "cli/command_fp_diff.h"
+#include "cli/command_pcb_diff.h"
 #include "cli/command_pcb_drc.h"
+#include "cli/command_mergetool.h"
+#include "cli/command_git_mergedriver.h"
+#include "cli/command_sch_diff.h"
+#include "cli/command_sym_diff.h"
 #include "cli/command_pcb_render.h"
 #include "cli/command_pcb_export_3d.h"
 #include "cli/command_pcb_export_drill.h"
@@ -79,6 +81,8 @@
 #include "cli/command_sch_export_plot.h"
 #include "cli/command_pcb_upgrade.h"
 #include "cli/command_pcb_import.h"
+#include "cli/command_sch_import.h"
+#include "cli/command_import.h"
 #include "cli/command_fp.h"
 #include "cli/command_fp_export.h"
 #include "cli/command_fp_export_svg.h"
@@ -96,12 +100,9 @@
 #include "cli/command_gerber_convert_png.h"
 #include "cli/command_gerber_info.h"
 #include "cli/command_gerber_diff.h"
+#include "cli/command_api_server.h"
 #include "cli/command_version.h"
 #include "cli/exit_codes.h"
-
-#ifdef KICAD_IPC_API
-#include "cli/command_api_server.h"
-#endif
 
 // Add this header after all others, to avoid a collision name in a Windows header
 // on mingw.
@@ -117,9 +118,11 @@ KIFACE_BASE& Kiface()
     // This function should never be called.  It is only referenced from
     // EDA_BASE_FRAME::config() and this is only provided to satisfy the linker,
     // not to be actually called.
-    wxLogFatalError( wxT( "Unexpected call to Kiface() in kicad/kicad.cpp" ) );
-
-    throw std::logic_error( "Unexpected call to Kiface() in kicad/kicad.cpp" );
+    wxFprintf( stderr,
+               wxT( "Unexpected call to Kiface() in kicad/kicad_cli.cpp — a "
+                    "code path is reaching into a kiface stub from the CLI "
+                    "process. Re-run with KICAD_TRACE=KICAD for a backtrace.\n" ) );
+    std::abort();
 }
 
 
@@ -139,10 +142,15 @@ struct COMMAND_ENTRY
 static CLI::JOBSET_COMMAND               jobsetCmd{};
 static CLI::JOBSET_RUN_COMMAND           jobsetRunCmd{};
 static CLI::PCB_COMMAND                  pcbCmd{};
+static CLI::PCB_DIFF_COMMAND             pcbDiffCmd{};
 static CLI::PCB_DRC_COMMAND              pcbDrcCmd{};
+static CLI::MERGETOOL_COMMAND            mergetoolCmd{};
+static CLI::GIT_MERGEDRIVER_COMMAND      gitMergeDriverCmd{};
 static CLI::PCB_RENDER_COMMAND           pcbRenderCmd{};
 static CLI::PCB_UPGRADE_COMMAND          pcbUpgradeCmd{};
 static CLI::PCB_IMPORT_COMMAND           pcbImportCmd{};
+static CLI::SCH_IMPORT_COMMAND           schImportCmd{};
+static CLI::IMPORT_COMMAND               importCmd{};
 static CLI::PCB_EXPORT_DRILL_COMMAND     exportPcbDrillCmd{};
 static CLI::PCB_EXPORT_DXF_COMMAND       exportPcbDxfCmd{};
 static CLI::PCB_EXPORT_3D_COMMAND        exportPcbGlbCmd{ "glb", UTF8STDSTR( _( "Export GLB (binary GLTF)" ) ),
@@ -180,6 +188,7 @@ static CLI::PCB_EXPORT_ODB_COMMAND       exportPcbOdbCmd{};
 static CLI::PCB_EXPORT_COMMAND           exportPcbCmd{};
 static CLI::SCH_EXPORT_COMMAND           exportSchCmd{};
 static CLI::SCH_COMMAND                  schCmd{};
+static CLI::SCH_DIFF_COMMAND             schDiffCmd{};
 static CLI::SCH_ERC_COMMAND              schErcCmd{};
 static CLI::SCH_UPGRADE_COMMAND          schUpgradeCmd{};
 static CLI::SCH_EXPORT_BOM_COMMAND       exportSchBomCmd{};
@@ -198,10 +207,12 @@ static CLI::SCH_EXPORT_PLOT_COMMAND exportSchSvgCmd{ "svg", UTF8STDSTR( _( "Expo
 static CLI::SCH_EXPORT_PLOT_COMMAND exportSchPngCmd{ "png", UTF8STDSTR( _( "Export PNG" ) ), SCH_PLOT_FORMAT::PNG,
                                                      CLI::COMMAND::IO_TYPE::DIRECTORY };
 static CLI::FP_COMMAND              fpCmd{};
+static CLI::FP_DIFF_COMMAND         fpDiffCmd{};
 static CLI::FP_EXPORT_COMMAND       fpExportCmd{};
 static CLI::FP_EXPORT_SVG_COMMAND   fpExportSvgCmd{};
 static CLI::FP_UPGRADE_COMMAND      fpUpgradeCmd{};
 static CLI::SYM_COMMAND             symCmd{};
+static CLI::SYM_DIFF_COMMAND        symDiffCmd{};
 static CLI::SYM_EXPORT_COMMAND      symExportCmd{};
 static CLI::SYM_EXPORT_SVG_COMMAND  symExportSvgCmd{};
 static CLI::SYM_UPGRADE_COMMAND     symUpgradeCmd{};
@@ -211,10 +222,7 @@ static CLI::GERBER_CONVERT_PNG_COMMAND gerberConvertPngCmd{};
 static CLI::GERBER_INFO_COMMAND        gerberInfoCmd{};
 static CLI::GERBER_DIFF_COMMAND        gerberDiffCmd{};
 static CLI::VERSION_COMMAND            versionCmd{};
-
-#ifdef KICAD_IPC_API
-static CLI::API_SERVER_COMMAND apiServerCmd{};
-#endif
+static CLI::API_SERVER_COMMAND         apiServerCmd{};
 
 // clang-format off
 static std::vector<COMMAND_ENTRY> commandStack = {
@@ -230,6 +238,9 @@ static std::vector<COMMAND_ENTRY> commandStack = {
         &fpCmd,
         {
             {
+                &fpDiffCmd
+            },
+            {
                 &fpExportCmd,
                 {
                     &fpExportSvgCmd
@@ -243,6 +254,9 @@ static std::vector<COMMAND_ENTRY> commandStack = {
     {
         &pcbCmd,
         {
+            {
+                &pcbDiffCmd
+            },
             {
                 &pcbDrcCmd
             },
@@ -290,7 +304,13 @@ static std::vector<COMMAND_ENTRY> commandStack = {
         &schCmd,
         {
             {
+                &schDiffCmd
+            },
+            {
                 &schErcCmd
+            },
+            {
+                &schImportCmd
             },
             {
                 &exportSchCmd,
@@ -314,6 +334,9 @@ static std::vector<COMMAND_ENTRY> commandStack = {
     {
         &symCmd,
         {
+            {
+                &symDiffCmd
+            },
             {
                 &symExportCmd,
                 {
@@ -345,14 +368,22 @@ static std::vector<COMMAND_ENTRY> commandStack = {
         }
     },
     {
+        &mergetoolCmd,
+    },
+    {
+        // Hidden from --help (set_suppress); invoked by git via the
+        // merge.kicad-*.driver config, not by users.
+        &gitMergeDriverCmd,
+    },
+    {
+        &importCmd,
+    },
+    {
         &versionCmd,
-    }
-#ifdef KICAD_IPC_API
-    ,
+    },
     {
         &apiServerCmd,
     }
-#endif
 };
 // clang-format on
 
@@ -631,6 +662,14 @@ void PGM_KICAD::OnPgmExit()
     {
         SaveCommonSettings();
         m_settings_manager->Save();
+
+        // Unload projects while the kiface DRC/ERC severity tables their PROJECT_FILE serializes
+        // against are still alive; deferring to static teardown crashes
+        for( const wxString& projectPath : m_settings_manager->GetOpenProjects() )
+        {
+            if( PROJECT* project = m_settings_manager->GetProject( projectPath ) )
+                m_settings_manager->UnloadProject( project, false );
+        }
     }
 
     if( GetGitBackend() )

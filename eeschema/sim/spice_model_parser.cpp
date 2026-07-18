@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * https://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/log.h>
@@ -51,6 +47,7 @@ namespace SIM_MODEL_SPICE_PARSER
     template <typename Rule> struct spiceUnitSelector : std::false_type {};
 
     template <> struct spiceUnitSelector<dotModelAko> : std::true_type {};
+    template <> struct spiceUnitSelector<dotModelCPL> : std::true_type {};
     template <> struct spiceUnitSelector<dotModel> : std::true_type {};
     template <> struct spiceUnitSelector<modelName> : std::true_type {};
     template <> struct spiceUnitSelector<dotModelType> : std::true_type {};
@@ -104,6 +101,13 @@ bool SPICE_MODEL_PARSER::ReadType( const SIM_LIBRARY_SPICE& aLibrary, const std:
             }
 
             *aType = sourceModel->GetType();
+            return true;
+        }
+        else if( node->is_type<SIM_MODEL_SPICE_PARSER::dotModelCPL>() )
+        {
+            // CPL (Coupled Multiconductor Line) has no native KiCad model type.
+            // Treat it as raw SPICE so the code is passed through to ngspice.
+            *aType = SIM_MODEL::TYPE::RAWSPICE;
             return true;
         }
         else if( node->is_type<SIM_MODEL_SPICE_PARSER::dotModel>() )

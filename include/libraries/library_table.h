@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef LIBRARY_TABLE_H
@@ -185,6 +185,9 @@ public:
 
     bool IsOk() const { return m_ok; }
     const wxString& ErrorDescription() const { return m_errorDescription; }
+
+    /// Returns true if the underlying file exists but is not writable
+    bool IsReadOnly() const;
 
     const std::deque<LIBRARY_TABLE_ROW>& Rows() const { return m_rows; }
     std::deque<LIBRARY_TABLE_ROW>& Rows() { return m_rows; }

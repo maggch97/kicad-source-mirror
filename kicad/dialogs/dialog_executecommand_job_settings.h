@@ -14,20 +14,21 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialogs/dialog_executecommand_job_settings_base.h>
 
 class JOB_SPECIAL_EXECUTE;
 class SCINTILLA_TRICKS;
+class PROJECT;
 
 
 class DIALOG_EXECUTECOMMAND_JOB_SETTINGS: public DIALOG_EXECUTECOMMAND_JOB_SETTINGS_BASE
 {
 public:
-    DIALOG_EXECUTECOMMAND_JOB_SETTINGS( wxWindow* aParent, JOB_SPECIAL_EXECUTE* aJob );
+    DIALOG_EXECUTECOMMAND_JOB_SETTINGS( wxWindow* aParent, JOB_SPECIAL_EXECUTE* aJob, PROJECT* aProject );
     ~DIALOG_EXECUTECOMMAND_JOB_SETTINGS();
 
     bool TransferDataFromWindow() override;
@@ -37,13 +38,17 @@ private:
     void onSizeGrid( wxSizeEvent& event ) override;
     void adjustPathSubsGridColumns( int aWidth );
     void OnRecordOutputClicked( wxCommandEvent& event ) override;
+    void onCommandChanged( wxStyledTextEvent& aEvent );
+    void onVarGridDClick( wxGridEvent& aEvent );
 
-    /// Populate the readonly environment variable table with names and values
-    /// by examining the script and path.
+    /// Fill the variable table with the available variables and any
+    /// referenced in the command, resolved as the job runner will.
     void populateEnvironReadOnlyTable();
 
 private:
     JOB_SPECIAL_EXECUTE* m_job;
+    PROJECT*             m_project;
+    wxWindow*            m_lastFocusedInput;
 
     SCINTILLA_TRICKS*    m_scintillaTricks;
 };

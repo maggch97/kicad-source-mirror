@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "sch_point_editor.h"
@@ -948,7 +944,7 @@ void SCH_POINT_EDITOR::makePointsAndBehavior( EDA_ITEM* aItem )
             }
 
             m_editBehavior = std::make_unique<EDA_ARC_POINT_EDIT_BEHAVIOR>(
-                    *shape, m_arcEditMode, *getViewControls() );
+                    *shape, m_arcEditMode, *getViewControls(), schIUScale );
             break;
         case SHAPE_T::CIRCLE:
             m_editBehavior = std::make_unique<EDA_CIRCLE_POINT_EDIT_BEHAVIOR>( *shape );
@@ -1033,6 +1029,7 @@ void SCH_POINT_EDITOR::makePointsAndBehavior( EDA_ITEM* aItem )
 SCH_POINT_EDITOR::SCH_POINT_EDITOR() :
         SCH_TOOL_BASE<SCH_BASE_FRAME>( "eeschema.PointEditor" ),
         m_editedPoint( nullptr ),
+        m_inDrag( false ),
         m_arcEditMode( ARC_EDIT_MODE::KEEP_CENTER_ADJUST_ANGLE_RADIUS ),
         m_inPointEditor( false )
 {
@@ -1055,6 +1052,9 @@ void SCH_POINT_EDITOR::Reset( RESET_REASON aReason )
     m_angleItem.reset();
     m_editPoints.reset();
     m_editedPoint = nullptr;
+
+    // A reset can tear down the Main() loop mid-drag, so clear the drag flag here too.
+    m_inDrag = false;
 }
 
 
@@ -1199,6 +1199,11 @@ int SCH_POINT_EDITOR::Main( const TOOL_EVENT& aEvent )
         {
             if( !inDrag )
             {
+                // Ctrl overrides grid snapping during the drag, but it is also the selection
+                // disambiguation modifier.  Cancel the pending disambiguation menu so it does
+                // not pop up mid-drag.
+                m_selectionTool->CancelDisambiguation();
+
                 commit.Modify( m_editPoints->GetParent(), m_frame->GetScreen() );
 
                 if( SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( item ) )
@@ -1270,9 +1275,15 @@ int SCH_POINT_EDITOR::Main( const TOOL_EVENT& aEvent )
             evt->SetPassEvent();
         }
 
+        // Mirror the drag state so IsDragging() lets the frame defer the autosave snapshot,
+        // which would otherwise serialize the whole schematic over a live point edit.
+        m_inDrag = inDrag;
+
         controls->SetAutoPan( inDrag );
         controls->CaptureCursor( inDrag );
     }
+
+    m_inDrag = false;
 
     if( SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( item ) )
     {

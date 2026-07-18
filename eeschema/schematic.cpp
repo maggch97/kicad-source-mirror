@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <advanced_config.h>
@@ -86,7 +86,7 @@ SCHEMATIC::SCHEMATIC( PROJECT* aPrj ) :
     m_textVarAdapter = std::make_unique<SCHEMATIC_TEXT_VAR_ADAPTER>( *this );
     AddListener( m_textVarAdapter.get() );
 
-    PROPERTY_MANAGER::Instance().RegisterListener(
+    m_fieldListenerSubscription = PROPERTY_MANAGER::Instance().RegisterListener(
             TYPE_HASH( SCH_FIELD ),
             [&]( INSPECTABLE* aItem, PROPERTY_BASE* aProperty, COMMIT* aCommit )
             {
@@ -155,7 +155,7 @@ SCHEMATIC::SCHEMATIC( PROJECT* aPrj ) :
 
 SCHEMATIC::~SCHEMATIC()
 {
-    PROPERTY_MANAGER::Instance().UnregisterListeners( TYPE_HASH( SCH_FIELD ) );
+    m_fieldListenerSubscription.reset();
 
     delete m_currentSheet;
     delete m_connectionGraph;
@@ -2295,8 +2295,10 @@ void SCHEMATIC::RenameVariant( const wxString& aOldName, const wxString& aNewNam
         descriptions.erase( aOldName );
     }
 
+    // Retarget through SetCurrentVariant so the whole-schematic cache/text-var invalidation runs;
+    // otherwise ${VARIANT} text on off-sheet items keeps its stale render cache after the rename.
     if( m_currentVariant == aOldName )
-        m_currentVariant = aNewName;
+        SetCurrentVariant( aNewName );
 
     SCH_SCREENS allScreens( m_rootSheet );
     allScreens.RenameVariant( aOldName, aNewName, aCommit );
@@ -2405,7 +2407,7 @@ void SCHEMATIC::SaveToHistory( const wxString& aProjectPath, std::vector<HISTORY
     // avoids spurious _autosave-* files.  In INCREMENTAL mode the manual-save flow
     // clears dirty flags before calling here, so filtering would skip the whole
     // snapshot.  Git's diff-against-HEAD check rejects no-op commits there anyway.
-    bool filterClean = Pgm().GetCommonSettings()->m_Backup.format == BACKUP_FORMAT::ZIP;
+    bool filterClean = !Pgm().GetCommonSettings()->AutosaveUsesLocalHistory();
 
     for( const SCH_SHEET_PATH& path : sheetList )
     {

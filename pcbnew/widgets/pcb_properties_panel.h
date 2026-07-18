@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_PROPERTIES_PANEL_H
@@ -34,6 +34,7 @@ class PG_UNIT_EDITOR;
 class PG_CHECKBOX_EDITOR;
 class PG_RATIO_EDITOR;
 class PG_NET_SELECTOR_EDITOR;
+class PG_TRACK_WIDTH_EDITOR;
 class PG_FPID_EDITOR;
 class PG_URL_EDITOR;
 
@@ -59,6 +60,8 @@ protected:
 
     void valueChanging( wxPropertyGridEvent& aEvent ) override;
     void valueChanged( wxPropertyGridEvent& aEvent ) override;
+
+    void applyConfirmedScale( const wxString& aPropName, const wxVariant& aValue );
 
     ///< Regenerates caches storing layer and net names
     void updateLists( const BOARD* aBoard );
@@ -88,11 +91,14 @@ protected:
     PG_CHECKBOX_EDITOR*  m_checkboxEditorInstance;
     PG_RATIO_EDITOR*     m_ratioEditorInstance;
     PG_NET_SELECTOR_EDITOR* m_netSelectorEditorInstance;
+    PG_TRACK_WIDTH_EDITOR*  m_trackWidthEditorInstance;
     PG_FPID_EDITOR*      m_fpEditorInstance;
     PG_URL_EDITOR*       m_urlEditorInstance;
 
     static std::set<wxString> m_currentFieldNames;
     wxPGChoices m_nets;
+
+    bool m_scaleConfirmPending;
 };
 
 #endif /* PCB_PROPERTIES_PANEL_H */

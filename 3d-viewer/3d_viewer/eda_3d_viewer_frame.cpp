@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/filename.h>
@@ -204,9 +200,14 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
         m_spaceMouse = std::make_unique<NL_3D_VIEWER_PLUGIN>( m_canvas );
 #endif
     }
-    catch( const std::system_error& e )
+    catch( const std::exception& e )
     {
-        wxLogTrace( wxT( "KI_TRACE_NAVLIB" ), e.what() );
+        wxLogTrace( wxT( "KI_TRACE_NAVLIB" ), wxS( "%s" ), e.what() );
+    }
+    catch( ... )
+    {
+        wxLogTrace( wxT( "KI_TRACE_NAVLIB" ),
+                    wxT( "Unknown exception during SpaceMouse initialization" ) );
     }
 
     // Fixes bug in Windows (XP and possibly others) where the canvas requires the focus

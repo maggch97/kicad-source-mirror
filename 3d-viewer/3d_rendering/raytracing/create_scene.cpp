@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "render_3d_raytrace_base.h"
@@ -2484,8 +2480,7 @@ void RENDER_3D_RAYTRACE_BASE::addModels( CONTAINER_3D& aDstContainer, const S3DM
                     wxASSERT( idx1 < mesh.m_VertexSize );
                     wxASSERT( idx2 < mesh.m_VertexSize );
 
-                    if( ( idx0 < mesh.m_VertexSize ) && ( idx1 < mesh.m_VertexSize )
-                      && ( idx2 < mesh.m_VertexSize ) )
+                    if( IsTriangleInRange( mesh.m_FaceIdx, faceIdx, mesh.m_VertexSize ) )
                     {
                         const SFVEC3F& v0 = mesh.m_Positions[idx0];
                         const SFVEC3F& v1 = mesh.m_Positions[idx1];

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef TEARDROP_H
@@ -136,15 +132,10 @@ private:
      */
     bool areItemsInSameZone( BOARD_ITEM* aPadOrVia, PCB_TRACK* aTrack) const;
 
-    /**
-     * Return the length of the portion of aTrack that lies outside aOther's copper shape
-     * on aLayer. A track that only grazes a pad or via edge tangentially emerges by much
-     * less than its width and is not a credible teardrop anchor: using it misorients the
-     * teardrop axis along the grazing sliver instead of the track's real entry direction.
-     * Returns 0 if the track is fully covered or does not intersect the outline.
-     */
-    int computeEmergingTrackLength( PCB_TRACK* aTrack, BOARD_ITEM* aOther,
-                                    PCB_LAYER_ID aLayer ) const;
+    /// Return the centerline chord length through aOther's copper span at aInsidePoint.
+    /// Degenerate, arc, or non-crossing cases return INT_MAX to avoid rejection.
+    int computeChordThroughShape( PCB_TRACK* aTrack, BOARD_ITEM* aOther, PCB_LAYER_ID aLayer,
+                                  const VECTOR2I& aInsidePoint ) const;
 
     /**
      * Compute the curve part points for teardrops connected to a round shape

@@ -14,14 +14,12 @@
 * GNU General Public License for more details.
 *
 * You should have received a copy of the GNU General Public License
-* along with this program; if not, you may find one here:
-* http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
-* or you may search the http://www.gnu.org website for the version 2 license,
-* or you may write to the Free Software Foundation, Inc.,
-* 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #pragma once
+
+#include <vector>
 
 #include <settings/app_settings.h>
 #include <project/sch_project_settings.h>
@@ -65,6 +63,16 @@ public:
         bool crossprobe_on_selection;
     };
 
+    /// One persisted open editor tab, restored on the next session.
+    struct OPEN_TAB
+    {
+        wxString lib;
+        wxString name;
+        int      unit = 1;
+        int      bodyStyle = 1;
+        bool     preview = false;
+    };
+
     SYMBOL_EDITOR_SETTINGS();
 
     virtual ~SYMBOL_EDITOR_SETTINGS() {}
@@ -98,6 +106,10 @@ public:
     PANEL_LIB_FIELDS_TABLE m_LibFieldEditor;
 
     PIN_TABLE m_PinTable;
+
+    std::vector<OPEN_TAB> m_OpenTabs;
+
+    wxString m_ActiveTabKey;
 
 protected:
 

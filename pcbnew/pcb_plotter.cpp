@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pcb_plotter.h>
@@ -253,9 +249,7 @@ bool PCB_PLOTTER::Plot( const wxString& aOutputPath, const LSEQ& aLayersToPlot,
                 break;
             }
 
-            if( m_plotOpts.GetFormat() == PLOT_FORMAT::PDF
-                    && m_plotOpts.m_PDFSingle
-                    && i != layersToPlot.size() - 1 )
+            if( m_plotOpts.GetFormat() == PLOT_FORMAT::PDF && m_plotOpts.m_PDFSingle && pageNum != finalPageCount )
             {
                 wxString     pageNumber = wxString::Format( "%d", pageNum + 1 );
                 size_t       nextI = i + 1;
@@ -447,6 +441,7 @@ void PCB_PLOTTER::PlotJobToPlotOpts( PCB_PLOT_PARAMS& aOpts, JOB_EXPORT_PCB_PLOT
         aOpts.SetDXFPlotMode( dxfJob->m_plotGraphicItemsUsingContours ? DXF_OUTLINE_MODE::SKETCH
                                                                       : DXF_OUTLINE_MODE::FILLED );
         aOpts.SetDXFPlotPolygonMode( dxfJob->m_polygonMode );
+        aOpts.SetTextMode( dxfJob->m_useKiCadFont ? PLOT_TEXT_MODE::DEFAULT : PLOT_TEXT_MODE::NATIVE );
         aOpts.SetDXFMultiLayeredExportOption( dxfJob->m_genMode == JOB_EXPORT_PCB_DXF::GEN_MODE::SINGLE );
     }
 

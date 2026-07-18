@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <geometry/circle.h>
@@ -213,6 +213,28 @@ VECTOR2D CIRCLE::NearestPoint( const VECTOR2D& aP ) const
     // Handle special case where aP is equal to this circle's center
     if( vec.x == 0 && vec.y == 0 )
         vec.x = 1; // Arbitrary, to ensure the return value is always on the circumference
+
+    return vec.Resize( Radius ) + Center;
+}
+
+
+VECTOR2I CIRCLE::FurthestPoint( const VECTOR2I& aP ) const
+{
+    VECTOR2I vec = Center - aP;
+
+    if( vec.x == 0 && vec.y == 0 )
+        vec.x = 1;
+
+    return vec.Resize( Radius ) + Center;
+}
+
+
+VECTOR2D CIRCLE::FurthestPoint( const VECTOR2D& aP ) const
+{
+    VECTOR2D vec = Center - aP;
+
+    if( vec.x == 0 && vec.y == 0 )
+        vec.x = 1;
 
     return vec.Resize( Radius ) + Center;
 }

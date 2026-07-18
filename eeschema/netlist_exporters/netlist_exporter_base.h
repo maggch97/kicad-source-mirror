@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef NETLIST_EXPORTER_H
@@ -28,9 +24,14 @@
 
 #include <schematic.h>
 
+#include <map>
+#include <set>
+
 class SCH_SYMBOL;
+class SCH_PIN;
 class LIB_SYMBOL;
 class REPORTER;
+class KIWAY;
 
 /**
  * Track unique wxStrings and is useful in telling if a string has been seen before.
@@ -71,15 +72,18 @@ struct LIB_SYMBOL_LESS_THAN
 
 struct PIN_INFO
 {
-    PIN_INFO( const wxString& aPinNumber, const wxString& aNetName, const wxString& aPinName ) :
+    PIN_INFO( const wxString& aPinNumber, const wxString& aNetName, const wxString& aPinName,
+              const wxString& aSourcePin = wxEmptyString ) :
             num( aPinNumber ),
             netName( aNetName ),
-            pinName( aPinName )
+            pinName( aPinName ),
+            srcPin( aSourcePin )
     {}
 
-    wxString num;
+    wxString num; ///< Resolved footprint pad number.
     wxString netName;
     wxString pinName;
+    wxString srcPin; ///< Original symbol pin number that mapped to this pad (issue #2282).
 };
 
 
@@ -96,6 +100,8 @@ public:
     }
 
     virtual ~NETLIST_EXPORTER_BASE() = default;
+
+    void SetKiway( KIWAY* aKiway ) { m_kiway = aKiway; }
 
     /**
      * Write to specified output file.
@@ -175,6 +181,15 @@ protected:
      */
     void eraseDuplicatePins( std::vector<PIN_INFO>& pins );
 
+    /// Resolve @a aPin to its pad number(s) and append a PIN_INFO for each (issue #2282).
+    void appendResolvedPins( std::vector<PIN_INFO>& aPins, const SCH_PIN* aPin, const SCH_SHEET_PATH& aSheetPath,
+                             const wxString& aNetName );
+
+    /// Resolve @a aPin to its effective pad number(s) for every netlist path (issue #2282).
+    std::vector<wxString> resolvePadNumbers( const SCH_PIN* aPin, const SCH_SHEET_PATH& aSheetPath ) const;
+
+    const std::set<wxString>& footprintPads( const wxString& aFootprintId ) const;
+
     /**
      * Find all units for symbols with multiple symbols per package.
      *
@@ -195,6 +210,10 @@ protected:
 
     /// The schematic we're generating a netlist for
     SCHEMATIC*      m_schematic;
+
+    KIWAY* m_kiway = nullptr;
+
+    mutable std::map<wxString, std::set<wxString>> m_footprintPadCache;
 };
 
 #endif

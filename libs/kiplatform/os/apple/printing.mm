@@ -13,11 +13,14 @@
 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 * General Public License for more details.
 *
-* You should have received a copy of the GNU General Public License along
-* with this program.  If not, see <http://www.gnu.org/licenses/>.
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include <printing.h>
+
+#include <wx/print.h>
+#include <wx/cmndata.h>
 
 #import <AppKit/AppKit.h>
 #import <PDFKit/PDFKit.h>
@@ -90,6 +93,11 @@ PRINT_RESULT PrintPDF( const std::string& aFile, bool fit_to_page)
 PRINT_RESULT PrintPDF(const std::string& aFile)
 {
     return PrintPDF(aFile, true);
+}
+
+void ResetPrintToFilePath( wxPrintData& aData )
+{
+    aData.SetFilename( wxEmptyString );
 }
 
 } // namespace PRINTING

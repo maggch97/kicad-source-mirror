@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "exporter_step.h"
@@ -272,7 +268,7 @@ bool EXPORTER_STEP::buildFootprint3DShapes( FOOTPRINT* aFootprint, const VECTOR2
             const PADSTACK::DRILL_PROPS& secondaryDrill = padstack.SecondaryDrill();
             const PADSTACK::DRILL_PROPS& tertiaryDrill = padstack.TertiaryDrill();
 
-            // Process secondary drill (typically bottom backdrill)
+            // Process secondary drill slot (backdrill side is given by its own start layer)
             if( secondaryDrill.size.x > 0 )
             {
                 SHAPE_SEGMENT backdrillShape( pad->GetPosition(), pad->GetPosition(),
@@ -303,7 +299,7 @@ bool EXPORTER_STEP::buildFootprint3DShapes( FOOTPRINT* aFootprint, const VECTOR2
                 }
             }
 
-            // Process tertiary drill (typically top backdrill)
+            // Process tertiary drill slot (backdrill side is given by its own start layer)
             if( tertiaryDrill.size.x > 0 )
             {
                 SHAPE_SEGMENT backdrillShape( pad->GetPosition(), pad->GetPosition(),
@@ -798,7 +794,7 @@ bool EXPORTER_STEP::buildTrack3DShape( PCB_TRACK* aTrack, const VECTOR2D& aOrigi
         const PADSTACK::DRILL_PROPS& secondaryDrill = padstack.SecondaryDrill();
         const PADSTACK::DRILL_PROPS& tertiaryDrill = padstack.TertiaryDrill();
 
-        // Process secondary drill (typically bottom backdrill)
+        // Process secondary drill slot (backdrill side is given by its own start layer)
         if( secondaryDrill.size.x > 0 )
         {
             SHAPE_SEGMENT backdrillShape( via->GetPosition(), via->GetPosition(),
@@ -829,7 +825,7 @@ bool EXPORTER_STEP::buildTrack3DShape( PCB_TRACK* aTrack, const VECTOR2D& aOrigi
             }
         }
 
-        // Process tertiary drill (typically top backdrill)
+        // Process tertiary drill slot (backdrill side is given by its own start layer)
         if( tertiaryDrill.size.x > 0 )
         {
             SHAPE_SEGMENT backdrillShape( via->GetPosition(), via->GetPosition(),
@@ -1131,7 +1127,8 @@ bool EXPORTER_STEP::buildGraphic3DShape( BOARD_ITEM* aItem, const VECTOR2D& aOri
         break;
     }
 
-    default: wxFAIL_MSG( "buildGraphic3DShape: unhandled item type" );
+    default:
+        UNIMPLEMENTED_FOR( aItem->GetClass() );
     }
 
     return true;

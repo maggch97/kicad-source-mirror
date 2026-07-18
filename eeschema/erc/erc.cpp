@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>
@@ -50,6 +46,9 @@
 #include <sch_textbox.h>
 #include <sch_line.h>
 #include <schematic.h>
+#include <lib_symbol.h>
+#include <sch_symbol.h>
+#include <pin_map.h>
 #include <drawing_sheet/ds_draw_item.h>
 #include <drawing_sheet/ds_proxy_view_item.h>
 #include <vector>
@@ -184,6 +183,207 @@ int ERC_TESTER::TestDuplicateSheetNames( bool aCreateMarker )
 }
 
 
+int ERC_TESTER::TestPinMap( KIFACE* aCvPcb, PROJECT* aProject )
+{
+    int        errors = 0;
+    const bool checkStale = m_settings.IsTestEnabled( ERCE_PIN_MAP_STALE_PIN );
+    const bool checkDuplicate = m_settings.IsTestEnabled( ERCE_PIN_MAP_DUPLICATE_PAD );
+    const bool checkBadPad = m_settings.IsTestEnabled( ERCE_PIN_MAP_BAD_PAD );
+
+    typedef void ( *PAD_NUMBERS_FN_PTR )( const wxString&, PROJECT*, std::set<wxString>& );
+
+    PAD_NUMBERS_FN_PTR padFetcher =
+            aCvPcb ? (PAD_NUMBERS_FN_PTR) aCvPcb->IfaceOrAddress( KIFACE_FOOTPRINT_PAD_NUMBERS ) : nullptr;
+
+    std::map<wxString, std::set<wxString>> padCache;
+
+    auto getPads = [&]( const wxString& aFootprintId ) -> const std::set<wxString>&
+    {
+        auto it = padCache.find( aFootprintId );
+
+        if( it != padCache.end() )
+            return it->second;
+
+        std::set<wxString>& pads = padCache[aFootprintId];
+
+        if( padFetcher && !aFootprintId.IsEmpty() )
+            padFetcher( aFootprintId, aProject, pads );
+
+        return pads;
+    };
+
+    // Pin maps and the symbol's pin numbers are library-symbol properties, so iterate unique
+    // screens (not sheet paths) to avoid double-reporting on reused hierarchical sheets.
+    for( SCH_SCREEN* screen = m_screens.GetFirst(); screen; screen = m_screens.GetNext() )
+    {
+        for( SCH_ITEM* item : screen->Items().OfType( SCH_SYMBOL_T ) )
+        {
+            SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
+            LIB_SYMBOL* lib = symbol->GetLibSymbolRef().get();
+
+            if( !lib )
+                continue;
+
+            const PIN_MAP_SET& maps = lib->GetEffectivePinMaps();
+
+            if( maps.IsEmpty() )
+                continue;
+
+            std::set<wxString> pinNumbers;
+
+            for( const SCH_PIN* pin : lib->GetPins() )
+                pinNumbers.insert( pin->GetNumber() );
+
+            const std::vector<std::set<wxString>>& jumperGroups = lib->JumperPinGroups();
+
+            auto sharesJumperGroup = [&]( const wxString& aPinA, const wxString& aPinB )
+            {
+                for( const std::set<wxString>& group : jumperGroups )
+                {
+                    if( group.count( aPinA ) && group.count( aPinB ) )
+                        return true;
+                }
+
+                return false;
+            };
+
+            for( const PIN_MAP& map : maps.GetAll() )
+            {
+                if( checkStale )
+                {
+                    for( const PIN_MAP_ENTRY& entry : map.GetEntries() )
+                    {
+                        if( pinNumbers.count( entry.m_PinNumber ) )
+                            continue;
+
+                        std::shared_ptr<ERC_ITEM> ercItem = ERC_ITEM::Create( ERCE_PIN_MAP_STALE_PIN );
+                        ercItem->SetItems( symbol );
+                        ercItem->SetErrorMessage(
+                                wxString::Format( _( "Pin map '%s' references unknown symbol pin '%s'" ), map.GetName(),
+                                                  entry.m_PinNumber ) );
+                        screen->Append( new SCH_MARKER( std::move( ercItem ), symbol->GetPosition() ) );
+                        errors++;
+                    }
+                }
+
+                // A single pin stacked across several pads is allowed. Two pins on one pad is not.
+                if( checkDuplicate )
+                {
+                    std::map<wxString, wxString> padToPin;
+
+                    for( const PIN_MAP_ENTRY& entry : map.GetEntries() )
+                    {
+                        for( const wxString& pad : ExpandStackedPinNotation( entry.m_PadNumber ) )
+                        {
+                            auto it = padToPin.find( pad );
+
+                            if( it == padToPin.end() )
+                            {
+                                padToPin[pad] = entry.m_PinNumber;
+                            }
+                            else if( it->second != entry.m_PinNumber
+                                     && !sharesJumperGroup( it->second, entry.m_PinNumber ) )
+                            {
+                                std::shared_ptr<ERC_ITEM> ercItem = ERC_ITEM::Create( ERCE_PIN_MAP_DUPLICATE_PAD );
+                                ercItem->SetItems( symbol );
+                                ercItem->SetErrorMessage(
+                                        wxString::Format( _( "Symbol pins '%s' and '%s' both map to pad '%s'" ),
+                                                          it->second, entry.m_PinNumber, pad ) );
+                                screen->Append( new SCH_MARKER( std::move( ercItem ), symbol->GetPosition() ) );
+                                errors++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if( checkBadPad && padFetcher )
+            {
+                for( const ASSOCIATED_FOOTPRINT& assoc : lib->GetEffectiveAssociatedFootprints() )
+                {
+                    const PIN_MAP* boundMap = maps.FindByName( assoc.m_MapName );
+
+                    if( !boundMap )
+                        continue;
+
+                    const std::set<wxString>& pads = getPads( assoc.m_FootprintLibId.GetUniStringLibId() );
+
+                    if( pads.empty() )
+                        continue;
+
+                    for( const PIN_MAP_ENTRY& entry : boundMap->GetEntries() )
+                    {
+                        for( const wxString& pad : ExpandStackedPinNotation( entry.m_PadNumber ) )
+                        {
+                            if( pads.count( pad ) )
+                                continue;
+
+                            std::shared_ptr<ERC_ITEM> ercItem = ERC_ITEM::Create( ERCE_PIN_MAP_BAD_PAD );
+                            ercItem->SetItems( symbol );
+                            ercItem->SetErrorMessage( wxString::Format(
+                                    _( "Pin map '%s' references pad '%s' not present on footprint '%s'" ),
+                                    boundMap->GetName(), pad, assoc.m_FootprintLibId.GetUniStringLibId() ) );
+                            screen->Append( new SCH_MARKER( std::move( ercItem ), symbol->GetPosition() ) );
+                            errors++;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if( m_settings.IsTestEnabled( ERCE_PIN_MAP_UNMAPPED_PIN ) && padFetcher )
+    {
+        const wxString variant = m_schematic ? m_schematic->GetCurrentVariant() : wxString();
+
+        for( SCH_SHEET_PATH& sheet : m_sheetList )
+        {
+            for( SCH_ITEM* item : sheet.LastScreen()->Items().OfType( SCH_SYMBOL_T ) )
+            {
+                SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
+                LIB_SYMBOL* lib = symbol->GetLibSymbolRef().get();
+
+                if( !lib || lib->GetEffectiveAssociatedFootprints().empty() )
+                    continue;
+
+                wxString fpText = symbol->GetFootprintFieldText( true, &sheet, false );
+                LIB_ID   fpId;
+
+                if( fpText.IsEmpty() || fpId.Parse( fpText, true ) >= 0 )
+                    continue;
+
+                const std::set<wxString>& pads = getPads( fpId.GetUniStringLibId() );
+
+                if( pads.empty() )
+                    continue;
+
+                for( SCH_PIN* pin : symbol->GetPins( &sheet ) )
+                {
+                    if( pin->IsDangling() )
+                        continue;
+
+                    SCH_PIN::PAD_RESOLUTION state = SCH_PIN::PAD_RESOLUTION::MAPPED;
+                    pin->GetEffectivePadNumber( sheet, variant, fpId, &pads, &state );
+
+                    if( state != SCH_PIN::PAD_RESOLUTION::UNMAPPED )
+                        continue;
+
+                    std::shared_ptr<ERC_ITEM> ercItem = ERC_ITEM::Create( ERCE_PIN_MAP_UNMAPPED_PIN );
+                    ercItem->SetItems( pin );
+                    ercItem->SetErrorMessage(
+                            wxString::Format( _( "Pin '%s' is connected but maps to no pad on footprint '%s'" ),
+                                              pin->GetNumber(), fpText ) );
+                    sheet.LastScreen()->Append( new SCH_MARKER( std::move( ercItem ), pin->GetPosition() ) );
+                    errors++;
+                }
+            }
+        }
+    }
+
+    return errors;
+}
+
+
 void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
 {
     DS_DRAW_ITEM_LIST wsItems( schIUScale, FOR_ERC_DRC );
@@ -199,48 +399,60 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
             []( const SCH_ITEM* item, const SCH_SHEET_PATH& sheet, SCH_SCREEN* screen,
                 const wxString& text, const VECTOR2I& pos )
             {
-                static wxRegEx warningExpr( wxS( "^\\$\\{ERC_WARNING\\s*([^}]*)\\}(.*)$" ) );
-                static wxRegEx errorExpr( wxS( "^\\$\\{ERC_ERROR\\s*([^}]*)\\}(.*)$" ) );
+                // Match anywhere in the text so users can embed ${ERC_ERROR ...}
+                // or ${ERC_WARNING ...} inside placeholder strings rather than
+                // only at the start of the field.  The leading "(^|[^\\\\])"
+                // group requires the marker to start the string or follow a
+                // non-backslash, so `\${ERC_ERROR ...}` stays inert; the
+                // captured message is group 2.
+                static wxRegEx warningExpr( wxS( "(^|[^\\\\])\\$\\{ERC_WARNING\\s*([^}]*)\\}" ) );
+                static wxRegEx errorExpr( wxS( "(^|[^\\\\])\\$\\{ERC_ERROR\\s*([^}]*)\\}" ) );
 
-                if( warningExpr.Matches( text ) )
-                {
-                    std::shared_ptr<ERC_ITEM> ercItem = ERC_ITEM::Create( ERCE_GENERIC_WARNING );
-                    wxString                  ercText = warningExpr.GetMatch( text, 1 );
+                auto reportEach =
+                        [&]( wxRegEx& aExpr, int aErrorCode )
+                        {
+                            // Return true on any *match*, not only when a marker is appended,
+                            // so the caller-side unresolved-variable suppression stays
+                            // correct even if the limit-exceeded short-circuit lands here in
+                            // the future.
+                            bool     found = false;
+                            wxString remaining = text;
 
-                    if( item )
-                        ercItem->SetItems( item );
-                    else
-                        ercText += _( " (in drawing sheet)" );
+                            while( aExpr.Matches( remaining ) )
+                            {
+                                found = true;
 
-                    ercItem->SetSheetSpecificPath( sheet );
-                    ercItem->SetErrorMessage( ercText );
+                                wxString ercText = aExpr.GetMatch( remaining, 2 );
 
-                    SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), pos );
-                    screen->Append( marker );
+                                std::shared_ptr<ERC_ITEM> ercItem = ERC_ITEM::Create( aErrorCode );
 
-                    return true;
-                }
+                                if( item )
+                                    ercItem->SetItems( item );
+                                else
+                                    ercText += _( " (in drawing sheet)" );
 
-                if( errorExpr.Matches( text ) )
-                {
-                    std::shared_ptr<ERC_ITEM> ercItem = ERC_ITEM::Create( ERCE_GENERIC_ERROR );
-                    wxString                  ercText = errorExpr.GetMatch( text, 1 );
+                                ercItem->SetSheetSpecificPath( sheet );
+                                ercItem->SetErrorMessage( ercText );
 
-                    if( item )
-                        ercItem->SetItems( item );
-                    else
-                        ercText += _( " (in drawing sheet)" );
+                                SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), pos );
+                                screen->Append( marker );
 
-                    ercItem->SetSheetSpecificPath( sheet );
-                    ercItem->SetErrorMessage( ercText );
+                                size_t start = 0;
+                                size_t len = 0;
 
-                    SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), pos );
-                    screen->Append( marker );
+                                if( !aExpr.GetMatch( &start, &len, 0 ) || len == 0 )
+                                    break;
 
-                    return true;
-                }
+                                remaining = remaining.Mid( start + len );
+                            }
 
-                return false;
+                            return found;
+                        };
+
+                bool foundWarning = reportEach( warningExpr, ERCE_GENERIC_WARNING );
+                bool foundError = reportEach( errorExpr, ERCE_GENERIC_ERROR );
+
+                return foundWarning || foundError;
             };
 
     if( aDrawingSheet )
@@ -266,7 +478,11 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
 
                 for( SCH_FIELD& field : symbol->GetFields() )
                 {
-                    if( unresolved( field.GetShownText( &sheet, true ) ) )
+                    if( testAssertion( &field, sheet, screen, field.GetText(), field.GetPosition() ) )
+                    {
+                        // Don't run unresolved test
+                    }
+                    else if( unresolved( field.GetShownText( &sheet, true ) ) )
                     {
                         auto ercItem = ERC_ITEM::Create( ERCE_UNRESOLVED_VARIABLE );
                         ercItem->SetItems( symbol );
@@ -275,8 +491,6 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
                         SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), field.GetPosition() );
                         screen->Append( marker );
                     }
-
-                    testAssertion( &field, sheet, screen, field.GetText(), field.GetPosition() );
                 }
 
                 if( symbol->GetLibSymbolRef() )
@@ -292,7 +506,12 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
                                 {
                                     SCH_TEXT* textItem = static_cast<SCH_TEXT*>( child );
 
-                                    if( unresolved( textItem->GetShownText( &sheet, true ) ) )
+                                    if( testAssertion( symbol, sheet, screen, textItem->GetText(),
+                                                       textItem->GetPosition() ) )
+                                    {
+                                        // Don't run unresolved test
+                                    }
+                                    else if( unresolved( textItem->GetShownText( &sheet, true ) ) )
                                     {
                                         auto ercItem = ERC_ITEM::Create( ERCE_UNRESOLVED_VARIABLE );
                                         ercItem->SetItems( symbol );
@@ -305,15 +524,18 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
                                         SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), pos );
                                         screen->Append( marker );
                                     }
-
-                                    testAssertion( symbol, sheet, screen, textItem->GetText(),
-                                                   textItem->GetPosition() );
                                 }
                                 else if( child->Type() == SCH_TEXTBOX_T )
                                 {
                                     SCH_TEXTBOX* textboxItem = static_cast<SCH_TEXTBOX*>( child );
 
-                                    if( unresolved( textboxItem->GetShownText( nullptr, &sheet, true ) ) )
+                                    if( testAssertion( symbol, sheet, screen, textboxItem->GetText(),
+                                                       textboxItem->GetPosition() ) )
+                                    {
+                                        // Don't run unresolved test
+                                    }
+                                    else if( unresolved( textboxItem->GetShownText( nullptr, &sheet,
+                                                                                    true ) ) )
                                     {
                                         auto ercItem = ERC_ITEM::Create( ERCE_UNRESOLVED_VARIABLE );
                                         ercItem->SetItems( symbol );
@@ -326,9 +548,6 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
                                         SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), pos );
                                         screen->Append( marker );
                                     }
-
-                                    testAssertion( symbol, sheet, screen, textboxItem->GetText(),
-                                                   textboxItem->GetPosition() );
                                 }
                             },
                             RECURSE_MODE::NO_RECURSE );
@@ -338,7 +557,11 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
             {
                 for( SCH_FIELD& field : label->GetFields() )
                 {
-                    if( unresolved( field.GetShownText( &sheet, true ) ) )
+                    if( testAssertion( &field, sheet, screen, field.GetText(), field.GetPosition() ) )
+                    {
+                        // Don't run unresolved test
+                    }
+                    else if( unresolved( field.GetShownText( &sheet, true ) ) )
                     {
                         auto ercItem = ERC_ITEM::Create( ERCE_UNRESOLVED_VARIABLE );
                         ercItem->SetItems( label );
@@ -347,8 +570,6 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
                         SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), field.GetPosition() );
                         screen->Append( marker );
                     }
-
-                    testAssertion( &field, sheet, screen, field.GetText(), field.GetPosition() );
                 }
             }
             else if( item->Type() == SCH_SHEET_T )
@@ -357,7 +578,11 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
 
                 for( SCH_FIELD& field : subSheet->GetFields() )
                 {
-                    if( unresolved( field.GetShownText( &sheet, true ) ) )
+                    if( testAssertion( &field, sheet, screen, field.GetText(), field.GetPosition() ) )
+                    {
+                        // Don't run unresolved test
+                    }
+                    else if( unresolved( field.GetShownText( &sheet, true ) ) )
                     {
                         auto ercItem = ERC_ITEM::Create( ERCE_UNRESOLVED_VARIABLE );
                         ercItem->SetItems( subSheet );
@@ -366,8 +591,6 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
                         SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), field.GetPosition() );
                         screen->Append( marker );
                     }
-
-                    testAssertion( &field, sheet, screen, field.GetText(), field.GetPosition() );
                 }
 
                 SCH_SHEET_PATH subSheetPath = sheet;
@@ -388,7 +611,11 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
             }
             else if( SCH_TEXT* text = dynamic_cast<SCH_TEXT*>( item ) )
             {
-                if( text->GetShownText( &sheet, true ).Matches( wxS( "*${*}*" ) ) )
+                if( testAssertion( text, sheet, screen, text->GetText(), text->GetPosition() ) )
+                {
+                    // Don't run unresolved test
+                }
+                else if( text->GetShownText( &sheet, true ).Matches( wxS( "*${*}*" ) ) )
                 {
                     auto ercItem = ERC_ITEM::Create( ERCE_UNRESOLVED_VARIABLE );
                     ercItem->SetItems( text );
@@ -397,12 +624,15 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
                     SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), text->GetPosition() );
                     screen->Append( marker );
                 }
-
-                testAssertion( text, sheet, screen, text->GetText(), text->GetPosition() );
             }
             else if( SCH_TEXTBOX* textBox = dynamic_cast<SCH_TEXTBOX*>( item ) )
             {
-                if( textBox->GetShownText( nullptr, &sheet, true ).Matches( wxS( "*${*}*" ) ) )
+                if( testAssertion( textBox, sheet, screen, textBox->GetText(),
+                                   textBox->GetPosition() ) )
+                {
+                    // Don't run unresolved test
+                }
+                else if( textBox->GetShownText( nullptr, &sheet, true ).Matches( wxS( "*${*}*" ) ) )
                 {
                     auto ercItem = ERC_ITEM::Create( ERCE_UNRESOLVED_VARIABLE );
                     ercItem->SetItems( textBox );
@@ -411,8 +641,6 @@ void ERC_TESTER::TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet )
                     SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), textBox->GetPosition() );
                     screen->Append( marker );
                 }
-
-                testAssertion( textBox, sheet, screen, textBox->GetText(), textBox->GetPosition() );
             }
         }
 
@@ -1568,7 +1796,10 @@ int ERC_TESTER::TestGroundPins()
             []( const wxString& txt )
             {
                 wxString upper = txt.Upper();
-                return upper.Contains( wxT( "GND" ) );
+
+                return upper.Contains( wxT( "GND" ) )
+                       || upper == wxT( "EARTH" ) || upper.StartsWith( wxT( "EARTH_" ) )
+                       || upper == wxT( "VSS" ) || upper == wxT( "VSSA" );
             };
 
     for( const SCH_SHEET_PATH& sheet : m_sheetList )
@@ -1986,6 +2217,12 @@ int ERC_TESTER::TestFootprintLinkIssues( KIFACE* aCvPcb, PROJECT* aProject )
 {
     wxCHECK( m_schematic, 0 );
 
+    if( std::optional<LIBRARY_MANAGER_ADAPTER*> adapter =
+                Pgm().GetLibraryManager().Adapter( LIBRARY_TABLE_TYPE::FOOTPRINT ) )
+    {
+        ( *adapter )->BlockUntilLoaded();
+    }
+
     wxString msg;
     int      err_count = 0;
 
@@ -2111,7 +2348,7 @@ int ERC_TESTER::TestFootprintFilters()
 
             if( !found )
             {
-                std::shared_ptr<ERC_ITEM> ercItem = ERC_ITEM::Create( ERCE_FOOTPRINT_LINK_ISSUES );
+                std::shared_ptr<ERC_ITEM> ercItem = ERC_ITEM::Create( ERCE_FOOTPRINT_FILTERS );
                 msg.Printf( _( "Assigned footprint (%s) doesn't match footprint filters (%s)" ),
                             footprint.GetUniStringLibItemName(),
                             wxJoin( filters, ' ' ) );
@@ -2281,6 +2518,16 @@ void ERC_TESTER::RunTests( DS_PROXY_VIEW_ITEM* aDrawingSheet, SCH_EDIT_FRAME* aE
             aProgressReporter->AdvancePhase( _( "Checking sheet names..." ) );
 
         TestDuplicateSheetNames( true );
+    }
+
+    // Test pin-to-pad maps for stale pins, duplicate pad targets and bad pad references (issue #2282).
+    if( m_settings.IsTestEnabled( ERCE_PIN_MAP_STALE_PIN ) || m_settings.IsTestEnabled( ERCE_PIN_MAP_DUPLICATE_PAD )
+        || m_settings.IsTestEnabled( ERCE_PIN_MAP_BAD_PAD ) || m_settings.IsTestEnabled( ERCE_PIN_MAP_UNMAPPED_PIN ) )
+    {
+        if( aProgressReporter )
+            aProgressReporter->AdvancePhase( _( "Checking pin maps..." ) );
+
+        TestPinMap( aCvPcb, aProject );
     }
 
     // The connection graph has a whole set of ERC checks it can run

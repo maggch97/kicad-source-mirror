@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef  __PCB_EDIT_FRAME_H__
@@ -63,11 +63,9 @@ class DIALOG_BOARD_SETUP;
 class PCB_DESIGN_BLOCK_PANE;
 class WX_INFOBAR;
 
-#ifdef KICAD_IPC_API
 class KICAD_API_SERVER;
 class API_HANDLER_PCB;
 class API_HANDLER_COMMON;
-#endif
 
 enum LAST_PATH_TYPE : unsigned int;
 
@@ -82,16 +80,6 @@ class PCB_EDIT_FRAME : public PCB_BASE_EDIT_FRAME
 {
 public:
     virtual ~PCB_EDIT_FRAME();
-
-    /**
-     * Load the footprints for each #SCH_COMPONENT in \a aNetlist from the list of libraries.
-     *
-     * @param aNetlist is the netlist of components to load the footprints into.
-     * @param aReporter is the #REPORTER object to report to.
-     * @throw IO_ERROR if an I/O error occurs or a #PARSE_ERROR if a file parsing error
-     *           occurs while reading footprint library files.
-     */
-    void LoadFootprints( NETLIST& aNetlist, REPORTER& aReporter );
 
     void OnQuit( wxCommandEvent& event );
 
@@ -109,11 +97,6 @@ public:
     void UpdateUserInterface();
 
     void HardRedraw() override;
-
-    /**
-     * Rebuilds board connectivity, refreshes canvas.
-     */
-    void RebuildAndRefresh();
 
     /**
      * Execute a remote command send by Eeschema via a socket, port KICAD_PCB_PORT_SERVICE_NUMBER
@@ -486,11 +469,6 @@ public:
                           const wxString& a3D_Subdir, double aXRef, double aYRef );
 
     /**
-     * Export the current BOARD to a Hyperlynx HYP file.
-     */
-    void OnExportHyperlynx();
-
-    /**
      * Create an IDF3 compliant BOARD (*.emn) and LIBRARY (*.emp) file.
      *
      * @param aPcb a pointer to the board to be exported to IDF.
@@ -505,11 +483,6 @@ public:
     bool Export_IDF3( BOARD* aPcb, const wxString& aFullFileName,
                       bool aUseThou, double aXRef, double aYRef,
                       bool aIncludeUnspecified, bool aIncludeDNP );
-
-    /**
-     * Export the current BOARD to a STEP assembly.
-     */
-    void OnExportSTEP();
 
     /**
      * Export the current BOARD to a specctra dsn file.
@@ -532,28 +505,6 @@ public:
     void ShowFootprintPropertiesDialog( FOOTPRINT* aFootprint );
 
     int ShowExchangeFootprintsDialog( FOOTPRINT* aFootprint, bool aUpdateMode, bool aSelectedMode );
-
-    /**
-     * Replace \a aExisting footprint by \a aNew footprint using the \a Existing footprint
-     * settings (position, orientation, pad netnames ...).
-     *
-     * The \a aExisting footprint is deleted or put in undo list.
-     *
-     * @param aExisting footprint to replace.
-     * @param aNew footprint to put.
-     * @param aCommit commit that should store the changes.
-     */
-    void ExchangeFootprint( FOOTPRINT* aExisting, FOOTPRINT* aNew, BOARD_COMMIT& aCommit,
-                            bool matchPadPositions,
-                            bool deleteExtraTexts = true,
-                            bool resetTextLayers = true,
-                            bool resetTextEffects = true,
-                            bool resetTextPositions = true,
-                            bool resetTextContent = true,
-                            bool resetFabricationAttrs = true,
-                            bool resetClearanceOverrides = true,
-                            bool reset3DModels = true,
-                            bool* aUpdated = nullptr );
 
     /**
      * Install the corresponding dialog editor for the given item.
@@ -741,6 +692,8 @@ protected:
 
     void configureToolbars() override;
 
+    void ReCreateAuxiliaryToolbar() override;
+
     // The Tool Framework initialization
     void setupTools();
     void setupUIConditions() override;
@@ -762,6 +715,15 @@ protected:
      */
     bool doAutoSave() override { return DoAutoSave(); }
 
+    bool canRunAutoSave() const override;
+
+    /**
+     * Return true when an interactive tool operation (routing, dragging, point editing,
+     * zone filling, or a blocked undo/redo) is currently in progress.  Used to gate both
+     * API command acceptance and autosave so neither stomps on a live edit.
+     */
+    bool interactiveOperationInProgress() const;
+
     /**
      * Load the given filename but sets the path to the current project path.
      *
@@ -770,6 +732,18 @@ protected:
      */
     bool importFile( const wxString& aFileName, int aFileType,
                      const std::map<std::string, UTF8>* aProperties = nullptr );
+
+    /**
+     * Reconcile the footprint-library references of a freshly imported non-KiCad board so that
+     * every board footprint FPID resolves to a registered project library.  Reads the generated
+     * cache nickname and provenance source libraries from m_importProperties, falling back to a
+     * nickname derived from the board filename for a standalone import.
+     *
+     * @param aDefinitions are the importer's caller-owned cached library footprints, captured
+     *                     during load before the plugin was destroyed.
+     */
+    void reconcileImportedFootprintLibraries(
+            std::vector<std::unique_ptr<FOOTPRINT>> aDefinitions, const wxString& aBoardPath );
 
     /**
      * @brief Save a board object to a file
@@ -801,9 +775,7 @@ protected:
 
     void onCloseModelessBookReporterDialogs( wxCommandEvent& aEvent );
 
-#ifdef KICAD_IPC_API
     void onPluginAvailabilityChanged( wxCommandEvent& aEvt );
-#endif
 
 public:
     wxChoice* m_SelTrackWidthBox;        // a choice box to display and select current track width
@@ -882,10 +854,8 @@ private:
     std::vector<KIID> m_crossProbeFlashItems;          ///< Items to flash (by UUID)
     bool              m_crossProbeFlashing = false;    ///< Currently flashing guard
 
-#ifdef KICAD_IPC_API
     std::unique_ptr<API_HANDLER_PCB>    m_apiHandler;
     std::unique_ptr<API_HANDLER_COMMON> m_apiHandlerCommon;
-#endif
 };
 
 #endif  // __PCB_EDIT_FRAME_H__

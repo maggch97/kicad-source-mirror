@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one at
- * http://www.gnu.org/licenses/
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
@@ -46,15 +45,13 @@ BOOST_FIXTURE_TEST_CASE( ERCLabelNotConnected, ERC_REGRESSION_TEST_FIXTURE )
 
     // Check not-connected ERC errors
 
-    std::vector<std::pair<wxString, int>> tests =
-    {
-        { "erc_pin_not_connected_basic",        2 },
-        { "issue7203",                          4 },
-        { "issue11926",                         2 },
-        { "issue10430",                         8 },
-        { "erc_directive_label_not_connected",  1 },
-        { "issue23346/issue23346",              1 }
-    };
+    std::vector<std::pair<wxString, int>> tests = { { "erc_pin_not_connected_basic", 2 },
+                                                    { "issue7203", 4 },
+                                                    { "issue11926", 2 },
+                                                    { "issue10430", 8 },
+                                                    { "erc_directive_label_not_connected", 1 },
+                                                    { "issue23346/issue23346", 1 },
+                                                    { "issue24449/BusHierLabels", 0 } };
 
     for( const std::pair<wxString, int>& test : tests )
     {

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "convert_tool.h"
 
@@ -591,9 +587,11 @@ int CONVERT_TOOL::CreatePolys( const TOOL_EVENT& aEvent )
 SHAPE_POLY_SET CONVERT_TOOL::makePolysFromChainedSegs( const std::deque<EDA_ITEM*>& aItems,
                                                        CONVERT_STRATEGY aStrategy )
 {
-    // TODO: This code has a somewhat-similar purpose to ConvertOutlineToPolygon but is slightly
-    // different, so this remains a separate algorithm.  It might be nice to analyze the dfiferences
-    // in requirements and refactor this.
+    // This intentionally does not delegate to ConvertOutlineToPolygon.  That routine accepts only
+    // PCB_SHAPEs, so the tracks in this tool's heterogeneous selection would need throwaway shapes
+    // built for them.  It also fails the whole conversion on any unclosed contour and resolves an
+    // outline/hole hierarchy, whereas this tool is best-effort, silently dropping chains that fail
+    // to close and emitting only flat top-level outlines.
 
     // Using a large epsilon here to allow for sloppy drawing can cause the algorithm to miss very
     // short segments in a converted bezier.  So use an epsilon only large enough to cover for
@@ -604,6 +602,12 @@ SHAPE_POLY_SET CONVERT_TOOL::makePolysFromChainedSegs( const std::deque<EDA_ITEM
 
     // Stores pairs of (anchor, item) where anchor == 0 -> SEG.A, anchor == 1 -> SEG.B
     std::map<VECTOR2I, std::vector<std::pair<int, EDA_ITEM*>>> connections;
+
+    // Canonical key each (item, anchor) endpoint was filed under.  Re-running findInsertionPoint()
+    // during the walk is order-dependent and could resolve to a different bucket once the map is
+    // fully populated, so the walk reuses these stored keys instead.
+    std::map<std::pair<EDA_ITEM*, int>, VECTOR2I> connectionKeys;
+
     std::deque<EDA_ITEM*> toCheck;
 
     auto closeEnough =
@@ -632,8 +636,15 @@ SHAPE_POLY_SET CONVERT_TOOL::makePolysFromChainedSegs( const std::deque<EDA_ITEM
         if( std::optional<SEG> seg = getStartEndPoints( item ) )
         {
             toCheck.push_back( item );
-            connections[findInsertionPoint( seg->A )].emplace_back( std::make_pair( 0, item ) );
-            connections[findInsertionPoint( seg->B )].emplace_back( std::make_pair( 1, item ) );
+
+            VECTOR2I keyA = findInsertionPoint( seg->A );
+            VECTOR2I keyB = findInsertionPoint( seg->B );
+
+            connections[keyA].emplace_back( std::make_pair( 0, item ) );
+            connections[keyB].emplace_back( std::make_pair( 1, item ) );
+
+            connectionKeys[{ item, 0 }] = keyA;
+            connectionKeys[{ item, 1 }] = keyB;
         }
     }
 
@@ -716,29 +727,34 @@ SHAPE_POLY_SET CONVERT_TOOL::makePolysFromChainedSegs( const std::deque<EDA_ITEM
                     }
                 };
 
+        // Walk by anchor index rather than by point.  MCAD splines leave sub-chainingEpsilon gaps
+        // at the junctions, so neighbouring endpoints do not compare equal and a point-based lookup
+        // would dead-end the walk; connectionKeys maps each (item, anchor) back to the bucket it was
+        // filed under.
+
         // aDirection == true for walking "right" and appending to the end of points
         // false for walking "left" and prepending to the beginning
-        std::function<void( EDA_ITEM*, const VECTOR2I&, bool )> process =
-                [&]( EDA_ITEM* aItem, const VECTOR2I& aAnchor, bool aDirection )
+        std::function<void( EDA_ITEM*, int, bool )> process =
+                [&]( EDA_ITEM* aItem, int aAnchor, bool aDirection )
                 {
                     if( aItem->GetFlags() & SKIP_STRUCT )
                         return;
 
                     aItem->SetFlags( SKIP_STRUCT );
 
-                    insert( aItem, aAnchor, aDirection );
-
                     std::optional<SEG> anchors = getStartEndPoints( aItem );
                     wxASSERT( anchors );
 
-                    VECTOR2I nextAnchor = ( aAnchor == anchors->A ) ? anchors->B : anchors->A;
+                    insert( aItem, aAnchor == 0 ? anchors->A : anchors->B, aDirection );
 
-                    for( std::pair<int, EDA_ITEM*> pair : connections[nextAnchor] )
+                    int nextAnchor = 1 - aAnchor;
+
+                    for( std::pair<int, EDA_ITEM*> pair : connections[connectionKeys.at( { aItem, nextAnchor } )] )
                     {
                         if( pair.second == aItem )
                             continue;
 
-                        process( pair.second, nextAnchor, aDirection );
+                        process( pair.second, pair.first, aDirection );
                     }
                 };
 
@@ -751,22 +767,24 @@ SHAPE_POLY_SET CONVERT_TOOL::makePolysFromChainedSegs( const std::deque<EDA_ITEM
         if( !candidate->IsType( { PCB_ARC_T, PCB_SHAPE_LOCATE_ARC_T } ) )
             insert( candidate, anchors->A, true );
 
-        process( candidate, anchors->B, true );
+        process( candidate, 1, true );
 
         // check for any candidates on the "left"
         EDA_ITEM* left = nullptr;
+        int       leftAnchor = 0;
 
-        for( std::pair<int, EDA_ITEM*> possibleLeft : connections[anchors->A] )
+        for( std::pair<int, EDA_ITEM*> possibleLeft : connections[connectionKeys.at( { candidate, 0 } )] )
         {
             if( possibleLeft.second != candidate )
             {
                 left = possibleLeft.second;
+                leftAnchor = possibleLeft.first;
                 break;
             }
         }
 
         if( left )
-            process( left, anchors->A, false );
+            process( left, leftAnchor, false );
 
         if( outline.PointCount() < 3
                 || !closeEnough( outline.GetPoint( 0 ), outline.GetPoint( -1 ), chainingEpsilon ) )
@@ -985,42 +1003,49 @@ int CONVERT_TOOL::CreateLines( const TOOL_EVENT& aEvent )
     if( fpEditor )
         footprint = fpEditor->GetBoard()->GetFirstFootprint();
 
-    auto handleGraphicSeg =
-            [&]( EDA_ITEM* aItem )
-            {
-                if( aItem->Type() != PCB_SHAPE_T )
-                    return false;
+    auto handleGraphicSeg = [&]( EDA_ITEM* aItem, NETINFO_ITEM* aNet )
+    {
+        if( aItem->Type() != PCB_SHAPE_T )
+            return false;
 
-                PCB_SHAPE* graphic = static_cast<PCB_SHAPE*>( aItem );
+        PCB_SHAPE* graphic = static_cast<PCB_SHAPE*>( aItem );
 
-                if( graphic->GetShape() == SHAPE_T::SEGMENT )
-                {
-                    PCB_TRACK* track = new PCB_TRACK( parent );
+        if( graphic->GetShape() == SHAPE_T::SEGMENT )
+        {
+            PCB_TRACK* track = new PCB_TRACK( parent );
 
-                    track->SetLayer( targetLayer );
-                    track->SetStart( graphic->GetStart() );
-                    track->SetEnd( graphic->GetEnd() );
-                    track->SetWidth( graphic->GetWidth() );
-                    commit.Add( track );
+            track->SetLayer( targetLayer );
+            track->SetStart( graphic->GetStart() );
+            track->SetEnd( graphic->GetEnd() );
+            track->SetWidth( graphic->GetWidth() );
 
-                    return true;
-                }
-                else if( graphic->GetShape() == SHAPE_T::ARC )
-                {
-                    PCB_ARC* arc = new PCB_ARC( parent );
+            if( aNet )
+                track->SetNet( aNet );
 
-                    arc->SetLayer( targetLayer );
-                    arc->SetStart( graphic->GetStart() );
-                    arc->SetEnd( graphic->GetEnd() );
-                    arc->SetMid( graphic->GetArcMid() );
-                    arc->SetWidth( graphic->GetWidth() );
-                    commit.Add( arc );
+            commit.Add( track );
 
-                    return true;
-                }
+            return true;
+        }
+        else if( graphic->GetShape() == SHAPE_T::ARC )
+        {
+            PCB_ARC* arc = new PCB_ARC( parent );
 
-                return false;
-            };
+            arc->SetLayer( targetLayer );
+            arc->SetStart( graphic->GetStart() );
+            arc->SetEnd( graphic->GetEnd() );
+            arc->SetMid( graphic->GetArcMid() );
+            arc->SetWidth( graphic->GetWidth() );
+
+            if( aNet )
+                arc->SetNet( aNet );
+
+            commit.Add( arc );
+
+            return true;
+        }
+
+        return false;
+    };
 
     auto addGraphicChain =
             [&]( const SHAPE_LINE_CHAIN& aChain, std::optional<int> aWidth )
@@ -1067,83 +1092,86 @@ int CONVERT_TOOL::CreateLines( const TOOL_EVENT& aEvent )
                 }
             };
 
-    auto addTrackChain =
-            [&]( const SHAPE_LINE_CHAIN& aChain, std::optional<int> aWidth )
-            {
-                for( size_t si = 0; si < aChain.GetSegmentCount(); ++si )
-                {
-                    const SEG seg = aChain.GetSegment( si );
+    auto addTrackChain = [&]( const SHAPE_LINE_CHAIN& aChain, std::optional<int> aWidth, NETINFO_ITEM* aNet )
+    {
+        for( size_t si = 0; si < aChain.GetSegmentCount(); ++si )
+        {
+            const SEG seg = aChain.GetSegment( si );
 
-                    if( seg.Length() == 0 )
-                        continue;
+            if( seg.Length() == 0 )
+                continue;
 
-                    if( aChain.IsArcSegment( si ) )
-                        continue;
+            if( aChain.IsArcSegment( si ) )
+                continue;
 
-                    PCB_TRACK* track = new PCB_TRACK( parent );
+            PCB_TRACK* track = new PCB_TRACK( parent );
 
-                    track->SetLayer( targetLayer );
-                    track->SetStart( seg.A );
-                    track->SetEnd( seg.B );
+            track->SetLayer( targetLayer );
+            track->SetStart( seg.A );
+            track->SetEnd( seg.B );
 
-                    if( aWidth && *aWidth > 0 )
-                        track->SetWidth( *aWidth );
+            if( aWidth && *aWidth > 0 )
+                track->SetWidth( *aWidth );
 
-                    commit.Add( track );
-                }
+            if( aNet )
+                track->SetNet( aNet );
 
-                for( size_t ai = 0; ai < aChain.ArcCount(); ++ai )
-                {
-                    const SHAPE_ARC& arc = aChain.Arc( ai );
+            commit.Add( track );
+        }
 
-                    if( arc.GetP0() == arc.GetP1() )
-                        continue;
+        for( size_t ai = 0; ai < aChain.ArcCount(); ++ai )
+        {
+            const SHAPE_ARC& arc = aChain.Arc( ai );
 
-                    PCB_ARC* trackArc = new PCB_ARC( parent );
+            if( arc.GetP0() == arc.GetP1() )
+                continue;
 
-                    trackArc->SetLayer( targetLayer );
-                    trackArc->SetStart( arc.GetP0() );
-                    trackArc->SetEnd( arc.GetP1() );
-                    trackArc->SetMid( arc.GetArcMid() );
+            PCB_ARC* trackArc = new PCB_ARC( parent );
 
-                    if( aWidth && *aWidth > 0 )
-                        trackArc->SetWidth( *aWidth );
+            trackArc->SetLayer( targetLayer );
+            trackArc->SetStart( arc.GetP0() );
+            trackArc->SetEnd( arc.GetP1() );
+            trackArc->SetMid( arc.GetArcMid() );
 
-                    commit.Add( trackArc );
-                }
-            };
+            if( aWidth && *aWidth > 0 )
+                trackArc->SetWidth( *aWidth );
 
-    auto processChain =
-            [&]( const SHAPE_LINE_CHAIN& aChain, std::optional<int> aWidth )
-            {
-                if( aChain.GetSegmentCount() == 0 && aChain.ArcCount() == 0 )
-                    return;
+            if( aNet )
+                trackArc->SetNet( aNet );
 
-                if( aEvent.IsAction( &PCB_ACTIONS::convertToLines ) )
-                {
-                    addGraphicChain( aChain, aWidth );
-                }
-                else if( fpEditor )
-                {
-                    addGraphicChain( aChain, aWidth );
-                }
-                else
-                {
-                    addTrackChain( aChain, aWidth );
-                }
-            };
+            commit.Add( trackArc );
+        }
+    };
 
-    auto processPolySet =
-            [&]( const SHAPE_POLY_SET& aPoly, std::optional<int> aWidth )
-            {
-                for( int oi = 0; oi < aPoly.OutlineCount(); ++oi )
-                {
-                    processChain( aPoly.COutline( oi ), aWidth );
+    auto processChain = [&]( const SHAPE_LINE_CHAIN& aChain, std::optional<int> aWidth, NETINFO_ITEM* aNet )
+    {
+        if( aChain.GetSegmentCount() == 0 && aChain.ArcCount() == 0 )
+            return;
 
-                    for( int hi = 0; hi < aPoly.HoleCount( oi ); ++hi )
-                        processChain( aPoly.CHole( oi, hi ), aWidth );
-                }
-            };
+        if( aEvent.IsAction( &PCB_ACTIONS::convertToLines ) )
+        {
+            addGraphicChain( aChain, aWidth );
+        }
+        else if( fpEditor )
+        {
+            addGraphicChain( aChain, aWidth );
+        }
+        else
+        {
+            addTrackChain( aChain, aWidth, aNet );
+        }
+    };
+
+    auto processPolySet = [&]( const SHAPE_POLY_SET& aPoly, std::optional<int> aWidth, NETINFO_ITEM* aNet )
+    {
+        for( int oi = 0; oi < aPoly.OutlineCount(); ++oi )
+        {
+            processChain( aPoly.COutline( oi ), aWidth, aNet );
+
+            for( int hi = 0; hi < aPoly.HoleCount( oi ); ++hi )
+                processChain( aPoly.CHole( oi, hi ), aWidth, aNet );
+        }
+    };
 
     if( aEvent.IsAction( &PCB_ACTIONS::convertToTracks ) )
     {
@@ -1168,7 +1196,10 @@ int CONVERT_TOOL::CreateLines( const TOOL_EVENT& aEvent )
         if( !item->IsBOARD_ITEM() )
             continue;
 
-        if( handleGraphicSeg( item ) )
+        BOARD_CONNECTED_ITEM* connected = dynamic_cast<BOARD_CONNECTED_ITEM*>( item );
+        NETINFO_ITEM*         sourceNet = connected ? connected->GetNet() : nullptr;
+
+        if( handleGraphicSeg( item, sourceNet ) )
             continue;
 
         BOARD_ITEM& boardItem = static_cast<BOARD_ITEM&>( *item );
@@ -1187,13 +1218,11 @@ int CONVERT_TOOL::CreateLines( const TOOL_EVENT& aEvent )
                 SHAPE_POLY_SET poly;
 
                 rrect.TransformToPolygon( poly, graphic->GetMaxError() );
-                processPolySet( poly, itemWidth );
+                processPolySet( poly, itemWidth, sourceNet );
                 break;
             }
 
-            case SHAPE_T::POLY:
-                processPolySet( graphic->GetPolyShape(), itemWidth );
-                break;
+            case SHAPE_T::POLY: processPolySet( graphic->GetPolyShape(), itemWidth, sourceNet ); break;
 
             case SHAPE_T::ELLIPSE:
             case SHAPE_T::ELLIPSE_ARC:
@@ -1209,7 +1238,7 @@ int CONVERT_TOOL::CreateLines( const TOOL_EVENT& aEvent )
                 SHAPE_LINE_CHAIN chain = e.ConvertToPolyline( graphic->GetMaxError() );
                 SHAPE_POLY_SET   poly;
                 poly.AddOutline( chain );
-                processPolySet( poly, itemWidth );
+                processPolySet( poly, itemWidth, sourceNet );
                 break;
             }
 
@@ -1221,7 +1250,7 @@ int CONVERT_TOOL::CreateLines( const TOOL_EVENT& aEvent )
         else if( boardItem.Type() == PCB_ZONE_T )
         {
             ZONE* zone = static_cast<ZONE*>( item );
-            processPolySet( *zone->Outline(), itemWidth );
+            processPolySet( *zone->Outline(), itemWidth, sourceNet );
         }
         else
         {
@@ -1322,6 +1351,7 @@ int CONVERT_TOOL::SegmentToArc( const TOOL_EVENT& aEvent )
 
         arc->SetLayer( layer );
         arc->SetWidth( line->GetWidth() );
+        arc->SetNet( line->GetNet() );
         arc->SetStart( start );
         arc->SetMid( mid );
         arc->SetEnd( end );
@@ -1408,6 +1438,9 @@ int CONVERT_TOOL::OutsetItems( const TOOL_EVENT& aEvent )
 
                 sTool->FilterCollectorForLockedItems( aCollector );
             } );
+
+    if( m_selectionTool->ReportFilteredLockedItems() )
+        return 0;
 
     BOARD_COMMIT commit( this );
 

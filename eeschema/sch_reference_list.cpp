@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -979,6 +975,14 @@ bool SCH_REFERENCE::GetSymbolExcludedFromBoard() const
 }
 
 
+bool SCH_REFERENCE::GetSymbolExcludedFromPosFiles( const wxString& aVariant ) const
+{
+    wxCHECK( m_rootSymbol, false );
+
+    return m_rootSymbol->GetExcludedFromPosFiles( &m_sheetPath, aVariant );
+}
+
+
 wxString SCH_REFERENCE::formatRefStr( int aNumber ) const
 {
     // To avoid a risk of duplicate, for power symbols the ref number is 0nnn instead of nnn.
@@ -1019,6 +1023,14 @@ void SCH_REFERENCE::SetSymbolExcludedFromBoard( bool aEnable )
     wxCHECK( m_rootSymbol, /* void */ );
 
     m_rootSymbol->SetExcludedFromBoard( aEnable );
+}
+
+
+void SCH_REFERENCE::SetSymbolExcludedFromPosFiles( bool aEnable, const wxString& aVariant )
+{
+    wxCHECK( m_rootSymbol, /* void */ );
+
+    m_rootSymbol->SetExcludedFromPosFiles( aEnable, &m_sheetPath, aVariant );
 }
 
 

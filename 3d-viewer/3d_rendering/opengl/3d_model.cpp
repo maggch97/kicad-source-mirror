@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -241,7 +237,6 @@ MODEL_3D::MODEL_3D( const S3DMODEL& a3DModel, MATERIAL_MODE aMaterialMode )
 
 
         // append indices of this mesh to the mesh group.
-        const unsigned int idx_offset = mesh_group.m_indices.size();
         unsigned int use_idx_count = mesh.m_FaceIdxSize;
 
         if( use_idx_count % 3 != 0 )
@@ -251,20 +246,20 @@ MODEL_3D::MODEL_3D( const S3DMODEL& a3DModel, MATERIAL_MODE aMaterialMode )
             use_idx_count = ( use_idx_count / 3 ) * 3;
         }
 
-        mesh_group.m_indices.resize( mesh_group.m_indices.size() + use_idx_count );
-
-        for( unsigned int idx_i = 0; idx_i < use_idx_count; ++idx_i )
+        for( unsigned int idx_i = 0; idx_i < use_idx_count; idx_i += 3 )
         {
-            if( mesh.m_FaceIdx[idx_i] >= mesh.m_VertexSize )
+            if( !IsTriangleInRange( mesh.m_FaceIdx, idx_i, mesh.m_VertexSize ) )
             {
-                wxLogTrace( m_logTrace, wxT( " index %u out of range (%u)" ),
-                            static_cast<unsigned int>( mesh.m_FaceIdx[idx_i] ),
+                wxLogTrace( m_logTrace, wxT( " triangle at index %u out of range (%u), skipping" ),
+                            static_cast<unsigned int>( idx_i ),
                             static_cast<unsigned int>( mesh.m_VertexSize ) );
 
-                // FIXME: should skip this triangle
+                continue;
             }
 
-            mesh_group.m_indices[idx_offset + idx_i] = mesh.m_FaceIdx[idx_i] + vtx_offset;
+            mesh_group.m_indices.push_back( mesh.m_FaceIdx[idx_i + 0] + vtx_offset );
+            mesh_group.m_indices.push_back( mesh.m_FaceIdx[idx_i + 1] + vtx_offset );
+            mesh_group.m_indices.push_back( mesh.m_FaceIdx[idx_i + 2] + vtx_offset );
         }
     }
 

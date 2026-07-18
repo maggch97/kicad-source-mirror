@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -288,7 +284,7 @@ void BACK_ANNOTATE::getPcbModulesFromString( const std::string& aPayload )
     for( const std::pair<const std::string, PTREE>& item : tree )
     {
         wxString path, value, footprint;
-        bool     dnp = false, exBOM = false;
+        bool                         dnp = false, exBOM = false, exPosFiles = false;
         std::map<wxString, wxString> pinNetMap, fieldsMap;
         wxASSERT( item.first == "ref" );
         wxString ref = getStr( item.second );
@@ -333,7 +329,8 @@ void BACK_ANNOTATE::getPcbModulesFromString( const std::string& aPayload )
             }
 
 
-            // Get DNP and Exclude from BOM out of the properties if they exist
+            // Get DNP, Exclude from BOM, and Exclude from Position Files out of the
+            // properties if they exist
             for( const auto& child : item.second )
             {
                 if( child.first != "property" )
@@ -349,6 +346,8 @@ void BACK_ANNOTATE::getPcbModulesFromString( const std::string& aPayload )
                     dnp = true;
                 else if( name.get().front().first == "exclude_from_bom" )
                     exBOM = true;
+                else if( name.get().front().first == "exclude_from_pos_files" )
+                    exPosFiles = true;
             }
 
             boost::optional<const PTREE&> nets = item.second.get_child_optional( "nets" );
@@ -383,8 +382,8 @@ void BACK_ANNOTATE::getPcbModulesFromString( const std::string& aPayload )
         else
         {
             // Add footprint to the map
-            std::shared_ptr<PCB_FP_DATA> data = std::make_shared<PCB_FP_DATA>( ref, footprint, value, dnp,
-                                                                               exBOM, pinNetMap, fieldsMap );
+            std::shared_ptr<PCB_FP_DATA> data = std::make_shared<PCB_FP_DATA>( ref, footprint, value, dnp, exBOM,
+                                                                               exPosFiles, pinNetMap, fieldsMap );
             m_pcbFootprints.insert( nearestItem, std::make_pair( path, data ) );
         }
     }
@@ -802,6 +801,7 @@ void BACK_ANNOTATE::applyChangelist()
         wxString       oldValue = ref.GetValue();
         bool           oldDNP = ref.GetSymbol()->GetDNP();
         bool           oldExBOM = ref.GetSymbol()->GetExcludedFromBOM();
+        bool           oldExPosFiles = ref.GetSymbol()->GetExcludedFromPosFiles();
         // Skip prevents us from re-applying label/field changes to units we just swapped
         bool skip = ( ref.GetSymbol()->GetFlags() & SKIP_STRUCT ) > 0 || unitSwapItems.count( &item ) > 0;
 
@@ -882,6 +882,18 @@ void BACK_ANNOTATE::applyChangelist()
 
             if( !m_dryRun )
                 symbol->SetExcludedFromBOM( fpData.m_excludeFromBOM );
+
+            m_reporter.ReportHead( msg, RPT_SEVERITY_ACTION );
+        }
+
+        if( m_processAttributes && oldExPosFiles != fpData.m_excludeFromPosFiles && !skip )
+        {
+            ++m_changesCount;
+            msg.Printf( _( "Change %s 'Exclude from position files' from '%s' to '%s'." ), DescribeRef( ref.GetRef() ),
+                        boolString( oldExPosFiles ), boolString( fpData.m_excludeFromPosFiles ) );
+
+            if( !m_dryRun )
+                symbol->SetExcludedFromPosFiles( fpData.m_excludeFromPosFiles );
 
             m_reporter.ReportHead( msg, RPT_SEVERITY_ACTION );
         }

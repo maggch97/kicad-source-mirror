@@ -15,18 +15,16 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialogs/html_message_box.h>
 
 #include "dialog_import_graphics.h"
+#include <dialog_map_layers.h>
 #include <import_gfx/dxf_import_plugin.h>
 #include <base_units.h>
+#include <board.h>
 #include <kiface_base.h>
 #include <locale_io.h>
 #include <pcb_layer_box_selector.h>
@@ -49,6 +47,47 @@ const std::map<DXF_IMPORT_UNITS, wxString> dxfUnitsMap = {
     { DXF_IMPORT_UNITS::CM,   _( "Centimeter" ) },
     { DXF_IMPORT_UNITS::FEET, _( "Feet" ) },
 };
+
+
+static PCB_LAYER_ID getAutoMappedLayer( const wxString& aSourceLayer, const LSET& aPermittedLayers )
+{
+    for( PCB_LAYER_ID layer : aPermittedLayers.UIOrder() )
+    {
+        if( aSourceLayer == LayerName( layer ) || aSourceLayer == LSET::Name( layer ) )
+            return layer;
+    }
+
+    return PCB_LAYER_ID::UNDEFINED_LAYER;
+}
+
+
+static std::vector<INPUT_LAYER_DESC> buildDxfLayerDescriptions( const std::vector<wxString>& aSourceLayers,
+                                                                const LSET&                  aPermittedLayers )
+{
+    std::vector<INPUT_LAYER_DESC> layerDescriptions;
+
+    for( const wxString& sourceLayer : aSourceLayers )
+    {
+        INPUT_LAYER_DESC desc;
+        desc.Name = sourceLayer;
+        desc.PermittedLayers = aPermittedLayers;
+        desc.AutoMapLayer = getAutoMappedLayer( sourceLayer, aPermittedLayers );
+        desc.Required = false;
+
+        layerDescriptions.push_back( desc );
+    }
+
+    return layerDescriptions;
+}
+
+
+static LSET getPermittedImportLayers( PCB_BASE_FRAME* aFrame )
+{
+    if( aFrame && aFrame->GetBoard() )
+        return aFrame->GetBoard()->GetEnabledLayers();
+
+    return LSET::AllLayersMask();
+}
 
 
 DIALOG_IMPORT_GRAPHICS::DIALOG_IMPORT_GRAPHICS( PCB_BASE_FRAME* aParent ) :
@@ -131,6 +170,11 @@ void DIALOG_IMPORT_GRAPHICS::onFilename( wxCommandEvent& event )
 
     m_dxfUnitsLabel->Enable( enableDXFControls );
     m_dxfUnitsChoice->Enable( enableDXFControls );
+
+    m_radioBtnMapLayers->Enable( enableDXFControls );
+
+    if( !enableDXFControls && m_radioBtnMapLayers->GetValue() )
+        m_radioBtnSingleLayer->SetValue( true );
 }
 
 
@@ -182,7 +226,10 @@ bool DIALOG_IMPORT_GRAPHICS::TransferDataFromWindow()
         return false;
     }
 
-    if( m_setLayerCheckbox->GetValue() && m_SelLayerBox->GetLayerSelection() < 0 )
+    bool useDxfLayerMapping = m_radioBtnMapLayers->IsEnabled() && m_radioBtnMapLayers->GetValue();
+    bool useSingleLayer = m_radioBtnSingleLayer->GetValue();
+
+    if( useSingleLayer && m_SelLayerBox->GetLayerSelection() < 0 )
     {
         wxMessageBox( _( "Please select a valid layer." ) );
         return false;
@@ -204,7 +251,9 @@ bool DIALOG_IMPORT_GRAPHICS::TransferDataFromWindow()
 
     if( std::unique_ptr<GRAPHICS_IMPORT_PLUGIN> plugin = m_gfxImportMgr->GetPluginByExt( ext ) )
     {
-        if( DXF_IMPORT_PLUGIN* dxfPlugin = dynamic_cast<DXF_IMPORT_PLUGIN*>( plugin.get() ) )
+        DXF_IMPORT_PLUGIN* dxfPlugin = dynamic_cast<DXF_IMPORT_PLUGIN*>( plugin.get() );
+
+        if( dxfPlugin )
         {
             auto it = dxfUnitsMap.begin();
             std::advance( it, m_dxfUnitsChoice->GetSelection() );
@@ -222,8 +271,9 @@ bool DIALOG_IMPORT_GRAPHICS::TransferDataFromWindow()
         }
 
         m_importer->SetPlugin( std::move( plugin ) );
+        m_importer->ClearLayerMap();
 
-        if( m_setLayerCheckbox->GetValue() )
+        if( useSingleLayer )
             m_importer->SetLayer( PCB_LAYER_ID( m_SelLayerBox->GetLayerSelection() ) );
         else
             m_importer->SetLayer( m_parent->GetActiveLayer() );
@@ -233,7 +283,21 @@ bool DIALOG_IMPORT_GRAPHICS::TransferDataFromWindow()
         LOCALE_IO dummy;    // Ensure floats can be read.
 
         if( m_importer->Load( m_textCtrlFileName->GetValue() ) )
+        {
+            if( useDxfLayerMapping && dxfPlugin )
+            {
+                std::vector<wxString> sourceLayers = dxfPlugin->GetSourceLayers();
+
+                if( !sourceLayers.empty() )
+                {
+                    LSET permittedLayers = getPermittedImportLayers( m_parent );
+                    m_importer->SetLayerMap( DIALOG_MAP_LAYERS::RunModal(
+                            this, buildDxfLayerDescriptions( sourceLayers, permittedLayers ) ) );
+                }
+            }
+
             m_importer->Import( VECTOR2D( scale, scale ) );
+        }
 
         // Get warning messages:
         wxString warnings = m_importer->GetMessages();
@@ -265,7 +329,5 @@ void DIALOG_IMPORT_GRAPHICS::onUpdateUI( wxUpdateUIEvent& event )
 
     m_tolerance.Enable( m_rbFixDiscontinuities->GetValue() );
 
-    m_SelLayerBox->Enable( m_setLayerCheckbox->GetValue() );
+    m_SelLayerBox->Enable( m_radioBtnSingleLayer->GetValue() );
 }
-
-

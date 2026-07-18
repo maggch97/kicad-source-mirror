@@ -14,22 +14,23 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <pcbnew_utils/board_test_utils.h>
 
 #include <board.h>
+#include <collectors.h>
 #include <footprint.h>
+#include <geometry/shape_arc.h>
+#include <geometry/shape_line_chain.h>
+#include <geometry/shape_poly_set.h>
 #include <geometry/shape_utils.h>
 #include <netinfo.h>
 #include <pad.h>
 #include <padstack.h>
+#include <pcb_painter.h>
 #include <pcb_track.h>
 #include <zone.h>
 #include <zone_utils.h>
@@ -157,6 +158,69 @@ BOOST_AUTO_TEST_CASE( RuleAreaInnerLayersExpandMode )
     usedLayers &= ~LSET::UserMask();
 
     BOOST_TEST( usedLayers.none() );
+}
+
+/**
+ * Zones created by converting a circle shape carry arc metadata in their outline.
+ * Clipper2 cannot preserve arcs across boolean operations once either operand has
+ * a hole or the clip operand has outlines (see SHAPE_POLY_SET::booleanOp's assertion).
+ * Historically the "Add a Zone Cutout" tool fed arc-bearing outlines straight into
+ * BooleanSubtract, which produced point/arc metadata that disagreed after serialization
+ * and rendered as corrupt zones on reload.
+ *
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24053
+ */
+BOOST_AUTO_TEST_CASE( CircleZoneCutoutRoundTrip )
+{
+    // Build a circular zone outline the same way convert_tool.cpp does for CIRCLE shapes
+    VECTOR2I  center( 0, 0 );
+    int       radius = pcbIUScale.mmToIU( 10.0 );
+    SHAPE_ARC fullCircle( center - VECTOR2I( radius, 0 ), center + VECTOR2I( radius, 0 ),
+                          center - VECTOR2I( radius, 0 ), 0 );
+
+    SHAPE_POLY_SET sourceOutline;
+    sourceOutline.NewOutline();
+    sourceOutline.Append( fullCircle );
+
+    BOOST_TEST_REQUIRE( sourceOutline.ArcCount() > 0 );
+    double sourceArea = sourceOutline.Area();
+    BOOST_TEST_REQUIRE( sourceArea > 0.0 );
+
+    // Draw a small rectangular cutout well inside the circle
+    SHAPE_POLY_SET cutoutOutline;
+    cutoutOutline.NewOutline();
+    int cutoutHalf = pcbIUScale.mmToIU( 1.0 );
+    cutoutOutline.Append( VECTOR2I( -cutoutHalf, -cutoutHalf ) );
+    cutoutOutline.Append( VECTOR2I( cutoutHalf, -cutoutHalf ) );
+    cutoutOutline.Append( VECTOR2I( cutoutHalf, cutoutHalf ) );
+    cutoutOutline.Append( VECTOR2I( -cutoutHalf, cutoutHalf ) );
+
+    // Mirror the fix applied in ZONE_CREATE_HELPER::performZoneCutout: drop arcs before
+    // the boolean so the saved outline cannot reference stale arc endpoints.
+    SHAPE_POLY_SET working( sourceOutline );
+    working.ClearArcs();
+
+    SHAPE_POLY_SET cutout( cutoutOutline );
+    cutout.ClearArcs();
+
+    working.BooleanSubtract( cutout );
+
+    BOOST_TEST( working.ArcCount() == 0 );
+    BOOST_TEST_REQUIRE( working.OutlineCount() == 1 );
+    BOOST_TEST_REQUIRE( working.HoleCount( 0 ) == 1 );
+
+    double expectedArea = sourceArea - cutoutOutline.Area();
+    BOOST_CHECK_CLOSE( working.Area(), expectedArea, 0.1 );
+
+    // Outline must be a simple closed curve with reasonable point count
+    const SHAPE_LINE_CHAIN& outerChain = working.COutline( 0 );
+    BOOST_TEST( outerChain.IsClosed() );
+    BOOST_TEST( outerChain.PointCount() >= 8 );
+    BOOST_TEST( outerChain.SelfIntersecting().has_value() == false );
+
+    const SHAPE_LINE_CHAIN& holeChain = working.CHole( 0, 0 );
+    BOOST_TEST( holeChain.IsClosed() );
+    BOOST_TEST( holeChain.PointCount() == 4 );
 }
 
 /**
@@ -561,6 +625,121 @@ BOOST_AUTO_TEST_CASE( AutoPriority_SameNetGroupInheritsEdge )
 
     // B shares A's priority because they are same-net and overlap
     BOOST_TEST( ptrA->GetAssignedPriority() == ptrB->GetAssignedPriority() );
+}
+
+
+/**
+ * Minimal COLLECTORS_GUIDE so GetCoverageArea() can be exercised headlessly.
+ * Only Accuracy()/OnePixelInIU() are read for the cases under test.
+ */
+class STUB_COLLECTORS_GUIDE : public COLLECTORS_GUIDE
+{
+public:
+    bool         IsLayerVisible( PCB_LAYER_ID ) const override { return true; }
+    PCB_LAYER_ID GetPreferredLayer() const override { return F_Cu; }
+    bool         IgnoreLockedItems() const override { return false; }
+    bool         IncludeSecondary() const override { return true; }
+    bool         IgnoreFPTextOnBack() const override { return false; }
+    bool         IgnoreFPTextOnFront() const override { return false; }
+    bool         IgnoreFootprintsOnBack() const override { return false; }
+    bool         IgnoreFootprintsOnFront() const override { return false; }
+    bool         IgnorePadsOnBack() const override { return false; }
+    bool         IgnorePadsOnFront() const override { return false; }
+    bool         IgnoreThroughHolePads() const override { return false; }
+    bool         IgnoreFPValues() const override { return false; }
+    bool         IgnoreFPReferences() const override { return false; }
+    bool         IgnoreThroughVias() const override { return false; }
+    bool         IgnoreBlindBuriedVias() const override { return false; }
+    bool         IgnoreMicroVias() const override { return false; }
+    bool         IgnoreTracks() const override { return false; }
+    bool         IgnoreZoneFills() const override { return true; }
+    bool         IgnoreNoNets() const override { return false; }
+    int          Accuracy() const override { return 0; }
+    double       OnePixelInIU() const override { return 1.0; }
+};
+
+
+/**
+ * A rule area has no filled polygons, so its coverage area must be derived from its outline.
+ * Otherwise it reports a zero area and wins selection precedence over every enclosed item.
+ *
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24464
+ */
+BOOST_AUTO_TEST_CASE( RuleAreaCoverageAreaNotZero )
+{
+    STUB_COLLECTORS_GUIDE guide;
+    GENERAL_COLLECTOR     collector;
+    collector.SetGuide( &guide );
+
+    auto ruleArea = CreateSquareZone( m_board,
+            BOX2I( VECTOR2I( 0, 0 ),
+                   VECTOR2I( pcbIUScale.mmToIU( 20 ), pcbIUScale.mmToIU( 20 ) ) ),
+            F_Cu );
+    ruleArea->SetIsRuleArea( true );
+
+    double zoneArea = FOOTPRINT::GetCoverageArea( ruleArea.get(), collector );
+
+    // The rule area covers a 20 mm x 20 mm region.  Its coverage area must reflect that, not 0.
+    BOOST_TEST( zoneArea > 0.0 );
+
+    double expected = (double) pcbIUScale.mmToIU( 20 ) * pcbIUScale.mmToIU( 20 );
+    BOOST_TEST( zoneArea == expected, boost::test_tools::tolerance( 0.001 ) );
+
+    // A small pad enclosed by the rule area must read as much smaller, so the disambiguation
+    // heuristic in GuessSelectionCandidates() will prefer it over the enclosing rule area.
+    PAD* pad = AddPadToBoard( m_board, VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ),
+                              0, F_Cu );
+
+    double padArea = FOOTPRINT::GetCoverageArea( pad, collector );
+
+    BOOST_TEST( padArea > 0.0 );
+    BOOST_TEST( padArea < zoneArea );
+}
+
+
+/**
+ * A filled (non-rule-area) zone must continue to report its coverage area from its filled
+ * polygons, not its outline, so a sparsely-filled zone keeps its existing selection behaviour.
+ */
+BOOST_AUTO_TEST_CASE( FilledZoneCoverageUsesFilledPolygons )
+{
+    STUB_COLLECTORS_GUIDE guide;
+    GENERAL_COLLECTOR     collector;
+    collector.SetGuide( &guide );
+
+    auto zone = CreateSquareZone( m_board,
+            BOX2I( VECTOR2I( 0, 0 ),
+                   VECTOR2I( pcbIUScale.mmToIU( 20 ), pcbIUScale.mmToIU( 20 ) ) ),
+            F_Cu );
+
+    // Fill only a small 2 mm x 2 mm island, far smaller than the 20 mm x 20 mm outline.
+    SHAPE_POLY_SET fill;
+    fill.AddOutline( KIGEOM::BoxToLineChain(
+            BOX2I( VECTOR2I( 0, 0 ),
+                   VECTOR2I( pcbIUScale.mmToIU( 2 ), pcbIUScale.mmToIU( 2 ) ) ) ) );
+    zone->SetFilledPolysList( F_Cu, fill );
+
+    double expected = (double) pcbIUScale.mmToIU( 2 ) * pcbIUScale.mmToIU( 2 );
+    BOOST_TEST( FOOTPRINT::GetCoverageArea( zone.get(), collector ) == expected,
+                boost::test_tools::tolerance( 0.001 ) );
+}
+
+
+/**
+ * A rule area's outline must be drawn on the zone layer, which sorts above copper, so unrelated
+ * tracks and pads on the same copper layer cannot paint over it and leave a broken-looking border
+ * (issue 24688). A filled zone keeps its outline on the copper layer, beneath its own fill.
+ */
+BOOST_AUTO_TEST_CASE( RuleAreaOutlineDrawnAboveCopper )
+{
+    const int copperPass = F_Cu;
+    const int zonePass = ZONE_LAYER_FOR( F_Cu );
+
+    BOOST_TEST( KIGFX::ZoneOutlineDrawnOnLayer( true, zonePass ) );
+    BOOST_TEST( !KIGFX::ZoneOutlineDrawnOnLayer( true, copperPass ) );
+
+    BOOST_TEST( KIGFX::ZoneOutlineDrawnOnLayer( false, copperPass ) );
+    BOOST_TEST( !KIGFX::ZoneOutlineDrawnOnLayer( false, zonePass ) );
 }
 
 

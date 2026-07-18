@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**********************************************************************************************/
@@ -464,6 +460,15 @@ void BEZIER_POLY::cubicParabolicApprox( std::vector<VECTOR2D>& aOutput, double a
 
         // Find the third control point deviation and the t values for subdivision
         double d = c->thirdControlPointDeviation();
+
+        // A vanishing deviation yields no valid split parameter, so subdivide recursively rather
+        // than dividing by zero
+        if( d == 0.0 )
+        {
+            c->recursiveSegmentation( aOutput, aMaxError );
+            break;
+        }
+
         double t = 2 * std::sqrt( aMaxError / ( 3.0 * d ) ); // Forumla 2 in Hain et al.
 
         wxLogTrace( BEZIER_DBG, "cubicParabolicApprox: split point t = %f", t );

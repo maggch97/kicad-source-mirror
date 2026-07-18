@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef KIID_H
@@ -57,6 +53,11 @@ public:
     void Clone( const KIID& aUUID );
 
     size_t Hash() const;
+
+    /**
+     * Return a KIID derived from a name, the same name always gives the same KIID.
+     */
+    static KIID FromName( const std::string& aName );
 
     bool        IsLegacyTimestamp() const;
     timestamp_t AsLegacyTimestamp() const;
@@ -106,6 +107,27 @@ public:
      * @return a new KIID that is the XOR combination of the two inputs
      */
     static KIID Combine( const KIID& aFirst, const KIID& aSecond );
+
+    /**
+     * Build a deterministic UUID from an arbitrary name string.
+     *
+     * The same input always yields the same UUID, and distinct inputs almost
+     * always yield distinct UUIDs. This is useful for keying objects that have
+     * a stable name but no native UUID (e.g. library symbols / footprints,
+     * which are file-name keyed rather than UUID keyed) so that two callsites
+     * derive the identical id for the same name.
+     *
+     * The output bytes are part of the diff/merge engine's on-disk contract;
+     * the hashing here must not change once persisted artifacts depend on it.
+     *
+     * Hashing is over wxChar code units, so for non-ASCII input the result
+     * differs between platforms with 16-bit vs 32-bit wxChar (Windows vs
+     * Linux/macOS); do not rely on cross-platform stability for non-ASCII names.
+     *
+     * @param aName the source string to hash.
+     * @return a deterministic KIID derived from @p aName.
+     */
+    static KIID FromDeterministicString( const wxString& aName );
 
     /**
      * Generates a deterministic replacement for a given ID.
@@ -257,6 +279,20 @@ template<> struct KICOMMON_API std::hash<KIID>
     std::size_t operator()( const KIID& aId ) const
     {
         return aId.Hash();
+    }
+};
+
+
+template<> struct std::hash<KIID_PATH>
+{
+    std::size_t operator()( const KIID_PATH& aPath ) const
+    {
+        std::size_t seed = 0;
+
+        for( const KIID& kiid : aPath )
+            seed ^= std::hash<KIID>()( kiid ) + 0x9e3779b9 + ( seed << 6 ) + ( seed >> 2 );
+
+        return seed;
     }
 };
 

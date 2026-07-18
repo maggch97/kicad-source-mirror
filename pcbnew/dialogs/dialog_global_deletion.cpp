@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <functional>
@@ -291,7 +287,10 @@ void DIALOG_GLOBAL_DELETION::DoGlobalDeletions()
         board->DeleteMARKERs();
 
     if( gen_rastnest )
-        m_Parent->Compile_Ratsnest( true );
+    {
+        board->CompileRatsnest();
+        m_Parent->SetMsgPanel( board );
+    }
 
     // There is a chance that some of tracks have changed their nets, so rebuild ratsnest
     // from scratch.

@@ -16,13 +16,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
+
+#include <api/api_handler_sch.h>
+#include <api/api_server.h>
+#include <api/api_utils.h>
+#include <api/headless_sch_context.h>
 #include <core/json_serializers.h>
 #include <pgm_base.h>
 #include <kiface_base.h>
@@ -33,6 +35,11 @@
 #include <eda_dde.h>
 #include "eeschema_jobs_handler.h"
 #include "eeschema_helpers.h"
+#include <diff_merge/diff_doc_kind.h>
+#include <reporter.h>
+#include "git/kigit_sch_merge.h"
+#include "git/kigit_sym_lib_merge.h"
+#include <git/kigit_driver_registry.h>
 #include <eeschema_settings.h>
 #include <sch_edit_frame.h>
 #include <libraries/symbol_library_adapter.h>
@@ -78,14 +85,8 @@
 #include <toolbars_sch_editor.h>
 #include <toolbars_symbol_editor.h>
 
-#if defined( KICAD_IPC_API )
-#include <api/api_handler_sch.h>
-#include <api/api_server.h>
-#include <api/api_utils.h>
-#include <api/headless_sch_context.h>
 #include <sch_io/sch_io.h>
 #include <sch_io/sch_io_mgr.h>
-#endif
 
 #include <wx/crt.h>
 
@@ -94,6 +95,16 @@ SCH_SHEET*  g_RootSheet = nullptr;
 
 
 namespace SCH {
+
+// Non-job kiface exports for diff/merge (returned by IfaceOrAddress). Defined
+// after the kiface instance so they can route into its jobs handler.
+static int eeschemaMergeExport( int aKind, const wxString& aAncestor, const wxString& aOurs,
+                                const wxString& aTheirs, const wxString& aOutput, bool aInteractive,
+                                bool aSingleFile, REPORTER* aReporter );
+static int eeschemaOpenDiffDialogExport( int aKind, const wxString& aFileA, const wxString& aFileB,
+                                         const wxString& aLabelA, const wxString& aLabelB,
+                                         wxWindow* aParent, REPORTER* aReporter );
+
 
 
 // TODO: This should move out of this file
@@ -124,7 +135,13 @@ static std::unique_ptr<SCHEMATIC> readSchematicFromFile( const std::string& aFil
     if( !rootSheet )
         return nullptr;
 
-    schematic->SetTopLevelSheets( { rootSheet } );
+    std::vector<SCH_SHEET*> topLevelSheets = schematic->GetTopLevelSheets();
+    bool rootIsTopLevel = std::find( topLevelSheets.begin(), topLevelSheets.end(), rootSheet )
+                          != topLevelSheets.end();
+    bool rootIsVirtualRoot = rootSheet == &schematic->Root() || rootSheet->IsVirtualRootSheet();
+
+    if( !rootIsTopLevel && !rootIsVirtualRoot )
+        schematic->SetTopLevelSheets( { rootSheet } );
 
     SCH_SCREENS screens( schematic->Root() );
 
@@ -409,10 +426,19 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
         {
             case KIFACE_NETLIST_SCHEMATIC:
                 return (void*) generateSchematicNetlist;
+
+            case KIFACE_MERGE_DOCUMENT:
+                return reinterpret_cast<void*>( &eeschemaMergeExport );
+
+            case KIFACE_OPEN_DIFF_DIALOG:
+                return reinterpret_cast<void*>( &eeschemaOpenDiffDialogExport );
         }
 
         return nullptr;
     }
+
+    /// Accessor for the non-job diff/merge exports (eeschemaMergeExport etc.).
+    EESCHEMA_JOBS_HANDLER* JobHandler() const { return m_jobHandler.get(); }
 
     /**
      * Saving a file under a different name is delegated to the various KIFACEs because
@@ -428,7 +454,6 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
 
     bool HandleJobConfig( JOB* aJob, wxWindow* aParent ) override;
 
-#if defined( KICAD_IPC_API )
     bool HandleApiOpenDocument( const wxString& aPath,
                                 KICAD_API_SERVER* aServer,
                                 wxString* aError ) override;
@@ -436,7 +461,6 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
     bool HandleApiCloseDocument( const wxString& aSchFileName,
                                  KICAD_API_SERVER* aServer,
                                  wxString* aError ) override;
-#endif
 
     void PreloadLibraries( KIWAY* aKiway ) override;
     void CancelPreload( bool aBlock = true ) override;
@@ -449,16 +473,33 @@ private:
     std::atomic_bool                       m_libraryPreloadInProgress;
     std::atomic_bool                       m_libraryPreloadAbort;
 
-#if defined( KICAD_IPC_API )
     void closeCurrentDocument( KICAD_API_SERVER* aServer );
 
     KIWAY*                                    m_kiway = nullptr;
     SCHEMATIC*                                m_openSchematic = nullptr;
     std::shared_ptr<HEADLESS_SCH_CONTEXT>     m_openContext;
     std::unique_ptr<API_HANDLER_SCH>          m_openHandler;
-#endif
 
 } kiface( "eeschema", KIWAY::FACE_SCH );
+
+
+int eeschemaMergeExport( int aKind, const wxString& aAncestor, const wxString& aOurs,
+                         const wxString& aTheirs, const wxString& aOutput, bool aInteractive,
+                         bool aSingleFile, REPORTER* aReporter )
+{
+    return kiface.JobHandler()->RunMerge( static_cast<KICAD_DIFF::DOC_KIND>( aKind ), aAncestor,
+                                          aOurs, aTheirs, aOutput, aInteractive, aSingleFile,
+                                          aReporter );
+}
+
+
+int eeschemaOpenDiffDialogExport( int aKind, const wxString& aFileA, const wxString& aFileB,
+                                  const wxString& aLabelA, const wxString& aLabelB,
+                                  wxWindow* aParent, REPORTER* aReporter )
+{
+    return kiface.JobHandler()->OpenDiffDialog( static_cast<KICAD_DIFF::DOC_KIND>( aKind ), aFileA,
+                                                aFileB, aLabelA, aLabelB, aParent, aReporter );
+}
 
 } // namespace
 
@@ -495,9 +536,7 @@ bool IFACE::OnKifaceStart( PGM_BASE* aProgram, int aCtlBits, KIWAY* aKiway )
 
     start_common( aCtlBits );
 
-#if defined( KICAD_IPC_API )
     m_kiway = aKiway;
-#endif
 
     m_jobHandler = std::make_unique<EESCHEMA_JOBS_HANDLER>( aKiway );
 
@@ -506,6 +545,12 @@ bool IFACE::OnKifaceStart( PGM_BASE* aProgram, int aCtlBits, KIWAY* aKiway )
         m_jobHandler->SetReporter( &CLI_REPORTER::GetInstance() );
         m_jobHandler->SetProgressReporter( &CLI_PROGRESS_REPORTER::GetInstance() );
     }
+
+    // Register the schematic and symbol-library merge drivers with libgit2 so
+    // `.gitattributes` entries `merge=kicad-sch` and `merge=kicad-sym-lib`
+    // route through KiCad-aware merge logic.
+    KIGIT::RegisterMergeDriver( "kicad-sch",     &KIGIT_SCH_MERGE::Apply );
+    KIGIT::RegisterMergeDriver( "kicad-sym-lib", &KIGIT_SYM_LIB_MERGE::Apply );
 
     return true;
 }
@@ -544,7 +589,8 @@ void IFACE::PreloadLibraries( KIWAY* aKiway )
 
             SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &aKiway->Prj() );
 
-            int elapsed = 0;
+            int  elapsed = 0;
+            bool aborted = false;
 
             reporter->Report( _( "Loading Symbol Libraries" ) );
             adapter->AsyncLoad();
@@ -554,6 +600,7 @@ void IFACE::PreloadLibraries( KIWAY* aKiway )
                 if( m_libraryPreloadAbort.load() )
                 {
                     m_libraryPreloadAbort.store( false );
+                    aborted = true;
                     break;
                 }
 
@@ -579,40 +626,60 @@ void IFACE::PreloadLibraries( KIWAY* aKiway )
                     break;
             }
 
-            adapter->BlockUntilLoaded();
+            // AbortAsyncLoad() sets the adapter's worker abort flag and then blocks,
+            // so workers exit at their next checkpoint. BlockUntilLoaded() alone just
+            // waits for each future to complete naturally, which can hang indefinitely
+            // if a worker is stuck on a stalled network or filesystem operation.
+            if( aborted )
+                adapter->AbortAsyncLoad();
+            else
+                adapter->BlockUntilLoaded();
 
-            // Collect library load errors for async reporting
-            wxString errors = adapter->GetLibraryLoadErrors();
-
-            wxLogTrace( traceLibraries, "eeschema PreloadLibraries: errors.IsEmpty()=%d, length=%zu",
-                        errors.IsEmpty(), errors.length() );
-
-            std::vector<LOAD_MESSAGE> messages =
-                    ExtractLibraryLoadErrors( errors, RPT_SEVERITY_ERROR );
-
-            if( !messages.empty() )
+            // If aborted, skip operations that use the adapter since the project may have changed
+            // and the adapter's project reference could be stale. This prevents use-after-free
+            // crashes when switching projects during library preload.
+            if( !aborted )
             {
-                wxLogTrace( traceLibraries, "  -> collected %zu messages, calling AddLibraryLoadMessages",
-                            messages.size() );
-                Pgm().AddLibraryLoadMessages( messages );
+                // Collect library load errors for async reporting
+                wxString errors = adapter->GetLibraryLoadErrors();
+
+                wxLogTrace( traceLibraries, "eeschema PreloadLibraries: errors.IsEmpty()=%d, length=%zu",
+                            errors.IsEmpty(), errors.length() );
+
+                std::vector<LOAD_MESSAGE> messages = ExtractLibraryLoadErrors( errors, RPT_SEVERITY_ERROR );
+
+                if( !messages.empty() )
+                {
+                    wxLogTrace( traceLibraries, "  -> collected %zu messages, calling AddLibraryLoadMessages",
+                                messages.size() );
+                    Pgm().AddLibraryLoadMessages( messages );
+                }
+                else
+                {
+                    wxLogTrace( traceLibraries, "  -> no errors from symbol libraries" );
+                }
             }
             else
             {
-                wxLogTrace( traceLibraries, "  -> no errors from symbol libraries" );
+                wxLogTrace( traceLibraries, "eeschema PreloadLibraries: aborted, skipping symbol processing" );
             }
 
             Pgm().GetBackgroundJobMonitor().Remove( m_libraryPreloadBackgroundJob );
             m_libraryPreloadBackgroundJob.reset();
             m_libraryPreloadInProgress.store( false );
 
-            std::string payload = "";
-            aKiway->ExpressMail( FRAME_SCH, MAIL_RELOAD_LIB, payload, nullptr, true );
-            aKiway->ExpressMail( FRAME_SCH_SYMBOL_EDITOR, MAIL_RELOAD_LIB, payload, nullptr, true );
-            aKiway->ExpressMail( FRAME_SCH_VIEWER, MAIL_RELOAD_LIB, payload, nullptr, true );
+            // Only send reload notifications if we weren't aborted
+            if( !aborted )
+            {
+                std::string payload = "";
+                aKiway->ExpressMail( FRAME_SCH, MAIL_RELOAD_LIB, payload, nullptr, true );
+                aKiway->ExpressMail( FRAME_SCH_SYMBOL_EDITOR, MAIL_RELOAD_LIB, payload, nullptr, true );
+                aKiway->ExpressMail( FRAME_SCH_VIEWER, MAIL_RELOAD_LIB, payload, nullptr, true );
+            }
         };
 
-    thread_pool& tp = GetKiCadThreadPool();
-    m_libraryPreloadReturn = tp.submit_task( preload );
+    std::future<void> preloadFuture = std::async( std::launch::async, preload );
+    m_libraryPreloadReturn = std::move( preloadFuture );
 }
 
 
@@ -637,6 +704,11 @@ void IFACE::ProjectChanged()
 
 void IFACE::OnKifaceEnd()
 {
+    // Release the CLI-cached schematic while the static ERC_ITEM tables it serializes against are
+    // still alive; deferring to static teardown crashes reading dangling severity keys
+    if( m_jobHandler )
+        m_jobHandler->ClearCachedSchematic();
+
     end_common();
 }
 
@@ -793,7 +865,6 @@ bool IFACE::HandleJobConfig( JOB* aJob, wxWindow* aParent )
 }
 
 
-#if defined( KICAD_IPC_API )
 // TODO(JE) some of the below methods can probably be factored out and shared between sch/pcb
 void IFACE::closeCurrentDocument( KICAD_API_SERVER* aServer )
 {
@@ -932,4 +1003,3 @@ bool IFACE::HandleApiCloseDocument( const wxString& aSchFileName, KICAD_API_SERV
     closeCurrentDocument( aServer );
     return true;
 }
-#endif

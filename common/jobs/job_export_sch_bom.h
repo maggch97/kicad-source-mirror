@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef JOB_EXPORT_SCH_BOM_H
@@ -31,6 +31,12 @@ public:
     JOB_EXPORT_SCH_BOM();
     wxString GetDefaultDescription() const override;
     wxString GetSettingsDialogTitle() const override;
+
+    // The variant the dialog works with. First list entry, or empty for default.
+    wxString GetSelectedVariant() const;
+
+    // Store a single dialog selection. Replaces the list so it cannot grow.
+    void SetSelectedVariant( const wxString& aVariant );
 
     // Basic options
     wxString m_filename;

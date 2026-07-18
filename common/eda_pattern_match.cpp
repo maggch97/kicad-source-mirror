@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <eda_pattern_match.h>
@@ -501,7 +497,10 @@ int EDA_COMBINED_MATCHER::ScoreTerms( std::vector<SEARCH_TERM>& aWeightedTerms, 
         {
             score += 8 * term.Score;
 
-            if( aExactMatch )
+            // Only the item's own name/LIB_ID can promote it into the exact-match tier; an
+            // incidental keyword or description field equalling the query shouldn't tie with
+            // an item whose actual name is the query.
+            if( aExactMatch && term.IsName )
                 *aExactMatch = true;
         }
         else if( Find( term.Text, matchers_fired, found_pos ) )

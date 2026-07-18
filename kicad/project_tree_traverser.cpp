@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "project_tree_traverser.h"
@@ -52,7 +48,7 @@ PROJECT_TREE_TRAVERSER::PROJECT_TREE_TRAVERSER( KICAD_MANAGER_FRAME* aFrame,
 wxDirTraverseResult PROJECT_TREE_TRAVERSER::OnFile( const wxString& aSrcFilePath )
 {
     // Recursion guard for a Save As to a location inside the source project.
-    if( aSrcFilePath.StartsWith( m_newProjectDirPath + wxFileName::GetPathSeparator() ) )
+    if( aSrcFilePath.StartsWith( m_newProjectDirPath ) )
         return wxDIR_CONTINUE;
 
     wxFileName destFile( aSrcFilePath );
@@ -172,6 +168,8 @@ wxDirTraverseResult PROJECT_TREE_TRAVERSER::OnFile( const wxString& aSrcFilePath
 
 wxDirTraverseResult PROJECT_TREE_TRAVERSER::OnDir( const wxString& aSrcDirPath )
 {
+    wxUniChar pathSep = wxFileName::GetPathSeparator();
+
     // Skip the local-history git repository.
     wxFileName    srcDir = wxFileName::DirName( aSrcDirPath );
     wxArrayString dirs = srcDir.GetDirs();
@@ -180,12 +178,11 @@ wxDirTraverseResult PROJECT_TREE_TRAVERSER::OnDir( const wxString& aSrcDirPath )
         return wxDIR_IGNORE;
 
     // Recursion guard for a Save As to a location inside the source project.
-    if( aSrcDirPath.StartsWith( m_newProjectDirPath ) )
-        return wxDIR_CONTINUE;
+    if( ( aSrcDirPath + pathSep ).StartsWith( m_newProjectDirPath ) )
+        return wxDIR_IGNORE;
 
     wxFileName destDir( aSrcDirPath );
     wxString   destDirPath = destDir.GetPathWithSep();
-    wxUniChar  pathSep = wxFileName::GetPathSeparator();
 
     if( destDirPath.StartsWith( m_projectDirPath + pathSep )
       || destDirPath.StartsWith( m_projectDirPath + PROJECT_BACKUPS_DIR_SUFFIX ) )

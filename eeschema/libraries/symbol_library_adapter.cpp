@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <magic_enum.hpp>
@@ -45,12 +45,18 @@ const char* SYMBOL_LIBRARY_ADAPTER::PropNonPowerSymsOnly = "non_pwr_sym_only";
 
 LEAK_AT_EXIT<std::map<wxString, LIB_DATA>> SYMBOL_LIBRARY_ADAPTER::GlobalLibraries;
 
-std::shared_mutex SYMBOL_LIBRARY_ADAPTER::GlobalLibraryMutex;
+LEAK_AT_EXIT<std::shared_mutex> SYMBOL_LIBRARY_ADAPTER::GlobalLibraryMutex;
 
 
 SYMBOL_LIBRARY_ADAPTER::SYMBOL_LIBRARY_ADAPTER( LIBRARY_MANAGER& aManager ) :
             LIBRARY_MANAGER_ADAPTER( aManager )
 {
+}
+
+
+SYMBOL_LIBRARY_ADAPTER::~SYMBOL_LIBRARY_ADAPTER()
+{
+    evictOwnedGlobalEntries();
 }
 
 
@@ -195,7 +201,15 @@ std::vector<wxString> SYMBOL_LIBRARY_ADAPTER::GetSymbolNames( const wxString& aN
         if( aType == SYMBOL_TYPE::POWER_ONLY )
             options[PropPowerSymsOnly] = "";
 
-        schplugin( lib )->EnumerateSymbolLib( namesAS, getUri( lib->row ), &options );
+        try
+        {
+            schplugin( lib )->EnumerateSymbolLib( namesAS, getUri( lib->row ), &options );
+        }
+        catch( const IO_ERROR& e )
+        {
+            wxLogTrace( traceLibraries, "Sym: Exception enumerating library %s: %s",
+                        lib->row->Nickname(), e.What() );
+        }
     }
 
     for( const wxString& name : namesAS )
@@ -293,19 +307,10 @@ void SYMBOL_LIBRARY_ADAPTER::DeleteSymbol( const wxString& aNickname, const wxSt
 
 bool SYMBOL_LIBRARY_ADAPTER::IsSymbolLibWritable( const wxString& aLib )
 {
-    {
-        std::shared_lock lock( m_librariesMutex );
-
-        if( auto it = m_libraries.find( aLib ); it != m_libraries.end() )
-            return it->second.plugin->IsLibraryWritable( getUri( it->second.row ) );
-    }
-
-    {
-        std::shared_lock lock( GlobalLibraryMutex );
-
-        if( auto it = GlobalLibraries.Get().find( aLib ); it != GlobalLibraries.Get().end() )
-            return it->second.plugin->IsLibraryWritable( getUri( it->second.row ) );
-    }
+    // Route through fetchIfLoaded() so LOAD_ERROR sentinel entries, which carry a null
+    // plugin, are filtered out instead of dereferenced.
+    if( std::optional<const LIB_DATA*> lib = fetchIfLoaded( aLib ) )
+        return ( *lib )->plugin->IsLibraryWritable( getUri( ( *lib )->row ) );
 
     return false;
 }
@@ -354,13 +359,22 @@ std::vector<SUB_LIBRARY> SYMBOL_LIBRARY_ADAPTER::GetSubLibraries( const wxString
     {
         const LIB_DATA* rowData = *result;
 
-        std::vector<wxString> names;
-        schplugin( rowData )->GetSubLibraryNames( names );
-
-        for( const wxString& name : names )
+        try
         {
-            ret.emplace_back( SUB_LIBRARY { .nickname = name,
-                                            .description = schplugin( rowData )->GetSubLibraryDescription( name ) } );
+            std::vector<wxString> names;
+            schplugin( rowData )->GetSubLibraryNames( names );
+
+            for( const wxString& name : names )
+            {
+                ret.emplace_back( SUB_LIBRARY {
+                        .nickname = name,
+                        .description = schplugin( rowData )->GetSubLibraryDescription( name ) } );
+            }
+        }
+        catch( const IO_ERROR& e )
+        {
+            wxLogTrace( traceLibraries, "Sym: Exception getting sub-libraries for %s: %s",
+                        aNickname, e.What() );
         }
     }
 
@@ -407,4 +421,17 @@ int SYMBOL_LIBRARY_ADAPTER::GetModifyHash() const
     }
 
     return hash;
+}
+
+
+std::optional<int> SYMBOL_LIBRARY_ADAPTER::GetLibraryModifyHash( const wxString& aNickname ) const
+{
+    if( std::optional<const LIB_DATA*> result = fetchIfLoaded( aNickname ) )
+    {
+        const LIB_DATA* rowData = *result;
+        wxCHECK( rowData->row, std::nullopt );
+        return schplugin( rowData )->GetModifyHash();
+    }
+
+    return std::nullopt;
 }

@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
@@ -29,6 +25,7 @@
 #include <pcbnew_utils/board_test_utils.h>
 #include <board.h>
 #include <board_commit.h>
+#include <zone_filler.h>
 #include <board_design_settings.h>
 #include <drc/drc_engine.h>
 #include <pad.h>
@@ -42,6 +39,10 @@
 #include <advanced_config.h>
 #include <connectivity/connectivity_data.h>
 #include <teardrop/teardrop.h>
+#include <project/net_settings.h>
+#include <netclass.h>
+#include <netinfo.h>
+#include <cmath>
 
 
 /// Assert every outline in @p aFill has at least @p aMinArea — used to verify
@@ -963,6 +964,83 @@ BOOST_FIXTURE_TEST_CASE( RegressionTHPadInnerLayerFlashing, ZONE_FILL_TEST_FIXTU
 
 
 /**
+ * Issue 24865: inner-layer annular rings vanish on some thermal reliefs.
+ *
+ * TH pads set to "Front, back and connected layers" sit inside same-net inner zones. The spokes
+ * connect and the fill reaches the pad, but the post-fill flash check only accepted fill within
+ * the hole radius of the pad center, which is exactly where the spoke ends. For some hole sizes
+ * (drill 1.1 and 1.4 mm) that rounded out and a connected pad lost its ring. Every pad inside
+ * its same-net inner zone must stay flashed after the fill.
+ */
+BOOST_FIXTURE_TEST_CASE( RegressionThermalReliefAnnularRing45, ZONE_FILL_TEST_FIXTURE )
+{
+    KI_TEST::LoadBoard( m_settingsManager, "issue24865/issue24865", m_board );
+
+    KI_TEST::FillZones( m_board.get() );
+
+    const PCB_LAYER_ID innerLayers[] = { m_board->GetLayerID( wxT( "In1.Cu" ) ),
+                                         m_board->GetLayerID( wxT( "In2.Cu" ) ) };
+
+    int padsWithMissingFlashing = 0;
+    int totalConditionalPads = 0;
+
+    for( FOOTPRINT* footprint : m_board->Footprints() )
+    {
+        for( PAD* pad : footprint->Pads() )
+        {
+            if( !pad->GetRemoveUnconnected() || !pad->HasHole() )
+                continue;
+
+            for( PCB_LAYER_ID layer : innerLayers )
+            {
+                bool shouldFlash = false;
+
+                for( ZONE* zone : m_board->Zones() )
+                {
+                    if( zone->GetIsRuleArea() || zone->GetNetCode() != pad->GetNetCode() )
+                        continue;
+
+                    if( !zone->IsOnLayer( layer ) )
+                        continue;
+
+                    if( zone->Outline()->Contains( pad->GetPosition() ) )
+                    {
+                        shouldFlash = true;
+                        break;
+                    }
+                }
+
+                if( !shouldFlash )
+                    continue;
+
+                totalConditionalPads++;
+
+                if( !pad->FlashLayer( layer ) )
+                {
+                    BOOST_TEST_MESSAGE(
+                            wxString::Format( "Pad %s (drill %.2f mm, spoke angle %.0f deg) on net %s is inside the "
+                                              "zone but not flashing on %s",
+                                              pad->GetNumber(), pcbIUScale.IUTomm( pad->GetDrillSizeX() ),
+                                              pad->GetThermalSpokeAngle().AsDegrees(), pad->GetNetname(),
+                                              m_board->GetLayerName( layer ) ) );
+                    padsWithMissingFlashing++;
+                }
+            }
+        }
+    }
+
+    BOOST_TEST_MESSAGE( wxString::Format( "Pads inside inner-layer zones: %d, missing flashing: %d",
+                                          totalConditionalPads, padsWithMissingFlashing ) );
+
+    BOOST_CHECK_MESSAGE( padsWithMissingFlashing == 0,
+                         wxString::Format( "Found %d TH pads inside a same-net inner-layer zone "
+                                           "that lost their annular ring after fill. This "
+                                           "indicates issue 24865 is not fixed.",
+                                           padsWithMissingFlashing ) );
+}
+
+
+/**
  * Test for issue 19405: Rounded teardrop geometry should not create concave shapes
  * when connecting to rounded rectangle pads at corners.
  *
@@ -1047,6 +1125,98 @@ BOOST_FIXTURE_TEST_CASE( RegressionRoundRectTeardropGeometry, ZONE_FILL_TEST_FIX
     BOOST_CHECK_MESSAGE( !foundBadTeardrop,
                          "Found teardrop with excessive concave vertices, indicating "
                          "issue 19405 - teardrop curve intersecting rounded rectangle corner" );
+}
+
+
+/**
+ * Reproduction for the teardrop "spike" bug: a track entering a long thin roundrect pad
+ * nearly parallel to the pad's long axis, then bending into a second segment toward a via,
+ * must not produce a teardrop polygon with a vertex spiking far outside the track/pad corridor.
+ */
+BOOST_FIXTURE_TEST_CASE( RegressionTeardropSpike, ZONE_FILL_TEST_FIXTURE )
+{
+    KI_TEST::LoadBoard( m_settingsManager, "teardrop_spike", m_board );
+
+    TOOL_MANAGER toolMgr;
+    toolMgr.SetEnvironment( m_board.get(), nullptr, nullptr, nullptr, nullptr );
+
+    KI_TEST::DUMMY_TOOL* dummyTool = new KI_TEST::DUMMY_TOOL();
+    toolMgr.RegisterTool( dummyTool );
+
+    BOARD_COMMIT commit( dummyTool );
+    TEARDROP_MANAGER teardropMgr( m_board.get(), &toolMgr );
+    teardropMgr.UpdateTeardrops( commit, nullptr, nullptr, true );
+
+    if( !commit.Empty() )
+        commit.Push( _( "Add teardrops" ), SKIP_UNDO | SKIP_SET_DIRTY );
+
+    int  teardropCount = 0;
+    bool foundSpike = false;
+
+    const int maxError = m_board->GetDesignSettings().m_MaxError;
+
+    for( ZONE* zone : m_board->Zones() )
+    {
+        if( !zone->IsTeardropArea() )
+            continue;
+
+        teardropCount++;
+
+        PCB_LAYER_ID layer = zone->GetFirstLayer();
+        int          netcode = zone->GetNetCode();
+
+        // A well-formed teardrop only ever covers the copper it bridges: the pads/vias it
+        // anchors on and the track(s) it follows. Build that corridor from all copper on the
+        // teardrop's net and layer (generously inflated) and require the teardrop to lie
+        // inside it. A spike sweeps area outside the corridor.
+        SHAPE_POLY_SET corridor;
+
+        for( FOOTPRINT* fp : m_board->Footprints() )
+        {
+            for( PAD* pad : fp->Pads() )
+            {
+                if( pad->GetNetCode() == netcode && pad->IsOnLayer( layer ) )
+                    pad->TransformShapeToPolygon( corridor, layer, 0, maxError, ERROR_OUTSIDE );
+            }
+        }
+
+        for( PCB_TRACK* track : m_board->Tracks() )
+        {
+            if( track->GetNetCode() == netcode && track->IsOnLayer( layer ) )
+                track->TransformShapeToPolygon( corridor, layer, 0, maxError, ERROR_OUTSIDE );
+        }
+
+        // Inflate by a full track width so the teardrop's flare toward the pad, which is
+        // legitimately wider than the bare track, is comfortably inside the corridor.
+        corridor.Inflate( pcbIUScale.mmToIU( 0.127 ), CORNER_STRATEGY::ROUND_ALL_CORNERS,
+                          maxError );
+        corridor.Simplify();
+
+        SHAPE_POLY_SET outside = *zone->Outline();
+        outside.BooleanSubtract( corridor );
+
+        double tdArea = std::abs( zone->Outline()->Area() );
+        double outArea = std::abs( outside.Area() );
+        double ratio = tdArea > 0 ? outArea / tdArea : 0.0;
+
+        BOOST_TEST_MESSAGE( wxString::Format(
+                "Teardrop on layer %d: area %.0f, area outside corridor %.0f (%.1f%%)",
+                (int) layer, tdArea, outArea, ratio * 100.0 ) );
+
+        if( ratio > 0.02 )
+        {
+            foundSpike = true;
+            BOOST_TEST_MESSAGE( wxString::Format(
+                    "Teardrop on layer %d sweeps %.1f%% of its area outside the track/pad "
+                    "corridor (spike)",
+                    (int) layer, ratio * 100.0 ) );
+        }
+    }
+
+    BOOST_CHECK_MESSAGE( teardropCount > 0, "Expected at least one teardrop zone" );
+    BOOST_CHECK_MESSAGE( !foundSpike,
+                         "A teardrop vertex spikes outside the track/pad corridor it should "
+                         "follow" );
 }
 
 
@@ -2241,6 +2411,67 @@ BOOST_FIXTURE_TEST_CASE( MultiTrackSharedInsideJunctionNoSelfIntersection,
 }
 
 
+/// Regression for #24426: short radial pad-via tracks still need teardrops.
+/// Covers round and rotated elongated pads with curved and straight teardrop edges.
+BOOST_FIXTURE_TEST_CASE( CloseViaShortRadialTrackTeardrop, ZONE_FILL_TEST_FIXTURE )
+{
+    auto runVariant = [&]( const wxString& aFixture, bool aCurvedEdges )
+    {
+        KI_TEST::LoadBoard( m_settingsManager, aFixture, m_board );
+
+        for( PCB_TRACK* track : m_board->Tracks() )
+        {
+            if( track->Type() == PCB_VIA_T )
+                static_cast<PCB_VIA*>( track )->SetTeardropCurved( aCurvedEdges );
+        }
+
+        for( FOOTPRINT* footprint : m_board->Footprints() )
+        {
+            for( PAD* pad : footprint->Pads() )
+                pad->SetTeardropCurved( aCurvedEdges );
+        }
+
+        TOOL_MANAGER toolMgr;
+        toolMgr.SetEnvironment( m_board.get(), nullptr, nullptr, nullptr, nullptr );
+
+        KI_TEST::DUMMY_TOOL* dummyTool = new KI_TEST::DUMMY_TOOL();
+        toolMgr.RegisterTool( dummyTool );
+
+        BOARD_COMMIT     commit( dummyTool );
+        TEARDROP_MANAGER teardropMgr( m_board.get(), &toolMgr );
+        teardropMgr.UpdateTeardrops( commit, nullptr, nullptr, true );
+
+        if( !commit.Empty() )
+            commit.Push( _( "Add teardrops" ), SKIP_UNDO | SKIP_SET_DIRTY );
+
+        int      teardropCount = 0;
+        VECTOR2I padPos = ( *m_board->Footprints().begin() )->Pads()[0]->GetPosition();
+        bool     padHasTeardrop = false;
+
+        for( ZONE* zone : m_board->Zones() )
+        {
+            if( !zone->IsTeardropArea() )
+                continue;
+
+            teardropCount++;
+
+            if( zone->Outline()->Contains( padPos ) )
+                padHasTeardrop = true;
+        }
+
+        BOOST_CHECK_MESSAGE( padHasTeardrop,
+                             wxString::Format( "Expected the pad-anchored teardrop on the short track joining the "
+                                               "pad and the close via in %s, got %d teardrop(s) (curved=%s)",
+                                               aFixture, teardropCount, aCurvedEdges ? "yes" : "no" ) );
+    };
+
+    runVariant( "teardrop_close_via", true );
+    runVariant( "teardrop_close_via", false );
+    runVariant( "teardrop_close_via_rotated_pad", true );
+    runVariant( "teardrop_close_via_rotated_pad", false );
+}
+
+
 /**
  * Test for issue 23515: Zone fills have random pieces missing near keepout boundaries.
  *
@@ -2485,6 +2716,113 @@ BOOST_FIXTURE_TEST_CASE( HatchZoneViaConnectionRespectsSetting, ZONE_FILL_TEST_F
                                  "added for THERMAL connection, or thermal ring was incorrectly "
                                  "added for FULL connection (issue 23516 regression).",
                                  thermalFillArea * areaIU2toMM2, fullFillArea * areaIU2toMM2 ) );
+}
+
+
+/**
+ * Regression test for issue 24559: a same-net via in a SOLID (FULL) hatch-fill zone must stay
+ * attached to the webbing.  The via is swept across a full hatch grid period so several
+ * positions land inside a hole.  Before the fix those in-hole vias were left isolated because
+ * no hatch hole was dropped around them.
+ */
+BOOST_FIXTURE_TEST_CASE( HatchZoneFullViaStaysConnected, ZONE_FILL_TEST_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+    m_board->SetCopperLayerCount( 2 );
+
+    BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
+    bds.SetCopperLayerCount( 2 );
+    bds.m_MinClearance = pcbIUScale.mmToIU( 0.2 );
+
+    NETINFO_ITEM* gndNet = new NETINFO_ITEM( m_board.get(), wxT( "GND" ) );
+    m_board->Add( gndNet );
+    int gndNetCode = gndNet->GetNetCode();
+
+    // Via diameter (0.4mm) is much smaller than the hatch gap (2.0mm), so a via centred in a
+    // hole sits entirely inside that hole with no copper around it unless the hole is dropped.
+    int viaDiam = pcbIUScale.mmToIU( 0.4 );
+    int viaDrill = pcbIUScale.mmToIU( 0.2 );
+
+    int hatchGap = pcbIUScale.mmToIU( 2.0 );
+    int hatchThickness = pcbIUScale.mmToIU( 0.3 );
+
+    auto makeHatchZone = [&]() -> ZONE*
+    {
+        ZONE* zone = new ZONE( m_board.get() );
+        zone->SetLayer( F_Cu );
+        zone->SetNetCode( gndNetCode );
+        zone->SetFillMode( ZONE_FILL_MODE::HATCH_PATTERN );
+        zone->SetHatchGap( hatchGap );
+        zone->SetHatchThickness( hatchThickness );
+        zone->SetPadConnection( ZONE_CONNECTION::FULL );
+        zone->SetMinThickness( pcbIUScale.mmToIU( 0.2 ) );
+
+        SHAPE_POLY_SET outline;
+        outline.NewOutline();
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 0 ), pcbIUScale.mmToIU( 0 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 20 ), pcbIUScale.mmToIU( 0 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 20 ), pcbIUScale.mmToIU( 20 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 0 ), pcbIUScale.mmToIU( 20 ) ) );
+        zone->AddPolygon( outline.COutline( 0 ) );
+
+        m_board->Add( zone );
+        return zone;
+    };
+
+    // Sweep over one full grid period (gridsize = hatchThickness + hatchGap = 2.3mm) so the
+    // via is guaranteed to land inside a hole at several positions regardless of grid phase.
+    const int    steps = 8;
+    const double startMM = 9.0;
+    const double stepMM = 2.3 / steps;
+
+    int isolatedCount = 0;
+    int testedCount = 0;
+
+    for( int ix = 0; ix < steps; ix++ )
+    {
+        for( int iy = 0; iy < steps; iy++ )
+        {
+            VECTOR2I viaPos( pcbIUScale.mmToIU( startMM + ix * stepMM ), pcbIUScale.mmToIU( startMM + iy * stepMM ) );
+
+            PCB_VIA* via = new PCB_VIA( m_board.get() );
+            via->SetPosition( viaPos );
+            via->SetLayerPair( F_Cu, B_Cu );
+            via->SetDrill( viaDrill );
+            via->SetWidth( PADSTACK::ALL_LAYERS, viaDiam );
+            via->SetNetCode( gndNetCode );
+            m_board->Add( via );
+
+            ZONE* zone = makeHatchZone();
+
+            m_board->BuildConnectivity();
+            auto drcEngine = std::make_shared<DRC_ENGINE>( m_board.get(), &bds );
+            drcEngine->InitEngine( wxFileName() );
+            bds.m_DRCEngine = drcEngine;
+
+            KI_TEST::FillZones( m_board.get() );
+
+            BOOST_REQUIRE( zone->HasFilledPolysForLayer( F_Cu ) );
+
+            const std::shared_ptr<SHAPE_POLY_SET>& fill = zone->GetFilledPolysList( F_Cu );
+            std::shared_ptr<SHAPE>                 viaShape = via->GetEffectiveShape( F_Cu );
+
+            // The zone fill must touch the via.  If it does not, the via is isolated copper
+            // inside a hatch hole (the issue 24559 regression).
+            if( !fill->Collide( viaShape.get(), 0 ) )
+                isolatedCount++;
+
+            testedCount++;
+
+            m_board->Remove( via );
+            m_board->Remove( zone );
+            delete via;
+            delete zone;
+        }
+    }
+
+    BOOST_CHECK_MESSAGE( isolatedCount == 0, wxString::Format( "%d of %d FULL-connection via positions were left "
+                                                               "isolated from the hatch fill (issue 24559).",
+                                                               isolatedCount, testedCount ) );
 }
 
 
@@ -2932,4 +3270,760 @@ BOOST_FIXTURE_TEST_CASE( CopperThievingZone_HatchPattern, ZONE_FILL_TEST_FIXTURE
     // A solid 10x10 mm rectangle would have ~4 vertices.  A hatched mesh has
     // many vertices because each void cut adds outline segments.
     BOOST_CHECK_GT( fill->TotalVertices(), 30 );
+}
+
+
+/**
+ * Regression test for issue 24089: refilling a non-copper (e.g. silkscreen) zone whose
+ * outline is split into multiple islands by keepout rule areas dropped the first stored
+ * island.  The cause was FillIsolatedIslandsMap unconditionally pushing outline 0 into
+ * the isolated list when a zone had no connectivity entries; non-copper zones never
+ * appear in connectivity, so this fired on every refill of a multi-island silk fill.
+ */
+BOOST_FIXTURE_TEST_CASE( RegressionNonCopperZoneKeepoutIslands, ZONE_FILL_TEST_FIXTURE )
+{
+    KI_TEST::LoadBoard( m_settingsManager, "issue24089/issue24089", m_board );
+
+    auto countIslands =
+            [this]() -> int
+            {
+                int total = 0;
+
+                for( ZONE* zone : m_board->Zones() )
+                {
+                    if( zone->GetIsRuleArea() )
+                        continue;
+
+                    for( PCB_LAYER_ID layer : zone->GetLayerSet().Seq() )
+                    {
+                        if( !zone->HasFilledPolysForLayer( layer ) )
+                            continue;
+
+                        std::shared_ptr<SHAPE_POLY_SET> fill = zone->GetFilledPolysList( layer );
+
+                        if( fill )
+                            total += fill->OutlineCount();
+                    }
+                }
+
+                return total;
+            };
+
+    int storedIslands = countIslands();
+
+    BOOST_REQUIRE_MESSAGE( storedIslands >= 3,
+                           wxString::Format( "Stored v9 fill should have at least 3 silk islands; "
+                                             "found %d",
+                                             storedIslands ) );
+
+    KI_TEST::FillZones( m_board.get() );
+
+    int refilledIslands = countIslands();
+
+    BOOST_CHECK_MESSAGE( refilledIslands == storedIslands,
+                         wxString::Format( "Refill lost silk islands: stored=%d, refilled=%d. "
+                                           "Outline 0 of every non-copper multi-island zone "
+                                           "was being incorrectly removed (issue 24089).",
+                                           storedIslands, refilledIslands ) );
+}
+
+
+/**
+ * A PTH pad on net A, sitting inside both a lower-priority same-net zone and a higher-priority
+ * different-net zone, must still flash on inner layers where the higher-priority zone has no
+ * copper but the same-net zone does.  https://gitlab.com/kicad/code/kicad/-/issues/24175
+ */
+BOOST_FIXTURE_TEST_CASE( OverlappingPriorityPadFlashing, ZONE_FILL_TEST_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+    m_board->SetCopperLayerCount( 4 );
+
+    BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
+    bds.SetCopperLayerCount( 4 );
+    bds.m_MinClearance = pcbIUScale.mmToIU( 0.2 );
+
+    NETINFO_ITEM* gndNet = new NETINFO_ITEM( m_board.get(), wxT( "GND" ) );
+    m_board->Add( gndNet );
+    int gndNetCode = gndNet->GetNetCode();
+
+    NETINFO_ITEM* vccNet = new NETINFO_ITEM( m_board.get(), wxT( "VCC" ) );
+    m_board->Add( vccNet );
+    int vccNetCode = vccNet->GetNetCode();
+
+    ZONE* gndZone = new ZONE( m_board.get() );
+    gndZone->SetLayer( In1_Cu );
+    gndZone->SetNetCode( gndNetCode );
+    gndZone->SetAssignedPriority( 0 );
+    gndZone->SetMinThickness( pcbIUScale.mmToIU( 0.2 ) );
+    gndZone->SetThermalReliefGap( pcbIUScale.mmToIU( 0.5 ) );
+    gndZone->SetThermalReliefSpokeWidth( pcbIUScale.mmToIU( 0.5 ) );
+    gndZone->SetPadConnection( ZONE_CONNECTION::THERMAL );
+    {
+        SHAPE_POLY_SET outline;
+        outline.NewOutline();
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 0 ),  pcbIUScale.mmToIU( 0 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 30 ), pcbIUScale.mmToIU( 0 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 30 ), pcbIUScale.mmToIU( 20 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 0 ),  pcbIUScale.mmToIU( 20 ) ) );
+        gndZone->AddPolygon( outline.COutline( 0 ) );
+    }
+    m_board->Add( gndZone );
+
+    ZONE* vccZone = new ZONE( m_board.get() );
+    vccZone->SetLayer( In1_Cu );
+    vccZone->SetNetCode( vccNetCode );
+    vccZone->SetAssignedPriority( 5 );
+    vccZone->SetMinThickness( pcbIUScale.mmToIU( 4.0 ) );
+    vccZone->SetThermalReliefGap( pcbIUScale.mmToIU( 0.5 ) );
+    vccZone->SetThermalReliefSpokeWidth( pcbIUScale.mmToIU( 0.5 ) );
+    vccZone->SetPadConnection( ZONE_CONNECTION::FULL );
+    {
+        // A "barbell": a bulky right lobe joined to a thin left neck by a 0.5mm-tall corridor.
+        // VCC's 4mm min-thickness prunes the neck and corridor in the deflate/inflate pass, so
+        // VCC fills only the right lobe while its outline still encloses the pad at (15, 10).
+        SHAPE_POLY_SET outline;
+        outline.NewOutline();
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 13.5 ), pcbIUScale.mmToIU( 9.75 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 18 ),   pcbIUScale.mmToIU( 9.75 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 18 ),   pcbIUScale.mmToIU( 0 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 30 ),   pcbIUScale.mmToIU( 0 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 30 ),   pcbIUScale.mmToIU( 20 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 18 ),   pcbIUScale.mmToIU( 20 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 18 ),   pcbIUScale.mmToIU( 10.25 ) ) );
+        outline.Append( VECTOR2I( pcbIUScale.mmToIU( 13.5 ), pcbIUScale.mmToIU( 10.25 ) ) );
+        vccZone->AddPolygon( outline.COutline( 0 ) );
+    }
+    m_board->Add( vccZone );
+
+    // REMOVE_EXCEPT_START_AND_END makes inner-layer flashing conditional on a same-net
+    // connection, which is what issue 24175 gets wrong.
+    auto footprint = std::make_unique<FOOTPRINT>( m_board.get() );
+
+    PAD* pad = new PAD( footprint.get() );
+    pad->SetAttribute( PAD_ATTRIB::PTH );
+    pad->SetLayerSet( LSET::AllCuMask() );
+    pad->SetSize( PADSTACK::ALL_LAYERS,
+                  VECTOR2I( pcbIUScale.mmToIU( 1.5 ), pcbIUScale.mmToIU( 1.5 ) ) );
+    pad->SetDrillSize( VECTOR2I( pcbIUScale.mmToIU( 0.8 ), pcbIUScale.mmToIU( 0.8 ) ) );
+    pad->SetPosition( VECTOR2I( pcbIUScale.mmToIU( 15 ), pcbIUScale.mmToIU( 10 ) ) );
+    pad->SetUnconnectedLayerMode( UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END );
+    pad->SetNetCode( gndNetCode );
+
+    footprint->Add( pad );
+    footprint->SetPosition( VECTOR2I( 0, 0 ) );
+    m_board->Add( footprint.release() );
+
+    m_board->BuildConnectivity();
+    auto drcEngine = std::make_shared<DRC_ENGINE>( m_board.get(), &bds );
+    drcEngine->InitEngine( wxFileName() );
+    bds.m_DRCEngine = drcEngine;
+
+    KI_TEST::FillZones( m_board.get() );
+
+    // Guard the preconditions so a future fill change cannot make this pass for the wrong
+    // reason: VCC's outline must enclose the pad while its fill must not reach it.
+    BOOST_REQUIRE_MESSAGE( vccZone->Outline()->Contains( pad->GetPosition() ),
+                           "VCC outline must contain the pad position to reproduce issue 24175." );
+    BOOST_REQUIRE_MESSAGE( vccZone->HasFilledPolysForLayer( In1_Cu ),
+                           "VCC zone should still have fill in its right lobe." );
+
+    {
+        const std::shared_ptr<SHAPE_POLY_SET>& vccFill = vccZone->GetFilledPolysList( In1_Cu );
+
+        BOOST_REQUIRE_MESSAGE( !vccFill->Contains( pad->GetPosition() ),
+                               "VCC fill should NOT contain the pad position (corridor must be "
+                               "pruned by min-thickness for the test to exercise issue 24175)." );
+    }
+
+    // Before the fix the higher-priority VCC outline forced ZLO_FORCE_NO_ZONE_CONNECTION on
+    // the pad; now the same-net GND zone wins the flashing decision.
+    BOOST_CHECK_MESSAGE( pad->FlashLayer( In1_Cu ),
+                         "PTH pad inside higher-priority different-net zone must still flash "
+                         "when a same-net lower-priority zone covers it (issue 24175)." );
+
+    BOOST_REQUIRE_MESSAGE( gndZone->HasFilledPolysForLayer( In1_Cu ),
+                           "GND zone should have fill on In1.Cu" );
+
+    const std::shared_ptr<SHAPE_POLY_SET>& gndFill = gndZone->GetFilledPolysList( In1_Cu );
+
+    // Sampling a ring just outside the pad proves the GND fill actually surrounds it.
+    int  samples = 16;
+    int  sampleR = pcbIUScale.mmToIU( 1.6 );  // just outside the pad (radius 0.75) + clearance
+    bool foundCopperAround = false;
+
+    for( int i = 0; i < samples; i++ )
+    {
+        double   angle = ( 2.0 * M_PI * i ) / samples;
+        VECTOR2I p( pad->GetPosition().x + KiROUND( sampleR * std::cos( angle ) ),
+                    pad->GetPosition().y + KiROUND( sampleR * std::sin( angle ) ) );
+
+        if( gndFill->Contains( p ) )
+        {
+            foundCopperAround = true;
+            break;
+        }
+    }
+
+    BOOST_CHECK_MESSAGE( foundCopperAround,
+                         "Lower-priority GND zone should have copper around GND pad even when "
+                         "a higher-priority different-net zone outline contains the pad "
+                         "(issue 24175)." );
+}
+
+
+// Reproduces the scripting/API zone-fill path used by KiKit panelization (issue 24643).
+//
+// The interactive GUI and the board loader always create and initialize the board's DRC engine
+// before filling.  The Python/API ZONE_FILLER path can reach Fill() with no engine, so the
+// worker-thread EvalRules() calls dereferenced a null engine and crashed the process.  This test
+// drops the engine after loading to drive that path, then verifies Fill() completes and leaves a
+// usable engine behind.
+BOOST_FIXTURE_TEST_CASE( RegressionApiSubsetFillPanelized, ZONE_FILL_TEST_FIXTURE )
+{
+    KI_TEST::LoadBoard( m_settingsManager, "issue24643/issue24643", m_board );
+
+    // The test harness loads boards with an initialized engine; the headless API path does not.
+    // Drop it so Fill() must reconstruct one, which is the condition that crashed.
+    BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
+    bds.m_DRCEngine.reset();
+    BOOST_REQUIRE( !bds.m_DRCEngine );
+
+    // Mirror the script: select non-rule-area zones on B.Cu that are not already filled.
+    PCB_LAYER_ID       targetLayer = m_board->GetLayerID( wxT( "B.Cu" ) );
+    std::vector<ZONE*> toFill;
+
+    for( ZONE* zone : m_board->Zones() )
+    {
+        if( zone->GetIsRuleArea() )
+            continue;
+
+        if( !zone->IsOnLayer( targetLayer ) )
+            continue;
+
+        if( zone->IsFilled() )
+            continue;
+
+        toFill.push_back( zone );
+    }
+
+    BOOST_REQUIRE_MESSAGE( !toFill.empty(),
+                           "Expected at least one unfilled B.Cu zone to exercise the API path." );
+
+    // The API path builds the filler with a null commit (see new_ZONE_FILLER in the SWIG
+    // wrapper) and fills only the selected subset.  This must complete without crashing
+    // (issue 24643).
+    ZONE_FILLER filler( m_board.get(), nullptr );
+
+    BOOST_CHECK_NO_THROW( filler.Fill( toFill ) );
+
+    // Fill() must have created and initialized a usable engine in place of the one we dropped.
+    BOOST_REQUIRE( bds.m_DRCEngine );
+    BOOST_CHECK( bds.m_DRCEngine->RulesValid() );
+}
+
+
+// Issue 23790: overlapping same-net zones must merge across a notch a higher-priority
+// different-net zone carved into the higher-priority same-net zone.
+BOOST_FIXTURE_TEST_CASE( RegressionSameNetMergeAroundHigherPriorityZone, ZONE_FILL_TEST_FIXTURE )
+{
+    // The reconciliation only runs inside the iterative refill.
+    ADVANCED_CFG& cfg = const_cast<ADVANCED_CFG&>( ADVANCED_CFG::GetCfg() );
+    struct ScopeGuard { bool& ref; bool orig; ~ScopeGuard() { ref = orig; } }
+        guard{ cfg.m_ZoneFillIterativeRefill, cfg.m_ZoneFillIterativeRefill };
+    cfg.m_ZoneFillIterativeRefill = true;
+
+    KI_TEST::LoadBoard( m_settingsManager, "issue23790/issue23790", m_board );
+    KI_TEST::FillZones( m_board.get() );
+
+    const PCB_LAYER_ID layer = F_Cu;
+    const int          margin = pcbIUScale.mmToIU( 0.05 );
+
+    std::map<int, SHAPE_POLY_SET> mergedByNet;
+
+    for( ZONE* zone : m_board->Zones() )
+    {
+        if( zone->GetIsRuleArea() || !zone->HasFilledPolysForLayer( layer ) )
+            continue;
+
+        mergedByNet[zone->GetNetCode()].BooleanAdd( *zone->GetFilledPolysList( layer ) );
+    }
+
+    // Areas legitimately free of this net's copper: keepouts and higher-priority
+    // different-net fills (grown by a clearance allowance).
+    auto buildLegitVoids =
+            [&]( const ZONE* aLower, const ZONE* aHigher ) -> SHAPE_POLY_SET
+            {
+                SHAPE_POLY_SET voids;
+                int            allowance = pcbIUScale.mmToIU( 0.6 );
+
+                for( ZONE* other : m_board->Zones() )
+                {
+                    if( !other->GetLayerSet().Contains( layer ) )
+                        continue;
+
+                    if( other->GetIsRuleArea() )
+                    {
+                        if( other->GetDoNotAllowZoneFills() )
+                            voids.BooleanAdd( *other->Outline() );
+
+                        continue;
+                    }
+
+                    if( other->GetNetCode() == aLower->GetNetCode()
+                            || other->GetAssignedPriority() <= aLower->GetAssignedPriority()
+                            || other->GetAssignedPriority() <= aHigher->GetAssignedPriority()
+                            || !other->HasFilledPolysForLayer( layer ) )
+                    {
+                        continue;
+                    }
+
+                    SHAPE_POLY_SET fill = *other->GetFilledPolysList( layer );
+                    fill.Inflate( allowance, CORNER_STRATEGY::ROUND_ALL_CORNERS, ARC_HIGH_DEF );
+                    voids.BooleanAdd( fill );
+                }
+
+                return voids;
+            };
+
+    std::vector<ZONE*> zones;
+
+    for( ZONE* zone : m_board->Zones() )
+    {
+        if( !zone->GetIsRuleArea() && zone->GetNetCode() > 0 && zone->GetLayerSet().Contains( layer ) )
+            zones.push_back( zone );
+    }
+
+    int checkedPairs = 0;
+
+    for( size_t i = 0; i < zones.size(); ++i )
+    {
+        for( size_t j = i + 1; j < zones.size(); ++j )
+        {
+            ZONE* a = zones[i];
+            ZONE* b = zones[j];
+
+            if( a->GetNetCode() != b->GetNetCode() )
+                continue;
+
+            SHAPE_POLY_SET overlap = *a->Outline();
+            overlap.BooleanIntersection( *b->Outline() );
+
+            if( overlap.OutlineCount() == 0 )
+                continue;
+
+            const ZONE* lower = a->GetAssignedPriority() <= b->GetAssignedPriority() ? a : b;
+            const ZONE* higher = ( lower == a ) ? b : a;
+
+            overlap.BooleanSubtract( buildLegitVoids( lower, higher ) );
+
+            // Stay clear of outer-boundary min-width rounding.
+            overlap.Deflate( margin, CORNER_STRATEGY::CHAMFER_ALL_CORNERS, ARC_HIGH_DEF );
+
+            if( overlap.OutlineCount() == 0 )
+                continue;
+
+            SHAPE_POLY_SET uncovered = overlap;
+            uncovered.BooleanSubtract( mergedByNet[a->GetNetCode()] );
+
+            double uncoveredArea =
+                    uncovered.Area() / ( pcbIUScale.IU_PER_MM * (double) pcbIUScale.IU_PER_MM );
+
+            BOOST_CHECK_MESSAGE( uncoveredArea < 0.01,
+                    wxString::Format( "Same-net zones (priorities %d and %d) left %.4f mm^2 of "
+                                      "their overlap unfilled; overlapping same-net zones must "
+                                      "merge (issue 23790).",
+                                      a->GetAssignedPriority(), b->GetAssignedPriority(),
+                                      uncoveredArea ) );
+            checkedPairs++;
+        }
+    }
+
+    BOOST_CHECK_MESSAGE( checkedPairs >= 2,
+                         wxString::Format( "Expected at least two overlapping same-net zone pairs "
+                                           "to exercise the merge, found %d.", checkedPairs ) );
+}
+
+
+// Issue 24935: a lower-priority same-net zone must not pour through the hatch windows of a
+// higher-priority hatched zone during the iterative refill.
+BOOST_FIXTURE_TEST_CASE( RegressionHatchedZonePriorityRefill, ZONE_FILL_TEST_FIXTURE )
+{
+    ADVANCED_CFG& cfg = const_cast<ADVANCED_CFG&>( ADVANCED_CFG::GetCfg() );
+    struct ScopeGuard
+    {
+        bool& ref;
+        bool  orig;
+        ~ScopeGuard() { ref = orig; }
+    } guard{ cfg.m_ZoneFillIterativeRefill, cfg.m_ZoneFillIterativeRefill };
+
+    for( bool iterative : { true, false } )
+    {
+        cfg.m_ZoneFillIterativeRefill = iterative;
+
+        KI_TEST::LoadBoard( m_settingsManager, "issue24935/issue24935", m_board );
+        KI_TEST::FillZones( m_board.get() );
+
+        const PCB_LAYER_ID layer = F_Cu;
+        ZONE*              hatched = nullptr;
+        ZONE*              solid = nullptr;
+
+        for( ZONE* zone : m_board->Zones() )
+        {
+            if( zone->GetFillMode() == ZONE_FILL_MODE::HATCH_PATTERN )
+                hatched = zone;
+            else
+                solid = zone;
+        }
+
+        BOOST_REQUIRE( hatched && solid );
+        BOOST_REQUIRE( hatched->GetAssignedPriority() > solid->GetAssignedPriority() );
+        BOOST_REQUIRE( hatched->SameNet( solid ) );
+        BOOST_REQUIRE( hatched->HasFilledPolysForLayer( layer ) );
+        BOOST_REQUIRE( solid->HasFilledPolysForLayer( layer ) );
+
+        const double mm2 = pcbIUScale.IU_PER_MM * (double) pcbIUScale.IU_PER_MM;
+
+        // Guard against a degenerate fixture: the hatch must leave most of its outline open,
+        // otherwise the containment check below proves nothing.
+        SHAPE_POLY_SET hatchedFill = hatched->GetFilledPolysList( layer )->CloneDropTriangulation();
+        SHAPE_POLY_SET hatchedOutline = hatched->Outline()->CloneDropTriangulation();
+        BOOST_REQUIRE( hatchedFill.Area() < 0.8 * hatchedOutline.Area() );
+
+        // The lower-priority zone owns nothing inside the hatched zone's outline.
+        SHAPE_POLY_SET window = hatchedOutline;
+        window.Deflate( pcbIUScale.mmToIU( 0.05 ), CORNER_STRATEGY::CHAMFER_ALL_CORNERS, ARC_HIGH_DEF );
+
+        SHAPE_POLY_SET leaked = solid->GetFilledPolysList( layer )->CloneDropTriangulation();
+        leaked.BooleanIntersection( window );
+
+        double leakedArea = leaked.Area() / mm2;
+
+        BOOST_CHECK_MESSAGE( leakedArea < 0.01,
+                             wxString::Format( "%s: lower-priority zone poured %.3f mm^2 inside the "
+                                               "higher-priority hatched zone (issue 24935).",
+                                               iterative ? wxS( "iterative refill" ) : wxS( "single pass" ),
+                                               leakedArea ) );
+    }
+}
+
+
+// Issue 24758: this board is densely tiled with same-net zones, so the zone-fill dependency-DAG
+// scheduler builds a large successor graph.  The scheduler returned once its logical work counter
+// reached zero while detached worker tasks -- which captured the successor/in-degree vectors by
+// reference -- were still in flight, dereferencing the freed locals inside ZONE_FILLER::Fill.
+// Filling repeatedly drives that window; under AddressSanitizer the use-after-free is reported
+// deterministically without the fix.
+BOOST_FIXTURE_TEST_CASE( RegressionSameNetZoneFillScheduler, ZONE_FILL_TEST_FIXTURE )
+{
+    ADVANCED_CFG& cfg = const_cast<ADVANCED_CFG&>( ADVANCED_CFG::GetCfg() );
+    struct ScopeGuard { bool& ref; bool orig; ~ScopeGuard() { ref = orig; } }
+        guard{ cfg.m_ZoneFillIterativeRefill, cfg.m_ZoneFillIterativeRefill };
+    cfg.m_ZoneFillIterativeRefill = true;
+
+    KI_TEST::LoadBoard( m_settingsManager, "issue24758/issue24758", m_board );
+
+    const PCB_LAYER_ID layer = F_Cu;
+
+    for( int pass = 0; pass < 64; ++pass )
+    {
+        BOOST_REQUIRE_NO_THROW( KI_TEST::FillZones( m_board.get() ) );
+
+        // Every same-net pour must come back with copper; a torn-down scheduler also corrupts
+        // or drops fills, so assert the result is usable on every pass.
+        SHAPE_POLY_SET merged;
+
+        for( ZONE* zone : m_board->Zones() )
+        {
+            if( zone->GetIsRuleArea() || !zone->HasFilledPolysForLayer( layer ) )
+                continue;
+
+            std::shared_ptr<SHAPE_POLY_SET> fill = zone->GetFilledPolysList( layer );
+
+            BOOST_REQUIRE( fill != nullptr );
+            merged.BooleanAdd( *fill );
+        }
+
+        BOOST_CHECK_MESSAGE( merged.Area() > 0.0,
+                             wxString::Format( "Fill pass %d produced no copper.", pass ) );
+    }
+}
+
+
+// Issue 24758: a hatch zone must keep its solid border where a higher-priority zone carves into
+// it, not run the mesh into the carved edge.  Board issue24758 carves net-B zones into net-A hatch.
+BOOST_FIXTURE_TEST_CASE( RegressionHatchBorderAroundOverlap, ZONE_FILL_TEST_FIXTURE )
+{
+    KI_TEST::LoadBoard( m_settingsManager, "issue24758/issue24758", m_board );
+    KI_TEST::FillZones( m_board.get() );
+
+    const PCB_LAYER_ID layer = F_Cu;
+
+    auto outlineNoArcs =
+            []( ZONE* z )
+            {
+                SHAPE_POLY_SET o = *z->Outline();
+                o.ClearArcs();
+                return o;
+            };
+
+    int checkedPairs = 0;
+
+    for( ZONE* hatch : m_board->Zones() )
+    {
+        if( hatch->GetIsRuleArea() || hatch->GetFillMode() != ZONE_FILL_MODE::HATCH_PATTERN
+                || !hatch->HasFilledPolysForLayer( layer ) )
+        {
+            continue;
+        }
+
+        SHAPE_POLY_SET hatchOutline = outlineNoArcs( hatch );
+        SHAPE_POLY_SET fill = *hatch->GetFilledPolysList( layer );
+
+        for( ZONE* other : m_board->Zones() )
+        {
+            if( other == hatch || other->GetIsRuleArea() || !other->GetLayerSet().Contains( layer )
+                    || other->GetAssignedPriority() <= hatch->GetAssignedPriority() )
+            {
+                continue;
+            }
+
+            SHAPE_POLY_SET carved = outlineNoArcs( other );
+            carved.BooleanIntersection( hatchOutline );
+
+            // Need real claimed area to have a border to test.
+            if( carved.Area() < pcbIUScale.mmToIU( 0.1 ) * (double) pcbIUScale.mmToIU( 0.1 ) )
+                continue;
+
+            // Ring past the clearance void: solid with the border, ~half hatch holes without it.
+            SHAPE_POLY_SET outer = carved;
+            outer.Inflate( pcbIUScale.mmToIU( 0.35 ), CORNER_STRATEGY::ROUND_ALL_CORNERS, ARC_HIGH_DEF );
+
+            SHAPE_POLY_SET inner = carved;
+            inner.Inflate( pcbIUScale.mmToIU( 0.20 ), CORNER_STRATEGY::ROUND_ALL_CORNERS, ARC_HIGH_DEF );
+
+            SHAPE_POLY_SET band = outer;
+            band.BooleanSubtract( inner );
+            band.BooleanIntersection( hatchOutline );
+
+            if( band.Area() <= 0 )
+                continue;
+
+            SHAPE_POLY_SET covered = band;
+            covered.BooleanIntersection( fill );
+
+            double coverage = covered.Area() / band.Area();
+            checkedPairs++;
+
+            BOOST_CHECK_MESSAGE( coverage >= 0.85,
+                    wxString::Format( "Hatch zone %s carved by %s: border ring only %.0f%% filled; "
+                                      "the hatch border was not re-established around the carved "
+                                      "area (issue 24758).",
+                                      hatch->GetZoneName(), other->GetZoneName(),
+                                      coverage * 100.0 ) );
+        }
+    }
+
+    BOOST_CHECK_MESSAGE( checkedPairs >= 3,
+                         wxString::Format( "Expected at least three carved hatch borders to check, "
+                                           "found %d.", checkedPairs ) );
+}
+
+
+// A pair separated by more than the clearance but less than the knockout reach used to fill
+// unordered, so the knocked-out copper depended on which task finished first.
+BOOST_FIXTURE_TEST_CASE( ZoneFillDependencyKnockoutMargin, ZONE_FILL_TEST_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+
+    BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
+    const int              clearance = pcbIUScale.mmToIU( 2 );
+
+    // Also the board's worst clearance, so the separation below lands between the worst
+    // clearance and the knockout reach.
+    bds.m_NetSettings->GetDefaultNetclass()->SetClearance( clearance );
+
+    NETINFO_ITEM* netA = new NETINFO_ITEM( m_board.get(), wxT( "NET_A" ), 1 );
+    NETINFO_ITEM* netB = new NETINFO_ITEM( m_board.get(), wxT( "NET_B" ), 2 );
+    m_board->Add( netA );
+    m_board->Add( netB );
+
+    // Separation lands inside the max-error part of the reach, so the gate's error term and
+    // the fill ordering are both exercised.
+    const int extraMargin = pcbIUScale.mmToIU( ADVANCED_CFG::GetCfg().m_ExtraClearance );
+    const int maxError = bds.m_MaxError;
+    const int sep = clearance + extraMargin + maxError / 2;
+    const int ax = pcbIUScale.mmToIU( 100 ) + sep;
+
+    ZONE* zoneA = new ZONE( m_board.get() );
+    zoneA->SetLayer( F_Cu );
+    zoneA->SetNet( netA );
+    zoneA->SetAssignedPriority( 0 );
+    zoneA->AppendCorner( VECTOR2I( ax, 0 ), -1 );
+    zoneA->AppendCorner( VECTOR2I( ax + pcbIUScale.mmToIU( 2 ), 0 ), -1 );
+    zoneA->AppendCorner( VECTOR2I( ax + pcbIUScale.mmToIU( 2 ), pcbIUScale.mmToIU( 10 ) ), -1 );
+    zoneA->AppendCorner( VECTOR2I( ax, pcbIUScale.mmToIU( 10 ) ), -1 );
+    m_board->Add( zoneA );
+
+    // The sawtooth keeps this fill busy long enough that, without a dependency edge, the
+    // small zone (seeded first) reliably fills before this fill publishes.
+    ZONE* zoneB = new ZONE( m_board.get() );
+    zoneB->SetLayer( F_Cu );
+    zoneB->SetNet( netB );
+    zoneB->SetAssignedPriority( 1 );
+    zoneB->AppendCorner( VECTOR2I( pcbIUScale.mmToIU( 1 ), 0 ), -1 );
+    zoneB->AppendCorner( VECTOR2I( pcbIUScale.mmToIU( 100 ), 0 ), -1 );
+    zoneB->AppendCorner( VECTOR2I( pcbIUScale.mmToIU( 100 ), pcbIUScale.mmToIU( 100 ) ), -1 );
+    zoneB->AppendCorner( VECTOR2I( pcbIUScale.mmToIU( 1 ), pcbIUScale.mmToIU( 100 ) ), -1 );
+
+    for( int ii = 0; ii < 1000; ++ii )
+    {
+        int yTop = pcbIUScale.mmToIU( 100 ) - ii * pcbIUScale.mmToIU( 0.1 );
+
+        zoneB->AppendCorner( VECTOR2I( 0, yTop - pcbIUScale.mmToIU( 0.05 ) ), -1 );
+        zoneB->AppendCorner( VECTOR2I( pcbIUScale.mmToIU( 1 ), yTop - pcbIUScale.mmToIU( 0.1 ) ), -1 );
+    }
+
+    m_board->Add( zoneB );
+
+    KI_TEST::FillZones( m_board.get() );
+
+    std::shared_ptr<SHAPE_POLY_SET> fillA = zoneA->GetFilledPolysList( F_Cu );
+    std::shared_ptr<SHAPE_POLY_SET> fillB = zoneB->GetFilledPolysList( F_Cu );
+
+    BOOST_REQUIRE( fillA && fillA->OutlineCount() > 0 );
+    BOOST_REQUIRE( fillB && fillB->OutlineCount() > 0 );
+
+    // Threshold sits between the knocked-out gap and the un-knocked outline separation, so the
+    // check distinguishes an ordered fill from a raced one.
+    BOOST_CHECK_MESSAGE( !fillA->Collide( fillB.get(), clearance + extraMargin + maxError * 3 / 4 ),
+                         "Lower-priority zone filled before the higher-priority knockout was "
+                         "published; the fill depends on thread scheduling." );
+}
+
+
+/**
+ * Test for issue 24312: two zone-fill lobes left kissing at a sub-min-width point.
+ *
+ * The deflate separates two nearby lobes; connect_nearby_polys is supposed to bridge
+ * them so the re-inflation produces a full min-width connection.  Near-coincident
+ * vertices left by Fracture/Deflate corrupted the ear test, the bridge anchor was
+ * missed, and the lobes re-touched only at a sliver narrower than the minimum
+ * connection width, tripping a connection_width DRC.
+ */
+BOOST_FIXTURE_TEST_CASE( RegressionZoneFillNarrowBridge, ZONE_FILL_TEST_FIXTURE )
+{
+    KI_TEST::LoadBoard( m_settingsManager, "issue24312/issue24312", m_board );
+
+    BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
+
+    // Force connection-width severity so the regression assertion does not silently
+    // weaken if the reproduction project is updated to ignore this code.
+    bds.m_DRCSeverities[ DRCE_CONNECTION_WIDTH ] = SEVERITY::RPT_SEVERITY_ERROR;
+
+    KI_TEST::FillZones( m_board.get() );
+
+    std::vector<DRC_ITEM> violations;
+
+    bds.m_DRCEngine->SetViolationHandler(
+            [&]( const std::shared_ptr<DRC_ITEM>& aItem, const VECTOR2I& aPos, int aLayer,
+                 const std::function<void( PCB_MARKER* )>& aPathGenerator )
+            {
+                if( aItem->GetErrorCode() == DRCE_CONNECTION_WIDTH )
+                    violations.push_back( *aItem );
+            } );
+
+    bds.m_DRCEngine->RunTests( EDA_UNITS::MM, true, false );
+
+    if( !violations.empty() )
+    {
+        UNITS_PROVIDER unitsProvider( pcbIUScale, EDA_UNITS::MM );
+
+        std::map<KIID, EDA_ITEM*> itemMap;
+        m_board->FillItemMap( itemMap );
+
+        for( const DRC_ITEM& item : violations )
+            BOOST_TEST_MESSAGE( item.ShowReport( &unitsProvider, RPT_SEVERITY_ERROR, itemMap ) );
+    }
+
+    BOOST_CHECK_MESSAGE( violations.empty(),
+                         wxString::Format( "Zone fill produced %zu connection_width violations; "
+                                           "expected 0 (issue 24312).",
+                                           violations.size() ) );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( RegressionIterativeRefillFullWidthBridge, ZONE_FILL_TEST_FIXTURE )
+{
+    ADVANCED_CFG& cfg = const_cast<ADVANCED_CFG&>( ADVANCED_CFG::GetCfg() );
+    bool          originalIterativeRefill = cfg.m_ZoneFillIterativeRefill;
+
+    struct ScopeGuard
+    {
+        bool& ref;
+        bool  orig;
+        ~ScopeGuard() { ref = orig; }
+    } guard{ cfg.m_ZoneFillIterativeRefill, originalIterativeRefill };
+
+    cfg.m_ZoneFillIterativeRefill = true;
+    KI_TEST::LoadBoard( m_settingsManager, "issue24835/issue24835-min", m_board );
+
+    BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
+    bds.m_MinConn = pcbIUScale.mmToIU( 0.1016 );
+    bds.m_DRCSeverities[ DRCE_CONNECTION_WIDTH ] = SEVERITY::RPT_SEVERITY_ERROR;
+    bds.m_DRCEngine->InitEngine( wxFileName() );
+
+    KI_TEST::FillZones( m_board.get() );
+
+    const VECTOR2I bridgeCenter( pcbIUScale.mmToIU( 104.220616 ),
+                                 pcbIUScale.mmToIU( 103.646866 ) );
+
+    for( PCB_LAYER_ID layer : { In1_Cu, In4_Cu } )
+    {
+        double localCopperArea = 0.0;
+
+        for( ZONE* zone : m_board->Zones() )
+        {
+            if( !zone->IsOnLayer( layer ) )
+                continue;
+
+            std::shared_ptr<SHAPE_POLY_SET> fill = zone->GetFilledPolysList( layer );
+            SHAPE_POLY_SET                 local;
+            int                            radius = pcbIUScale.mmToIU( 0.2 );
+
+            local.NewOutline();
+            local.Append( bridgeCenter + VECTOR2I( -radius, -radius ) );
+            local.Append( bridgeCenter + VECTOR2I( radius, -radius ) );
+            local.Append( bridgeCenter + VECTOR2I( radius, radius ) );
+            local.Append( bridgeCenter + VECTOR2I( -radius, radius ) );
+
+            if( fill )
+                local.BooleanIntersection( *fill );
+
+            localCopperArea = std::max( localCopperArea, std::abs( local.Area() ) );
+        }
+
+        double minimumLocalCopperArea = 0.05 * pcbIUScale.IU_PER_MM * pcbIUScale.IU_PER_MM;
+
+        BOOST_CHECK_MESSAGE( localCopperArea > minimumLocalCopperArea,
+                             wxString::Format( "Expected copper around the bridge on %s; the "
+                                               "bridge must be widened, not removed.",
+                                               LSET::Name( layer ) ) );
+    }
+
+    std::vector<DRC_ITEM> violations;
+
+    bds.m_DRCEngine->SetViolationHandler(
+            [&]( const std::shared_ptr<DRC_ITEM>& aItem, const VECTOR2I&, int,
+                 const std::function<void( PCB_MARKER* )>& )
+            {
+                if( aItem->GetErrorCode() == DRCE_CONNECTION_WIDTH )
+                    violations.push_back( *aItem );
+            } );
+
+    bds.m_DRCEngine->RunTests( EDA_UNITS::MM, true, false );
+
+    BOOST_CHECK_MESSAGE( violations.empty(),
+                         wxString::Format( "Iterative refill produced %zu connection_width "
+                                           "violations; expected full-width bridges (issue 24835).",
+                                           violations.size() ) );
 }

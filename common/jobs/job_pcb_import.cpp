@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <jobs/job_pcb_import.h>
@@ -35,19 +35,11 @@ NLOHMANN_JSON_SERIALIZE_ENUM( JOB_PCB_IMPORT::FORMAT,
                               } )
 
 
-NLOHMANN_JSON_SERIALIZE_ENUM( JOB_PCB_IMPORT::REPORT_FORMAT,
-                              {
-                                  { JOB_PCB_IMPORT::REPORT_FORMAT::NONE, "none" },
-                                  { JOB_PCB_IMPORT::REPORT_FORMAT::JSON, "json" },
-                                  { JOB_PCB_IMPORT::REPORT_FORMAT::TEXT, "text" }
-                              } )
-
-
 JOB_PCB_IMPORT::JOB_PCB_IMPORT() :
         JOB( "pcb_import", false )
 {
     m_params.emplace_back( new JOB_PARAM<FORMAT>( "format", &m_format, m_format ) );
-    m_params.emplace_back( new JOB_PARAM<REPORT_FORMAT>( "report_format", &m_reportFormat, m_reportFormat ) );
+    m_params.emplace_back( new JOB_PARAM<IMPORT_REPORT_FORMAT>( "report_format", &m_reportFormat, m_reportFormat ) );
     m_params.emplace_back( new JOB_PARAM<wxString>( "report_file", &m_reportFile, m_reportFile ) );
 }
 

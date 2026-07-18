@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef  PCB_BASE_FRAME_H
@@ -188,6 +184,14 @@ public:
     void SetDisplayOptions( const PCB_DISPLAY_OPTIONS& aOptions, bool aRefresh = true );
 
     /**
+     * Return true when moving from @p aOld to @p aNew changes drawn item geometry and therefore
+     * requires the GAL cache to be rebuilt.  Colour, opacity and high-contrast changes are handled
+     * by a cheaper recolour and return false.
+     */
+    static bool displayOptionsRequireRecache( const PCB_DISPLAY_OPTIONS& aOld,
+                                              const PCB_DISPLAY_OPTIONS& aNew );
+
+    /**
      * Return the #PCB_PLOT_PARAMS for the BOARD owned by this frame.
      */
     virtual const PCB_PLOT_PARAMS& GetPlotSettings() const;
@@ -291,16 +295,6 @@ public:
      * @param aDC is the current Device Context, to draw the new footprint (can be NULL ).
      */
     virtual void AddFootprintToBoard( FOOTPRINT* aFootprint );
-
-    /**
-     * Create the entire board ratsnest.
-     *
-     * This must be called after a board change (changes for pads, footprints or a read
-     * netlist ).
-     *
-     * @param aDisplayStatus  if true, display the computation results.
-     */
-    void Compile_Ratsnest( bool aDisplayStatus );
 
     /**
      * Create a new entry in undo list of commands.
@@ -408,17 +402,6 @@ protected:
     void handleIconizeEvent( wxIconizeEvent& aEvent ) override;
 
     virtual void doReCreateMenuBar() override;
-
-    /**
-     * Attempt to load \a aFootprintId from the footprint library table.
-     *
-     * @param aFootprintId is the #LIB_ID of component footprint to load.
-     * @return the #FOOTPRINT if found or NULL if \a aFootprintId not found in any of the
-     *         libraries in the table returned from #Prj().PcbFootprintLibs().
-     * @throw IO_ERROR if an I/O error occurs or a #PARSE_ERROR if a file parsing error
-     *                 occurs while reading footprint library files.
-     */
-    FOOTPRINT* loadFootprint( const LIB_ID& aFootprintId );
 
     virtual void unitsChangeRefresh() override;
 

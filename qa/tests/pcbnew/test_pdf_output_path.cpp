@@ -14,16 +14,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <boost/test/unit_test.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <memory>
 
 #include <cli/exit_codes.h>
@@ -68,6 +65,52 @@ BOOST_AUTO_TEST_CASE( ExportPdfSingleDocumentOutputPath )
     const std::filesystem::path nestedPdf =
             outputPath / ( boardPath.stem().string() + ".pdf" );
     BOOST_CHECK( !std::filesystem::exists( nestedPdf ) );
+
+    std::filesystem::remove_all( outputRoot );
+}
+
+
+BOOST_AUTO_TEST_CASE( ExportPdfSingleDocumentTrailingDisabledLayers )
+{
+    // 24845: trailing disabled copper layers added a blank page in single-document PDF mode.
+    PCBNEW_JOBS_HANDLER handler( nullptr );
+
+    const std::filesystem::path boardPath =
+            std::filesystem::path( KI_TEST::GetPcbnewTestDataDir() ) / "api_kitchen_sink.kicad_pcb";
+    BOOST_REQUIRE( std::filesystem::exists( boardPath ) );
+
+    const std::filesystem::path outputRoot =
+            std::filesystem::temp_directory_path() / "kicad_pdf_trailing_disabled_test";
+    const std::filesystem::path outputPath = outputRoot / "out.pdf";
+
+    if( std::filesystem::exists( outputRoot ) )
+        std::filesystem::remove_all( outputRoot );
+
+    auto pdfJob = std::make_unique<JOB_EXPORT_PCB_PDF>();
+    pdfJob->m_filename = wxString::FromUTF8( boardPath.string().c_str() );
+    pdfJob->SetConfiguredOutputPath( wxString::FromUTF8( outputPath.string().c_str() ) );
+    pdfJob->m_plotDrawingSheet = false;
+    pdfJob->m_pdfSingle = true;
+    pdfJob->m_pdfGenMode = JOB_EXPORT_PCB_PDF::GEN_MODE::ONE_PAGE_PER_LAYER_ONE_FILE;
+
+    // api_kitchen_sink is 2-layer, so In1_Cu is disabled and skipped, leaving 2 pages.
+    pdfJob->m_plotLayerSequence = LSEQ( { F_Cu, B_Cu, In1_Cu } );
+
+    int result = handler.JobExportPdf( pdfJob.get() );
+    BOOST_CHECK_EQUAL( result, CLI::EXIT_CODES::OK );
+    BOOST_REQUIRE( std::filesystem::exists( outputPath ) );
+
+    // Each page object is written as "/Type /Page\n" (the tree root uses "/Type /Pages\n").
+    std::ifstream in( outputPath, std::ios::binary );
+    std::string   pdf( ( std::istreambuf_iterator<char>( in ) ), std::istreambuf_iterator<char>() );
+
+    size_t pageCount = 0;
+
+    for( size_t pos = pdf.find( "/Type /Page\n" ); pos != std::string::npos;
+         pos = pdf.find( "/Type /Page\n", pos + 1 ) )
+        ++pageCount;
+
+    BOOST_CHECK_EQUAL( pageCount, 2u ); // 3 before the fix
 
     std::filesystem::remove_all( outputRoot );
 }

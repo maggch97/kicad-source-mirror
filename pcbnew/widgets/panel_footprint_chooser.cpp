@@ -16,16 +16,14 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <widgets/panel_footprint_chooser.h>
+#include <algorithm>
 #include <wx/button.h>
 #include <wx/clipbrd.h>
+#include <wx/display.h>
 #include <wx/log.h>
 #include <wx/panel.h>
 #include <wx/sizer.h>
@@ -203,8 +201,8 @@ PANEL_FOOTPRINT_CHOOSER::~PANEL_FOOTPRINT_CHOOSER()
         // Save any changes to column widths, etc.
         m_adapter->SaveSettings();
 
-        cfg->m_FootprintChooser.width = GetParent()->GetSize().x;
-        cfg->m_FootprintChooser.height = GetParent()->GetSize().y;
+        cfg->m_FootprintChooser.width = GetParent()->ToDIP( GetParent()->GetSize().x );
+        cfg->m_FootprintChooser.height = GetParent()->ToDIP( GetParent()->GetSize().y );
         cfg->m_FootprintChooser.sash_h = m_hsplitter->GetSashPosition();
 
         if( m_vsplitter )
@@ -263,8 +261,19 @@ void PANEL_FOOTPRINT_CHOOSER::FinishSetup()
 
         PCBNEW_SETTINGS::FOOTPRINT_CHOOSER& cfg = settings->m_FootprintChooser;
 
-        int w = cfg.width < 40 ? horizPixelsFromDU( 440 ) : cfg.width;
-        int h = cfg.height < 40 ? horizPixelsFromDU( 340 ) : cfg.height;
+        // The persisted size is stored in DIP so it is independent of the monitor it was saved
+        // on. Restoring raw pixels would scale the window by the DPI ratio when reopened on a
+        // different-scale display, producing a window that spills across monitors.
+        int w = cfg.width > 40 ? GetParent()->FromDIP( cfg.width ) : horizPixelsFromDU( 440 );
+        int h = cfg.height > 40 ? GetParent()->FromDIP( cfg.height ) : horizPixelsFromDU( 340 );
+
+        // Cap to the work area so a stale pre-DIP setting cannot reopen the window across monitors.
+        if( int display = wxDisplay::GetFromWindow( GetParent() ); display != wxNOT_FOUND )
+        {
+            wxRect workArea = wxDisplay( display ).GetClientArea();
+            w = std::min( w, workArea.GetWidth() );
+            h = std::min( h, workArea.GetHeight() );
+        }
 
         GetParent()->SetSize( wxSize( w, h ) );
         GetParent()->Layout();
@@ -289,6 +298,7 @@ void PANEL_FOOTPRINT_CHOOSER::FinishSetup()
 
 void PANEL_FOOTPRINT_CHOOSER::SetPreselect( const LIB_ID& aPreselect )
 {
+    m_preselect = aPreselect;
     m_adapter->SetPreselectNode( aPreselect, 0 );
 
     if( m_tree && aPreselect.IsValid() )
@@ -326,8 +336,18 @@ void PANEL_FOOTPRINT_CHOOSER::onCloseTimer( wxTimerEvent& aEvent )
 
 void PANEL_FOOTPRINT_CHOOSER::onOpenLibsTimer( wxTimerEvent& aEvent )
 {
+    // Freeze across both steps so the expand and the re-scroll paint as a single final
+    // state, otherwise the selected row visibly shifts and snaps back.
+    m_tree->Freeze();
+
     if( PCBNEW_SETTINGS* cfg = dynamic_cast<PCBNEW_SETTINGS*>( Kiface().KifaceSettings() ) )
         m_adapter->OpenLibs( cfg->m_LibTree.open_libs );
+
+    // OpenLibs reshuffles the tree, so re-assert the preselected footprint.
+    if( m_preselect.IsValid() )
+        m_tree->SelectLibId( m_preselect );
+
+    m_tree->Thaw();
 }
 
 

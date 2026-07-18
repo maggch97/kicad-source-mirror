@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>
@@ -311,32 +311,6 @@ void PANEL_SETUP_BUSES::OnMemberGridCellChanging( wxGridEvent& event )
             event.Veto();
             return;
         }
-
-        const std::shared_ptr<BUS_ALIAS>& alias = m_aliases[ m_lastAlias ];
-
-        alias->ClearMembers();
-
-        for( int ii = 0; ii < m_membersGrid->GetNumberRows(); ++ii )
-        {
-            if( ii == row )
-            {
-                // Parse a space-separated list and add each one
-                wxStringTokenizer tok( name, " " );
-
-                if( tok.CountTokens() > 1 )
-                {
-                    m_membersGridDirty = true;
-                    Bind( wxEVT_IDLE, &PANEL_SETUP_BUSES::reloadMembersGridOnIdle, this );
-                }
-
-                while( tok.HasMoreTokens() )
-                    alias->AddMember( tok.GetNextToken() );
-            }
-            else
-            {
-                alias->AddMember( m_membersGrid->GetCellValue( ii, 0 ) );
-            }
-        }
     }
 }
 
@@ -527,6 +501,18 @@ void PANEL_SETUP_BUSES::updateAliasMembers( int aAliasIndex )
         alias->ClearMembers();
 
         for( int ii = 0; ii < m_membersGrid->GetNumberRows(); ++ii )
-            alias->AddMember( m_membersGrid->GetCellValue( ii, 0 ) );
+        {
+            wxString          cellValue = m_membersGrid->GetCellValue( ii, 0 );
+            wxStringTokenizer tok( cellValue, " " );
+
+            if( tok.CountTokens() > 1 )
+            {
+                m_membersGridDirty = true;
+                Bind( wxEVT_IDLE, &PANEL_SETUP_BUSES::reloadMembersGridOnIdle, this );
+            }
+
+            while( tok.HasMoreTokens() )
+                alias->AddMember( tok.GetNextToken() );
+        }
     }
 }

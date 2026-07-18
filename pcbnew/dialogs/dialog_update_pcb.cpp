@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pcb_edit_frame.h>
@@ -28,6 +24,7 @@
 #include "widgets/wx_html_report_panel.h"
 #include <netlist_reader/pcb_netlist.h>
 #include <netlist_reader/board_netlist_updater.h>
+#include <pcb_group.h>
 #include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
 #include <tools/pcb_selection_tool.h>
@@ -52,6 +49,8 @@ DIALOG_UPDATE_PCB::DIALOG_UPDATE_PCB( PCB_EDIT_FRAME* aParent, NETLIST* aNetlist
 
     SetupStandardButtons( { { wxID_OK,     _( "Update PCB" ) },
                             { wxID_CANCEL, _( "Close" )      } } );
+
+    m_cbApplyDesignBlockLayouts->Enable( m_cbTransferGroups->GetValue() );
 
     finishDialogSettings();
 
@@ -103,6 +102,7 @@ void DIALOG_UPDATE_PCB::PerformUpdate( bool aDryRun )
     updater.SetDeleteUnusedFootprints( m_cbDeleteExtraFootprints->GetValue());
     updater.SetReplaceFootprints( m_cbUpdateFootprints->GetValue() );
     updater.SetTransferGroups( m_cbTransferGroups->GetValue() );
+    updater.SetApplyDesignBlockLayouts( m_cbApplyDesignBlockLayouts->GetValue() );
     updater.SetOverrideLocks( m_cbOverrideLocks->GetValue() );
     updater.SetUpdateFields( m_cbUpdateFields->GetValue() );
     updater.SetRemoveExtraFields( m_cbRemoveExtraFields->GetValue() );
@@ -114,11 +114,31 @@ void DIALOG_UPDATE_PCB::PerformUpdate( bool aDryRun )
         return;
 
     m_frame->OnNetlistChanged( updater, &m_runDragCommand );
+
+    if( m_cbApplyDesignBlockLayouts->GetValue() )
+    {
+        TOOL_MANAGER*       toolMgr = m_frame->GetToolManager();
+        PCB_SELECTION_TOOL* selTool = toolMgr->GetTool<PCB_SELECTION_TOOL>();
+
+        for( PCB_GROUP* group : updater.GetAddedGroups() )
+        {
+            if( !group->HasDesignBlockLink() )
+                continue;
+
+            toolMgr->RunAction( ACTIONS::selectionClear );
+            selTool->select( group );
+            toolMgr->RunAction( PCB_ACTIONS::applyDesignBlockLayout );
+        }
+
+        toolMgr->RunAction( ACTIONS::selectionClear );
+    }
 }
 
 
 bool DIALOG_UPDATE_PCB::TransferDataToWindow()
 {
+    m_cbApplyDesignBlockLayouts->Enable( m_cbTransferGroups->GetValue() );
+
     PerformUpdate( true );
 
     return true;
@@ -127,6 +147,13 @@ bool DIALOG_UPDATE_PCB::TransferDataToWindow()
 
 void DIALOG_UPDATE_PCB::OnOptionChanged( wxCommandEvent& event )
 {
+    bool transferGroups = m_cbTransferGroups->GetValue();
+
+    if( !transferGroups )
+        m_cbApplyDesignBlockLayouts->SetValue( false );
+
+    m_cbApplyDesignBlockLayouts->Enable( transferGroups );
+
     if( m_initialized )
     {
         PerformUpdate( true );

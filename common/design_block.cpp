@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <design_block.h>
@@ -28,8 +28,8 @@ std::vector<SEARCH_TERM>& DESIGN_BLOCK::GetSearchTerms()
     m_searchTerms.reserve( 6 );
 
     m_searchTerms.emplace_back( SEARCH_TERM( GetLibNickname(), 4 ) );
-    m_searchTerms.emplace_back( SEARCH_TERM( GetName(), 8 ) );
-    m_searchTerms.emplace_back( SEARCH_TERM( GetLIB_ID().Format(), 16 ) );
+    m_searchTerms.emplace_back( SEARCH_TERM( GetName(), 8, true ) );
+    m_searchTerms.emplace_back( SEARCH_TERM( GetLIB_ID().Format(), 16, true ) );
 
     wxStringTokenizer keywordTokenizer( GetKeywords(), wxS( " " ), wxTOKEN_STRTOK );
 

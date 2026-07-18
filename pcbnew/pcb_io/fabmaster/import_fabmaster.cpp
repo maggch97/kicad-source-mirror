@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "import_fabmaster.h"
@@ -588,10 +584,13 @@ size_t FABMASTER::processPadStacks( size_t aRow )
         if( pad_layer[0] == '~' )
             continue;
 
+        int layer_x_offset = 0;
+        int layer_y_offset = 0;
+
         try
         {
-            pad->x_offset = KiROUND( readDouble( pad_xoff ) * scale_factor );
-            pad->y_offset = -KiROUND( readDouble( pad_yoff ) * scale_factor );
+            layer_x_offset = KiROUND( readDouble( pad_xoff ) * scale_factor );
+            layer_y_offset = -KiROUND( readDouble( pad_yoff ) * scale_factor );
         }
         catch( ... )
         {
@@ -602,41 +601,52 @@ size_t FABMASTER::processPadStacks( size_t aRow )
             continue;
         }
 
-        if( w > 0.0 && h > 0.0 && recnum == 1 )
+        if( recnum == 1 )
         {
-            pad->width = KiROUND( w );
-            pad->height = KiROUND( h );
-            pad->via = ( std::toupper( pad_is_via[0] ) != 'V' );
+            pad->x_offset = layer_x_offset;
+            pad->y_offset = layer_y_offset;
+        }
+
+        if( w > 0.0 && h > 0.0 )
+        {
+            FM_PAD_LAYER layer_data;
+            layer_data.width = KiROUND( w );
+            layer_data.height = KiROUND( h );
+            layer_data.x_offset = layer_x_offset;
+            layer_data.y_offset = layer_y_offset;
 
             if( pad_shape == "CIRCLE" )
             {
-                pad->height = pad->width;
-                pad->shape = PAD_SHAPE::CIRCLE;
+                layer_data.height = layer_data.width;
+                layer_data.shape = PAD_SHAPE::CIRCLE;
             }
             else if( pad_shape == "RECTANGLE" )
             {
-                pad->shape = PAD_SHAPE::RECTANGLE;
+                layer_data.shape = PAD_SHAPE::RECTANGLE;
             }
             else if( pad_shape == "ROUNDED_RECT" )
             {
-                pad->shape = PAD_SHAPE::ROUNDRECT;
+                layer_data.shape = PAD_SHAPE::ROUNDRECT;
             }
             else if( pad_shape == "SQUARE" )
             {
-                pad->shape = PAD_SHAPE::RECTANGLE;
-                pad->height = pad->width;
+                layer_data.shape = PAD_SHAPE::RECTANGLE;
+                layer_data.height = layer_data.width;
             }
-            else if( pad_shape == "OBLONG" || pad_shape == "OBLONG_X" || pad_shape == "OBLONG_Y" )
-                pad->shape = PAD_SHAPE::OVAL;
+            else if( pad_shape == "OBLONG" || pad_shape == "OBLONG_X"
+                     || pad_shape == "OBLONG_Y" )
+            {
+                layer_data.shape = PAD_SHAPE::OVAL;
+            }
             else if( pad_shape == "OCTAGON" )
             {
-                pad->shape = PAD_SHAPE::RECTANGLE;
-                pad->is_octogon = true;
+                layer_data.shape = PAD_SHAPE::RECTANGLE;
+                layer_data.is_octogon = true;
             }
             else if( pad_shape == "SHAPE" )
             {
-                pad->shape = PAD_SHAPE::CUSTOM;
-                pad->custom_name = pad_shapename;
+                layer_data.shape = PAD_SHAPE::CUSTOM;
+                layer_data.custom_name = pad_shapename;
             }
             else
             {
@@ -645,6 +655,21 @@ size_t FABMASTER::processPadStacks( size_t aRow )
                             pad_layer.c_str(),
                             rownum );
                 continue;
+            }
+
+            pad->layer_shapes[pad_layer] = layer_data;
+
+            if( recnum == 1 )
+            {
+                pad->width = layer_data.width;
+                pad->height = layer_data.height;
+                pad->shape = layer_data.shape;
+                pad->is_octogon = layer_data.is_octogon;
+                pad->via = pad_is_via.empty()
+                           || std::toupper( static_cast<unsigned char>( pad_is_via[0] ) ) != 'V';
+
+                if( layer_data.shape == PAD_SHAPE::CUSTOM )
+                    pad->custom_name = pad_shapename;
             }
         }
     }
@@ -2160,13 +2185,26 @@ bool FABMASTER::Process()
 }
 
 
+/**
+ * Allegro area "shapes" that carry no net and must not become copper fills.  These map to
+ * KiCad rule areas rather than pours; the mapping is applied in loadZone().
+ */
+static bool isRuleAreaClass( const std::string& aClass )
+{
+    return aClass == "ROUTE KEEPOUT" || aClass == "VIA KEEPOUT" || aClass == "PACKAGE KEEPOUT"
+           || aClass == "ROUTE KEEPIN" || aClass == "PACKAGE KEEPIN"
+           || aClass == "CONSTRAINT REGION";
+}
+
+
 bool FABMASTER::loadZones( BOARD* aBoard )
 {
     for( auto& zone : zones )
     {
         checkpoint();
 
-        if( IsCopperLayer( getLayer( zone->layer ) ) || zone->layer == "ALL" )
+        if( isRuleAreaClass( zone->lclass ) || IsCopperLayer( getLayer( zone->layer ) )
+            || zone->layer == "ALL" )
         {
             loadZone( aBoard, zone );
         }
@@ -2205,6 +2243,10 @@ bool FABMASTER::loadZones( BOARD* aBoard )
     for( auto zone1 : aBoard->Zones() )
     {
         if( zone1->GetNetCode() > 0 )
+            continue;
+
+        // Rule areas legitimately have no net; they are not orphaned fills awaiting a match.
+        if( zone1->GetIsRuleArea() )
             continue;
 
         SHAPE_LINE_CHAIN& outline1 = zone1->Outline()->Outline( 0 );
@@ -2680,10 +2722,108 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
                     {
                         auto& pad = padstack->second;
 
-                        newpad->SetShape( PADSTACK::ALL_LAYERS, pad.shape );
+                        // Determine if per-layer shapes differ and need
+                        // FRONT_INNER_BACK mode
+                        const FM_PAD_LAYER* front_layer = nullptr;
+                        const FM_PAD_LAYER* back_layer = nullptr;
+                        const FM_PAD_LAYER* inner_layer = nullptr;
 
-                        if( pad.shape == PAD_SHAPE::CUSTOM )
+                        for( const auto& [layer_name, layer_data] : pad.layer_shapes )
                         {
+                            auto layer_it = layers.find( layer_name );
+
+                            if( layer_it == layers.end() || !layer_it->second.conductive )
+                                continue;
+
+                            PCB_LAYER_ID kicad_layer =
+                                    static_cast<PCB_LAYER_ID>( layer_it->second.layerid );
+
+                            if( kicad_layer == F_Cu )
+                                front_layer = &layer_data;
+                            else if( kicad_layer == B_Cu )
+                                back_layer = &layer_data;
+                            else if( IsCopperLayer( kicad_layer ) )
+                                inner_layer = &layer_data;
+                        }
+
+                        auto layersDiffer = []( const FM_PAD_LAYER& aA, const FM_PAD_LAYER& aB )
+                        {
+                            return aA.shape != aB.shape
+                                   || aA.width != aB.width
+                                   || aA.height != aB.height
+                                   || aA.x_offset != aB.x_offset
+                                   || aA.y_offset != aB.y_offset
+                                   || aA.is_octogon != aB.is_octogon
+                                   || aA.custom_name != aB.custom_name;
+                        };
+
+                        std::vector<const FM_PAD_LAYER*> copper_defs;
+
+                        for( const FM_PAD_LAYER* def : { front_layer, inner_layer, back_layer } )
+                        {
+                            if( def )
+                                copper_defs.push_back( def );
+                        }
+
+                        bool needs_padstack = false;
+
+                        for( size_t ii = 1; ii < copper_defs.size(); ++ii )
+                        {
+                            if( layersDiffer( *copper_defs[0], *copper_defs[ii] ) )
+                            {
+                                needs_padstack = true;
+                                break;
+                            }
+                        }
+
+                        if( needs_padstack )
+                            newpad->Padstack().SetMode( PADSTACK::MODE::FRONT_INNER_BACK );
+
+                        auto applyLayerShape = [&]( PCB_LAYER_ID aLayer,
+                                                    const FM_PAD_LAYER& aLayerData )
+                        {
+                            newpad->SetShape( aLayer, aLayerData.shape );
+
+                            if( aLayerData.shape == PAD_SHAPE::CIRCLE )
+                            {
+                                newpad->SetSize( aLayer,
+                                                 VECTOR2I( aLayerData.width, aLayerData.width ) );
+                            }
+                            else
+                            {
+                                newpad->SetSize( aLayer,
+                                                 VECTOR2I( aLayerData.width, aLayerData.height ) );
+                            }
+
+                            newpad->SetOffset( aLayer,
+                                               VECTOR2I( aLayerData.x_offset, aLayerData.y_offset ) );
+                        };
+
+                        if( needs_padstack )
+                        {
+                            if( front_layer )
+                                applyLayerShape( F_Cu, *front_layer );
+
+                            if( back_layer )
+                                applyLayerShape( B_Cu, *back_layer );
+
+                            if( inner_layer )
+                                applyLayerShape( PADSTACK::INNER_LAYERS, *inner_layer );
+                            else if( front_layer )
+                                applyLayerShape( PADSTACK::INNER_LAYERS, *front_layer );
+
+                            if( pad.shape == PAD_SHAPE::CUSTOM )
+                            {
+                                wxLogWarning( _( "Pad '%s' has custom shape with per-layer "
+                                                 "geometry; custom primitives not supported "
+                                                 "in padstack mode." ),
+                                              pad.name );
+                            }
+                        }
+                        else if( pad.shape == PAD_SHAPE::CUSTOM )
+                        {
+                            newpad->SetShape( PADSTACK::ALL_LAYERS, pad.shape );
+
                             // Choose the smaller dimension to ensure the base pad
                             // is fully hidden by the custom pad
                             int pad_size = std::min( pad.width, pad.height );
@@ -2793,8 +2933,15 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
                         }
                         else
                         {
+                            newpad->SetShape( PADSTACK::ALL_LAYERS, pad.shape );
                             newpad->SetSize( PADSTACK::ALL_LAYERS,
                                              VECTOR2I( pad.width, pad.height ) );
+                        }
+
+                        if( !needs_padstack && ( pad.x_offset || pad.y_offset ) )
+                        {
+                            newpad->SetOffset( PADSTACK::ALL_LAYERS,
+                                               VECTOR2I( pad.x_offset, pad.y_offset ) );
                         }
 
                         if( pad.drill )
@@ -3466,6 +3613,10 @@ bool FABMASTER::loadZone( BOARD* aBoard, const std::unique_ptr<FABMASTER::TRACE>
 
     if( aLine->layer == "ALL" )
         zone->SetLayerSet( aBoard->GetLayerSet() & LSET::AllCuMask() );
+    else if( aLine->layer == "OUTER_LAYERS" )
+        zone->SetLayerSet( aBoard->GetLayerSet() & LSET::ExternalCuMask() );
+    else if( aLine->layer == "INNER_PLANE_LAYERS" || aLine->layer == "INNER_SIGNAL_LAYERS" )
+        zone->SetLayerSet( aBoard->GetLayerSet() & LSET::InternalCuMask() );
     else
         zone->SetLayer( layer );
 
@@ -3476,15 +3627,32 @@ bool FABMASTER::loadZone( BOARD* aBoard, const std::unique_ptr<FABMASTER::TRACE>
     zone->SetDoNotAllowFootprints( false );
     zone->SetDoNotAllowZoneFills( false );
 
-    if( aLine->lclass == "ROUTE KEEPOUT")
+    if( aLine->lclass == "ROUTE KEEPOUT" )
     {
+        // A bare Allegro route keepout excludes all routing objects, not just tracks.
         zone->SetIsRuleArea( true );
         zone->SetDoNotAllowTracks( true );
+        zone->SetDoNotAllowVias( true );
+        zone->SetDoNotAllowPads( true );
+        zone->SetDoNotAllowZoneFills( true );
     }
-    else if( aLine->lclass == "VIA KEEPOUT")
+    else if( aLine->lclass == "VIA KEEPOUT" )
     {
         zone->SetIsRuleArea( true );
         zone->SetDoNotAllowVias( true );
+    }
+    else if( aLine->lclass == "PACKAGE KEEPOUT" )
+    {
+        zone->SetIsRuleArea( true );
+        zone->SetDoNotAllowFootprints( true );
+    }
+    else if( aLine->lclass == "ROUTE KEEPIN" || aLine->lclass == "PACKAGE KEEPIN"
+             || aLine->lclass == "CONSTRAINT REGION" )
+    {
+        // KiCad has no keepin or constraint-region concept.  Keep the shape as a named rule
+        // area with no restrictions so it survives import without becoming unconnected copper.
+        zone->SetIsRuleArea( true );
+        zone->SetZoneName( wxString::FromUTF8( aLine->lclass.c_str() ) );
     }
     else
     {

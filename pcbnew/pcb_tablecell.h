@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_TABLECELL_H
@@ -42,7 +38,11 @@ public:
 
     EDA_ITEM* Clone() const override { return new PCB_TABLECELL( *this ); }
 
-    EDA_GROUP* GetParentGroup() const override { return GetParent()->GetParentGroup(); }
+    EDA_GROUP* GetParentGroup() const override
+    {
+        BOARD_ITEM* parent = GetParent();
+        return parent ? parent->GetParentGroup() : nullptr;
+    }
 
     int GetRow() const;
     int GetColumn() const;

@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -35,6 +31,7 @@ class SYMBOL_EDIT_FRAME;
 class LIB_SYMBOL;
 class LISTBOX_TRICKS;
 class PANEL_EMBEDDED_FILES;
+class PANEL_SYMBOL_PIN_MAP;
 class WX_GRID;
 
 
@@ -43,6 +40,9 @@ class DIALOG_LIB_SYMBOL_PROPERTIES: public DIALOG_LIB_SYMBOL_PROPERTIES_BASE
 public:
     DIALOG_LIB_SYMBOL_PROPERTIES( SYMBOL_EDIT_FRAME* parent, LIB_SYMBOL* aLibEntry );
     ~DIALOG_LIB_SYMBOL_PROPERTIES();
+
+    /// Switch the notebook to the Pin Map page (issue #2282).
+    void SelectPinMapPage();
 
 protected:
     bool TransferDataToWindow() override;
@@ -107,9 +107,14 @@ public:
     std::bitset<64>    m_shownColumns;
 
     PANEL_EMBEDDED_FILES* m_embeddedFiles;
+    PANEL_SYMBOL_PIN_MAP* m_pinMapPanel;
 
 private:
     static int m_lastOpenedPage;    // To remember the last notebook selection
+
+    /// When set by SelectPinMapPage(), TransferDataToWindow opens the Pin Map page instead of the
+    /// remembered last page (issue #2282).
+    bool m_forcePinMapPage = false;
 
     enum class LAST_LAYOUT {
         NONE,

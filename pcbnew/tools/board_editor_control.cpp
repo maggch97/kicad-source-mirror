@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "board_editor_control.h"
@@ -119,11 +115,12 @@ std::vector<ZONE*> getOverlappingZones( BOARD* aBoard, ZONE* aZone )
             continue;
 
         // Check edge collision and containment (one zone entirely inside another)
-        if( aZone->Outline()->Collide( candidate->Outline() )
-            || ( candidate->Outline()->TotalVertices() > 0
-                 && aZone->Outline()->Contains( candidate->Outline()->CVertex( 0 ) ) )
-            || ( aZone->Outline()->TotalVertices() > 0
-                 && candidate->Outline()->Contains( aZone->Outline()->CVertex( 0 ) ) ) )
+        SHAPE_POLY_SET aOutline = aZone->GetBoardOutline();
+        SHAPE_POLY_SET candidateOutline = candidate->GetBoardOutline();
+
+        if( aOutline.Collide( &candidateOutline )
+            || ( candidateOutline.TotalVertices() > 0 && aOutline.Contains( candidateOutline.CVertex( 0 ) ) )
+            || ( aOutline.TotalVertices() > 0 && candidateOutline.Contains( aOutline.CVertex( 0 ) ) ) )
         {
             overlapping.push_back( candidate );
         }
@@ -1057,11 +1054,7 @@ int BOARD_EDITOR_CONTROL::TrackWidthInc( const TOOL_EVENT& aEvent )
     if( routerTool && routerTool->IsToolActive()
         && routerTool->Router()->Mode() == PNS::PNS_MODE_ROUTE_DIFF_PAIR )
     {
-        int widthIndex = bds.GetDiffPairIndex() + 1;
-
-        // If we go past the last track width entry in the list, start over at the beginning
-        if( widthIndex >= (int) bds.m_DiffPairDimensionsList.size() )
-            widthIndex = 0;
+        int widthIndex = bds.GetNextDiffPairIndex( bds.GetDiffPairIndex(), true );
 
         bds.SetDiffPairIndex( widthIndex );
         bds.UseCustomDiffPairDimensions( false );
@@ -1070,24 +1063,16 @@ int BOARD_EDITOR_CONTROL::TrackWidthInc( const TOOL_EVENT& aEvent )
     }
     else
     {
-        int widthIndex = bds.GetTrackWidthIndex();
-
+        // Issue #24644: stepping the index unconditionally lets the first press both enter the
+        // connected-width override and advance into the list, instead of no-op'ing.
         if( routerTool && routerTool->IsToolActive()
             && routerTool->Router()->GetState() == PNS::ROUTER::RouterState::ROUTE_TRACK
             && bds.m_UseConnectedTrackWidth && !bds.m_TempOverrideTrackWidth )
         {
             bds.m_TempOverrideTrackWidth = true;
         }
-        else
-        {
-            widthIndex++;
-        }
 
-        // If we go past the last track width entry in the list, start over at the beginning
-        if( widthIndex >= (int) bds.m_TrackWidthList.size() )
-            widthIndex = 0;
-
-        bds.SetTrackWidthIndex( widthIndex );
+        bds.SetTrackWidthIndex( bds.GetNextTrackWidthIndex( bds.GetTrackWidthIndex(), true ) );
         bds.UseCustomTrackViaSize( false );
 
         m_toolMgr->RunAction( PCB_ACTIONS::trackViaSizeChanged );
@@ -1139,11 +1124,7 @@ int BOARD_EDITOR_CONTROL::TrackWidthDec( const TOOL_EVENT& aEvent )
     if( routerTool && routerTool->IsToolActive()
             && routerTool->Router()->Mode() == PNS::PNS_MODE_ROUTE_DIFF_PAIR )
     {
-        int widthIndex = bds.GetDiffPairIndex() - 1;
-
-        // If we get to the lowest entry start over at the highest
-        if( widthIndex < 0 )
-            widthIndex = bds.m_DiffPairDimensionsList.size() - 1;
+        int widthIndex = bds.GetNextDiffPairIndex( bds.GetDiffPairIndex(), false );
 
         bds.SetDiffPairIndex( widthIndex );
         bds.UseCustomDiffPairDimensions( false );
@@ -1152,24 +1133,16 @@ int BOARD_EDITOR_CONTROL::TrackWidthDec( const TOOL_EVENT& aEvent )
     }
     else
     {
-        int widthIndex = bds.GetTrackWidthIndex();
-
+        // Issue #24644: mirror TrackWidthInc so the first invocation also advances into the
+        // predefined list instead of merely flipping the override flag.
         if( routerTool && routerTool->IsToolActive()
             && routerTool->Router()->GetState() == PNS::ROUTER::RouterState::ROUTE_TRACK
             && bds.m_UseConnectedTrackWidth && !bds.m_TempOverrideTrackWidth )
         {
             bds.m_TempOverrideTrackWidth = true;
         }
-        else
-        {
-            widthIndex--;
-        }
 
-        // If we get to the lowest entry start over at the highest
-        if( widthIndex < 0 )
-            widthIndex = (int) bds.m_TrackWidthList.size() - 1;
-
-        bds.SetTrackWidthIndex( widthIndex );
+        bds.SetTrackWidthIndex( bds.GetNextTrackWidthIndex( bds.GetTrackWidthIndex(), false ) );
         bds.UseCustomTrackViaSize( false );
 
         m_toolMgr->RunAction( PCB_ACTIONS::trackViaSizeChanged );
@@ -1219,11 +1192,7 @@ int BOARD_EDITOR_CONTROL::ViaSizeInc( const TOOL_EVENT& aEvent )
     }
     else
     {
-        int sizeIndex = bds.GetViaSizeIndex() + 1;
-
-        // If we go past the last via entry in the list, start over at the beginning
-        if( sizeIndex >= (int) bds.m_ViasDimensionsList.size() )
-            sizeIndex = 0;
+        int sizeIndex = bds.GetNextViaSizeIndex( bds.GetViaSizeIndex(), true );
 
         bds.SetViaSizeIndex( sizeIndex );
         bds.UseCustomTrackViaSize( false );
@@ -1279,13 +1248,7 @@ int BOARD_EDITOR_CONTROL::ViaSizeDec( const TOOL_EVENT& aEvent )
 
         // If there are more, cycle through them backwards
         if( bds.m_ViasDimensionsList.size() > 0 )
-        {
-            sizeIndex = bds.GetViaSizeIndex() - 1;
-
-            // If we get to the lowest entry start over at the highest
-            if( sizeIndex < 0 )
-                sizeIndex = bds.m_ViasDimensionsList.size() - 1;
-        }
+            sizeIndex = bds.GetNextViaSizeIndex( bds.GetViaSizeIndex(), false );
 
         bds.SetViaSizeIndex( sizeIndex );
         bds.UseCustomTrackViaSize( false );
@@ -1549,12 +1512,18 @@ int BOARD_EDITOR_CONTROL::UnlockSelected( const TOOL_EVENT& aEvent )
 
 int BOARD_EDITOR_CONTROL::modifyLockSelected( MODIFY_MODE aMode )
 {
-    PCB_SELECTION_TOOL*  selTool = m_toolMgr->GetTool<PCB_SELECTION_TOOL>();
-    const PCB_SELECTION& selection = selTool->GetSelection();
-    BOARD_COMMIT         commit( m_frame );
+    PCB_SELECTION_TOOL* selTool = m_toolMgr->GetTool<PCB_SELECTION_TOOL>();
+
+    // RequestSelection populates from the cursor when empty and marks it IsHover(), letting us
+    // clear it afterwards without disturbing a pre-existing selection.
+    const PCB_SELECTION& selection = selTool->RequestSelection( nullptr );
+
+    BOARD_COMMIT commit( m_frame );
 
     if( selection.Empty() )
-        m_toolMgr->RunAction( ACTIONS::selectionCursor );
+        return 0;
+
+    const bool isHover = selection.IsHover();
 
     // Resolve TOGGLE mode
     if( aMode == TOGGLE )
@@ -1609,6 +1578,16 @@ int BOARD_EDITOR_CONTROL::modifyLockSelected( MODIFY_MODE aMode )
             board_item->SetLocked( true );
         else
             board_item->SetLocked( false );
+
+        if( aMode == OFF && board_item->Type() == PCB_FOOTPRINT_T )
+        {
+            board_item->RunOnChildren(
+                    []( BOARD_ITEM* child )
+                    {
+                        child->SetLocked( false );
+                    },
+                    RECURSE_MODE::RECURSE );
+        }
     }
 
     if( !commit.Empty() )
@@ -1618,6 +1597,9 @@ int BOARD_EDITOR_CONTROL::modifyLockSelected( MODIFY_MODE aMode )
         m_toolMgr->PostEvent( EVENTS::SelectedEvent );
         m_frame->OnModify();
     }
+
+    if( isHover )
+        m_toolMgr->RunAction( ACTIONS::selectionClear );
 
     return 0;
 }
@@ -1788,6 +1770,9 @@ int BOARD_EDITOR_CONTROL::ZoneDuplicate( const TOOL_EVENT& aEvent )
     newZone->ClearSelected();
     newZone->UnFill();
     zoneSettings.ExportSetting( *newZone );
+
+    if( !newZone->GetZoneName().IsEmpty() )
+        newZone->SetZoneName( board()->GetUniqueZoneName( newZone->GetZoneName() ) );
 
     // If the new zone is on the same layer(s) as the initial zone,
     // offset it a bit so it can more easily be picked.
@@ -2118,6 +2103,9 @@ int BOARD_EDITOR_CONTROL::AssignNetclass( const TOOL_EVENT& aEvent )
 
                 sTool->FilterCollectorForLockedItems( aCollector );
             } );
+
+    if( selectionTool->ReportFilteredLockedItems() )
+        return 0;
 
     std::set<wxString> netNames;
     std::set<int>      netCodes;

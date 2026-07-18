@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -180,6 +180,7 @@ private:
     void loadLibraryPads( const SYMDEF_PCB& aComponent, FOOTPRINT* aFootprint );
     void loadComponentAttributes( const COMPONENT& aComponent, FOOTPRINT* aFootprint );
     void loadNetTracks( const NET_ID& aCadstarNetID, const NET_PCB::ROUTE& aCadstarRoute,
+                        long aDefaultRouteWidth,
                         long aStartWidth = std::numeric_limits<long>::max(),
                         long aEndWidth = std::numeric_limits<long>::max() );
 

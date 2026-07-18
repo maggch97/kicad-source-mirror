@@ -14,16 +14,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
 #include <core/throttle.h>
+#include <widgets/wx_progress_reporters.h>
 #include <thread>
 
 
@@ -53,6 +50,56 @@ BOOST_AUTO_TEST_CASE( ReadyAgainAfterInterval )
     std::this_thread::sleep_for( std::chrono::milliseconds( 60 ) );
 
     BOOST_CHECK( t.Ready() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProgressReporterGatingThrottlesBulkCalls )
+{
+    THROTTLE throttle( std::chrono::milliseconds( 100 ) );
+
+    int refreshes = 0;
+    int maxProgress = 1000;
+
+    // Only the priming refresh should run inside the throttle window.
+    for( int progress = 0; progress < maxProgress; ++progress )
+    {
+        if( WX_PROGRESS_REPORTER::shouldRefresh( progress, maxProgress, 0, 1, throttle ) )
+            refreshes++;
+    }
+
+    BOOST_CHECK_EQUAL( refreshes, 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProgressReporterGatingAlwaysRefreshesFinalTick )
+{
+    THROTTLE throttle( std::chrono::milliseconds( 100 ) );
+
+    int maxProgress = 1000;
+
+    // Consume the priming refresh.
+    BOOST_CHECK( WX_PROGRESS_REPORTER::shouldRefresh( 0, maxProgress, 0, 1, throttle ) );
+    BOOST_CHECK( !WX_PROGRESS_REPORTER::shouldRefresh( 500, maxProgress, 0, 1, throttle ) );
+
+    // The final tick must refresh regardless of throttle state.
+    BOOST_CHECK( WX_PROGRESS_REPORTER::shouldRefresh( maxProgress, maxProgress, 0, 1, throttle ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProgressReporterGatingThrottlesPhaseBoundaries )
+{
+    THROTTLE throttle( std::chrono::milliseconds( 100 ) );
+
+    int maxProgress = 1000;
+
+    // Consume the priming refresh.
+    BOOST_CHECK( WX_PROGRESS_REPORTER::shouldRefresh( 0, maxProgress, 0, 2, throttle ) );
+
+    // Intermediate phase completion must stay throttled.
+    BOOST_CHECK( !WX_PROGRESS_REPORTER::shouldRefresh( maxProgress, maxProgress, 0, 2, throttle ) );
+
+    // The last phase is the terminal tick.
+    BOOST_CHECK( WX_PROGRESS_REPORTER::shouldRefresh( maxProgress, maxProgress, 1, 2, throttle ) );
 }
 
 

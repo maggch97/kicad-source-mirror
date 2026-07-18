@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DRC_RE_VIA_STYLE_CONSTRAINT_DATA_H_
@@ -68,13 +64,13 @@ public:
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
         // Positions measured from constraint_via_style.png bitmap
-        // Format: { xStart, xEnd, yTop, tabOrder }
+        // Format: { xStart, xEnd, yCenter, tabOrder }
         return {
-            { 155 + DRC_RE_OVERLAY_XO, 195 + DRC_RE_OVERLAY_XO, 10 + DRC_RE_OVERLAY_YO, 0, wxS( "mm" ), LABEL_POSITION::RIGHT }, // [0] min_via_diameter
-            { 245 + DRC_RE_OVERLAY_XO, 285 + DRC_RE_OVERLAY_XO, 10 + DRC_RE_OVERLAY_YO, 1, wxS( "mm" ), LABEL_POSITION::RIGHT }, // [1] max_via_diameter
-            { 195 + DRC_RE_OVERLAY_XO, 235 + DRC_RE_OVERLAY_XO, 190 + DRC_RE_OVERLAY_YO, 2, wxS( "mm" ), LABEL_POSITION::RIGHT }, // [2] min_via_hole
-            { 285 + DRC_RE_OVERLAY_XO, 325 + DRC_RE_OVERLAY_XO, 190 + DRC_RE_OVERLAY_YO, 3, wxS( "mm" ), LABEL_POSITION::RIGHT }, // [3] max_via_hole
-            { 420 + DRC_RE_OVERLAY_XO, 510 + DRC_RE_OVERLAY_XO, 110 + DRC_RE_OVERLAY_YO, 4, _( "Via type:" ), LABEL_POSITION::LEFT }, // [4] via_type dropdown
+            { 155, 210, 22, 0, wxS( "mm" ), LABEL_POSITION::RIGHT },                // [0] min_via_diameter
+            { 265, 320, 22, 1, wxS( "mm" ), LABEL_POSITION::RIGHT, wxS( "–  " ) },  // [1] max_via_diameter
+            { 195, 250, 202, 2, wxS( "mm" ), LABEL_POSITION::RIGHT },               // [2] min_via_hole
+            { 305, 360, 202, 3, wxS( "mm" ), LABEL_POSITION::RIGHT, wxS( "–  " ) }, // [3] max_via_hole
+            { 420, 525, 122, 4, _( "Via type:" ), LABEL_POSITION::LEFT },           // [4] via_type dropdown
         };
     }
 

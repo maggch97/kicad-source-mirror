@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef FOOTPRINT_EDITOR_SETTINGS_H_
@@ -87,6 +87,19 @@ public:
     std::vector<LAYER_PRESET> m_LayerPresets;
 
     wxString m_ActiveLayerPreset;
+
+    /// One open tab persisted across sessions.
+    struct OPEN_TAB
+    {
+        wxString m_lib;
+        wxString m_fpName;
+        bool     m_preview = false;
+    };
+
+    std::vector<OPEN_TAB> m_OpenTabs;
+
+    /// Tab key ("lib:fpName") of the tab that was active when the editor last closed.
+    wxString m_ActiveTab;
 
 protected:
 

@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "drc_rule_editor_utils.h"
@@ -709,7 +705,7 @@ std::vector<std::shared_ptr<DRC_RE_BASE_CONSTRAINT_DATA>> DRC_RULE_EDITOR_UTILS:
 
     wxString rulesText = aRules;
     if( !rulesText.Contains( "(version" ) )
-        rulesText.Prepend( "(version 1)\n" );
+        rulesText.Prepend( "(version 2)\n" );
 
     try
     {
@@ -751,7 +747,7 @@ bool DRC_RULE_EDITOR_UTILS::SaveRules( const wxString& aFilename,
                                        const std::vector<std::shared_ptr<DRC_RE_BASE_CONSTRAINT_DATA>>& aRules,
                                        const BOARD* aBoard )
 {
-    wxString content = wxT( "(version 1)\n" );
+    wxString content = wxT( "(version 2)\n" );
 
     for( const auto& data : aRules )
     {

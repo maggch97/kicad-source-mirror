@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DRC_RE_PERMITTED_LAYERS_CONSTRAINT_DATA_H_
@@ -52,10 +48,10 @@ public:
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
         // Positions measured from constraint_permitted_layers.png (~300x170)
-        // Format: { xStart, xEnd, yTop, tabOrder }
+        // Format: { xStart, xEnd, yCenter, tabOrder }
         return {
-            { 150 + DRC_RE_OVERLAY_XO, 164 + DRC_RE_OVERLAY_XO, 40 + DRC_RE_OVERLAY_YO, 1, _( "Allow top Layer" ), LABEL_POSITION::RIGHT },      // top layer checkbox (upper left)
-            { 150 + DRC_RE_OVERLAY_XO, 164 + DRC_RE_OVERLAY_XO, 200 + DRC_RE_OVERLAY_YO, 2, _( "Allow bottom Layer" ), LABEL_POSITION::RIGHT },  // bottom layer checkbox (lower left)
+            { 150, 365, 52, 1, _( "Allow top Layer" ), LABEL_POSITION::RIGHT },     // top layer checkbox (upper left)
+            { 150, 365, 212, 2, _( "Allow bottom Layer" ), LABEL_POSITION::RIGHT }, // bot layer checkbox (lower left)
         };
     }
 

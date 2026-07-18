@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <fmt/format.h>
@@ -492,6 +492,8 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol( LIB_SYMBOL* aSymbol, OUTPUTFORMAT
 
         saveDcmInfoAsFields( aSymbol, aFormatter );
 
+        savePinMapData( aSymbol, aFormatter );
+
         // Save the draw items grouped by units.
         std::vector<LIB_SYMBOL_UNIT> units = aSymbol->GetUnitDrawItems();
         std::sort( units.begin(), units.end(),
@@ -550,9 +552,21 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol( LIB_SYMBOL* aSymbol, OUTPUTFORMAT
 
         wxASSERT( parent );
 
+        // Prefer the recorded parent name over dereferencing the live parent pointer. The parent
+        // LIB_SYMBOL uses a null_deleter shared_ptr, so the weak_ptr's control block can outlive the
+        // parent object (for example when a derived symbol is copied to another library and the
+        // buffered parent is freed before this symbol is serialized). In that state GetParent().lock()
+        // can return a non-null but dangling pointer, and reading parent->GetName() is a use-after-
+        // free that crashes release builds while only tripping the assertion above in debug builds.
+        // The recorded parent name is a value member and is always safe to read.
+        wxString parentName = aSymbol->GetParentName();
+
+        if( parentName.IsEmpty() && parent )
+            parentName = parent->GetName();
+
         aFormatter.Print( "(symbol %s (extends %s)",
                           name.c_str(),
-                          aFormatter.Quotew( parent->GetName() ).c_str() );
+                          aFormatter.Quotew( parentName ).c_str() );
 
         aSymbol->GetFields( orderedFields );
 
@@ -560,6 +574,8 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol( LIB_SYMBOL* aSymbol, OUTPUTFORMAT
             saveField( field, aFormatter );
 
         saveDcmInfoAsFields( aSymbol, aFormatter );
+
+        savePinMapData( aSymbol, aFormatter );
 
         KICAD_FORMAT::FormatBool( &aFormatter, "embedded_fonts", aSymbol->GetAreFontsEmbedded() );
 
@@ -605,6 +621,56 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::saveDcmInfoAsFields( LIB_SYMBOL* aSymbol,
         description.SetVisible( false );
         description.SetText( tmp );
         saveField( &description, aFormatter );
+    }
+}
+
+
+void SCH_IO_KICAD_SEXPR_LIB_CACHE::savePinMapData( LIB_SYMBOL* aSymbol, OUTPUTFORMATTER& aFormatter )
+{
+    wxCHECK_RET( aSymbol, "Invalid LIB_SYMBOL pointer." );
+
+    // Emit only the symbol's own bundle; derived symbols inheriting the parent's maps write
+    // nothing here so the inheritance is preserved on round-trip.
+    const std::vector<ASSOCIATED_FOOTPRINT>& associations = aSymbol->GetAssociatedFootprints();
+
+    if( !associations.empty() )
+    {
+        aFormatter.Print( "(associated_footprints" );
+
+        for( const ASSOCIATED_FOOTPRINT& assoc : associations )
+        {
+            aFormatter.Print( "(footprint %s",
+                              aFormatter.Quotew( assoc.m_FootprintLibId.GetUniStringLibId() ).c_str() );
+
+            if( !assoc.m_MapName.IsEmpty() )
+                aFormatter.Print( "(map %s)", aFormatter.Quotew( assoc.m_MapName ).c_str() );
+
+            aFormatter.Print( ")" );
+        }
+
+        aFormatter.Print( ")" );
+    }
+
+    const std::vector<PIN_MAP>& maps = aSymbol->GetPinMaps().GetAll();
+
+    if( !maps.empty() )
+    {
+        aFormatter.Print( "(pin_maps" );
+
+        for( const PIN_MAP& map : maps )
+        {
+            aFormatter.Print( "(pin_map %s", aFormatter.Quotew( map.GetName() ).c_str() );
+
+            for( const PIN_MAP_ENTRY& entry : map.GetEntries() )
+            {
+                aFormatter.Print( "(entry %s %s)", aFormatter.Quotew( entry.m_PinNumber ).c_str(),
+                                  aFormatter.Quotew( entry.m_PadNumber ).c_str() );
+            }
+
+            aFormatter.Print( ")" );
+        }
+
+        aFormatter.Print( ")" );
     }
 }
 

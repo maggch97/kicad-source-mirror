@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "dialog_plot.h"
@@ -484,6 +480,7 @@ void DIALOG_PLOT::transferPlotParamsToJob()
                                                                              : JOB_EXPORT_PCB_DXF::DXF_UNITS::MM;
         dxfJob->m_plotGraphicItemsUsingContours = m_plotOpts.GetDXFPlotMode() == DXF_OUTLINE_MODE::SKETCH;
         dxfJob->m_polygonMode = m_plotOpts.GetDXFPlotPolygonMode();
+        dxfJob->m_useKiCadFont = m_plotOpts.GetTextMode() != PLOT_TEXT_MODE::NATIVE;
         dxfJob->m_genMode = m_plotOpts.GetDXFMultiLayeredExportOption() ? JOB_EXPORT_PCB_DXF::GEN_MODE::SINGLE
                                                                         : JOB_EXPORT_PCB_DXF::GEN_MODE::MULTI;
     }

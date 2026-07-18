@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <boost/test/unit_test.hpp>
@@ -125,7 +121,7 @@ BOOST_AUTO_TEST_CASE( SaveRules )
     file.ReadAll( &content );
 
     // Verify content
-    BOOST_CHECK( content.Contains( "(version 1)" ) );
+    BOOST_CHECK( content.Contains( "(version 2)" ) );
     BOOST_CHECK( content.Contains( "(rule ViaRule" ) );
     BOOST_CHECK( content.Contains( "(constraint via_diameter" ) );
     BOOST_CHECK( content.Contains( "(constraint hole_size" ) );
@@ -1418,7 +1414,7 @@ BOOST_AUTO_TEST_CASE( RuleSaverBasicGeneration )
     std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = { entry };
     wxString result = saver.GenerateRulesText( entries, nullptr );
 
-    BOOST_CHECK( result.Contains( "(version 1)" ) );
+    BOOST_CHECK( result.Contains( "(version 2)" ) );
     BOOST_CHECK( result.Contains( "TestClearance" ) );
     BOOST_CHECK( result.Contains( "clearance" ) );
 }
@@ -1566,9 +1562,9 @@ BOOST_AUTO_TEST_CASE( RuleSaverEmptyEntries )
     std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries;
     wxString result = saver.GenerateRulesText( entries, nullptr );
 
-    BOOST_CHECK( result.Contains( "(version 1)" ) );
+    BOOST_CHECK( result.Contains( "(version 2)" ) );
     // Should have version header but nothing else
-    BOOST_CHECK_EQUAL( result.Trim(), "(version 1)" );
+    BOOST_CHECK_EQUAL( result.Trim(), "(version 2)" );
 }
 
 BOOST_AUTO_TEST_CASE( RuleSaverNullConstraintData )
@@ -1585,7 +1581,7 @@ BOOST_AUTO_TEST_CASE( RuleSaverNullConstraintData )
     wxString result = saver.GenerateRulesText( entries, nullptr );
 
     // Should have version header but rule text is skipped
-    BOOST_CHECK( result.Contains( "(version 1)" ) );
+    BOOST_CHECK( result.Contains( "(version 2)" ) );
     BOOST_CHECK( !result.Contains( "Null Data Rule" ) );
 }
 

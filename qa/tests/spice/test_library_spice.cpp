@@ -14,20 +14,23 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <eeschema_test_utils.h>
 #include <sim/sim_library_spice.h>
+#include <sim/sim_model_spice_fallback.h>
 
 #include <boost/algorithm/string/case_conv.hpp>
 #include <fmt/core.h>
 #include <locale_io.h>
+
+#include <atomic>
+#include <cstdlib>
+#include <map>
+#include <string>
+#include <thread>
 
 
 class TEST_SIM_LIBRARY_SPICE_FIXTURE
@@ -1576,6 +1579,97 @@ BOOST_AUTO_TEST_CASE( InvalidBinaryFile )
     // The library should have no valid models since it's not a valid SPICE file
     const std::vector<SIM_LIBRARY::MODEL> models = m_library->GetModels();
     BOOST_CHECK_EQUAL( models.size(), 0 );
+}
+
+
+// SPICE library parsing builds its models on the thread pool, and every parameter value parsed
+// scopes a LOCALE_IO to switch to the "C" locale.  LOCALE_IO drives the process-global locale,
+// so constructing and destroying it from several threads at once must not corrupt the heap or the
+// locale state.  Before this was serialized, concurrent toggles damaged the malloc free list,
+// crashing when a large SPICE library was loaded from the simulation model editor. (Issue #24627)
+BOOST_AUTO_TEST_CASE( LocaleIoConcurrency )
+{
+    constexpr int        threadCount = 16;
+    constexpr int        iterations = 5000;
+    std::atomic<bool>    start{ false };
+    std::vector<std::thread> threads;
+
+    for( int t = 0; t < threadCount; ++t )
+    {
+        threads.emplace_back(
+                [&]()
+                {
+                    while( !start.load( std::memory_order_acquire ) )
+                        std::this_thread::yield();
+
+                    for( int i = 0; i < iterations; ++i )
+                    {
+                        LOCALE_IO toggle;
+
+                        // Touch the "C" locale the way file parsing does, so the test also exercises
+                        // overlapping nested scopes from different threads.
+                        volatile double parsed = std::strtod( "1.5", nullptr );
+                        (void) parsed;
+                    }
+                } );
+    }
+
+    start.store( true, std::memory_order_release );
+
+    for( std::thread& thread : threads )
+        thread.join();
+
+    // Reaching here without a crash or a corrupted free list is the actual assertion; the explicit
+    // check just keeps Boost from reporting the case as containing no assertions.
+    BOOST_CHECK( true );
+}
+
+
+// A CPL (Coupled Multiconductor Line) model whose parameters mix bare numeric multi-values with
+// braced expressions, e.g. "R=1 0 1 L={L11} {L12} {L22} ...", used to hang the parser (issue
+// #22105) or, once the hang was fixed, drop values once a parameter switched between the braced and
+// bare forms.  CPL has no native KiCad type, so each model lands as RAWSPICE carrying its whole
+// line as raw code; assert every model line survives parsing intact.
+BOOST_AUTO_TEST_CASE( CplModels )
+{
+    LOCALE_IO toggle;
+
+    LoadLibrary( "cpl_models" );
+
+    std::map<std::string, std::string> spiceByName;
+
+    for( const auto& [modelName, model] : m_library->GetModels() )
+    {
+        BOOST_TEST_CONTEXT( "CPL model: " << modelName )
+        {
+            // A CPL model has no native KiCad type, so it is passed through as raw SPICE.
+            BOOST_CHECK( model.GetType() == SIM_MODEL::TYPE::RAWSPICE );
+
+            auto* fallback = dynamic_cast<const SIM_MODEL_SPICE_FALLBACK*>( &model );
+            BOOST_REQUIRE( fallback );
+            spiceByName[modelName] = fallback->GetSpiceCode();
+        }
+    }
+
+    auto codeContains =
+            [&]( const std::string& aName, const std::string& aFragment )
+            {
+                auto it = spiceByName.find( aName );
+                BOOST_REQUIRE( it != spiceByName.end() );
+                BOOST_CHECK( it->second.find( aFragment ) != std::string::npos );
+            };
+
+    BOOST_REQUIRE_EQUAL( spiceByName.size(), 5 );
+
+    // The exact multi-parameter line from the issue must round-trip unmangled.
+    codeContains( "PLINE_MIXED", "R=1 0 1 L={L11} {L12} {L22} G=0 0 0 C={C11} {C12} {C22}" );
+
+    // A parameter that starts braced and then goes bare (and vice versa) must keep both.
+    codeContains( "PLINE_BRACE_FIRST", "R={R11} 0 {R22} L=1e-9 {L12} 1e-9" );
+
+    codeContains( "PLINE_BRACED", "R={R11} {R12} {R22}" );
+    codeContains( "PLINE_NUMERIC", "R=1 0 1 L=1e-9 0 1e-9" );
+    codeContains( "PLINE_EMPTY", "PLINE_EMPTY CPL" );
 }
 
 

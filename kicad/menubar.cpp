@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <settings/common_settings.h>
@@ -108,7 +104,7 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
     ACTION_CONDITIONS historyCond;
     historyCond.Enable( [&]( const SELECTION& )
     {
-        return Pgm().GetCommonSettings()->m_System.local_history_enabled
+        return Pgm().GetCommonSettings()->AutosaveUsesLocalHistory()
                && Kiway().LocalHistory().HistoryExists( Prj().GetProjectPath() );
     } );
     RegisterUIUpdateHandler( restoreItem->GetId(), historyCond );
@@ -150,9 +146,18 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
                      _( "Import PADS Logic schematic and PADS ASCII PCB (*.asc, *.txt)" ),
                      ID_IMPORT_PADS_PROJECT, BITMAPS::import_project );
 
+    importMenu->Add( _( "P-CAD Project..." ),
+                     _( "Import P-CAD ASCII schematic and board" ),
+                     ID_IMPORT_PCAD_PROJECT, BITMAPS::import_project );
+
     importMenu->Add( _( "gEDA / Lepton EDA Project..." ),
                      _( "Import gEDA or Lepton EDA schematic and PCB layout" ),
                      ID_IMPORT_GEDA_PROJECT,
+                     BITMAPS::import_project );
+
+    importMenu->Add( _( "DipTrace Project..." ),
+                     _( "Import DipTrace schematic and PCB (*.dch, *.dip)" ),
+                     ID_IMPORT_DIPTRACE_PROJECT,
                      BITMAPS::import_project );
 
     fileMenu->Add( importMenu );
@@ -231,6 +236,12 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
     }
 
     toolsMenu->AppendSeparator();
+    toolsMenu->Add( _( "Compare Project Branches..." ),
+                    _( "Review the file changes between two git refs in the "
+                       "current project" ),
+                    ID_COMPARE_PROJECT_BRANCHES,
+                    BITMAPS::change_entry_orient );
+
     toolsMenu->Add( _( "Edit Local File..." ),
                     _( "Edit local file in text editor" ),
                     ID_EDIT_LOCAL_FILE_IN_TEXT_EDITOR,

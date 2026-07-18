@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <sch_io/ltspice/ltspice_schematic.h>
@@ -79,10 +79,20 @@ SCH_SHEET* SCH_IO_LTSPICE::LoadSchematicFile( const wxString& aFileName, SCHEMAT
     {
         // Mac path
         ltspiceDataDir = wxFileName( KIPLATFORM::ENV::GetUserDataPath(), wxEmptyString );
-        ltspiceDataDir.RemoveLastDir();        // "kicad"
+        ltspiceDataDir.RemoveLastDir(); // "kicad"
         ltspiceDataDir.AppendDir( wxS( "LTspice" ) );
         ltspiceDataDir.AppendDir( wxS( "lib" ) );
     }
+
+#ifdef __APPLE__
+    if( !ltspiceDataDir.DirExists() )
+    {
+        // LTspice 26 Mac path
+        ltspiceDataDir = wxFileName( "/Applications/LTspice.app/Contents/SharedSupport/ltspice/support/ltspice/drive_c/"
+                                     "users/crossover/AppData/Local/LTspice/lib",
+                                     wxEmptyString );
+    }
+#endif
 
     if( !ltspiceDataDir.DirExists() )
     {

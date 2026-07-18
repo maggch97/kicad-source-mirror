@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -111,8 +107,6 @@ public:
 
     /**
      * Get the position (center) of the barcode in internal units.
-     *
-     * @return center position of the barcode.
      */
     VECTOR2I GetPosition() const override;
     void SetPosition( const VECTOR2I& aPos ) override;
@@ -276,6 +270,12 @@ public:
      */
     void Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipLeftRight ) override;
 
+    void OnFootprintRescaled( double aRatioX, double aRatioY, double aLinearFactor, const VECTOR2I& aAnchor,
+                              const EDA_ANGLE& aParentRotate ) override;
+
+    const VECTOR2I&  GetLibraryPos() const { return m_libPos; }
+    const EDA_ANGLE& GetLibraryAngle() const { return m_libAngle; }
+
     void StyleFromSettings( const BOARD_DESIGN_SETTINGS& settings, bool aCheckSide ) override;
 
     /**
@@ -350,6 +350,8 @@ public:
      */
     virtual const BOX2I ViewBBox() const override;
 
+    double ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const override;
+
     /**
      * Compute a simple similarity score between this barcode and another board item.
      *
@@ -400,12 +402,12 @@ public:
     void SetBarcodeWidth( int aWidth );
     void SetBarcodeHeight( int aHeight );
 
-    EDA_ANGLE GetAngle() const { return m_angle; }
-    double GetOrientation() const { return m_angle.AsDegrees(); }
+    EDA_ANGLE GetAngle() const;
+    double    GetOrientation() const { return GetAngle().AsDegrees(); }
     void   SetOrientation( double aDegrees )
     {
         EDA_ANGLE newAngle( aDegrees, DEGREES_T );
-        EDA_ANGLE oldAngle = m_angle;
+        EDA_ANGLE oldAngle = GetAngle();
 
         if( newAngle != oldAngle )
         {
@@ -446,11 +448,11 @@ public:
 private:
     int            m_width;      ///< Barcode width
     int            m_height;     ///< Barcode height
-    VECTOR2I       m_pos;        ///< Position of the barcode
+    VECTOR2I       m_libPos;     ///< Position, FP-relative when in a footprint, board absolute otherwise.
     VECTOR2I       m_margin;     ///< Margin around the barcode (only valid for knockout)
     PCB_TEXT       m_text;
     BARCODE_T      m_kind;
-    EDA_ANGLE      m_angle;
+    EDA_ANGLE      m_libAngle;        ///< Angle, FP-relative when in a footprint, board absolute otherwise.
     BARCODE_ECC_T  m_errorCorrection; ///< Error correction level for QR codes
 
     mutable std::unique_ptr<PCB_BARCODE_CACHE> m_cache;

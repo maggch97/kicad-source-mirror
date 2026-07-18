@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -35,15 +31,31 @@
 
 #include <board.h>
 #include <board_design_settings.h>
+#include <footprint.h>
+#include <board_stackup_manager/board_stackup.h>
+#include <common.h>
+#include <core/utf8.h>
+#include <eda_text.h>
 #include <netinfo.h>
 #include <netclass.h>
+#include <pcb_track.h>
+#include <pcb_generator.h>
+#include <generators/pcb_tuning_pattern.h>
+#include <project.h>
+#include <pcb_text.h>
 #include <project/net_settings.h>
+#include <settings/settings_manager.h>
 #include <zone.h>
+
+#include <map>
+#include <set>
+#include <string>
+#include <vector>
 
 
 struct ALTIUM_PCB_IMPORT_FIXTURE
 {
-    ALTIUM_PCB_IMPORT_FIXTURE() {}
+    ALTIUM_PCB_IMPORT_FIXTURE() = default;
 
     PCB_IO_ALTIUM_DESIGNER m_altiumPlugin;
 };
@@ -71,6 +83,40 @@ BOOST_AUTO_TEST_CASE( BoardLoadNoAssertions )
     // Basic sanity checks
     BOOST_CHECK( board->GetNetCount() > 0 );
     BOOST_CHECK( board->Footprints().size() > 0 );
+}
+
+
+// GetImportedCachedLibraryFootprints() is caller-owns, so Altium must clone rather than alias
+// aliasing would let the reconciler (takes ownership) double-free the board
+BOOST_AUTO_TEST_CASE( CachedLibraryFootprintsAreOwnedCopies )
+{
+    std::string dataPath =
+            KI_TEST::GetPcbnewTestDataDir() + "plugins/altium/HiFive/HiFive1.B01.PcbDoc";
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+    m_altiumPlugin.LoadBoard( dataPath, board.get(), nullptr );
+
+    BOOST_REQUIRE( board );
+    BOOST_REQUIRE_GT( board->Footprints().size(), 0 );
+
+    std::vector<FOOTPRINT*> cached = m_altiumPlugin.GetImportedCachedLibraryFootprints();
+
+    // adopt ownership so the clones free with the test
+    std::vector<std::unique_ptr<FOOTPRINT>> owned;
+
+    for( FOOTPRINT* fp : cached )
+        owned.emplace_back( fp );
+
+    BOOST_CHECK_EQUAL( cached.size(), board->Footprints().size() );
+
+    std::set<FOOTPRINT*> boardFootprints( board->Footprints().begin(), board->Footprints().end() );
+
+    // no returned footprint may alias a board-owned one
+    for( FOOTPRINT* fp : cached )
+    {
+        BOOST_CHECK_MESSAGE( boardFootprints.count( fp ) == 0,
+                             "GetImportedCachedLibraryFootprints returned a board-owned footprint" );
+    }
 }
 
 
@@ -277,6 +323,380 @@ BOOST_AUTO_TEST_CASE( SelectAltiumPolygonRule_PriorityOrder )
     BOOST_CHECK( selectAltiumPolygonRule( rules ) == nullptr );
 
     BOOST_CHECK( selectAltiumPolygonRule( {} ) == nullptr );
+}
+
+
+/**
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24458
+ *
+ * The Fastino board references every via's solder mask expansion from the hole edge.  KiCad vias
+ * cannot represent a hole-referenced opening, so when the resulting opening does not clear the via
+ * land the importer must tent the side instead of leaving the copper exposed.  Before the fix these
+ * vias were imported untented, so verify the imported board tents both sides of every via.
+ *
+ * This is the same board used by the issue 24456 stackup test.
+ */
+BOOST_AUTO_TEST_CASE( Via_HoleReferencedMaskTenting )
+{
+    std::string dataPath = KI_TEST::GetPcbnewTestDataDir()
+                           + "plugins/altium/issue24456/Fastino_Ground_Isolator.PcbDoc";
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    m_altiumPlugin.LoadBoard( dataPath, board.get(), nullptr );
+
+    BOOST_REQUIRE( board );
+
+    int viaCount = 0;
+    int frontExposed = 0;
+    int backExposed = 0;
+
+    for( PCB_TRACK* track : board->Tracks() )
+    {
+        if( track->Type() != PCB_VIA_T )
+            continue;
+
+        const PCB_VIA* via = static_cast<const PCB_VIA*>( track );
+        viaCount++;
+
+        if( via->GetFrontTentingMode() != TENTING_MODE::TENTED )
+            frontExposed++;
+
+        if( via->GetBackTentingMode() != TENTING_MODE::TENTED )
+            backExposed++;
+    }
+
+    BOOST_REQUIRE_GT( viaCount, 0 );
+
+    // Every via on this board carries a hole-referenced mask opening narrower than its land, so the
+    // importer must tent both sides of all of them.
+    BOOST_CHECK_MESSAGE( frontExposed == 0,
+                         wxString::Format( "%d of %d vias left front-exposed despite a "
+                                           "hole-referenced mask",
+                                           frontExposed, viaCount ) );
+    BOOST_CHECK_MESSAGE( backExposed == 0,
+                         wxString::Format( "%d of %d vias left back-exposed despite a "
+                                           "hole-referenced mask",
+                                           backExposed, viaCount ) );
+
+    // Guard the tenting heuristic's boundary cases directly.  A wide hole-referenced opening that
+    // clears the land must NOT tent, a land-referenced via must NOT be silently tented, and an
+    // explicit Altium tent flag must always tent regardless of expansion mode.
+    const uint32_t holeSize = 300000;     // 0.3mm
+    const int      landWidth = 600000;    // 0.6mm
+
+    BOOST_CHECK( !altiumViaSideIsTented( /*tentFlag*/ false, /*manual*/ true, /*fromHole*/ true,
+                                         holeSize, /*expansion*/ 500000, landWidth ) );
+    BOOST_CHECK( !altiumViaSideIsTented( /*tentFlag*/ false, /*manual*/ true, /*fromHole*/ false,
+                                         holeSize, /*expansion*/ 30000, landWidth ) );
+    BOOST_CHECK( altiumViaSideIsTented( /*tentFlag*/ true, /*manual*/ false, /*fromHole*/ false,
+                                        holeSize, /*expansion*/ 0, landWidth ) );
+
+    // A narrow hole-referenced opening (hole + 2 * expansion <= land) tents the side.
+    BOOST_CHECK( altiumViaSideIsTented( /*tentFlag*/ false, /*manual*/ true, /*fromHole*/ true,
+                                        holeSize, /*expansion*/ 30000, landWidth ) );
+}
+
+
+/**
+ * Verify that the dielectric loss tangent is imported from the modern Altium physical stackup
+ * (LAYER_V8_/V9_STACK_LAYER keys). The legacy LAYER<n> records used to build the stackup do not
+ * carry the loss tangent, so it must be backfilled from the modern keys.
+ *
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24456
+ */
+BOOST_AUTO_TEST_CASE( StackupDielectricLossTangent )
+{
+    std::string dataPath = KI_TEST::GetPcbnewTestDataDir()
+                           + "plugins/altium/issue24456/Fastino_Ground_Isolator.PcbDoc";
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    m_altiumPlugin.LoadBoard( dataPath, board.get(), nullptr );
+
+    BOOST_REQUIRE( board );
+
+    const BOARD_STACKUP& stackup = board->GetDesignSettings().GetStackupDescriptor();
+
+    int dielectricCount = 0;
+    int dielectricWithTangent = 0;
+
+    for( const BOARD_STACKUP_ITEM* item : stackup.GetList() )
+    {
+        if( item->GetType() != BS_ITEM_TYPE_DIELECTRIC )
+            continue;
+
+        for( int sub = 0; sub < item->GetSublayersCount(); sub++ )
+        {
+            // Only count dielectric sublayers that carry a real dielectric (non-zero thickness)
+            if( item->GetThickness( sub ) <= 0 )
+                continue;
+
+            dielectricCount++;
+
+            double tangent = item->GetLossTangent( sub );
+
+            if( tangent > 0. )
+            {
+                dielectricWithTangent++;
+
+                // Every prepreg/core dielectric in this board uses a 0.020 loss tangent.
+                BOOST_CHECK_CLOSE( tangent, 0.020, 1e-6 );
+            }
+        }
+    }
+
+    BOOST_REQUIRE_GT( dielectricCount, 0 );
+
+    // All of the board's substantive dielectrics carry a loss tangent in the Altium source, so
+    // every imported dielectric sublayer must receive it.
+    BOOST_CHECK_MESSAGE( dielectricWithTangent == dielectricCount,
+                         wxString::Format( "Only %d of %d dielectric sublayers received a loss "
+                                           "tangent from the Altium stackup",
+                                           dielectricWithTangent, dielectricCount ) );
+}
+
+
+/**
+ * Test that Altium project parameters (special strings) are imported as KiCad project text
+ * variables so that board text such as ".PCB_Revision" resolves to its value.
+ *
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24455
+ */
+BOOST_AUTO_TEST_CASE( ProjectParametersToTextVars )
+{
+    std::string dataDir = KI_TEST::GetPcbnewTestDataDir() + "plugins/altium/issue24456/";
+    std::string pcbDoc = dataDir + "Fastino_Ground_Isolator.PcbDoc";
+    std::string prjPcb = dataDir + "Fastino_Ground_Isolator.PrjPcb";
+
+    SETTINGS_MANAGER settingsManager;
+    settingsManager.LoadProject( "" );
+    PROJECT& project = settingsManager.Prj();
+
+    std::map<std::string, UTF8> props;
+    props["project_file"] = prjPcb;
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    m_altiumPlugin.LoadBoard( pcbDoc, board.get(), &props, &project );
+
+    const std::map<wxString, wxString>& textVars = project.GetTextVars();
+
+    // The parameter that the issue reports as broken must resolve to its value.
+    BOOST_REQUIRE( textVars.count( wxS( "PCB_REVISION" ) ) );
+    BOOST_CHECK_EQUAL( textVars.at( wxS( "PCB_REVISION" ) ), wxS( "A" ) );
+
+    // A representative sample of the remaining project parameters must all be present.
+    BOOST_CHECK_EQUAL( textVars.at( wxS( "COMPANY_NAME" ) ), wxS( "ETH Zurich" ) );
+    BOOST_CHECK_EQUAL( textVars.at( wxS( "PROJECT_NAME" ) ), wxS( "Fastino Ground Isolator" ) );
+    BOOST_CHECK_EQUAL( textVars.at( wxS( "REVISION_MAJOR" ) ), wxS( "1" ) );
+    BOOST_CHECK_EQUAL( textVars.at( wxS( "YEAR" ) ), wxS( "2026" ) );
+
+    // Board text referencing the special string now resolves through the project variable.
+    wxString resolved = ExpandTextVars( wxS( "${PCB_REVISION}" ), &project );
+    BOOST_CHECK_EQUAL( resolved, wxS( "A" ) );
+
+    // End-to-end: an actual imported board text that references ${PCB_REVISION} must render its
+    // value once the board is linked to the project carrying the variable. This guards against a
+    // regression in the Altium special-string conversion as well as the variable registration.
+    board->SetProject( &project, true /* reference only */ );
+
+    bool sawResolvedBoardText = false;
+
+    for( BOARD_ITEM* item : board->Drawings() )
+    {
+        const EDA_TEXT* text = dynamic_cast<const EDA_TEXT*>( item );
+
+        if( text && text->GetText().Contains( wxS( "${PCB_REVISION}" ) ) )
+        {
+            wxString shown = text->GetShownText( false );
+            BOOST_CHECK( !shown.Contains( wxS( "${PCB_REVISION}" ) ) );
+            BOOST_CHECK( shown.Contains( wxS( "A" ) ) );
+            sawResolvedBoardText = true;
+        }
+    }
+
+    BOOST_CHECK( sawResolvedBoardText );
+}
+
+
+/**
+ * Test that importing project parameters does not overwrite text variables that already exist
+ * on the project, and that names reserved for KiCad's contextual resolution are not imported.
+ */
+BOOST_AUTO_TEST_CASE( ProjectParametersPreserveExisting )
+{
+    std::string dataDir = KI_TEST::GetPcbnewTestDataDir() + "plugins/altium/issue24456/";
+    std::string pcbDoc = dataDir + "Fastino_Ground_Isolator.PcbDoc";
+    std::string prjPcb = dataDir + "Fastino_Ground_Isolator.PrjPcb";
+
+    SETTINGS_MANAGER settingsManager;
+    settingsManager.LoadProject( "" );
+    PROJECT& project = settingsManager.Prj();
+    project.GetTextVars()[wxS( "PCB_REVISION" )] = wxS( "user-set" );
+
+    std::map<std::string, UTF8> props;
+    props["project_file"] = prjPcb;
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    m_altiumPlugin.LoadBoard( pcbDoc, board.get(), &props, &project );
+
+    // A pre-existing variable wins over the imported parameter.
+    BOOST_CHECK_EQUAL( project.GetTextVars().at( wxS( "PCB_REVISION" ) ), wxS( "user-set" ) );
+
+    // Other parameters are still imported.
+    BOOST_CHECK_EQUAL( project.GetTextVars().at( wxS( "COMPANY_NAME" ) ), wxS( "ETH Zurich" ) );
+}
+
+
+/**
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24504
+ *
+ * The Fastino board places several labels as a coincident pair of free strings, one on a copper
+ * layer and one on the matching soldermask layer.  Altium auto-sizes each string's bounding box
+ * from its own rasterizer and may store a different box width (and stroke width) for the two
+ * copies, so anchoring the imported KiCad text to that per-record box width pushed the copper and
+ * mask copies apart.  Verify that every copper-layer free string that has a matching soldermask
+ * free string (same text, mirroring and rotation) is imported to the same position.
+ */
+BOOST_AUTO_TEST_CASE( CopperAndMaskTextCoincide )
+{
+    std::string dataPath = KI_TEST::GetPcbnewTestDataDir()
+                           + "plugins/altium/issue24456/Fastino_Ground_Isolator.PcbDoc";
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+    m_altiumPlugin.LoadBoard( dataPath, board.get(), nullptr );
+    BOOST_REQUIRE( board );
+
+    std::vector<PCB_TEXT*> copperTexts;
+    std::vector<PCB_TEXT*> maskTexts;
+
+    for( BOARD_ITEM* item : board->Drawings() )
+    {
+        if( item->Type() != PCB_TEXT_T )
+            continue;
+
+        PCB_TEXT*    text = static_cast<PCB_TEXT*>( item );
+        PCB_LAYER_ID layer = text->GetLayer();
+
+        if( IsCopperLayer( layer ) )
+            copperTexts.push_back( text );
+        else if( layer == F_Mask || layer == B_Mask )
+            maskTexts.push_back( text );
+    }
+
+    BOOST_REQUIRE_MESSAGE( !copperTexts.empty(), "Board must contain copper-layer text" );
+    BOOST_REQUIRE_MESSAGE( !maskTexts.empty(), "Board must contain soldermask-layer text" );
+
+    // A copper string and a mask string are the same logical label when they share text, rotation
+    // and mirroring.  KiCad's IU tolerance for "coincident" is tight; before the fix the gap was
+    // 50000-75000 IU (0.05-0.075 mm).
+    const int tolerance = 1000; // 1 micron
+
+    int matchedPairs = 0;
+
+    for( PCB_TEXT* copper : copperTexts )
+    {
+        for( PCB_TEXT* mask : maskTexts )
+        {
+            if( copper->GetText() != mask->GetText()
+                || copper->GetTextAngle() != mask->GetTextAngle()
+                || copper->IsMirrored() != mask->IsMirrored() )
+            {
+                continue;
+            }
+
+            // Only treat them as the same label when they are already near each other; distinct
+            // labels that happen to share a glyph (e.g. several "+" pads) must not be cross-matched.
+            VECTOR2I delta = copper->GetTextPos() - mask->GetTextPos();
+
+            if( std::abs( delta.x ) > 500000 || std::abs( delta.y ) > 500000 )
+                continue;
+
+            matchedPairs++;
+
+            BOOST_CHECK_MESSAGE(
+                    std::abs( delta.x ) <= tolerance && std::abs( delta.y ) <= tolerance,
+                    wxString::Format( "Copper/mask copies of '%s' diverge by (%d, %d) IU",
+                                      copper->GetText(), delta.x, delta.y ) );
+        }
+    }
+
+    BOOST_CHECK_MESSAGE( matchedPairs > 0,
+                         "Expected at least one coincident copper/soldermask text pair" );
+}
+
+
+/**
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24654
+ *
+ * Altium stores interactive length-tuning meanders as committed tracks and arcs plus a parametric
+ * definition in the SmartUnions stream, referenced from each primitive by a union index.  The
+ * importer used to drop the SmartUnions stream, so a converted board kept the tuned copper but lost
+ * the editable length-tuning tool.  Verify that the Coil sample rebuilds its eight tuning patterns
+ * (four single-track, four differential-pair) as PCB_TUNING_PATTERN generators wrapping the
+ * imported copper.
+ */
+BOOST_AUTO_TEST_CASE( LengthTuningPatterns )
+{
+    std::string dataPath =
+            KI_TEST::GetPcbnewTestDataDir() + "plugins/altium/issue24654/PCB1.PcbDoc";
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+    m_altiumPlugin.LoadBoard( dataPath, board.get(), nullptr );
+
+    BOOST_REQUIRE( board );
+
+    int tuningCount = 0;
+    int singleCount = 0;
+    int diffPairCount = 0;
+
+    for( PCB_GENERATOR* generator : board->Generators() )
+    {
+        PCB_TUNING_PATTERN* pattern = dynamic_cast<PCB_TUNING_PATTERN*>( generator );
+
+        if( !pattern )
+            continue;
+
+        tuningCount++;
+
+        // Each pattern must wrap the real imported copper and carry Altium's meander parameters.
+        BOOST_CHECK_MESSAGE( !pattern->GetBoardItems().empty(),
+                             "Imported tuning pattern wraps no copper" );
+        BOOST_CHECK_GT( pattern->GetMaxAmplitude(), 0 );
+        BOOST_CHECK_GT( pattern->GetSpacing(), 0 );
+
+        // The members must be copper tracks/arcs that the importer placed on the board.
+        std::set<int> memberNets;
+
+        for( BOARD_ITEM* item : pattern->GetBoardItems() )
+        {
+            BOOST_CHECK( item->Type() == PCB_TRACE_T || item->Type() == PCB_ARC_T );
+            BOOST_CHECK( item->GetParentGroup() == pattern );
+
+            if( BOARD_CONNECTED_ITEM* bci = dynamic_cast<BOARD_CONNECTED_ITEM*>( item ) )
+                memberNets.insert( bci->GetNetCode() );
+        }
+
+        if( pattern->GetTuningMode() == DIFF_PAIR )
+        {
+            diffPairCount++;
+
+            // A differential-pair meander must keep both nets; collapsing them to one would
+            // corrupt half the routing.
+            BOOST_CHECK_EQUAL( memberNets.size(), 2 );
+        }
+        else if( pattern->GetTuningMode() == SINGLE )
+        {
+            singleCount++;
+            BOOST_CHECK_EQUAL( memberNets.size(), 1 );
+        }
+    }
+
+    BOOST_CHECK_EQUAL( tuningCount, 8 );
+    BOOST_CHECK_EQUAL( singleCount, 4 );
+    BOOST_CHECK_EQUAL( diffPairCount, 4 );
 }
 
 

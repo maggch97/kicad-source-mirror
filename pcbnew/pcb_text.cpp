@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <google/protobuf/any.pb.h>
@@ -52,7 +48,8 @@
 
 PCB_TEXT::PCB_TEXT( BOARD_ITEM* parent, KICAD_T idtype ) :
         BOARD_ITEM( parent, idtype ),
-        EDA_TEXT( pcbIUScale )
+        EDA_TEXT( pcbIUScale ),
+        m_libTextAngle( ANGLE_0 )
 {
     SetMultilineAllowed( true );
 }
@@ -60,7 +57,8 @@ PCB_TEXT::PCB_TEXT( BOARD_ITEM* parent, KICAD_T idtype ) :
 
 PCB_TEXT::PCB_TEXT( FOOTPRINT* aParent, KICAD_T idtype ) :
         BOARD_ITEM( aParent, idtype ),
-        EDA_TEXT( pcbIUScale )
+        EDA_TEXT( pcbIUScale ),
+        m_libTextAngle( ANGLE_0 )
 {
     SetKeepUpright( true );
 
@@ -81,7 +79,8 @@ PCB_TEXT::PCB_TEXT( FOOTPRINT* aParent, KICAD_T idtype ) :
 
 PCB_TEXT::PCB_TEXT( const PCB_TEXT& aOther ) :
         BOARD_ITEM( aOther ),
-        EDA_TEXT( aOther )
+        EDA_TEXT( aOther ),
+        m_libTextAngle( aOther.m_libTextAngle )
 {
 }
 
@@ -94,6 +93,7 @@ PCB_TEXT& PCB_TEXT::operator=( const PCB_TEXT& aOther )
     BOARD_ITEM::operator=( aOther );
     EDA_TEXT::operator=( aOther );
     m_knockout_cache.reset();
+    m_libTextAngle = aOther.m_libTextAngle;
 
     return *this;
 }
@@ -442,6 +442,126 @@ bool PCB_TEXT::TextHitTest( const SHAPE_LINE_CHAIN& aPoly, bool aContained ) con
 }
 
 
+VECTOR2I PCB_TEXT::GetTextPos() const
+{
+    if( const FOOTPRINT* fp = GetParentFootprint() )
+        return fp->GetTransform().Apply( EDA_TEXT::GetTextPos() );
+
+    return EDA_TEXT::GetTextPos();
+}
+
+
+VECTOR2I PCB_TEXT::GetTextSize() const
+{
+    VECTOR2I libSize = EDA_TEXT::GetTextSize();
+
+    if( const FOOTPRINT* fp = GetParentFootprint() )
+    {
+        const TRANSFORM_TRS& xf = fp->GetTransform();
+        return { KiROUND( libSize.x * std::abs( xf.GetScaleX() ) ), KiROUND( libSize.y * std::abs( xf.GetScaleY() ) ) };
+    }
+
+    return libSize;
+}
+
+
+void PCB_TEXT::SetTextSize( VECTOR2I aNewSize, bool aEnforceMinTextSize )
+{
+    if( const FOOTPRINT* fp = GetParentFootprint() )
+    {
+        const TRANSFORM_TRS& xf = fp->GetTransform();
+        aNewSize = { KiROUND( aNewSize.x / std::abs( xf.GetScaleX() ) ),
+                     KiROUND( aNewSize.y / std::abs( xf.GetScaleY() ) ) };
+    }
+
+    EDA_TEXT::SetTextSize( aNewSize, aEnforceMinTextSize );
+}
+
+
+int PCB_TEXT::GetTextThickness() const
+{
+    int libThickness = EDA_TEXT::GetTextThickness();
+
+    if( const FOOTPRINT* fp = GetParentFootprint() )
+    {
+        const TRANSFORM_TRS& xf = fp->GetTransform();
+        const double         factor = ( std::abs( xf.GetScaleX() ) + std::abs( xf.GetScaleY() ) ) * 0.5;
+        return KiROUND( libThickness * factor );
+    }
+
+    return libThickness;
+}
+
+
+void PCB_TEXT::SetTextThickness( int aWidth )
+{
+    if( const FOOTPRINT* fp = GetParentFootprint() )
+    {
+        const TRANSFORM_TRS& xf = fp->GetTransform();
+        const double         factor = ( std::abs( xf.GetScaleX() ) + std::abs( xf.GetScaleY() ) ) * 0.5;
+        aWidth = KiROUND( aWidth / factor );
+    }
+
+    EDA_TEXT::SetTextThickness( aWidth );
+}
+
+
+void PCB_TEXT::Offset( const VECTOR2I& aOffset )
+{
+    if( const FOOTPRINT* fp = GetParentFootprint() )
+    {
+        VECTOR2I curBoardPos = fp->GetTransform().Apply( EDA_TEXT::GetTextPos() );
+        VECTOR2I newLibPos = fp->GetTransform().InverseApply( curBoardPos + aOffset );
+        VECTOR2I libDelta = newLibPos - EDA_TEXT::GetTextPos();
+        ClearRenderCache();
+        EDA_TEXT::Offset( libDelta );
+    }
+    else
+    {
+        EDA_TEXT::Offset( aOffset );
+    }
+}
+
+
+void PCB_TEXT::SetLibTextPos( const VECTOR2I& aPos )
+{
+    EDA_TEXT::Offset( aPos - EDA_TEXT::GetTextPos() );
+}
+
+
+void PCB_TEXT::SetLibTextSize( const VECTOR2I& aSize )
+{
+    EDA_TEXT::SetTextSize( aSize );
+}
+
+
+void PCB_TEXT::SetLibTextThickness( int aWidth )
+{
+    EDA_TEXT::SetTextThickness( aWidth );
+}
+
+
+EDA_ANGLE PCB_TEXT::GetTextAngle() const
+{
+    if( const FOOTPRINT* fp = GetParentFootprint() )
+        return m_libTextAngle + fp->GetOrientation();
+
+    return m_libTextAngle;
+}
+
+
+void PCB_TEXT::SetTextAngle( const EDA_ANGLE& aAngle )
+{
+    if( const FOOTPRINT* fp = GetParentFootprint() )
+        m_libTextAngle = aAngle - fp->GetOrientation();
+    else
+        m_libTextAngle = aAngle;
+
+    m_libTextAngle.Normalize();
+    EDA_TEXT::SetTextAngle( aAngle );
+}
+
+
 void PCB_TEXT::Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle )
 {
     VECTOR2I pt = GetTextPos();
@@ -475,18 +595,52 @@ void PCB_TEXT::Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 }
 
 
+void PCB_TEXT::OnFootprintRescaled( double /* aRatioX */, double /* aRatioY */, double /* aLinearFactor */,
+                                    const VECTOR2I& /* aAnchor */, const EDA_ANGLE& /* aParentRotate */ )
+{
+    OnFootprintTransformed();
+}
+
+
+void PCB_TEXT::OnFootprintTransformed()
+{
+    SetTextAngle( GetTextAngle() );
+    ClearRenderCache();
+    ClearBoundingBoxCache();
+}
+
+
 void PCB_TEXT::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 {
-    if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
+    if( const FOOTPRINT* fp = GetParentFootprint() )
+    {
+        // Mirror the library-frame position (rotation-independent).
+        const VECTOR2I libAxis = fp->GetTransform().InverseApply( aCentre );
+        VECTOR2I       libPos = EDA_TEXT::GetTextPos();
+
+        if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
+            libPos.x = 2 * libAxis.x - libPos.x;
+        else
+            libPos.y = 2 * libAxis.y - libPos.y;
+
+        SetLibTextPos( libPos );
+    }
+    else if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
     {
         SetTextX( MIRRORVAL( GetTextPos().x, aCentre.x ) );
-        SetTextAngle( -GetTextAngle() );
     }
     else
     {
         SetTextY( MIRRORVAL( GetTextPos().y, aCentre.y ) );
-        SetTextAngle( ANGLE_180 - GetTextAngle() );
     }
+
+    if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
+        m_libTextAngle = -m_libTextAngle;
+    else
+        m_libTextAngle = ANGLE_180 - m_libTextAngle;
+
+    m_libTextAngle.Normalize();
+    EDA_TEXT::SetTextAngle( GetTextAngle() );
 
     SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
 
@@ -529,7 +683,7 @@ EDA_ITEM* PCB_TEXT::Clone() const
 
 void PCB_TEXT::swapData( BOARD_ITEM* aImage )
 {
-    assert( aImage->Type() == PCB_TEXT_T );
+    wxASSERT( aImage->Type() == PCB_TEXT_T );
 
     std::swap( *( (PCB_TEXT*) this ), *( (PCB_TEXT*) aImage ) );
 }
@@ -554,6 +708,7 @@ const SHAPE_POLY_SET& PCB_TEXT::GetKnockoutCache( const KIFONT::FONT* aFont, con
                                                   int aMaxError ) const
 {
     TEXT_ATTRIBUTES attrs = GetAttributes();
+    attrs.m_Size = GetTextSize();
     EDA_ANGLE       drawAngle = GetDrawRotation();
     VECTOR2I        drawPos = GetDrawPos();
 
@@ -622,6 +777,7 @@ void PCB_TEXT::TransformTextToPolySet( SHAPE_POLY_SET& aBuffer, int aClearance, 
     wxString                   shownText = GetShownText( true );
 
     attrs.m_Angle = GetDrawRotation();
+    attrs.m_Size = GetTextSize();
 
     // The polygonal shape of a text can have many basic shapes, so combining these shapes can
     // be very useful to create a final shape with a lot less vertices to speedup calculations.

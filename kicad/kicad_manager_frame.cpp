@@ -16,17 +16,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "kicad_id.h"
 #include "pcm.h"
 #include "pgm_kicad.h"
+#include "project_tree.h"
 #include "project_tree_pane.h"
+#include <dialogs/dialog_git_mr_review.h>
 #include "local_history_pane.h"
 #include "widgets/bitmap_button.h"
 
@@ -73,11 +71,13 @@
 #include <wildcards_and_files_ext.h>
 #include <widgets/app_progress_dialog.h>
 #include <widgets/kistatusbar.h>
+#include <widgets/ui_common.h>
 #include <wx/ffile.h>
 #include <wx/filedlg.h>
 #include <wx/dnd.h>
 #include <wx/process.h>
 #include <wx/snglinst.h>
+#include <algorithm>
 #include <atomic>
 #include <update_manager.h>
 #include <jobs/jobset.h>
@@ -121,7 +121,11 @@ BEGIN_EVENT_TABLE( KICAD_MANAGER_FRAME, EDA_BASE_FRAME )
     EVT_MENU( ID_IMPORT_EASYEDAPRO_PROJECT, KICAD_MANAGER_FRAME::OnImportEasyEdaProFiles )
     EVT_MENU( ID_IMPORT_ALTIUM_PROJECT, KICAD_MANAGER_FRAME::OnImportAltiumProjectFiles )
     EVT_MENU( ID_IMPORT_PADS_PROJECT, KICAD_MANAGER_FRAME::OnImportPadsProjectFiles )
+    EVT_MENU( ID_IMPORT_PCAD_PROJECT, KICAD_MANAGER_FRAME::OnImportPcadProjectFiles )
     EVT_MENU( ID_IMPORT_GEDA_PROJECT, KICAD_MANAGER_FRAME::OnImportGedaFiles )
+    EVT_MENU( ID_IMPORT_DIPTRACE_PROJECT, KICAD_MANAGER_FRAME::OnImportDipTraceFiles )
+    EVT_MENU( ID_COMPARE_PROJECT_BRANCHES,
+              KICAD_MANAGER_FRAME::OnCompareProjectBranches )
 
     // Range menu events
     EVT_MENU_RANGE( ID_FILE1, ID_FILEMAX, KICAD_MANAGER_FRAME::OnFileHistory )
@@ -390,8 +394,20 @@ wxStatusBar* KICAD_MANAGER_FRAME::OnCreateStatusBar( int number, long style, wxW
     for( size_t i = 0; i < sbFieldCnt; i++ )
         sbFieldSizes[i] = sb->GetStatusWidth( static_cast<int>( i ) );
 
-    if( sbFieldCnt )
-        sbFieldSizes[0] = -3;
+    // Field 0 (the project path) is the only stretchable field so it uses all the leftover width
+    // before ellipsizing. Field 1 gets a fixed width sized to its watcher text; longer content
+    // (archive progress) is ellipsized rather than allowed to steal the path's width.
+    if( sbFieldCnt > 0 )
+        sbFieldSizes[0] = -1;
+
+    if( sbFieldCnt > 1 )
+    {
+        int margin = KIUI::GetTextSize( wxT( "XX" ), sb ).x;
+        int watcherWidth = std::max( KIUI::GetTextSize( _( "Local path: monitoring folder changes" ), sb ).x,
+                                     KIUI::GetTextSize( _( "Network path: not monitoring folder changes" ), sb ).x );
+
+        sbFieldSizes[1] = watcherWidth + margin;
+    }
 
     sb->SetStatusWidths( sbFieldCnt, sbFieldSizes.data() );
 
@@ -803,7 +819,8 @@ bool KICAD_MANAGER_FRAME::CloseProject( bool aSave )
         // Wait for any in-flight autosave so the HEAD check below isn't racing it.
         Kiway().LocalHistory().WaitForPendingSave();
 
-        if( !projPath.IsEmpty() && Kiway().LocalHistory().HistoryExists( projPath ) )
+        if( Pgm().GetCommonSettings()->AutosaveUsesLocalHistory()
+                && !projPath.IsEmpty() && Kiway().LocalHistory().HistoryExists( projPath ) )
         {
             if( Kiway().LocalHistory().HeadNewerThanLastSave( projPath ) )
             {
@@ -819,7 +836,8 @@ bool KICAD_MANAGER_FRAME::CloseProject( bool aSave )
 
         m_active_project = false;
         // Enforce local history size limit (if enabled) once all pending saves/backups are done.
-        if( Pgm().GetCommonSettings() && Pgm().GetCommonSettings()->m_Backup.enabled )
+        if( Pgm().GetCommonSettings()
+                && Pgm().GetCommonSettings()->AutosaveUsesLocalHistory() )
         {
             unsigned long long int limit = Pgm().GetCommonSettings()->m_Backup.limit_total_size;
 
@@ -975,7 +993,8 @@ bool KICAD_MANAGER_FRAME::LoadProject( const wxFileName& aProjectFileName )
     if( aProjectFileName.IsDirWritable() )
         SetMruPath( Prj().GetProjectPath() );
 
-    if( Kiway().LocalHistory().HeadNewerThanLastSave( Prj().GetProjectPath() ) )
+    if( Pgm().GetCommonSettings()->AutosaveUsesLocalHistory()
+            && Kiway().LocalHistory().HeadNewerThanLastSave( Prj().GetProjectPath() ) )
     {
         wxString head = Kiway().LocalHistory().GetHeadHash( Prj().GetProjectPath() );
 
@@ -991,7 +1010,8 @@ bool KICAD_MANAGER_FRAME::LoadProject( const wxFileName& aProjectFileName )
 
         if( dlg.ShowModal() == wxID_YES )
         {
-            Kiway().LocalHistory().RestoreCommit( Prj().GetProjectPath(), head, this );
+            // The dialog above is the confirmation, skip RestoreCommit's own prompt.
+            Kiway().LocalHistory().RestoreCommit( Prj().GetProjectPath(), head, this, false );
         }
         else
         {
@@ -1151,6 +1171,65 @@ void KICAD_MANAGER_FRAME::CreateNewProject( const wxFileName& aProjectFileName, 
 }
 
 
+void KICAD_MANAGER_FRAME::OnCompareProjectBranches( wxCommandEvent& event )
+{
+    git_repository* repo = ( m_projectTreePane && m_projectTreePane->m_TreeProject )
+                                   ? m_projectTreePane->m_TreeProject->GetGitRepo()
+                                   : nullptr;
+
+    if( !repo )
+    {
+        wxMessageBox( _( "Compare Project Branches requires a project that is "
+                         "tracked by git." ),
+                      _( "Compare Branches" ),
+                      wxOK | wxICON_INFORMATION, this );
+        return;
+    }
+
+    // Seed the picker with the conventional "MR" pair: an integration branch
+    // (main/master) as the base, the current branch as the head. Resolve the
+    // current branch from HEAD so a checked-out feature branch lands at
+    // index 1 (where DIALOG_GIT_MR_REVIEW selects its head ref) instead of
+    // the literal "HEAD" string.
+    wxString currentBranch;
+    git_reference* head = nullptr;
+
+    if( git_repository_head( &head, repo ) == 0 )
+    {
+        const char* shorthand = git_reference_shorthand( head );
+
+        if( shorthand && *shorthand )
+            currentBranch = wxString::FromUTF8( shorthand );
+
+        git_reference_free( head );
+    }
+
+    std::vector<wxString> refs;
+
+    auto pushUnique = [&]( const wxString& aRef )
+    {
+        if( aRef.IsEmpty() )
+            return;
+
+        for( const wxString& existing : refs )
+        {
+            if( existing == aRef )
+                return;
+        }
+
+        refs.push_back( aRef );
+    };
+
+    pushUnique( wxS( "main" ) );
+    pushUnique( wxS( "master" ) );
+    pushUnique( currentBranch );
+    pushUnique( wxS( "HEAD" ) );
+
+    DIALOG_GIT_MR_REVIEW dlg( this, repo, refs );
+    dlg.ShowModal();
+}
+
+
 void KICAD_MANAGER_FRAME::OnOpenFileInTextEditor( wxCommandEvent& event )
 {
     // show all files in file dialog (in Kicad all files are editable texts):
@@ -1299,7 +1378,8 @@ void KICAD_MANAGER_FRAME::ProjectChanged()
             [this]( const wxString& aProjectPath, std::vector<HISTORY_FILE_DATA>& aFileData )
             {
                 Prj().SaveToHistory( aProjectPath, aFileData );
-            } );
+            },
+            Prj().GetHistoryLifetimeToken() );
 }
 
 

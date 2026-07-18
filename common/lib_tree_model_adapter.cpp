@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <eda_base_frame.h>
@@ -38,6 +38,15 @@
 
 
 static const int kDataViewIndent = 20;
+
+
+bool LIB_TREE_MODEL_ADAPTER::IsValidColumnWidth( int aWidth )
+{
+    // An out-of-range persisted width (seen after mixed-DPI monitor changes) can push the
+    // tree content out of view and leave the chooser unusable, so anything outside a width
+    // that could legitimately fit on a display is treated as corrupt rather than a resize.
+    return aWidth > 0 && aWidth <= MAX_COL_WIDTH;
+}
 
 
 class LIB_TREE_RENDERER : public wxDataViewCustomRenderer
@@ -175,7 +184,10 @@ TOOL_DISPATCHER* LIB_TREE_MODEL_ADAPTER::GetToolDispatcher() const
 void LIB_TREE_MODEL_ADAPTER::loadColumnConfig()
 {
     for( const std::pair<const wxString, int>& pair : m_cfg.column_widths )
-        m_colWidths[pair.first] = pair.second;
+    {
+        if( IsValidColumnWidth( pair.second ) )
+            m_colWidths[pair.first] = pair.second;
+    }
 
     m_shownColumns = m_cfg.columns;
 
@@ -228,7 +240,7 @@ void LIB_TREE_MODEL_ADAPTER::SaveSettings()
 
         for( const std::pair<const wxString, wxDataViewColumn*>& pair : m_colNameMap )
         {
-            if( pair.second )
+            if( pair.second && IsValidColumnWidth( pair.second->GetWidth() ) )
                 m_cfg.column_widths[pair.first] = pair.second->GetWidth();
         }
 
@@ -547,7 +559,20 @@ int LIB_TREE_MODEL_ADAPTER::GetItemCount() const
     int n = 0;
 
     for( const std::unique_ptr<LIB_TREE_NODE>& lib: m_tree.m_Children )
-        n += lib->m_Children.size();
+    {
+        if( m_filter )
+        {
+            for( const std::unique_ptr<LIB_TREE_NODE>& child : lib->m_Children )
+            {
+                if( (*m_filter)( *child ) )
+                    n++;
+            }
+        }
+        else
+        {
+            n += lib->m_Children.size();
+        }
+    }
 
     return n;
 }
@@ -656,8 +681,14 @@ void LIB_TREE_MODEL_ADAPTER::RefreshTree()
 
         for( const auto& [ colName, colPtr ] : m_colNameMap )
         {
-            if( i < widths.size() )
-                m_colWidths[ colName ] = widths[i++];
+            if( i >= widths.size() )
+                break;
+
+            int width = widths[i++];
+
+            // Keep the prior sane width if a DPI change handed back a corrupt one.
+            if( IsValidColumnWidth( width ) )
+                m_colWidths[ colName ] = width;
         }
     }
 
@@ -701,17 +732,17 @@ wxDataViewItem LIB_TREE_MODEL_ADAPTER::GetParent( const wxDataViewItem& aItem ) 
         return ToItem( nullptr );
 
     LIB_TREE_NODE* node   = ToNode( aItem );
-    LIB_TREE_NODE* parent = node ? node->m_Parent : nullptr;
 
-    if( node->m_Type == LIB_TREE_NODE::TYPE::INVALID )
+    if( !node || node->m_Type == LIB_TREE_NODE::TYPE::INVALID )
         return ToItem( nullptr );
 
-    // wxDataViewModel has no root node, but rather top-level elements have
-    // an invalid (null) parent.
-    if( !node || !parent || parent->m_Type == LIB_TREE_NODE::TYPE::ROOT )
+    LIB_TREE_NODE* parent = node->m_Parent;
+
+    // wxDataViewModel has no root node, but rather top-level elements have an invalid (null) parent.
+    if( !parent || parent->m_Type == LIB_TREE_NODE::TYPE::ROOT )
         return ToItem( nullptr );
-    else
-        return ToItem( parent );
+
+    return ToItem( parent );
 }
 
 

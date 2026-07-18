@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialogs/dialog_text_entry.h>
@@ -41,6 +37,11 @@ WX_TEXT_ENTRY_DIALOG::WX_TEXT_ENTRY_DIALOG( wxWindow* aParent, const wxString& a
     // DIALOG_SHIM needs a title- and label-specific hash_key so we don't save/restore state between
     // usage cases.
     m_hash_key = TO_UTF8( aCaption + aFieldLabel );
+
+    // The text value is always supplied by the caller through aDefaultValue and is specific to the
+    // item being edited.  Persisting and restoring it would clobber that value with whatever was last
+    // entered, so opt the control out of DIALOG_SHIM state save/restore.
+    OptOut( m_textCtrl );
 
     SetupStandardButtons();
 

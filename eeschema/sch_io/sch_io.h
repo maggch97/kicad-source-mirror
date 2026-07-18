@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef SCH_IO_H_
@@ -169,8 +169,8 @@ public:
     /**
      * Populate a list of #LIB_SYMBOL aliases contained within the library \a aLibraryPath.
      *
-     * @note It is the responsibility of the caller to delete the returned object from the heap.
-     *       Failure to do this will result in memory leaks.
+     * @note The returned #LIB_SYMBOL objects are owned by the plugin's library cache; callers
+     *       must copy them if they need a symbol that outlives the plugin.
      *
      * @param aSymbolList is an array to populate with the #LIB_SYMBOL pointers associated with
      *                    the library.

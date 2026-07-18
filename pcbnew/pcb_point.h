@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -60,16 +56,19 @@ public:
         bool operator()( const PCB_POINT* a, const PCB_POINT* b ) const;
     };
 
-    void     SetPosition( const VECTOR2I& aPos ) override { m_pos = aPos; }
+    void     SetPosition( const VECTOR2I& aPos ) override;
     VECTOR2I GetPosition() const override { return m_pos; }
+    VECTOR2I GetLibraryPosition() const { return m_libPos; }
+
+    void SetParent( EDA_ITEM* aParent ) override;
+
+    /// Refresh the cached board position after the parent footprint's transform changed.
+    void OnFootprintTransformed() override;
 
     void SetSize( const int aSize ) { m_size = aSize; }
     int  GetSize() const { return m_size; }
 
-    void Move( const VECTOR2I& aMoveVector ) override
-    {
-        m_pos += aMoveVector;
-    }
+    void Move( const VECTOR2I& aMoveVector ) override { SetPosition( GetPosition() + aMoveVector ); }
 
     double ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const override;
     std::vector<int> ViewGetLayers() const override;
@@ -129,7 +128,12 @@ protected:
     virtual void swapData( BOARD_ITEM* aImage ) override;
 
 private:
-    // Center of the point
+    /// Recompute the cached board position from the library position and parent transform.
+    void recomputePosition();
+
+    // Position in parent footprint's library frame (or board space if no parent footprint)
+    VECTOR2I m_libPos;
+    // Cached board-space position, refreshed when the parent footprint transform changes
     VECTOR2I m_pos;
     // Visual size of the point in board space
     int m_size;

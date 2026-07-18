@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -31,6 +27,7 @@
 
 class BOARD_DESIGN_SETTINGS;
 class PANEL_ZONE_PROPERTIES;
+class PANEL_SETUP_ZONE_HATCH_OFFSETS;
 
 
 class PANEL_SETUP_ZONES : public PANEL_SETUP_ZONES_BASE
@@ -44,8 +41,14 @@ public:
 
     bool CommitPendingChanges();
 
+    void ImportSettingsFrom( BOARD* aBoard );
+    void ImportHatchOffsetsFrom( BOARD* aBoard );
+
+    void SyncCopperLayers( int aCopperLayerCount );
+
 private:
-    BOARD_DESIGN_SETTINGS&  m_brdSettings;
-    ZONE_SETTINGS_BAG       m_zoneSettingsBag;
-    PANEL_ZONE_PROPERTIES*  m_panelZoneProperties;
+    BOARD_DESIGN_SETTINGS&          m_brdSettings;
+    ZONE_SETTINGS_BAG               m_zoneSettingsBag;
+    PANEL_ZONE_PROPERTIES*          m_panelZoneProperties;
+    PANEL_SETUP_ZONE_HATCH_OFFSETS* m_panelHatchOffsets;
 };

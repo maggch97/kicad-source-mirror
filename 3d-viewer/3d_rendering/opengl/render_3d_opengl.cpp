@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <cstdint>
@@ -44,28 +40,6 @@
 #include <wx/log.h>
 
 #include <base_units.h>
-
-#include <glm/gtc/type_ptr.hpp>
-
-/**
- * Attempt to control the transparency based on the gray value of the color.
- * This function applies a non-linear transformation that reduces transparency
- * for darker colors while preserving copper visibility through the solder mask.
- *
- * @param aGrayColorValue - diffuse gray value (0.0 to 1.0)
- * @param aTransparency - base transparency value (0.0 opaque to 1.0 transparent)
- * @return transparency to use in material
- */
-static float TransparencyControl( float aGrayColorValue, float aTransparency )
-{
-    const float aaa = aTransparency * aTransparency * aTransparency;
-
-    // 1.00-1.05*(1.0-x)^3
-    float ca = 1.0f - aTransparency;
-    ca       = 1.00f - 1.05f * ca * ca * ca;
-
-    return glm::clamp( aGrayColorValue * ca + aaa, 0.0f, 1.0f );
-}
 
 /**
  * Scale conversion from 3d model units to pcb units
@@ -286,8 +260,7 @@ void RENDER_3D_OPENGL::setupMaterials()
     m_materials.m_SilkSBot.m_Shininess = 0.078125f * 128.0f;
     m_materials.m_SilkSBot.m_Emissive  = SFVEC3F( 0.0f, 0.0f, 0.0f );
 
-    // Shininess is computed dynamically in setLayerMaterial() based on color darkness
-    m_materials.m_SolderMask.m_Shininess    = 0.85f * 128.0f;
+    m_materials.m_SolderMask.m_Shininess    = 0.8f * 128.0f;
     m_materials.m_SolderMask.m_Emissive     = SFVEC3F( 0.0f, 0.0f, 0.0f );
 
     // Epoxy material
@@ -326,28 +299,13 @@ void RENDER_3D_OPENGL::setLayerMaterial( PCB_LAYER_ID aLayerID )
 
         m_materials.m_SolderMask.m_Diffuse = layerColor;
 
-        // Compute gray value for material property adjustments based on color darkness
-        const float solderMask_gray = ( layerColor.r + layerColor.g + layerColor.b ) / 3.0f;
-
-        // Use TransparencyControl to make darker colors more opaque, preventing copper
-        // show-through on dark solder masks
-        const float baseTransparency = 1.0f - layerColor.a;
-        m_materials.m_SolderMask.m_Transparency = TransparencyControl( solderMask_gray,
-                                                                       baseTransparency );
+        // Convert Opacity to Transparency
+        m_materials.m_SolderMask.m_Transparency = 1.0f - layerColor.a;
 
         m_materials.m_SolderMask.m_Ambient = m_materials.m_SolderMask.m_Diffuse * 0.3f;
 
-        // Darker solder masks need a higher specular floor to avoid washed-out appearance
-        const SFVEC3F baseSpecular = m_materials.m_SolderMask.m_Diffuse
-                                     * m_materials.m_SolderMask.m_Diffuse;
-        m_materials.m_SolderMask.m_Specular = glm::max( baseSpecular, SFVEC3F( 0.30f ) );
-
-        // Darker colors get higher shininess for a tighter specular highlight, matching
-        // how dark solder masks appear in real life
-        const float minSolderMaskShininess = 0.85f * 128.0f;
-        const float maxSolderMaskShininess = 512.0f;
-        m_materials.m_SolderMask.m_Shininess = minSolderMaskShininess
-                + ( maxSolderMaskShininess - minSolderMaskShininess ) * ( 1.0f - solderMask_gray );
+        m_materials.m_SolderMask.m_Specular = m_materials.m_SolderMask.m_Diffuse
+                                                * m_materials.m_SolderMask.m_Diffuse;
 
         OglSetMaterial( m_materials.m_SolderMask, 1.0f );
         break;
@@ -777,7 +735,14 @@ bool RENDER_3D_OPENGL::Redraw( bool aIsMoving, REPORTER* aStatusReporter,
             if( solder_mask )
                 solder_mask->ApplyScalePosition( pLayerDispList );
 
+            // Offset non-copper layers slightly closer to the screen than soldermask to avoid Z-fighting.
+            glEnable( GL_POLYGON_OFFSET_FILL );
+            glPolygonOffset( 0.0f, -4.0f );
+
             pLayerDispList->DrawCulled( showThickness, solder_mask, throughHolesOuter, anti_board );
+
+            glDisable( GL_POLYGON_OFFSET_FILL );
+            glPolygonOffset( 0.0f, 0.0f );
         }
 
         glPopMatrix();
@@ -867,14 +832,24 @@ bool RENDER_3D_OPENGL::Redraw( bool aIsMoving, REPORTER* aStatusReporter,
 
     // Display board body
     if( layerFlags.test( LAYER_3D_BOARD ) )
+    {
+        // Make the board body appear further from the screen
+        // to avoid Z-fighting with copper items.
+        glEnable( GL_POLYGON_OFFSET_FILL );
+        glPolygonOffset( 0.0f, 2.0f );
+
         renderBoardBody( skipRenderHoles );
+
+        glDisable( GL_POLYGON_OFFSET_FILL );
+        glPolygonOffset( 0.0f, 0.0f );
+    }
 
     // Display transparent mask layers
     if( layerFlags.test( LAYER_3D_SOLDERMASK_TOP )
       || layerFlags.test( LAYER_3D_SOLDERMASK_BOTTOM ) )
     {
-        // add a depth buffer offset, it will help to hide some artifacts
-        // on silkscreen where the SolderMask is removed
+        // Make the soldermask appear closer to the screen
+        // to avoid Z-fighting with copper items
         glEnable( GL_POLYGON_OFFSET_FILL );
         glPolygonOffset( 0.0f, -2.0f );
 

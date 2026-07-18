@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>
@@ -31,6 +31,7 @@
 
 #include <base_units.h>
 #include <bitmap_base.h>
+#include <common.h> // ExpandTextVars
 #include <wildcards_and_files_ext.h>
 #include <build_version.h>
 #include <sch_selection.h>
@@ -197,7 +198,9 @@ void SCH_IO_KICAD_SEXPR::loadHierarchy( const SCH_SHEET_PATH& aParentSheetPath, 
         // SCH_SCREEN objects store the full path and file name where the SCH_SHEET object only
         // stores the file name and extension.  Add the project path to the file name and
         // extension to compare when calling SCH_SHEET::SearchHierarchy().
-        wxFileName fileName = aSheet->GetFileName();
+        // Resolve text variables in the filename. The field keeps the raw text for portability.
+        wxFileName fileName =
+                m_schematic ? ExpandTextVars( aSheet->GetFileName(), &m_schematic->Project() ) : aSheet->GetFileName();
 
         if( !fileName.IsAbsolute() )
             fileName.MakeAbsolute( m_currentPath.top() );
@@ -769,6 +772,36 @@ void SCH_IO_KICAD_SEXPR::Format( SCH_SELECTION* aSelection, SCH_SHEET_PATH* aSel
 }
 
 
+static void formatPinMapOverride( OUTPUTFORMATTER* aOut, const PIN_MAP_INSTANCE_OVERRIDE& aOverride )
+{
+    if( aOverride.IsDefault() )
+        return;
+
+    const char* mode = "library_default";
+
+    switch( aOverride.m_Mode )
+    {
+    case PIN_MAP_OVERRIDE_MODE::USE_LIBRARY_DEFAULT: mode = "library_default"; break;
+    case PIN_MAP_OVERRIDE_MODE::USE_NAMED_MAP: mode = "named_map"; break;
+    case PIN_MAP_OVERRIDE_MODE::FORCE_IDENTITY: mode = "identity"; break;
+    case PIN_MAP_OVERRIDE_MODE::DELEGATE_TO_UNIT_1: mode = "delegate"; break;
+    }
+
+    aOut->Print( "(pin_map_override (mode %s)", mode );
+
+    if( aOverride.m_Mode == PIN_MAP_OVERRIDE_MODE::USE_NAMED_MAP && !aOverride.m_ActiveMapName.IsEmpty() )
+        aOut->Print( "(map %s)", aOut->Quotew( aOverride.m_ActiveMapName ).c_str() );
+
+    for( const PIN_MAP_ENTRY& edit : aOverride.m_Edits )
+    {
+        aOut->Print( "(edit %s %s)", aOut->Quotew( edit.m_PinNumber ).c_str(),
+                     aOut->Quotew( edit.m_PadNumber ).c_str() );
+    }
+
+    aOut->Print( ")" );
+}
+
+
 void SCH_IO_KICAD_SEXPR::saveSymbol( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSchematic,
                                      const SCH_SHEET_LIST& aSheetList, bool aForClipboard,
                                      const SCH_SHEET_PATH* aRelativePath )
@@ -869,6 +902,7 @@ void SCH_IO_KICAD_SEXPR::saveSymbol( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSche
     KICAD_FORMAT::FormatBool( m_out, "on_board", !aSymbol->GetExcludedFromBoard() );
     KICAD_FORMAT::FormatBool( m_out, "in_pos_files", !aSymbol->GetExcludedFromPosFiles() );
     KICAD_FORMAT::FormatBool( m_out, "dnp", aSymbol->GetDNP() );
+    formatPinMapOverride( m_out, aSymbol->GetPinMapOverride() );
     // Persist passthrough mode as enum string for tri-state support, but omit when DEFAULT
     // to avoid file churn and keep files compact/back-compatible.
     if( aSymbol->GetPassthroughMode() != SCH_SYMBOL::PASSTHROUGH_MODE::DEFAULT )
@@ -976,8 +1010,10 @@ void SCH_IO_KICAD_SEXPR::saveSymbol( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSche
 
         for( const SCH_SYMBOL_INSTANCE& inst : aSymbol->GetInstances() )
         {
-            // Zero length KIID_PATH objects are not valid and will cause a crash below.
-            wxCHECK2( inst.m_Path.size(), continue );
+            // During a check-point save, the symbol might not yet have instance data.  Just skip
+            // it; don't assert.
+            if( inst.m_Path.empty() )
+                continue;
 
             // If the instance data is part of this design but no longer has an associated sheet
             // path, don't save it.  This prevents large amounts of orphaned instance data for the
@@ -1001,6 +1037,12 @@ void SCH_IO_KICAD_SEXPR::saveSymbol( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSche
                     continue;
                 }
             }
+
+            // The autosave timer serializes a live schematic whose symbol instances a concurrent
+            // edit can leave transiently pathless, so a size-checked source can still copy empty
+            // here.  Indexing an empty path dereferences null (Sentry KICAD-173B), so skip it.
+            if( pathToCheck.empty() )
+                continue;
 
             // Check if this instance is orphaned (no matching sheet path)
             // For virtual root, we check if the first real sheet matches one of the top-level sheets
@@ -1060,6 +1102,11 @@ void SCH_IO_KICAD_SEXPR::saveSymbol( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSche
                 {
                     for( const auto&[name, variant] : instance.m_Variants )
                     {
+                        // A variant without differentials resolves identically to no variant,
+                        // writing it only keeps deleted variants alive across sessions.
+                        if( !variant.HasDifferentials( *aSymbol ) )
+                            continue;
+
                         m_out->Print( "(variant (name %s)", m_out->Quotew( name ).c_str() );
 
                         if( variant.m_DNP != aSymbol->GetDNP() )
@@ -1082,6 +1129,8 @@ void SCH_IO_KICAD_SEXPR::saveSymbol( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSche
                             m_out->Print( "(field (name %s) (value %s))",
                                           m_out->Quotew( fname ).c_str(), m_out->Quotew( fvalue ).c_str() );
                         }
+
+                        formatPinMapOverride( m_out, variant.m_PinMapOverride );
 
                         m_out->Print( ")" );  // Closes `variant` token.
                     }
@@ -1318,6 +1367,11 @@ void SCH_IO_KICAD_SEXPR::saveSheet( SCH_SHEET* aSheet, const SCH_SHEET_LIST& aSh
             {
                 for( const auto&[name, variant] : sheetInstances[i].m_Variants )
                 {
+                    // A variant without differentials resolves identically to no variant,
+                    // writing it only keeps deleted variants alive across sessions.
+                    if( !variant.HasDifferentials( *aSheet ) )
+                        continue;
+
                     m_out->Print( "(variant (name %s)", m_out->Quotew( name ).c_str() );
 
                     if( variant.m_DNP != aSheet->GetDNP() )

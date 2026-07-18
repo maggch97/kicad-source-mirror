@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef _SCH_CONNECTION_H
@@ -163,6 +163,9 @@ public:
     wxString BusPrefix() const { return m_bus_prefix; }
 
     wxString Suffix() const { return m_suffix; }
+
+    /// Unlike SetPrefix, the suffix is not pushed onto bus members. Members are matched to their
+    /// breakout labels by name, so a disambiguating suffix must stay on the bus itself (issue #21798).
     void SetSuffix( const wxString& aSuffix );
 
     CONNECTION_TYPE Type() const { return m_type; }

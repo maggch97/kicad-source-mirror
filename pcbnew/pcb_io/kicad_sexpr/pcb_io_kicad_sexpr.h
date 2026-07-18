@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_IO_KICAD_SEXPR_H_
@@ -38,6 +34,7 @@
 #include <boost/ptr_container/ptr_map.hpp>
 #include <wx_filename.h>
 #include "widgets/report_severity.h"
+#include <pcb_io/common/plugin_common_layer_mapping.h>
 
 class BOARD;
 class BOARD_ITEM;
@@ -201,17 +198,25 @@ class PCB_IO_KICAD_SEXPR;   // forward decl
 //#define SEXPR_BOARD_FILE_VERSION    20260101  // PCB variants with per-footprint overrides
 //#define SEXPR_BOARD_FILE_VERSION    20260206  // Fix barcode and variant attribute serialization
 //----------------- Start of 11.0 development -----------------
-//#define SEXPR_BOARD_FILE_VERSION      20260410  // Extruded 3D body
-//#define SEXPR_BOARD_FILE_VERSION      20260508  // Native ellipse primitive
-//#define SEXPR_BOARD_FILE_VERSION      20260511  // Dielectric frequency-dependent models in board stackup
-//#define SEXPR_BOARD_FILE_VERSION      20260512  // Net chains
-#define SEXPR_BOARD_FILE_VERSION        20260513  // Copper thieving zone fill mode
+//#define SEXPR_BOARD_FILE_VERSION    20260410  // Extruded 3D body
+//#define SEXPR_BOARD_FILE_VERSION    20260508  // Native ellipse primitive
+//#define SEXPR_BOARD_FILE_VERSION    20260511  // Dielectric frequency-dependent models in board stackup
+//#define SEXPR_BOARD_FILE_VERSION    20260512  // Net chains
+//#define SEXPR_BOARD_FILE_VERSION    20260513  // Copper thieving zone fill mode
+//#define SEXPR_BOARD_FILE_VERSION    20260521  // Pad simulation electrical types
+// #define SEXPR_BOARD_FILE_VERSION   20260603  // Knockout flag on table cells
+//#define SEXPR_BOARD_FILE_VERSION      20260616  // Footprint affine transform: lib-frame storage and (transform) block
+#define SEXPR_BOARD_FILE_VERSION        20260623  // Migrate reference image scale for PNG pixel-density fix
 
 #define BOARD_FILE_HOST_VERSION       20200825  ///< Earlier files than this include the host tag
 #define LEGACY_ARC_FORMATTING         20210925  ///< These were the last to use old arc formatting
 #define LEGACY_NET_TIES               20220815  ///< These were the last to use the keywords field
                                                 ///<   to indicate a net-tie.
 #define FIRST_NORMALIZED_VERISON      20230924  ///< Earlier files did not have normalized bools
+#define FIRST_FP_AFFINE_TRANSFORM     20260616  ///< First version that stores footprint children
+                                                ///<   in library frame. Earlier files stored them
+                                                ///<   in board frame, so zone outlines need to be
+                                                ///<   un-baked on load.
 // clang-format on
 
 // common combinations of the above:
@@ -322,7 +327,7 @@ public:
  *
  * @note This class is not thread safe, but it is re-entrant multiple times in sequence.
  */
-class PCB_IO_KICAD_SEXPR : public PCB_IO
+class PCB_IO_KICAD_SEXPR : public PCB_IO, public LAYER_MAPPABLE_PLUGIN
 {
 public:
     const IO_BASE::IO_FILE_DESC GetBoardFileDesc() const override

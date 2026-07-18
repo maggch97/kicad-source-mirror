@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "footprint.h"
@@ -29,6 +25,7 @@
 #include <magic_enum.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_set>
 
 #include <wx/log.h>
@@ -67,6 +64,7 @@
 #include <pcb_textbox.h>
 #include <pcb_track.h>
 #include <pcb_barcode.h>
+#include <name_validation.h>
 #include <refdes_utils.h>
 #include <string_utils.h>
 #include <view/view.h>
@@ -83,7 +81,6 @@
 
 FOOTPRINT::FOOTPRINT( BOARD* parent ) :
         BOARD_ITEM_CONTAINER( (BOARD_ITEM*) parent, PCB_FOOTPRINT_T ),
-        m_orient( ANGLE_0 ),
         m_attributes( 0 ),
         m_fpStatus( FP_PADS_are_LOCKED ),
         m_fileFormatVersionAtLoad( 0 ),
@@ -125,8 +122,8 @@ FOOTPRINT::FOOTPRINT( const FOOTPRINT& aFootprint ) :
         EMBEDDED_FILES( aFootprint ),
         m_componentClassCacheProxy( std::make_unique<COMPONENT_CLASS_CACHE_PROXY>( this ) )
 {
-    m_orient                  = aFootprint.m_orient;
-    m_pos                     = aFootprint.m_pos;
+    m_transform               = aFootprint.m_transform;
+    m_flipped                 = aFootprint.m_flipped;
     m_fpid                    = aFootprint.m_fpid;
     m_attributes              = aFootprint.m_attributes;
     m_fpStatus                = aFootprint.m_fpStatus;
@@ -253,8 +250,9 @@ FOOTPRINT::FOOTPRINT( const FOOTPRINT& aFootprint ) :
         }
     }
 
-    for( auto& [ name, file ] : aFootprint.EmbeddedFileMap() )
-        AddFile( new EMBEDDED_FILES::EMBEDDED_FILE( *file ) );
+    // Embedded files are inherited via the EMBEDDED_FILES copy constructor invoked in the
+    // member initializer list above; the underlying file payloads are reference-counted so
+    // cloning a footprint is cheap even when it carries large embedded models or fonts.
 }
 
 
@@ -835,11 +833,11 @@ FOOTPRINT& FOOTPRINT::operator=( FOOTPRINT&& aOther )
     m_courtyard_cache.reset();
     m_geometry_cache.reset();
 
-    m_pos           = aOther.m_pos;
     m_fpid          = aOther.m_fpid;
     m_attributes    = aOther.m_attributes;
     m_fpStatus      = aOther.m_fpStatus;
-    m_orient        = aOther.m_orient;
+    m_transform     = aOther.m_transform;
+    m_flipped       = aOther.m_flipped;
     m_lastEditTime  = aOther.m_lastEditTime;
     m_link          = aOther.m_link;
     m_path          = aOther.m_path;
@@ -964,11 +962,11 @@ FOOTPRINT& FOOTPRINT::operator=( const FOOTPRINT& aOther )
     m_courtyard_cache.reset();
     m_geometry_cache.reset();
 
-    m_pos           = aOther.m_pos;
     m_fpid          = aOther.m_fpid;
     m_attributes    = aOther.m_attributes;
     m_fpStatus      = aOther.m_fpStatus;
-    m_orient        = aOther.m_orient;
+    m_transform     = aOther.m_transform;
+    m_flipped       = aOther.m_flipped;
     m_lastEditTime  = aOther.m_lastEditTime;
     m_link          = aOther.m_link;
     m_path          = aOther.m_path;
@@ -1559,6 +1557,14 @@ void FOOTPRINT::Remove( BOARD_ITEM* aBoardItem, REMOVE_MODE aMode )
 
         break;
 
+    case PCB_MARKER_T:
+        wxFAIL_MSG( wxT( "FOOTPRINT::Remove(): Markers go at the board level, even in the footprint editor" ) );
+        break;
+
+    case PCB_FOOTPRINT_T:
+        wxFAIL_MSG( wxT( "FOOTPRINT::Remove(): Nested footprints not supported" ) );
+        break;
+
     case PCB_POINT_T:
         for( auto it = m_points.begin(); it != m_points.end(); ++it )
         {
@@ -1572,12 +1578,8 @@ void FOOTPRINT::Remove( BOARD_ITEM* aBoardItem, REMOVE_MODE aMode )
         break;
 
     default:
-    {
-        wxString msg;
-        msg.Printf( wxT( "FOOTPRINT::Remove() needs work: BOARD_ITEM type (%d) not handled" ),
-                    aBoardItem->Type() );
-        wxFAIL_MSG( msg );
-    }
+        wxFAIL_MSG( wxString::Format( wxT( "FOOTPRINT::Remove() needs work: BOARD_ITEM type (%d) not handled" ),
+                                      aBoardItem->Type() ) );
     }
 
     // If this footprint is on a board, update the board's item-by-id cache
@@ -1672,8 +1674,8 @@ std::vector<SEARCH_TERM>& FOOTPRINT::GetSearchTerms()
     m_searchTerms.reserve( 6 );
 
     m_searchTerms.emplace_back( SEARCH_TERM( GetLibNickname(), 4 ) );
-    m_searchTerms.emplace_back( SEARCH_TERM( GetName(), 8 ) );
-    m_searchTerms.emplace_back( SEARCH_TERM( GetLIB_ID().Format(), 16 ) );
+    m_searchTerms.emplace_back( SEARCH_TERM( GetName(), 8, true ) );
+    m_searchTerms.emplace_back( SEARCH_TERM( GetLIB_ID().Format(), 16, true ) );
 
     wxStringTokenizer keywordTokenizer( GetKeywords(), wxS( " \t\r\n" ), wxTOKEN_STRTOK );
 
@@ -1757,7 +1759,7 @@ const BOX2I FOOTPRINT::GetBoundingBox( bool aIncludeText ) const
     std::vector<PCB_TEXT*> texts;
     bool                   isFPEdit = board && board->IsFootprintHolder();
 
-    BOX2I bbox( m_pos );
+    BOX2I bbox( m_transform.GetTranslate() );
     bbox.Inflate( pcbIUScale.mmToIU( 0.25 ) );   // Give a min size to the bbox
 
     // Calculate the footprint side
@@ -2917,18 +2919,15 @@ bool FOOTPRINT::IsLibNameValid( const wxString & aName )
 
 const wxChar* FOOTPRINT::StringLibNameInvalidChars( bool aUserReadable )
 {
-    // This list of characters is also duplicated in validators.cpp and
-    // lib_id.cpp
-    // TODO: Unify forbidden character lists - Warning, invalid filename characters are not the same
-    // as invalid LIB_ID characters.  We will need to separate the FP filenames from FP names before this
-    // can be unified
-    static const wxChar invalidChars[] = wxT("%$<>\t\n\r\"\\/:");
+    // Filename rules are a superset of LIB_ID rules; the machine-readable list is the shared
+    // source of truth, while the human-readable spelling stays local.
+    static const wxString invalidChars = GetLibFilenameForbiddenChars();
     static const wxChar invalidCharsReadable[] = wxT("% $ < > 'tab' 'return' 'line feed' \\ \" / :");
 
     if( aUserReadable )
         return invalidCharsReadable;
     else
-        return invalidChars;
+        return invalidChars.wc_str();
 }
 
 
@@ -2937,7 +2936,7 @@ void FOOTPRINT::Move( const VECTOR2I& aMoveVector )
     if( aMoveVector.x == 0 && aMoveVector.y == 0 )
         return;
 
-    VECTOR2I newpos = m_pos + aMoveVector;
+    VECTOR2I newpos = m_transform.GetTranslate() + aMoveVector;
     SetPosition( newpos );
 }
 
@@ -2949,7 +2948,7 @@ void FOOTPRINT::Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle )
 
     EDA_ANGLE orientation = GetOrientation();
     EDA_ANGLE newOrientation = orientation + aAngle;
-    VECTOR2I  newpos = m_pos;
+    VECTOR2I  newpos = m_transform.GetTranslate();
     RotatePoint( newpos, aRotCentre, aAngle );
     SetPosition( newpos );
     SetOrientation( newOrientation );
@@ -2977,7 +2976,7 @@ void FOOTPRINT::SetLayerAndFlip( PCB_LAYER_ID aLayer )
 void FOOTPRINT::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 {
     // Move footprint to its final position:
-    VECTOR2I finalPos = m_pos;
+    VECTOR2I finalPos = m_transform.GetTranslate();
 
     // Now Flip the footprint.
     // Flipping a footprint is a specific transform: it is not mirrored like a text.
@@ -2993,44 +2992,64 @@ void FOOTPRINT::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
     SetPosition( finalPos );
 
     // Flip layer
-    BOARD_ITEM::SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
+    BOARD_ITEM::SetLayer( GetBoard() ? GetBoard()->FlipLayer( GetLayer() ) : FlipLayer( GetLayer() ) );
 
-    // Calculate the new orientation, and then clear it for pad flipping.
-    EDA_ANGLE newOrientation = -m_orient;
-    newOrientation.Normalize180();
-    m_orient = ANGLE_0;
+    const VECTOR2I pos = m_transform.GetTranslate();
 
-    // Mirror fields to other side of board.
+    // Children mirror their lib-frame state directly so the result does not
+    // depend on the parent rotation at the time of the call. The parent
+    // rotation is negated once at the end.
     for( PCB_FIELD* field : m_fields )
-        field->Flip( m_pos, FLIP_DIRECTION::TOP_BOTTOM );
+        field->Flip( pos, FLIP_DIRECTION::TOP_BOTTOM );
 
-    // Mirror pads to other side of board.
     for( PAD* pad : m_pads )
-        pad->Flip( m_pos, FLIP_DIRECTION::TOP_BOTTOM );
+        pad->Flip( pos, FLIP_DIRECTION::TOP_BOTTOM );
 
-    // Now set the new orientation.
-    m_orient = newOrientation;
-
-    // Mirror zones to other side of board.
     for( ZONE* zone : m_zones )
-        zone->Flip( m_pos, FLIP_DIRECTION::TOP_BOTTOM );
+        zone->Flip( pos, FLIP_DIRECTION::TOP_BOTTOM );
 
-    // Reverse mirror footprint graphics and texts.
     for( BOARD_ITEM* item : m_drawings )
-        item->Flip( m_pos, FLIP_DIRECTION::TOP_BOTTOM );
+        item->Flip( pos, FLIP_DIRECTION::TOP_BOTTOM );
 
     // Points move but don't flip layer
     for( PCB_POINT* point : m_points )
-        point->Flip( m_pos, FLIP_DIRECTION::TOP_BOTTOM );
+        point->Flip( pos, FLIP_DIRECTION::TOP_BOTTOM );
+
+    EDA_ANGLE newOrientation = -m_transform.GetRotate();
+    newOrientation.Normalize180();
+    m_transform.SetRotate( newOrientation );
+
+    // Refresh derived caches now that the final rotation is in place.
+    for( PCB_FIELD* field : m_fields )
+        field->OnFootprintTransformed();
+
+    for( PAD* pad : m_pads )
+        pad->OnFootprintTransformed();
+
+    for( ZONE* zone : m_zones )
+        zone->OnFootprintTransformed();
+
+    for( BOARD_ITEM* item : m_drawings )
+    {
+        if( item->Type() == PCB_TEXT_T || item->Type() == PCB_SHAPE_T || item->Type() == PCB_TEXTBOX_T
+            || item->Type() == PCB_BARCODE_T || item->Type() == PCB_TABLE_T
+            || BaseType( item->Type() ) == PCB_DIMENSION_T )
+        {
+            item->OnFootprintTransformed();
+        }
+    }
+
+    for( PCB_POINT* point : m_points )
+        point->OnFootprintTransformed();
 
     // Swap the courtyard sides, then mirror in the same way as everything else.
     if( m_courtyard_cache )
     {
         std::swap( m_courtyard_cache->back, m_courtyard_cache->front );
-        m_courtyard_cache->back.Mirror( m_pos, FLIP_DIRECTION::TOP_BOTTOM );
+        m_courtyard_cache->back.Mirror( pos, FLIP_DIRECTION::TOP_BOTTOM );
         m_courtyard_cache->back_hash = m_courtyard_cache->back.GetHash();
 
-        m_courtyard_cache->front.Mirror( m_pos, FLIP_DIRECTION::TOP_BOTTOM );
+        m_courtyard_cache->front.Mirror( pos, FLIP_DIRECTION::TOP_BOTTOM );
         m_courtyard_cache->front_hash = m_courtyard_cache->front.GetHash();
     }
 
@@ -3039,7 +3058,7 @@ void FOOTPRINT::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
         m_extrudedBody->m_layer = GetBoard()->FlipLayer( m_extrudedBody->m_layer );
 
     if( m_geometry_cache )
-        m_geometry_cache->hull.Mirror( m_pos, FLIP_DIRECTION::TOP_BOTTOM );
+        m_geometry_cache->hull.Mirror( pos, FLIP_DIRECTION::TOP_BOTTOM );
 
     // Now rotate 180 deg if required
     if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
@@ -3047,29 +3066,100 @@ void FOOTPRINT::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 
     if( m_geometry_cache )
         m_geometry_cache->text_excluded_bbox_timestamp = 0;
+
+    m_flipped = ( GetLayer() == B_Cu );
+}
+
+
+void FOOTPRINT::SetLayer( PCB_LAYER_ID aLayer )
+{
+    BOARD_ITEM::SetLayer( aLayer );
+    m_flipped = ( aLayer == B_Cu );
+}
+
+
+void FOOTPRINT::SetTransformScale( double aScaleX, double aScaleY )
+{
+    // Reject zero, negative, and non-finite scales: they produce a degenerate transform.
+    if( !std::isfinite( aScaleX ) || !std::isfinite( aScaleY ) || aScaleX <= 0.0 || aScaleY <= 0.0 )
+        return;
+
+    const double oldSx = m_transform.GetScaleX();
+    const double oldSy = m_transform.GetScaleY();
+    const double ratioX = aScaleX / oldSx;
+    const double ratioY = aScaleY / oldSy;
+    const double linearFactor = ( aScaleX + aScaleY ) / ( oldSx + oldSy );
+
+    m_transform.SetScale( aScaleX, aScaleY );
+
+    const VECTOR2I  anchor = m_transform.GetTranslate();
+    const EDA_ANGLE parentRotate = m_transform.GetRotate();
+
+    for( PAD* pad : m_pads )
+        pad->OnFootprintRescaled( ratioX, ratioY, linearFactor, anchor, parentRotate );
+
+    for( PCB_FIELD* field : m_fields )
+        field->OnFootprintRescaled( ratioX, ratioY, linearFactor, anchor, parentRotate );
+
+    for( BOARD_ITEM* item : m_drawings )
+        item->OnFootprintRescaled( ratioX, ratioY, linearFactor, anchor, parentRotate );
+
+    for( ZONE* zone : m_zones )
+        zone->OnFootprintRescaled( ratioX, ratioY, linearFactor, anchor, parentRotate );
+
+    for( PCB_POINT* point : m_points )
+        point->OnFootprintTransformed();
+
+    if( m_geometry_cache )
+    {
+        m_geometry_cache->bounding_box_timestamp = 0;
+        m_geometry_cache->text_excluded_bbox_timestamp = 0;
+    }
+
+    m_courtyard_cache.reset();
+}
+
+
+void FOOTPRINT::RescaleAroundPoint( const VECTOR2I& aCenter, double aSx, double aSy )
+{
+    TRANSFORM_TRS rescaled = m_transform.RescaleAround( aCenter, aSx, aSy );
+
+    SetPosition( rescaled.GetTranslate() );
+    SetTransformScale( rescaled.GetScaleX(), rescaled.GetScaleY() );
 }
 
 
 void FOOTPRINT::SetPosition( const VECTOR2I& aPos )
 {
-    VECTOR2I delta = aPos - m_pos;
+    VECTOR2I delta = aPos - m_transform.GetTranslate();
 
-    m_pos += delta;
+    m_transform.SetTranslate( aPos );
 
     for( PCB_FIELD* field : m_fields )
-        field->EDA_TEXT::Offset( delta );
+        field->OnFootprintTransformed();
 
     for( PAD* pad : m_pads )
-        pad->SetPosition( pad->GetPosition() + delta );
+        pad->OnFootprintTransformed();
 
     for( ZONE* zone : m_zones )
-        zone->Move( delta );
-
-    for( BOARD_ITEM* item : m_drawings )
-        item->Move( delta );
+        zone->OnFootprintTransformed();
 
     for( PCB_POINT* point : m_points )
-        point->Move( delta );
+        point->OnFootprintTransformed();
+
+    for( BOARD_ITEM* item : m_drawings )
+    {
+        if( item->Type() == PCB_TEXT_T || item->Type() == PCB_SHAPE_T || item->Type() == PCB_TEXTBOX_T
+            || item->Type() == PCB_BARCODE_T || item->Type() == PCB_TABLE_T
+            || BaseType( item->Type() ) == PCB_DIMENSION_T )
+        {
+            item->OnFootprintTransformed();
+        }
+        else
+        {
+            item->Move( delta );
+        }
+    }
 
     if( m_geometry_cache )
     {
@@ -3121,6 +3211,10 @@ void FOOTPRINT::MoveAnchorPosition( const VECTOR2I& aMoveVector )
     for( ZONE* zone : Zones() )
         zone->Move( moveVector );
 
+    // Update the point local coordinates.
+    for( PCB_POINT* point : m_points )
+        point->Move( moveVector );
+
     // Update the 3D models
     for( FP_3DMODEL& model : Models() )
     {
@@ -3149,27 +3243,39 @@ void FOOTPRINT::MoveAnchorPosition( const VECTOR2I& aMoveVector )
 
 void FOOTPRINT::SetOrientation( const EDA_ANGLE& aNewAngle )
 {
-    EDA_ANGLE angleChange = aNewAngle - m_orient;  // change in rotation
+    EDA_ANGLE angleChange = aNewAngle - m_transform.GetRotate();  // change in rotation
 
-    m_orient = aNewAngle;
-    m_orient.Normalize180();
+    EDA_ANGLE newAngle = aNewAngle;
+    newAngle.Normalize180();
+    m_transform.SetRotate( newAngle );
 
     const VECTOR2I rotationCenter = GetPosition();
 
     for( PCB_FIELD* field : m_fields )
-        field->Rotate( rotationCenter, angleChange );
+        field->OnFootprintTransformed();
 
     for( PAD* pad : m_pads )
-        pad->Rotate( rotationCenter, angleChange );
+        pad->OnFootprintTransformed();
 
     for( ZONE* zone : m_zones )
-        zone->Rotate( rotationCenter, angleChange );
-
-    for( BOARD_ITEM* item : m_drawings )
-        item->Rotate( rotationCenter, angleChange );
+        zone->OnFootprintTransformed();
 
     for( PCB_POINT* point : m_points )
-        point->Rotate( rotationCenter, angleChange );
+        point->OnFootprintTransformed();
+
+    for( BOARD_ITEM* item : m_drawings )
+    {
+        if( item->Type() == PCB_TEXT_T || item->Type() == PCB_SHAPE_T || item->Type() == PCB_TEXTBOX_T
+            || item->Type() == PCB_BARCODE_T || item->Type() == PCB_TABLE_T
+            || BaseType( item->Type() ) == PCB_DIMENSION_T )
+        {
+            item->OnFootprintTransformed();
+        }
+        else
+        {
+            item->Rotate( rotationCenter, angleChange );
+        }
+    }
 
     if( m_geometry_cache )
         m_geometry_cache->text_excluded_bbox_timestamp = 0;
@@ -3537,6 +3643,34 @@ double FOOTPRINT::GetCoverageArea( const BOARD_ITEM* aItem, const GENERAL_COLLEC
                     aItem->TransformShapeToPolygon( layerPoly, aLayer, 0, ARC_LOW_DEF, ERROR_OUTSIDE );
                     poly.BooleanAdd( layerPoly );
                 } );
+    }
+    else if( aItem->Type() == PCB_ZONE_T )
+    {
+        const ZONE* zone = static_cast<const ZONE*>( aItem );
+
+        if( zone->GetIsRuleArea() )
+        {
+            // Rule areas are never filled, so TransformShapeToPolygon would report a zero coverage
+            // area and make them appear as the smallest item under the cursor.  That incorrectly
+            // gives them selection precedence over the pads, tracks and footprints they enclose.
+            // Use the outline area so an enclosed item is selected first while the rule area stays
+            // available via its border and the disambiguation menu.
+            poly = *zone->Outline();
+        }
+        else
+        {
+            for( PCB_LAYER_ID layer : zone->GetLayerSet() )
+            {
+                SHAPE_POLY_SET layerPoly;
+                zone->TransformShapeToPolygon( layerPoly, layer, 0, ARC_LOW_DEF, ERROR_OUTSIDE );
+                poly.BooleanAdd( layerPoly );
+            }
+
+            // An unfilled zone has no filled polygons; fall back to the outline so it does not
+            // collapse to a zero coverage area and steal precedence like a rule area would.
+            if( poly.OutlineCount() == 0 )
+                poly = *zone->Outline();
+        }
     }
     else
     {
@@ -4381,42 +4515,40 @@ bool FOOTPRINT::cmp_drawings::operator()( const BOARD_ITEM* itemA, const BOARD_I
         if( dwgA->GetShape() != dwgB->GetShape() )
             return dwgA->GetShape() < dwgB->GetShape();
 
-        // GetStart() and GetEnd() have no meaning with polygons.
-        // We cannot use them for sorting polygons
         if( dwgA->GetShape() != SHAPE_T::POLY )
         {
-            if( std::optional<bool> cmp = cmp_points_opt( dwgA->GetStart(), dwgB->GetStart() ) )
+            if( std::optional<bool> cmp = cmp_points_opt( dwgA->GetLibraryStart(), dwgB->GetLibraryStart() ) )
                 return *cmp;
 
-            if( std::optional<bool> cmp = cmp_points_opt( dwgA->GetEnd(), dwgB->GetEnd() ) )
+            if( std::optional<bool> cmp = cmp_points_opt( dwgA->GetLibraryEnd(), dwgB->GetLibraryEnd() ) )
                 return *cmp;
         }
 
         if( dwgA->GetShape() == SHAPE_T::ARC )
         {
-            if( std::optional<bool> cmp = cmp_points_opt( dwgA->GetCenter(), dwgB->GetCenter() ) )
+            if( std::optional<bool> cmp = cmp_points_opt( dwgA->GetLibraryArcMid(), dwgB->GetLibraryArcMid() ) )
                 return *cmp;
         }
         else if( dwgA->GetShape() == SHAPE_T::BEZIER )
         {
-            if( std::optional<bool> cmp = cmp_points_opt( dwgA->GetBezierC1(), dwgB->GetBezierC1() ) )
+            if( std::optional<bool> cmp = cmp_points_opt( dwgA->GetLibraryBezierC1(), dwgB->GetLibraryBezierC1() ) )
                 return *cmp;
 
-            if( std::optional<bool> cmp = cmp_points_opt( dwgA->GetBezierC2(), dwgB->GetBezierC2() ) )
+            if( std::optional<bool> cmp = cmp_points_opt( dwgA->GetLibraryBezierC2(), dwgB->GetLibraryBezierC2() ) )
                 return *cmp;
         }
         else if( dwgA->GetShape() == SHAPE_T::POLY )
         {
-            if( dwgA->GetPolyShape().TotalVertices() != dwgB->GetPolyShape().TotalVertices() )
-                return dwgA->GetPolyShape().TotalVertices() < dwgB->GetPolyShape().TotalVertices();
+            const SHAPE_POLY_SET aLib = dwgA->GetLibraryPolyShape();
+            const SHAPE_POLY_SET bLib = dwgB->GetLibraryPolyShape();
 
-            for( int ii = 0; ii < dwgA->GetPolyShape().TotalVertices(); ++ii )
+            if( aLib.TotalVertices() != bLib.TotalVertices() )
+                return aLib.TotalVertices() < bLib.TotalVertices();
+
+            for( int ii = 0; ii < aLib.TotalVertices(); ++ii )
             {
-                if( std::optional<bool> cmp =
-                            cmp_points_opt( dwgA->GetPolyShape().CVertex( ii ), dwgB->GetPolyShape().CVertex( ii ) ) )
-                {
+                if( std::optional<bool> cmp = cmp_points_opt( aLib.CVertex( ii ), bLib.CVertex( ii ) ) )
                     return *cmp;
-                }
             }
         }
         else if( dwgA->GetShape() == SHAPE_T::ELLIPSE || dwgA->GetShape() == SHAPE_T::ELLIPSE_ARC )
@@ -4456,7 +4588,7 @@ bool FOOTPRINT::cmp_drawings::operator()( const BOARD_ITEM* itemA, const BOARD_I
         const PCB_TEXT& textA = static_cast<const PCB_TEXT&>( *itemA );
         const PCB_TEXT& textB = static_cast<const PCB_TEXT&>( *itemB );
 
-        if( std::optional<bool> cmp = cmp_points_opt( textA.GetPosition(), textB.GetPosition() ) )
+        if( std::optional<bool> cmp = cmp_points_opt( textA.GetFPRelativePosition(), textB.GetFPRelativePosition() ) )
             return *cmp;
 
         if( textA.GetTextAngle() != textB.GetTextAngle() )
@@ -4608,16 +4740,16 @@ bool FOOTPRINT::cmp_zones::operator()( const ZONE* aFirst, const ZONE* aSecond )
     if( aFirst->GetLayerSet() != aSecond->GetLayerSet() )
         return aFirst->GetLayerSet().Seq() < aSecond->GetLayerSet().Seq();
 
-    if( aFirst->Outline()->TotalVertices() != aSecond->Outline()->TotalVertices() )
-        return aFirst->Outline()->TotalVertices() < aSecond->Outline()->TotalVertices();
+    const SHAPE_POLY_SET aLib = aFirst->GetLibraryOutline();
+    const SHAPE_POLY_SET bLib = aSecond->GetLibraryOutline();
 
-    for( int ii = 0; ii < aFirst->Outline()->TotalVertices(); ++ii )
+    if( aLib.TotalVertices() != bLib.TotalVertices() )
+        return aLib.TotalVertices() < bLib.TotalVertices();
+
+    for( int ii = 0; ii < aLib.TotalVertices(); ++ii )
     {
-        if( std::optional<bool> cmp =
-                    cmp_points_opt( aFirst->Outline()->CVertex( ii ), aSecond->Outline()->CVertex( ii ) ) )
-        {
+        if( std::optional<bool> cmp = cmp_points_opt( aLib.CVertex( ii ), bLib.CVertex( ii ) ) )
             return *cmp;
-        }
     }
 
     if( aFirst->m_Uuid != aSecond->m_Uuid )
@@ -4950,6 +5082,14 @@ static struct FOOTPRINT_DESC
                     &FOOTPRINT::SetOrientationDegrees, &FOOTPRINT::GetOrientationDegrees,
                     PROPERTY_DISPLAY::PT_DEGREE ) )
                .SetAvailableFunc( isNotFootprintHolder );
+
+        propMgr.AddProperty( new PROPERTY<FOOTPRINT, double>( _HKI( "Scale X" ), &FOOTPRINT::SetScaleX,
+                                                              &FOOTPRINT::GetScaleX ) )
+                .SetAvailableFunc( isNotFootprintHolder );
+
+        propMgr.AddProperty( new PROPERTY<FOOTPRINT, double>( _HKI( "Scale Y" ), &FOOTPRINT::SetScaleY,
+                                                              &FOOTPRINT::GetScaleY ) )
+                .SetAvailableFunc( isNotFootprintHolder );
 
         const wxString groupFields = _HKI( "Fields" );
 

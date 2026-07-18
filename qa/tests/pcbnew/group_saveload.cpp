@@ -15,19 +15,18 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <bitset>
 #include <filesystem>
+#include <set>
 #include <string>
+#include <vector>
 
 #include <board.h>
 #include <footprint.h>
+#include <lset.h>
 #include <pcb_generator.h>
 #include <pcb_group.h>
 #include <pcb_text.h>
@@ -76,7 +75,7 @@ static PCB_GROUP* s_removedGroup = nullptr;
  * Each group is a vector of which ItemTypes to put in the group.
  * The first group corresponds to GROUP0, the second to GROUP1, and os on.
  */
-std::unique_ptr<BOARD> createBoard( const std::vector<std::vector<ItemType>>& spec )
+std::unique_ptr<BOARD> createBoard( const std::vector<std::vector<ItemType>>& spec, bool aAllowInvalidGroups = false )
 {
     std::unique_ptr<BOARD>   board = std::make_unique<BOARD>();
     std::vector<BOARD_ITEM*> items;
@@ -126,7 +125,18 @@ std::unique_ptr<BOARD> createBoard( const std::vector<std::vector<ItemType>>& sp
             for( ItemType item : groupSpec )
             {
                 used.set( static_cast<size_t>( item ) );
-                group->AddItem( items[item] );
+
+                if( aAllowInvalidGroups )
+                {
+                    // The invalid-group tests intentionally build graphs that AddItem()
+                    // rejects so GroupsSanityCheck() can verify diagnostics.
+                    group->GetItems().insert( items[item] );
+                    items[item]->SetParentGroup( group );
+                }
+                else
+                {
+                    group->AddItem( items[item] );
+                }
             }
 
             BOOST_CHECK_EQUAL( group->GetItems().size(), groupSpec.size() );
@@ -256,15 +266,17 @@ BOOST_AUTO_TEST_CASE( SingleMemberGroupsSaved )
 }
 
 
+// TODO: this is *probably* not needed any more as long as nothing is bypassing AddItem's
+// check for cyclic group membership, but it doesn't hurt to have it as a sanity check for the groups graph.
 BOOST_AUTO_TEST_CASE( InvalidGroups )
 {
     // A cycle
-    std::unique_ptr<BOARD> board1 = createBoard( { { TEXT0, GROUP1 }, { TEXT2, GROUP0 } } );
+    std::unique_ptr<BOARD> board1 = createBoard( { { TEXT0, GROUP1 }, { TEXT2, GROUP0 } }, true );
     BOOST_CHECK_EQUAL( board1->GroupsSanityCheck(), "Cycle detected in group membership" );
 
     // More complex cycle
-    board1 = createBoard( { { TEXT0, GROUP1 }, { TEXT1 }, { TEXT2, NAME_GROUP4 },
-                            { TEXT3, GROUP2 }, { TEXT4, NAME_GROUP3 } } );
+    board1 = createBoard(
+            { { TEXT0, GROUP1 }, { TEXT1 }, { TEXT2, NAME_GROUP4 }, { TEXT3, GROUP2 }, { TEXT4, NAME_GROUP3 } }, true );
     BOOST_CHECK_EQUAL( board1->GroupsSanityCheck(), "Cycle detected in group membership" );
 
     // Delete the removed group since the test is over
@@ -395,6 +407,93 @@ BOOST_AUTO_TEST_CASE( DeepCloneNestedGeneratorMembership )
     delete clonedText;
     delete clonedNested;
     delete deepCopy;
+}
+
+
+static PCB_TRACK* makeSegment( BOARD* aBoard, const VECTOR2I& aStart, const VECTOR2I& aEnd )
+{
+    PCB_TRACK* track = new PCB_TRACK( aBoard );
+    track->SetStart( aStart );
+    track->SetEnd( aEnd );
+    track->SetWidth( pcbIUScale.mmToIU( 0.2 ) );
+    track->SetLayer( F_Cu );
+    aBoard->Add( track );
+
+    return track;
+}
+
+
+/**
+ * Deep-duplicating a group that wraps a PCB_GENERATOR must give the copy a generator owning fresh
+ * copies of its member tracks. The shallow path left the duplicate aliasing the source's tracks,
+ * so arraying the group moved the originals and corrupted the design (#23771).
+ */
+BOOST_AUTO_TEST_CASE( DeepDuplicateGeneratorMembersAreDeepCopied )
+{
+    auto board = std::make_unique<BOARD>();
+    board->SetEnabledLayers( LSET::AllCuMask() | LSET::AllTechMask() );
+
+    PCB_TUNING_PATTERN* generator = new PCB_TUNING_PATTERN( board.get(), F_Cu );
+    board->Add( generator );
+
+    PCB_TRACK* seg1 = makeSegment( board.get(), VECTOR2I( 0, 0 ), VECTOR2I( pcbIUScale.mmToIU( 1 ), 0 ) );
+    PCB_TRACK* seg2 =
+            makeSegment( board.get(), VECTOR2I( pcbIUScale.mmToIU( 1 ), 0 ), VECTOR2I( pcbIUScale.mmToIU( 2 ), 0 ) );
+
+    generator->AddItem( seg1 );
+    generator->AddItem( seg2 );
+
+    // Wrap the generator in a group, as "Create from Selection > Group" does.
+    PCB_GROUP* group = new PCB_GROUP( board.get() );
+    group->AddItem( generator );
+    board->Add( group );
+
+    PCB_GROUP* dupGroup = group->DeepDuplicate( IGNORE_PARENT_GROUP );
+    BOOST_REQUIRE( dupGroup );
+    BOOST_REQUIRE_EQUAL( dupGroup->GetItems().size(), 1u );
+
+    PCB_GENERATOR* dupGenerator = nullptr;
+
+    for( EDA_ITEM* member : dupGroup->GetItems() )
+    {
+        BOOST_REQUIRE_EQUAL( member->Type(), PCB_GENERATOR_T );
+        dupGenerator = static_cast<PCB_GENERATOR*>( member );
+    }
+
+    BOOST_REQUIRE( dupGenerator );
+
+    // KIID has no ostream operator, so compare with BOOST_CHECK instead of BOOST_CHECK_NE.
+    BOOST_CHECK_NE( dupGenerator, static_cast<PCB_GENERATOR*>( generator ) );
+    BOOST_CHECK( dupGenerator->m_Uuid != generator->m_Uuid );
+
+    BOOST_REQUIRE_EQUAL( dupGenerator->GetItems().size(), generator->GetItems().size() );
+
+    std::set<EDA_ITEM*> originalMembers( generator->GetItems().begin(), generator->GetItems().end() );
+
+    for( EDA_ITEM* member : dupGenerator->GetItems() )
+    {
+        BOARD_ITEM* boardItem = dynamic_cast<BOARD_ITEM*>( member );
+        BOOST_REQUIRE( boardItem );
+
+        BOOST_CHECK_EQUAL( originalMembers.count( member ), 0u );
+        BOOST_CHECK( boardItem->m_Uuid != seg1->m_Uuid );
+        BOOST_CHECK( boardItem->m_Uuid != seg2->m_Uuid );
+        BOOST_CHECK_EQUAL( boardItem->GetParentGroup(), static_cast<EDA_GROUP*>( dupGenerator ) );
+    }
+
+    // The source generator must be left untouched.
+    BOOST_CHECK_EQUAL( generator->GetItems().size(), 2u );
+    BOOST_CHECK_EQUAL( seg1->GetParentGroup(), static_cast<EDA_GROUP*>( generator ) );
+    BOOST_CHECK_EQUAL( seg2->GetParentGroup(), static_cast<EDA_GROUP*>( generator ) );
+
+    // Groups do not own their members, and these copies were never added to the board.
+    std::vector<EDA_ITEM*> dupMembers( dupGenerator->GetItems().begin(), dupGenerator->GetItems().end() );
+
+    for( EDA_ITEM* member : dupMembers )
+        delete member;
+
+    delete dupGenerator;
+    delete dupGroup;
 }
 
 

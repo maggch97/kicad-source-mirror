@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "pns_multi_dragger.h"
@@ -238,7 +238,11 @@ bool MULTI_DRAGGER::Start( const VECTOR2I& aP, ITEM_SET& aPrimitives )
 
             const JOINT* jt = m_world->FindJoint( l.originalLine.CLastPoint(), &l.originalLine );
 
-            assert (jt != nullptr);
+            if( !jt )
+            {
+                m_dragMode = DM_SEGMENT;
+                break;
+            }
 
             if( !jt->IsTrivialEndpoint() )
             {
@@ -862,6 +866,11 @@ bool MULTI_DRAGGER::Drag( const VECTOR2I& aP )
                             PNS_DBG( Dbg(), AddPoint, projected, LIGHTYELLOW, 600000,
                                    wxT( "l-end" ) );
 
+                            // DragCorner can collapse a very short secondary line to a single
+                            // point; skip it so the later CSegment(-1) check stays valid
+                            if( parallelDragged.SegmentCount() < 1 )
+                                continue;
+
                             l.dragOK = true;
 
                             if( !l.isPrimaryLine )
@@ -938,6 +947,11 @@ bool MULTI_DRAGGER::Drag( const VECTOR2I& aP )
 
                 if( l.isPrimaryLine )
                     continue;
+
+                // A degenerate dragged line has no last segment to read a direction from;
+                // reject this posture so the next variant is attempted
+                if( l.draggedLine.SegmentCount() < 1 )
+                    return false;
 
                 DIRECTION_45 lastDir ( l.draggedLine.CSegment(-1) );
 

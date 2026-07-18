@@ -14,14 +14,15 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "nl_schematic_plugin_impl.h"
 
 // KiCAD includes
 #include <gal/graphics_abstraction_layer.h>
+#include <navlib_safe_init.h>
 #include <sch_base_frame.h>
 #include <bitmaps.h>
 #include <class_draw_panel_gal.h>
@@ -66,7 +67,8 @@ NL_SCHEMATIC_PLUGIN_IMPL::NL_SCHEMATIC_PLUGIN_IMPL() :
 
 NL_SCHEMATIC_PLUGIN_IMPL::~NL_SCHEMATIC_PLUGIN_IMPL()
 {
-    EnableNavigation( false );
+    if( IsEnabled() )
+        EnableNavigation( false );
 }
 
 
@@ -83,14 +85,12 @@ void NL_SCHEMATIC_PLUGIN_IMPL::SetCanvas( EDA_DRAW_PANEL_GAL* aViewport )
 
         if( init )
         {
-            // Use the default settings for the connexion to the 3DMouse navigation
-            // They are use a single-threaded threading model and row vectors.
-            EnableNavigation( true );
-
-            // Use the SpaceMouse internal timing source for the frame rate.
-            PutFrameTimingSource( TimingSource::SpaceMouse );
-
-            exportCommandsAndImages();
+            SafeNavlibInit( [this]()
+            {
+                EnableNavigation( true );
+                PutFrameTimingSource( TimingSource::SpaceMouse );
+                exportCommandsAndImages();
+            } );
         }
     }
 }
@@ -447,7 +447,7 @@ long NL_SCHEMATIC_PLUGIN_IMPL::SetActiveCommand( std::string commandId )
             bool runAction = true;
 
             if( const ACTION_CONDITIONS* aCond = tool_manager->GetActionManager()->GetCondition( *context ) )
-                runAction = aCond->enableCondition( sel );
+                runAction = aCond->GetHotkeyCondition()( sel );
 
             if( runAction )
                 tool_manager->RunAction( *context );

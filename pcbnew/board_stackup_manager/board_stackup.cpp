@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -447,6 +447,9 @@ bool BOARD_STACKUP::operator==( const BOARD_STACKUP& aOther ) const
     if( m_EdgeConnectorConstraints != aOther.m_EdgeConnectorConstraints ) return false;
     if( m_EdgePlating              != aOther.m_EdgePlating ) return false;
     if( m_FinishType               != aOther.m_FinishType ) return false;
+
+    if( m_list.size() != aOther.m_list.size() )
+        return false;
 
     if( !std::equal( std::begin( m_list ), std::end( m_list ), std::begin( aOther.m_list ),
                      []( const BOARD_STACKUP_ITEM* aA, const BOARD_STACKUP_ITEM* aB )

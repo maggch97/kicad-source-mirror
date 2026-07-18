@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -142,8 +142,7 @@ void ODB_MATRIX_ENTITY::InitMatrixLayerData()
                     ly_name = m_board->GetLayerName( stackup_item->GetBrdLayerId() );
 
                 if( ly_name.IsEmpty() && stackup_item->GetType() == BS_ITEM_TYPE_DIELECTRIC )
-                    ly_name = wxString::Format( "DIELECTRIC_%d",
-                                                stackup_item->GetDielectricLayerId() );
+                    ly_name = wxString::Format( "DIELECTRIC_%d", stackup_item->GetDielectricLayerId() );
             }
 
             MATRIX_LAYER matrix( m_row++, ly_name );
@@ -199,11 +198,20 @@ void ODB_MATRIX_ENTITY::AddMatrixLayerField( MATRIX_LAYER& aMLayer, PCB_LAYER_ID
     switch( aLayer )
     {
     case F_Paste:
-    case B_Paste: aMLayer.m_type = ODB_TYPE::SOLDER_PASTE; break;
+    case B_Paste:
+        aMLayer.m_type = ODB_TYPE::SOLDER_PASTE;
+        break;
+
     case F_SilkS:
-    case B_SilkS: aMLayer.m_type = ODB_TYPE::SILK_SCREEN; break;
+    case B_SilkS:
+        aMLayer.m_type = ODB_TYPE::SILK_SCREEN;
+        break;
+
     case F_Mask:
-    case B_Mask: aMLayer.m_type = ODB_TYPE::SOLDER_MASK; break;
+    case B_Mask:
+        aMLayer.m_type = ODB_TYPE::SOLDER_MASK;
+        break;
+
     case B_CrtYd:
     case F_CrtYd:
     case Edge_Cuts:
@@ -290,13 +298,13 @@ void ODB_MATRIX_ENTITY::AddMatrixLayerField( MATRIX_LAYER& aMLayer, PCB_LAYER_ID
 
 void ODB_MATRIX_ENTITY::AddDrillMatrixLayer()
 {
-    std::map<ODB_DRILL_SPAN, std::vector<BOARD_ITEM*>>& drill_layers =
-            m_plugin->GetDrillLayerItemsMap();
+    std::map<ODB_DRILL_SPAN, std::vector<BOARD_ITEM*>>& drill_layers = m_plugin->GetDrillLayerItemsMap();
 
     std::map<std::pair<PCB_LAYER_ID, PCB_LAYER_ID>, std::vector<BOARD_ITEM*>>& slot_holes =
             m_plugin->GetSlotHolesMap();
 
     drill_layers.clear();
+    slot_holes.clear();
 
     std::map<ODB_DRILL_SPAN, wxString>& span_names = m_plugin->GetDrillSpanNameMap();
     span_names.clear();
@@ -371,57 +379,57 @@ void ODB_MATRIX_ENTITY::AddDrillMatrixLayer()
 
     int backdrillIndex = 1;
 
-    auto assignName = [&]( const ODB_DRILL_SPAN& aSpan )
-    {
-        auto it = span_names.find( aSpan );
+    auto assignName =
+            [&]( const ODB_DRILL_SPAN& aSpan )
+            {
+                auto it = span_names.find( aSpan );
 
-        if( it != span_names.end() )
-            return it->second;
+                if( it != span_names.end() )
+                    return it->second;
 
-        wxString name;
+                wxString name;
 
-        if( aSpan.m_IsBackdrill )
-        {
-            name.Printf( wxT( "drill%d" ), backdrillIndex++ );
-        }
-        else
-        {
-            wxString platedLabel = aSpan.m_IsNonPlated ? wxT( "non-plated" ) : wxT( "plated" );
-            name.Printf( wxT( "drill_%s_%s-%s" ), platedLabel,
-                         m_board->GetLayerName( aSpan.TopLayer() ),
-                         m_board->GetLayerName( aSpan.BottomLayer() ) );
-        }
+                if( aSpan.m_IsBackdrill )
+                {
+                    name.Printf( wxT( "drill%d" ), backdrillIndex++ );
+                }
+                else
+                {
+                    wxString platedLabel = aSpan.m_IsNonPlated ? wxT( "non-plated" ) : wxT( "plated" );
+                    name.Printf( wxT( "drill_%s_%s-%s" ), platedLabel,
+                                 m_board->GetLayerName( aSpan.TopLayer() ),
+                                 m_board->GetLayerName( aSpan.BottomLayer() ) );
+                }
 
-        wxString legalName = ODB::GenLegalEntityName( name );
-        span_names[aSpan] = legalName;
+                wxString legalName = ODB::GenLegalEntityName( name );
+                span_names[aSpan] = legalName;
 
-        return legalName;
-    };
+                return legalName;
+            };
 
-    auto InitDrillMatrix = [&]( const ODB_DRILL_SPAN& aSpan )
-    {
-        wxString dLayerName = assignName( aSpan );
-        MATRIX_LAYER matrix( m_row++, dLayerName );
+    auto InitDrillMatrix =
+            [&]( const ODB_DRILL_SPAN& aSpan )
+            {
+                wxString dLayerName = assignName( aSpan );
+                MATRIX_LAYER matrix( m_row++, dLayerName );
 
-        matrix.m_type = ODB_TYPE::DRILL;
-        matrix.m_context = ODB_CONTEXT::BOARD;
-        matrix.m_polarity = ODB_POLARITY::POSITIVE;
-        matrix.m_span.emplace( std::make_pair(
-                ODB::GenLegalEntityName( m_board->GetLayerName( aSpan.m_StartLayer ) ),
-                ODB::GenLegalEntityName( m_board->GetLayerName( aSpan.m_EndLayer ) ) ) );
+                matrix.m_type = ODB_TYPE::DRILL;
+                matrix.m_context = ODB_CONTEXT::BOARD;
+                matrix.m_polarity = ODB_POLARITY::POSITIVE;
+                matrix.m_span.emplace( std::make_pair(
+                        ODB::GenLegalEntityName( m_board->GetLayerName( aSpan.m_StartLayer ) ),
+                        ODB::GenLegalEntityName( m_board->GetLayerName( aSpan.m_EndLayer ) ) ) );
 
-        if( aSpan.m_IsBackdrill )
-            matrix.m_addType.emplace( ODB_SUBTYPE::BACKDRILL );
+                if( aSpan.m_IsBackdrill )
+                    matrix.m_addType.emplace( ODB_SUBTYPE::BACKDRILL );
 
-        m_matrixLayers.push_back( matrix );
-        m_plugin->GetLayerNameList().emplace_back(
-                std::make_pair( PCB_LAYER_ID::UNDEFINED_LAYER, matrix.m_layerName ) );
-    };
+                m_matrixLayers.push_back( matrix );
+                m_plugin->GetLayerNameList().emplace_back(
+                        std::make_pair( PCB_LAYER_ID::UNDEFINED_LAYER, matrix.m_layerName ) );
+            };
 
     for( const auto& entry : drill_layers )
-    {
         InitDrillMatrix( entry.first );
-    }
 }
 
 
@@ -778,9 +786,14 @@ void ODB_LAYER_ENTITY::InitDrillData()
     bool isNonPlatedLayer = matchedSpan.has_value() && matchedSpan->m_IsNonPlated;
     bool isNPTHLayer = matchedSpan.has_value() && matchedSpan->m_IsNonPlated
                        && !matchedSpan->m_IsBackdrill;
+    bool isPlatedDrillLayer = matchedSpan.has_value() && !matchedSpan->m_IsNonPlated
+                              && !matchedSpan->m_IsBackdrill;
 
-    if( matchedSpan.has_value() && isNPTHLayer )
+    if( matchedSpan.has_value() && ( isNPTHLayer || isPlatedDrillLayer ) )
     {
+        // Slotted (oval) holes are routed to a separate map; emit them on the matching
+        // plated or non-plated drill layer. Plated slots belong on the plated layer,
+        // non-plated slots on the non-plated layer.
         auto slotIt = slot_holes.find( matchedSpan->Pair() );
 
         if( slotIt != slot_holes.end() )
@@ -792,10 +805,12 @@ void ODB_LAYER_ENTITY::InitDrillData()
 
                 PAD* pad = static_cast<PAD*>( item );
 
-                if( pad->GetAttribute() == PAD_ATTRIB::PTH )
+                bool padIsNPTH = pad->GetAttribute() == PAD_ATTRIB::NPTH;
+
+                if( isNPTHLayer != padIsNPTH )
                     continue;
 
-                m_tools.value().AddDrillTools( wxT( "NON_PLATED" ),
+                m_tools.value().AddDrillTools( padIsNPTH ? wxT( "NON_PLATED" ) : wxT( "PLATED" ),
                                                ODB::SymDouble2String(
                                                        std::min( pad->GetDrillSizeX(),
                                                                 pad->GetDrillSizeY() ) ) );
@@ -1250,10 +1265,10 @@ void ODB_STEP_ENTITY::InitEdaData()
 
         for( int i = 0; i < (int) fp->Pads().size(); ++i )
         {
-            PAD*  pad = fp->Pads()[i];
-            auto& eda_net = m_edaData.GetNet( pad->GetNetCode() );
+            PAD*           pad = fp->Pads()[i];
+            EDA_DATA::NET& eda_net = m_edaData.GetNet( pad->GetNetCode() );
 
-            auto& subnet = eda_net.AddSubnet<EDA_DATA::SUB_NET_TOEPRINT>(
+            EDA_DATA::SUB_NET_TOEPRINT& subnet = eda_net.AddSubnet<EDA_DATA::SUB_NET_TOEPRINT>(
                     &m_edaData,
                     fp->IsFlipped() ? EDA_DATA::SUB_NET_TOEPRINT::SIDE::BOTTOM
                                     : EDA_DATA::SUB_NET_TOEPRINT::SIDE::TOP,
@@ -1270,8 +1285,7 @@ void ODB_STEP_ENTITY::InitEdaData()
 
             toep.m_center = ODB::AddXY( pad->GetPosition() );
 
-            toep.m_rot = ODB::Double2String(
-                    ( ANGLE_360 - pad->GetOrientation() ).Normalize().AsDegrees() );
+            toep.m_rot = ODB::Double2String( ( ANGLE_360 - pad->GetOrientation() ).Normalize().AsDegrees() );
 
             if( pad->IsFlipped() )
                 toep.m_mirror = wxT( "M" );
@@ -1282,7 +1296,7 @@ void ODB_STEP_ENTITY::InitEdaData()
 
     for( PCB_TRACK* track : m_board->Tracks() )
     {
-        auto&              eda_net = m_edaData.GetNet( track->GetNetCode() );
+        EDA_DATA::NET&     eda_net = m_edaData.GetNet( track->GetNetCode() );
         EDA_DATA::SUB_NET* subnet = nullptr;
 
         if( track->Type() == PCB_VIA_T )
@@ -1297,11 +1311,12 @@ void ODB_STEP_ENTITY::InitEdaData()
     {
         for( PCB_LAYER_ID layer : zone->GetLayerSet().Seq() )
         {
-            auto& eda_net = m_edaData.GetNet( zone->GetNetCode() );
-            auto& subnet = eda_net.AddSubnet<EDA_DATA::SUB_NET_PLANE>( &m_edaData,
-                                                                       EDA_DATA::SUB_NET_PLANE::FILL_TYPE::SOLID,
-                                                                       EDA_DATA::SUB_NET_PLANE::CUTOUT_TYPE::EXACT,
-                                                                       0 );
+            EDA_DATA::NET&           eda_net = m_edaData.GetNet( zone->GetNetCode() );
+            EDA_DATA::SUB_NET_PLANE& subnet = eda_net.AddSubnet<EDA_DATA::SUB_NET_PLANE>(
+                    &m_edaData,
+                    EDA_DATA::SUB_NET_PLANE::FILL_TYPE::SOLID,
+                    EDA_DATA::SUB_NET_PLANE::CUTOUT_TYPE::EXACT,
+                    0 );
             m_plugin->GetPlaneSubnetMap().emplace( std::piecewise_construct,
                                                    std::forward_as_tuple( layer, zone ),
                                                    std::forward_as_tuple( &subnet ) );
@@ -1342,14 +1357,10 @@ void ODB_STEP_ENTITY::GenerateProfileFile( ODB_TREE_WRITER& writer )
     SHAPE_POLY_SET board_outline;
 
     if( !m_board->GetBoardPolygonOutlines( board_outline, true ) )
-    {
         wxLogError( "Failed to get board outline" );
-    }
 
     if( !m_profile->AddContour( board_outline, 0 ) )
-    {
         wxLogError( "Failed to add polygon to profile" );
-    }
 
     m_profile->GenerateProfileFeatures( fileproxy.GetStream() );
 }
@@ -1464,9 +1475,15 @@ void ODB_STEP_ENTITY::MakeLayerEntity()
     for( BOARD_ITEM* item : m_board->Drawings() )
     {
         if( BOARD_CONNECTED_ITEM* conn_it = dynamic_cast<BOARD_CONNECTED_ITEM*>( item ) )
-            elements[conn_it->GetLayer()][conn_it->GetNetCode()].push_back( conn_it );
+        {
+            for( PCB_LAYER_ID layer : conn_it->GetLayerSet() )
+                elements[layer][conn_it->GetNetCode()].push_back( conn_it );
+        }
         else
-            elements[item->GetLayer()][0].push_back( item );
+        {
+            for( PCB_LAYER_ID layer : item->GetLayerSet() )
+                elements[layer][0].push_back( item );
+        }
     }
 
     for( FOOTPRINT* fp : m_board->Footprints() )
@@ -1475,7 +1492,10 @@ void ODB_STEP_ENTITY::MakeLayerEntity()
             elements[field->GetLayer()][0].push_back( field );
 
         for( BOARD_ITEM* item : fp->GraphicalItems() )
-            elements[item->GetLayer()][0].push_back( item );
+        {
+            for( PCB_LAYER_ID layer : item->GetLayerSet() )
+                elements[layer][0].push_back( item );
+        }
 
         for( PAD* pad : fp->Pads() )
         {

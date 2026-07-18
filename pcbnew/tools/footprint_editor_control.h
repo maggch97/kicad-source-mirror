@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef FOOTPRINT_EDITOR_CONTROL_H
@@ -63,6 +59,9 @@ public:
     int DeleteFootprint( const TOOL_EVENT& aEvent );
     int ImportFootprint( const TOOL_EVENT& aEvent );
     int ExportFootprint( const TOOL_EVENT& aEvent );
+
+    /// Diff the currently-selected footprint library against another .pretty directory.
+    int CompareLibraryWithFile( const TOOL_EVENT& aEvent );
     int OpenDirectory( const TOOL_EVENT& aEvent );
     int OpenWithTextEditor( const TOOL_EVENT& aEvent );
     int ShowDatasheet( const TOOL_EVENT& aEvent );
@@ -80,6 +79,10 @@ public:
 
     int CleanupGraphics( const TOOL_EVENT& aEvent );
     int RepairFootprint( const TOOL_EVENT& aEvent );
+
+    int NextTab( const TOOL_EVENT& aEvent );
+    int PrevTab( const TOOL_EVENT& aEvent );
+    int CloseTab( const TOOL_EVENT& aEvent );
 
     /**
      * Edit the properties used for new pad creation.

@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -55,7 +55,7 @@ private:
      */
     bool verifyTables();
 
-    void browseLibrariesHandler( wxCommandEvent& event ) override;
+    void browseLibrariesHandler( wxCommandEvent& event );
     void appendRowHandler( wxCommandEvent& event ) override;
     void deleteRowHandler( wxCommandEvent& event ) override;
     void moveUpHandler( wxCommandEvent& event ) override;

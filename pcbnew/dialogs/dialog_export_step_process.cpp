@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "dialog_export_step_process.h"
@@ -30,6 +26,7 @@
 #include <wx/timer.h>
 #include <wx/txtstrm.h>
 #include <wx/msgdlg.h>
+#include <wx/filefn.h>
 
 wxDEFINE_EVENT( wxEVT_THREAD_STDIN, wxThreadEvent );
 wxDEFINE_EVENT( wxEVT_THREAD_STDERR, wxThreadEvent );
@@ -204,6 +201,30 @@ void DIALOG_EXPORT_STEP_LOG::onProcessTerminate( wxProcessEvent& aEvent )
             m_activityGauge->SetValue( 1 );
         }
     }
+
+    // The child has exited; it is safe to remove any temp inputs we were keeping alive for it.
+    cleanupTempFiles();
+}
+
+
+void DIALOG_EXPORT_STEP_LOG::SetTempFilesToCleanup( std::vector<wxString> aPaths )
+{
+    m_tempFiles = std::move( aPaths );
+}
+
+
+void DIALOG_EXPORT_STEP_LOG::cleanupTempFiles()
+{
+    if( m_tempFilesCleaned )
+        return;
+
+    for( const wxString& path : m_tempFiles )
+    {
+        if( !path.IsEmpty() && wxFileExists( path ) )
+            wxRemoveFile( path );
+    }
+
+    m_tempFilesCleaned = true;
 }
 
 void DIALOG_EXPORT_STEP_LOG::onThreadInput( wxThreadEvent& aEvent )
@@ -238,6 +259,11 @@ void DIALOG_EXPORT_STEP_LOG::onClose( wxCloseEvent& aEvent )
         m_process->Detach();
     }
 
+    // Best-effort cleanup. If the child was detached above and is still reading the temp files
+    // on Windows, wxRemoveFile will fail and leave them behind; unique filenames per export
+    // keep that from interfering with future runs.
+    cleanupTempFiles();
+
     // Clear log window message, storing the log data in config has no interest.
     m_textCtrlLog->Clear();
 
@@ -246,6 +272,7 @@ void DIALOG_EXPORT_STEP_LOG::onClose( wxCloseEvent& aEvent )
 
 DIALOG_EXPORT_STEP_LOG::~DIALOG_EXPORT_STEP_LOG()
 {
+    cleanupTempFiles();
     delete m_stdioThread;
 }
 
@@ -279,6 +306,10 @@ DIALOG_EXPORT_STEP_LOG::DIALOG_EXPORT_STEP_LOG( wxWindow* aParent, const wxStrin
     {
         m_startMessage.Append( "Unable to launch stdstream thread.\n" );
         delete m_stdioThread;
+
+        // Without this, onClose() and the dtor find a non-null but freed m_stdioThread and
+        // dereference it (KICAD 4020447211).
+        m_stdioThread = nullptr;
         return;
     }
 

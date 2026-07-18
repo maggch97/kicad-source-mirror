@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef __PNS_LINE_H
@@ -236,6 +236,8 @@ public:
 
     void DragSegment( const VECTOR2I& aP, int aIndex, bool aFreeAngle = false );
     void DragCorner( const VECTOR2I& aP, int aIndex, bool aFreeAngle = false, DIRECTION_45 aPreferredEndingDirection = DIRECTION_45() );
+
+    void DragArc( const VECTOR2I& aP, int aIndex );
 
     void SetRank( int aRank ) override;
     int Rank() const override;

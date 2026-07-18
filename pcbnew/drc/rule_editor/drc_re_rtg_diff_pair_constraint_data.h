@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DRC_RE_ROUTING_DIFF_PAIR_CONSTRAINT_DATA_H_
@@ -57,19 +53,14 @@ public:
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
         // Positions measured from constraint_routing_diff_pair.png bitmap (~423x133)
-        // Format: { xStart, xEnd, yTop, tabOrder }
+        // Format: { xStart, xEnd, yCenter, tabOrder }
         // TODO: measure actual positions from PNG
         return {
-            { 0 + DRC_RE_OVERLAY_XO, 40 + DRC_RE_OVERLAY_XO, 135 + DRC_RE_OVERLAY_YO, 1, wxS( "mm" ),
-              LABEL_POSITION::RIGHT }, // opt_width
-            { 80 + DRC_RE_OVERLAY_XO, 120 + DRC_RE_OVERLAY_XO, 135 + DRC_RE_OVERLAY_YO, 2, wxS( "mm" ),
-              LABEL_POSITION::RIGHT }, // width_tolerance (±)
-            { 185 + DRC_RE_OVERLAY_XO, 225 + DRC_RE_OVERLAY_XO, 115 + DRC_RE_OVERLAY_YO, 3, wxS( "mm" ),
-              LABEL_POSITION::RIGHT }, // opt_gap
-            { 265 + DRC_RE_OVERLAY_XO, 305 + DRC_RE_OVERLAY_XO, 115 + DRC_RE_OVERLAY_YO, 4, wxS( "mm" ),
-              LABEL_POSITION::RIGHT }, // gap_tolerance (±)
-            { 95 + DRC_RE_OVERLAY_XO, 135 + DRC_RE_OVERLAY_XO, 10 + DRC_RE_OVERLAY_YO, 5, wxS( "mm" ),
-              LABEL_POSITION::RIGHT }, // max_uncoupled
+            { 0, 55, 147, 1, wxS( "mm" ), LABEL_POSITION::RIGHT },                     // opt_width
+            { 105, 160, 147, 2, wxS( "mm" ), LABEL_POSITION::RIGHT, wxS( "\u00B1" ) }, // width_tolerance (±)
+            { 185, 240, 123, 3, wxS( "mm" ), LABEL_POSITION::RIGHT },                  // opt_gap
+            { 290, 345, 123, 4, wxS( "mm" ), LABEL_POSITION::RIGHT, wxS( "\u00B1" ) }, // gap_tolerance (±)
+            { 85, 140, 20, 5, wxS( "mm" ), LABEL_POSITION::RIGHT },                    // max_uncoupled
         };
     }
 

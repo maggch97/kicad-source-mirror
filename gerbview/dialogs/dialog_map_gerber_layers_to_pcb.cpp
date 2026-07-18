@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <X2_gerber_attributes.h>
@@ -216,7 +212,7 @@ void DIALOG_MAP_GERBER_LAYERS_TO_PCB::initDialog()
                                               + wxT( "\n\n" ) + _( "Assign to matching PCB layers?" ),
                                     _( "Automatic Layer Assignment" ), wxOK | wxCANCEL | wxOK_DEFAULT );
 
-        if( dlg.ShowModal() == wxOK )
+        if( dlg.ShowModal() == wxID_OK )
         {
             int total_copper = 0;
 

@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "remote_symbol_import_utils.h"
@@ -243,7 +243,7 @@ bool PlaceRemoteDownloadedSymbol( SCH_EDIT_FRAME* aFrame, const wxString& aNickn
 
     aFrame->Raise();
     toolMgr->PostAction( SCH_ACTIONS::placeSymbol,
-                         SCH_ACTIONS::PLACE_SYMBOL_PARAMS{ symbol, true } );
+                         SCH_ACTIONS::PLACE_SYMBOL_PARAMS{ symbol, true, symbol->IsMultiUnit() } );
     return true;
 }
 

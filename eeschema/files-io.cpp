@@ -17,13 +17,11 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+
+#include <algorithm>
 
 #include <confirm.h>
 #include <common.h>
@@ -48,12 +46,15 @@
 #include <project_rescue.h>
 #include <project_sch.h>
 #include <dialog_HTML_reporter_base.h>
+#include <import_proj_properties.h>
 #include <io/common/plugin_common_choose_project.h>
 #include <reporter.h>
 #include <richio.h>
+#include <sch_footprint_field_reconciler.h>
 #include <sch_bus_entry.h>
 #include <sch_commit.h>
 #include <sch_edit_frame.h>
+#include <sch_draw_panel.h>
 #include <sch_io/kicad_legacy/sch_io_kicad_legacy.h>
 #include <sch_file_versions.h>
 #include <sch_line.h>
@@ -112,9 +113,6 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
     wxString   fullFileName( aFileSet[0] );
     wxFileName wx_filename( fullFileName );
-
-    if( !Prj().IsNullProject() )
-        Kiway().LocalHistory().Init( Prj().GetProjectPath() );
 
     // We insist on caller sending us an absolute path, if it does not, we say it's a bug.
     wxASSERT_MSG( wx_filename.IsAbsolute(), wxS( "Path is not absolute!" ) );
@@ -440,11 +438,19 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
         // update some of the needed schematic settings such as drawing defaults
         LoadProjectSettings();
 
-        // It's possible the schematic parser fixed errors due to bugs so warn the user
-        // that the schematic has been fixed (modified).
         SCH_SHEET_LIST sheetList = Schematic().Hierarchy();
 
-        if( sheetList.IsModified() )
+        bool repairedPageNumbers = false;
+
+        if( sheetList.AllSheetPageNumbersEmpty() )
+            sheetList.SetInitialPageNumbers();
+        else
+            repairedPageNumbers = sheetList.RepairPageNumbers();
+
+        // It's possible the schematic parser fixed errors due to bugs, or that we reassigned
+        // duplicate or blank sheet page numbers, so warn the user that the schematic has been
+        // fixed (modified).
+        if( sheetList.IsModified() || repairedPageNumbers )
         {
             DisplayInfoMessage( this,
                                 _( "An error was found when loading the schematic that has "
@@ -452,9 +458,6 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
                                    "repair the broken file or it may not be usable with other "
                                    "versions of KiCad." ) );
         }
-
-        if( sheetList.AllSheetPageNumbersEmpty() )
-            sheetList.SetInitialPageNumbers();
 
         UpdateFileHistory( fullFileName );
 
@@ -736,19 +739,15 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
         SetScreen( GetCurrentSheet().LastScreen() );
 
+        // Repaired page numbers changed in-memory sheet instances; flag the schematic so the
+        // fixed numbering can be saved instead of silently reverting on the next load.
+        if( repairedPageNumbers )
+            OnModify();
+
         wxLogTrace( traceSchCurrentSheet,
                    "After SetScreen: Current sheet path='%s', size=%zu",
                    GetCurrentSheet().Path().AsString(),
                    GetCurrentSheet().size() );
-
-        // Migrate conflicting bus definitions
-        // TODO(JE) This should only run once based on schematic file version
-        if( Schematic().ConnectionGraph()->GetBusesNeedingMigration().size() > 0 )
-        {
-            DIALOG_MIGRATE_BUSES dlg( this );
-            dlg.ShowQuasiModal();
-            OnModify();
-        }
 
         SCH_COMMIT dummy( this );
 
@@ -756,6 +755,31 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
         progressReporter.KeepRefreshing();
 
         RecalculateConnections( &dummy, GLOBAL_CLEANUP, &progressReporter );
+
+        // Migrate conflicting bus definitions, but only for files old enough to store them.
+        // The connection graph must be rebuilt first so GetBusesNeedingMigration() can see the
+        // conflicting subgraphs; the earlier Reset() clears them.
+        SCH_SCREEN* schRootScreen = Schematic().RootScreen();
+        int         schFileVersion = schRootScreen ? schRootScreen->GetFileFormatVersionAtLoad() : 0;
+
+        if( DIALOG_MIGRATE_BUSES::ShouldPrompt(
+                    schFileVersion, Schematic().ConnectionGraph()->GetBusesNeedingMigration().size() ) )
+        {
+            progressReporter.Hide();
+
+            // The rebuild below frees the subgraphs the dialog caches, and a progress update can
+            // dispatch queued UI events into its still-bound handlers, so destroy the dialog first.
+            {
+                DIALOG_MIGRATE_BUSES dlg( this );
+                dlg.ShowQuasiModal();
+            }
+
+            OnModify();
+            progressReporter.Show();
+
+            // Relabeling the conflicting buses changes connectivity, so rebuild it.
+            RecalculateConnections( &dummy, GLOBAL_CLEANUP, &progressReporter );
+        }
 
         if( schematic.HasSymbolFieldNamesWithWhiteSpace() )
         {
@@ -782,7 +806,17 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
     // TODO: (RFB) This really needs to be put inside the Load() function of the SCH_IO_KICAD_LEGACY
     // I can't put it right now because of the extra code that is above to convert legacy bus-bus
     // entries to bus wires
-    if( schFileType == SCH_IO_MGR::SCH_LEGACY )
+    //
+    // A native s-expression schematic written by an older version can drop the junctions implied
+    // by merged colinear wires, so the fixup also runs for pre-current native files.  It is limited
+    // to older files because the current version writes those junctions on save; running it on a
+    // current file could silently connect an intentional wire crossing and mask an
+    // ERCE_LABEL_MULTIPLE_WIRES violation.  It is idempotent and only adds needed junctions.
+    bool nativeNeedsFixup = schFileType == SCH_IO_MGR::SCH_KICAD
+                            && Schematic().RootScreen()->GetFileFormatVersionAtLoad()
+                                       < SEXPR_SCHEMATIC_FILE_VERSION;
+
+    if( schFileType == SCH_IO_MGR::SCH_LEGACY || nativeNeedsFixup )
         Schematic().FixupJunctionsAfterImport();
 
     SyncView();
@@ -1471,6 +1505,21 @@ bool SCH_EDIT_FRAME::SaveProject( bool aSaveAs )
             SetStatusText( backupReporter.GetMessages(), 0 );
     }
 
+    // Restore the virtual page numbers that were modified during save. When saving, screens are
+    // assigned page number 1 (single use) or 0 (multiple uses) for serialization purposes.
+    // We restore all screens here, not just the current one, because other code paths (e.g.
+    // ERC tree model, temporary sheet switches) may read any screen's virtual page number.
+    for( const SCH_SHEET_PATH& sheet : Schematic().Hierarchy() )
+        sheet.LastScreen()->SetVirtualPageNumber( sheet.GetVirtualPageNumber() );
+
+    SetSheetNumberAndCount();
+
+    if( GetCanvas() && GetCanvas()->GetView() )
+    {
+        GetCanvas()->GetView()->RefreshDrawingSheetPageInfo();
+        GetCanvas()->Refresh();
+    }
+
     updateTitle();
 
     if( m_infoBar->GetMessageType() == WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE )
@@ -1506,8 +1555,11 @@ bool SCH_EDIT_FRAME::importFile( const wxString& aFileName, int aFileType,
     case SCH_IO_MGR::SCH_LTSPICE:
     case SCH_IO_MGR::SCH_EASYEDA:
     case SCH_IO_MGR::SCH_EASYEDAPRO:
+    case SCH_IO_MGR::SCH_EASYEDAPRO_V3:
     case SCH_IO_MGR::SCH_PADS:
     case SCH_IO_MGR::SCH_GEDA:
+    case SCH_IO_MGR::SCH_DIPTRACE:
+    case SCH_IO_MGR::SCH_PCAD:
     {
         // We insist on caller sending us an absolute path, if it does not, we say it's a bug.
         // Unless we are passing the files in aproperties, in which case aFileName can be empty.
@@ -1540,7 +1592,27 @@ bool SCH_EDIT_FRAME::importFile( const wxString& aFileName, int aFileType,
 
             if( loadedSheet )
             {
-                Schematic().SetTopLevelSheets( { loadedSheet } );
+                std::vector<SCH_SHEET*> topLevelSheets = Schematic().GetTopLevelSheets();
+                bool loadedIsTopLevel = std::find( topLevelSheets.begin(), topLevelSheets.end(), loadedSheet )
+                                        != topLevelSheets.end();
+                bool loadedIsVirtualRoot = loadedSheet == &Schematic().Root()
+                                           || loadedSheet->IsVirtualRootSheet();
+
+                // Some importers create the full top-level sheet set themselves.  Do not collapse
+                // that back to the returned sheet.
+                if( !loadedIsTopLevel && !loadedIsVirtualRoot )
+                    Schematic().SetTopLevelSheets( { loadedSheet } );
+
+                // re-link footprint fields to the project lib so update-from-schematic works
+                {
+                    wxString              cacheNick;
+                    std::vector<wxString> sourceFpLibs;
+                    IMPORT_PROJ_PROPS::ReadFootprintProps( aProperties, cacheNick, sourceFpLibs );
+
+                    SCH_FOOTPRINT_FIELD_RECONCILER fpReconciler( cacheNick, sourceFpLibs,
+                                                                 &loadReporter );
+                    fpReconciler.Reconcile( Schematic() );
+                }
 
                 if( errorReporter.m_Reporter->HasMessage() )
                 {
@@ -1615,6 +1687,9 @@ bool SCH_EDIT_FRAME::importFile( const wxString& aFileName, int aFileType,
         SyncView();
 
         UpdateHierarchyNavigator( false, true );
+        UpdateVariantSelectionCtrl( m_schematic->GetVariantNamesForUI() );
+        SetCurrentVariant( m_schematic->GetCurrentVariant() );
+
         CallAfter(
                 [this]()
                 {

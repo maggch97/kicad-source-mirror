@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -31,9 +27,12 @@
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
 #include <pcbnew/pcb_io/easyedapro/pcb_io_easyedapro.h>
+#include <pcbnew/pcb_io/easyedapro/pcb_io_easyedapro_parser.h>
 
+#include <board.h>
 #include <footprint.h>
 #include <pad.h>
+#include <pcb_shape.h>
 
 
 struct EASYEDAPRO_IMPORT_FIXTURE
@@ -83,6 +82,24 @@ BOOST_AUTO_TEST_CASE( PolygonPadImport )
     BOOST_CHECK( !pad10->GetPrimitives( PADSTACK::ALL_LAYERS ).empty() );
 
     delete fp;
+}
+
+
+/**
+ * A closed polyline that collapses to two points must be skipped, not asserted
+ * on. Such degenerate outlines occur in real projects (issue #22239) and would
+ * otherwise abort the import in a debug build.
+ */
+BOOST_AUTO_TEST_CASE( ParsePolyDegenerateClosedPathSkipped )
+{
+    BOARD                    board;
+    PCB_IO_EASYEDAPRO_PARSER parser( &board, nullptr );
+
+    nlohmann::json polyData = nlohmann::json::parse( R"(["L", 5, 5])" );
+
+    std::vector<std::unique_ptr<PCB_SHAPE>> shapes;
+    BOOST_CHECK_NO_THROW( shapes = parser.ParsePoly( &board, polyData, true, false ) );
+    BOOST_CHECK( shapes.empty() );
 }
 
 

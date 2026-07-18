@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pgm_base.h>
@@ -646,7 +642,9 @@ void SCH_ITEM::SwapItemData( SCH_ITEM* aImage )
     std::swap( m_bodyStyle, aImage->m_bodyStyle );
     std::swap( m_private, aImage->m_private );
     std::swap( m_fieldsAutoplaced, aImage->m_fieldsAutoplaced );
-    std::swap( m_group, aImage->m_group );
+
+    // Don't swap m_group. Group membership is restored by SCH_GROUP::swapData, and the undo copy
+    // has no group, so swapping it here would drop the item out of its group.
     std::swap( m_isLocked, aImage->m_isLocked );
     swapData( aImage );
 

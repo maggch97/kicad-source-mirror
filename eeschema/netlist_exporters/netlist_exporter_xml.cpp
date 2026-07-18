@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "netlist_exporter_xml.h"
@@ -714,6 +710,10 @@ XNODE* NETLIST_EXPORTER_XML::makeGroups()
 
     SCH_SHEET_PATH currentSheet = m_schematic->CurrentSheet();
     SCH_SHEET_LIST sheetList = m_schematic->Hierarchy();
+    std::map<SCH_SCREEN*, int> screenVisits;
+
+    for( const SCH_SHEET_PATH& sheet : sheetList )
+        screenVisits[sheet.LastScreen()]++;
 
     for( const SCH_SHEET_PATH& sheet : sheetList )
     {
@@ -721,15 +721,21 @@ XNODE* NETLIST_EXPORTER_XML::makeGroups()
         // resolution of text variables in sheet fields.
         m_schematic->SetCurrentSheet( sheet );
 
+        wxString instancePrefix = sheet.PathAsString();
+
         for( SCH_ITEM* item : sheet.LastScreen()->Items().OfType( SCH_GROUP_T ) )
         {
             SCH_GROUP* group = static_cast<SCH_GROUP*>( item );
+            wxString   groupName = group->GetName();
+
+            if( screenVisits[sheet.LastScreen()] > 1 )
+                groupName = wxString::Format( wxT( "%s (%s)" ), groupName, sheet.PathHumanReadable() );
 
             XNODE* xgroup;  // current symbol being constructed
             xcomps->AddChild( xgroup = node( wxT( "group" ) ) );
 
-            xgroup->AddAttribute( wxT( "name" ), group->GetName() );
-            xgroup->AddAttribute( wxT( "uuid" ), group->m_Uuid.AsString() );
+            xgroup->AddAttribute( wxT( "name" ), groupName );
+            xgroup->AddAttribute( wxT( "uuid" ), instancePrefix + group->m_Uuid.AsString() );
             xgroup->AddAttribute( wxT( "lib_id" ), group->GetDesignBlockLibId().Format() );
 
             XNODE* xmembers;
@@ -741,7 +747,14 @@ XNODE* NETLIST_EXPORTER_XML::makeGroups()
                 {
                     XNODE* xmember;
                     xmembers->AddChild( xmember = node( wxT( "member" ) ) );
-                    xmember->AddAttribute( wxT( "uuid" ), member->m_Uuid.AsString() );
+                    xmember->AddAttribute( wxT( "uuid" ), instancePrefix + member->m_Uuid.AsString() );
+                }
+                else if( member->Type() == SCH_GROUP_T )
+                {
+                    // Emit nested groups so the board side can rebuild the nesting.
+                    XNODE* xmember;
+                    xmembers->AddChild( xmember = node( wxT( "member" ) ) );
+                    xmember->AddAttribute( wxT( "uuid" ), instancePrefix + member->m_Uuid.AsString() );
                 }
                 else if( member->Type() == SCH_SHEET_T )
                 {
@@ -757,7 +770,8 @@ XNODE* NETLIST_EXPORTER_XML::makeGroups()
                         {
                             XNODE* xmember;
                             xmembers->AddChild( xmember = node( wxT( "member" ) ) );
-                            xmember->AddAttribute( wxT( "uuid" ), descendantItem->m_Uuid.AsString() );
+                            xmember->AddAttribute( wxT( "uuid" ),
+                                                   descendantSheet.PathAsString() + descendantItem->m_Uuid.AsString() );
                         }
                     }
                 }
@@ -1278,6 +1292,18 @@ XNODE* NETLIST_EXPORTER_XML::makeListOfNets( unsigned aCtl )
             if( refText[0] == wxChar( '#' ) )
                 continue;
 
+            // Emit the resolved footprint pad number(s), not the raw symbol pin number, so a
+            // remapped pin's net lands on the right pad when the board reads this netlist
+            // (issue #2282).  Shared with the PIN_INFO path via resolvePadNumbers.
+            std::vector<wxString> nums = resolvePadNumbers( netNode.m_Pin, netNode.m_Sheet );
+
+            // An unmapped pin contributes no pad, so skip it and do not open an empty net for it.
+            if( nums.empty() )
+                continue;
+
+            wxString baseName = netNode.m_Pin->GetShownName();
+            wxString pinType = netNode.m_Pin->GetCanonicalElectricalTypeName();
+
             if( !added )
             {
                 netCodeTxt.Printf( wxT( "%d" ), i + 1 );
@@ -1289,15 +1315,6 @@ XNODE* NETLIST_EXPORTER_XML::makeListOfNets( unsigned aCtl )
 
                 added = true;
             }
-
-            std::vector<wxString> nums = netNode.m_Pin->GetStackedPinNumbers();
-            wxString              baseName = netNode.m_Pin->GetShownName();
-            wxString              pinType = netNode.m_Pin->GetCanonicalElectricalTypeName();
-
-            wxLogTrace( traceStackedPins,
-                        wxString::Format( "XML: net='%s' ref='%s' base='%s' shownNum='%s' expand=%zu",
-                                          net_record->m_Name, refText, baseName,
-                                          netNode.m_Pin->GetShownNumber(), nums.size() ) );
 
             for( const wxString& num : nums )
             {
@@ -1316,9 +1333,6 @@ XNODE* NETLIST_EXPORTER_XML::makeListOfNets( unsigned aCtl )
                     && ( net_record->m_Nodes.size() == 1 || allNetPinsStacked ) )
                 {
                     typeAttr += wxT( "+no_connect" );
-                    wxLogTrace( traceStackedPins,
-                                wxString::Format( "XML: marking node ref='%s' pin='%s' as no_connect",
-                                                  refText, num ) );
                 }
 
                 xnode->AddAttribute( wxT( "pintype" ), typeAttr );

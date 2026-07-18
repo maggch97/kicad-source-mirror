@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <advanced_config.h>
@@ -53,6 +49,7 @@
 #include <sch_group.h>
 #include <sch_marker.h>
 #include <sch_no_connect.h>
+#include <sch_rule_area.h>
 #include <sch_sheet_pin.h>
 #include <sch_table.h>
 #include <tool/tool_event.h>
@@ -1078,8 +1075,10 @@ int SCH_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
             {
                 m_toolMgr->RunAction( SCH_ACTIONS::move );
             }
-            // Allow drag selecting table cells, except when they're inside a group that we haven't entered
+            // Allow drag selecting table cells, except when the table is already selected
+            // or inside a group that we haven't entered
             else if( CollectHits( collector, evt->DragOrigin(), { SCH_TABLECELL_T } )
+                     && !collector[0]->GetParent()->IsSelected()
                      && ( collector[0]->GetParent()->GetParentGroup() == nullptr
                           || collector[0]->GetParent()->GetParentGroup() == m_enteredGroup ) )
             {
@@ -1595,6 +1594,12 @@ void SCH_SELECTION_TOOL::EnterGroup()
 
     m_toolMgr->ProcessEvent( EVENTS::SelectedEvent );
 
+    // Processing the selection event can re-enter the tool and ExitGroup(), which clears
+    // m_enteredGroup. If that happened, don't operate on the now-stale (possibly null) group
+    // or we would hide/overlay a null item and crash (issue #24778).
+    if( m_enteredGroup != aGroup )
+        return;
+
     getView()->Hide( m_enteredGroup, true );
     m_enteredGroupOverlay.Add( m_enteredGroup );
     getView()->Update( &m_enteredGroupOverlay );
@@ -1840,7 +1845,7 @@ void SCH_SELECTION_TOOL::narrowSelection( SCH_COLLECTOR& collector, const VECTOR
         }
     }
 
-    filterCollectorForHierarchy( collector, false );
+    FilterCollectorForHierarchy( collector, false );
 
     // Apply some ugly heuristics to avoid disambiguation menus whenever possible
     if( collector.GetCount() > 1 && !m_skip_heuristics )
@@ -1897,7 +1902,7 @@ bool SCH_SELECTION_TOOL::selectPoint( SCH_COLLECTOR& aCollector, const VECTOR2I&
             ExitGroup();
     }
 
-    filterCollectorForHierarchy( aCollector, true );
+    FilterCollectorForHierarchy( aCollector, true );
 
     int  addedCount = 0;
     bool anySubtracted = false;
@@ -2032,7 +2037,7 @@ int SCH_SELECTION_TOOL::SelectAll( const TOOL_EVENT& aEvent )
                 return true;
             } );
 
-    filterCollectorForHierarchy( collection, true );
+    FilterCollectorForHierarchy( collection, true );
 
     // Sheet pins aren't in the view; add them by hand
     for( EDA_ITEM* item : collection )
@@ -2889,13 +2894,13 @@ void SCH_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, 
     }
 
     filterCollectedItems( collector, true );
-    filterCollectorForHierarchy( collector, true );
+    FilterCollectorForHierarchy( collector, true );
 
     if( collector.GetCount() == 0 )
     {
         collector = pinsCollector;
         filterCollectedItems( collector, true );
-        filterCollectorForHierarchy( collector, true );
+        FilterCollectorForHierarchy( collector, true );
     }
 
     std::sort( collector.begin(), collector.end(),
@@ -3029,8 +3034,7 @@ void SCH_SELECTION_TOOL::SelectMultiple( KIGFX::PREVIEW::SELECTION_AREA& aArea, 
 }
 
 
-void SCH_SELECTION_TOOL::filterCollectorForHierarchy( SCH_COLLECTOR& aCollector,
-                                                      bool aMultiselect ) const
+void SCH_SELECTION_TOOL::FilterCollectorForHierarchy( SCH_COLLECTOR& aCollector, bool aMultiselect ) const
 {
     std::unordered_set<EDA_ITEM*> toAdd;
 
@@ -3051,6 +3055,11 @@ void SCH_SELECTION_TOOL::filterCollectorForHierarchy( SCH_COLLECTOR& aCollector,
             aCollector[j]->SetFlags( SELECTION_CANDIDATE );
     }
 
+    // Skip group promotion when the caller asked for specific types that exclude groups
+    const std::vector<KICAD_T>& scanTypes = aCollector.GetScanTypes();
+    bool                        promoteToGroups = scanTypes.empty() || alg::contains( scanTypes, SCH_LOCATE_ANY_T )
+                           || alg::contains( scanTypes, SCH_GROUP_T );
+
     for( int j = 0; j < aCollector.GetCount(); )
     {
         SCH_ITEM* item = aCollector[j];
@@ -3069,7 +3078,8 @@ void SCH_SELECTION_TOOL::filterCollectorForHierarchy( SCH_COLLECTOR& aCollector,
 
         // If any element is a member of a group, replace those elements with the top containing
         // group.
-        if( EDA_GROUP* top = SCH_GROUP::TopLevelGroup( start, m_enteredGroup, m_isSymbolEditor ) )
+        if( EDA_GROUP* top =
+                    promoteToGroups ? SCH_GROUP::TopLevelGroup( start, m_enteredGroup, m_isSymbolEditor ) : nullptr )
         {
             if( top->AsEdaItem() != item )
             {
@@ -4032,6 +4042,17 @@ bool SCH_SELECTION_TOOL::Selectable( const EDA_ITEM* aItem, const VECTOR2I* aPos
     case SCH_DIRECTIVE_LABEL_T:
         if( !m_frame->eeconfig()->m_Appearance.show_directive_labels )
             return false;
+
+        break;
+
+    case SCH_RULE_AREA_T:
+        // A rule area that exists solely to carry directive labels is hidden along with those
+        // labels, so it must not remain selectable while invisible.
+        if( !m_frame->eeconfig()->m_Appearance.show_directive_labels
+                && static_cast<const SCH_RULE_AREA*>( aItem )->IsDirectiveLabelOnlyArea() )
+        {
+            return false;
+        }
 
         break;
 

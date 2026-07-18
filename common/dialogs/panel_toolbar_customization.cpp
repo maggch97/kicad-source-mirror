@@ -14,17 +14,14 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialogs/panel_toolbar_customization.h>
 
 #include <bitmaps.h>
 #include <settings/app_settings.h>
+#include <tool/action_manager.h>
 #include <tool/actions.h>
 #include <tool/ui/toolbar_configuration.h>
 #include <widgets/split_button.h>
@@ -225,23 +222,9 @@ bool PANEL_TOOLBAR_CUSTOMIZATION::isActionSupported( const TOOL_ACTION& aAction 
     if( hasPrefix( "common." ) )
         return true;
 
-    switch( m_actionContext )
-    {
-    case FRAME_PCB_EDITOR:
-    case FRAME_FOOTPRINT_EDITOR:
-    case FRAME_FOOTPRINT_VIEWER: return hasPrefix( "pcbnew." );
+    const std::string framePrefix = ACTION_MANAGER::FrameNamespacePrefix( m_actionContext );
 
-    case FRAME_SCH:
-    case FRAME_SCH_SYMBOL_EDITOR:
-    case FRAME_SCH_VIEWER:
-    case FRAME_SIMULATOR: return hasPrefix( "eeschema." );
-
-    case FRAME_GERBER: return hasPrefix( "gerbview." );
-
-    case FRAME_PL_EDITOR: return hasPrefix( "plEditor." );
-
-    default: return false;
-    }
+    return !framePrefix.empty() && hasPrefix( framePrefix.c_str() );
 }
 
 

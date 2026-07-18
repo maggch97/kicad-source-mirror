@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <cstdio>
@@ -166,6 +166,7 @@ bool ROUTER::StartDragging( const VECTOR2I& aP, ITEM* aItem, int aDragMode )
 bool ROUTER::StartDragging( const VECTOR2I& aP, ITEM_SET aStartItems, int aDragMode )
 {
     m_leaderSegments.clear();
+    SetFailureReason( wxEmptyString );
 
     if( aStartItems.Empty() )
         return false;

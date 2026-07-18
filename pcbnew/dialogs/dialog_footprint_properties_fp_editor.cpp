@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "dialog_footprint_properties_fp_editor.h"
@@ -487,6 +483,7 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataToWindow()
     m_itemsGrid->SetRowLabelSize( 0 );
 
     Layout();
+    m_itemsGrid->SetMinVisibleRows( this, 4 );
     m_initialized = true;
 
     return true;
@@ -548,9 +545,10 @@ LSET DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::getCustomLayersFromControls() const
     }
     else
     {
+        // The default stackup restricts nothing, so every standard layer is available.
         userLayers |= LSET{ F_Cu, B_Cu };
         userLayers |= LSET::InternalCuMask();
-        userLayers |= LSET::UserDefinedLayersMask( 4 );
+        userLayers |= LSET::UserDefinedLayersMask();
     }
 
     return userLayers;
@@ -649,21 +647,26 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::Validate()
             m_frame->SyncLibraryTree( true );
     }
 
-    // Check that the user isn't trying to remove a layer that is used by the footprint.
-    LSET orphanLayers = LAYER_UTILS::GetOrphanedFootprintLayers( *m_footprint,
-                                                                 getCustomLayersFromControls() );
-
-    if( orphanLayers.any() )
+    // A custom layer set restricts which layers the footprint may use, so check that the user
+    // isn't removing a layer that is still used by the footprint. The default stackup imposes no
+    // such restriction, so nothing can be orphaned in that case.
+    if( m_cbCustomLayers->GetValue() )
     {
-        m_delayedErrorMessage =
-                wxString::Format( _( "You are trying to remove layers that are used by the footprint: %s.\n"
-                                     "Please remove the objects that use these layers first." ),
-                                  LAYER_UTILS::AccumulateNames( orphanLayers, m_frame->GetBoard() ) );
-        m_delayedFocusGrid = m_customUserLayersGrid;
-        m_delayedFocusColumn = 0;
-        m_delayedFocusRow = 0;
-        m_delayedFocusPage = NOTEBOOK_PAGES::PAGE_LAYERS;
-        return false;
+        LSET orphanLayers = LAYER_UTILS::GetOrphanedFootprintLayers( *m_footprint,
+                                                                     getCustomLayersFromControls() );
+
+        if( orphanLayers.any() )
+        {
+            m_delayedErrorMessage =
+                    wxString::Format( _( "You are trying to remove layers that are used by the footprint: %s.\n"
+                                         "Please remove the objects that use these layers first." ),
+                                      LAYER_UTILS::AccumulateNames( orphanLayers, m_frame->GetBoard() ) );
+            m_delayedFocusGrid = m_customUserLayersGrid;
+            m_delayedFocusColumn = 0;
+            m_delayedFocusRow = 0;
+            m_delayedFocusPage = NOTEBOOK_PAGES::PAGE_LAYERS;
+            return false;
+        }
     }
 
     return true;

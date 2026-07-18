@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -217,6 +217,15 @@ public:
         bool                 m_Live3DRefresh;
     };
 
+    struct DIFF_PHASE_SKEW_SETTINGS
+    {
+        KIGFX::COLOR4D m_ZeroSkewColor{ 1.0, 1.0, 1.0, 1.0 };
+        KIGFX::COLOR4D m_PositiveSkewColor{ 0.0, 0.0, 1.0, 1.0 };
+        KIGFX::COLOR4D m_NegativeSkewColor{ 1.0, 0.0, 0.0, 1.0 };
+        KIGFX::COLOR4D m_UnknownSkewColor{ 0.5, 0.5, 0.5, 1.0 };
+        bool           m_UseLogScale{ false };
+    };
+
     PCBNEW_SETTINGS();
     virtual ~PCBNEW_SETTINGS();
 
@@ -271,5 +280,7 @@ public:
 
     wxString  m_LastFootprintLibDir;
     wxString  m_LastFootprint3dDir;
+
+    DIFF_PHASE_SKEW_SETTINGS m_DiffPhaseSkewSettings;
 };
 

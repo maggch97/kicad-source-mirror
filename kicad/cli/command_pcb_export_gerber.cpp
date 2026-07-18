@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "command_pcb_export_gerber.h"
@@ -52,6 +52,10 @@ CLI::PCB_EXPORT_GERBER_COMMAND::PCB_EXPORT_GERBER_COMMAND( const std::string& aN
 
     m_argParser.add_argument( "--sp", ARG_SKETCH_PADS_ON_FAB_LAYERS )
             .help( UTF8STDSTR( _( ARG_SKETCH_PADS_ON_FAB_LAYERS_DESC ) ) )
+            .flag();
+
+    m_argParser.add_argument( "--spn", ARG_SKETCH_PAD_NUMBERS )
+            .help( UTF8STDSTR( _( ARG_SKETCH_PAD_NUMBERS_DESC ) ) )
             .flag();
 
     m_argParser.add_argument( "--hdnp", ARG_HIDE_DNP_FPS_ON_FAB_LAYERS )
@@ -110,8 +114,7 @@ int CLI::PCB_EXPORT_GERBER_COMMAND::populateJob( JOB_EXPORT_PCB_GERBER* aJob )
     aJob->SetConfiguredOutputPath( m_argOutput );
     aJob->m_drawingSheet = m_argDrawingSheet;
     aJob->m_sketchPadsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_PADS_ON_FAB_LAYERS );
-    if( aJob->m_sketchPadsOnFabLayers )
-        aJob->m_plotPadNumbers = true;
+    aJob->m_plotPadNumbers = aJob->m_sketchPadsOnFabLayers && m_argParser.get<bool>( ARG_SKETCH_PAD_NUMBERS );
     aJob->m_hideDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_HIDE_DNP_FPS_ON_FAB_LAYERS );
     aJob->m_sketchDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_DNP_FPS_ON_FAB_LAYERS );
     aJob->m_crossoutDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_CROSSOUT_DNP_FPS_ON_FAB_LAYERS );

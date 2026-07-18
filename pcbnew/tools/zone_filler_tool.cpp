@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include <cstdint>
 #include <thread>
@@ -101,8 +97,7 @@ void ZONE_FILLER_TOOL::CheckAllZones( wxWindow* aCaller, PROGRESS_REPORTER* aRep
         commit.Revert();
     }
 
-    rebuildConnectivity();
-    refresh();
+    PostFillRefresh();
 
     m_fillInProgress = false;
     m_filler.reset( nullptr );
@@ -184,15 +179,10 @@ void ZONE_FILLER_TOOL::FillAllZones( wxWindow* aCaller, PROGRESS_REPORTER* aRepo
         commit.Revert();
     }
 
-    rebuildConnectivity( aHeadless );
+    PostFillRefresh( aHeadless );
 
-    if( !aHeadless )
-    {
-        refresh();
-
-        if( m_filler->IsDebug() )
-            frame->UpdateUserInterface();
-    }
+    if( !aHeadless && m_filler->IsDebug() )
+        frame->UpdateUserInterface();
 
     m_fillInProgress = false;
     m_filler.reset( nullptr );
@@ -276,8 +266,7 @@ int ZONE_FILLER_TOOL::ZoneFillDirty( const TOOL_EVENT& aEvent )
     else
         commit.Revert();
 
-    rebuildConnectivity();
-    refresh();
+    PostFillRefresh();
 
     if( GetRunningMicroSecs() - startTime > 3000000 )   // 3 seconds
     {
@@ -368,8 +357,7 @@ int ZONE_FILLER_TOOL::ZoneFill( const TOOL_EVENT& aEvent )
         commit.Revert();
     }
 
-    rebuildConnectivity();
-    refresh();
+    PostFillRefresh();
 
     m_fillInProgress = false;
     m_filler.reset( nullptr );
@@ -448,6 +436,15 @@ PROGRESS_REPORTER* ZONE_FILLER_TOOL::GetProgressReporter()
         return m_filler->GetProgressReporter();
     else
         return nullptr;
+}
+
+
+void ZONE_FILLER_TOOL::PostFillRefresh( bool aHeadless )
+{
+    rebuildConnectivity( aHeadless );
+
+    if( !aHeadless )
+        refresh();
 }
 
 

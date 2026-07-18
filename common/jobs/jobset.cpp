@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <i18n_utility.h>
@@ -26,6 +26,7 @@
 
 #include <jobs/jobset.h>
 #include <jobs/job_registry.h>
+#include <jobs/job_unknown.h>
 #include <jobs/jobs_output_folder.h>
 #include <jobs/jobs_output_archive.h>
 #include <kiid.h>
@@ -76,9 +77,9 @@ KICOMMON_API void from_json( const nlohmann::json& j, JOBSET_JOB& f )
     f.m_job.reset( JOB_REGISTRY::CreateInstance<JOB>( f.m_type ) );
 
     if( f.m_job != nullptr )
-    {
         f.m_job->FromJson( settings_obj );
-    }
+    else
+        f.m_job = std::make_shared<JOB_UNKNOWN>( f.m_type.ToStdString(), settings_obj );
 }
 
 

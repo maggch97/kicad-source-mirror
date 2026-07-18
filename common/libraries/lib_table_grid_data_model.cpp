@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <lib_table_grid_data_model.h>
@@ -31,6 +31,7 @@ LIB_TABLE_GRID_DATA_MODEL::LIB_TABLE_GRID_DATA_MODEL( DIALOG_SHIM* aDialog, WX_G
                                                       const wxArrayString& aPluginChoices,
                                                       wxString* aMRUDirectory, const wxString& aProjectPath ) :
         m_table( aTableToEdit ),
+        m_readOnly( m_table.IsReadOnly() ),
         m_adapter( aAdapter )
 {
     m_uriEditor = new wxGridCellAttr;
@@ -48,6 +49,9 @@ LIB_TABLE_GRID_DATA_MODEL::LIB_TABLE_GRID_DATA_MODEL( DIALOG_SHIM* aDialog, WX_G
     m_boolAttr->SetRenderer( new wxGridCellBoolRenderer() );
     m_boolAttr->SetReadOnly(); // not really; we delegate interactivity to GRID_TRICKS
     m_boolAttr->SetAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
+
+    m_readOnlyAttr = new wxGridCellAttr;
+    m_readOnlyAttr->SetReadOnly();
 
     m_warningAttr = new wxGridCellAttr;
     m_warningAttr->SetRenderer( new GRID_BITMAP_BUTTON_RENDERER( KiBitmapBundle( BITMAPS::small_warning ) ) );
@@ -75,6 +79,7 @@ LIB_TABLE_GRID_DATA_MODEL::~LIB_TABLE_GRID_DATA_MODEL()
     m_uriEditor->DecRef();
     m_typesEditor->DecRef();
     m_boolAttr->DecRef();
+    m_readOnlyAttr->DecRef();
     m_warningAttr->DecRef();
     m_noStatusAttr->DecRef();
     m_editSettingsAttr->DecRef();
@@ -134,14 +139,27 @@ wxGridCellAttr* LIB_TABLE_GRID_DATA_MODEL::GetAttr( int aRow, int aCol, wxGridCe
         return enhanceAttr( nullptr, aRow, aCol, aKind );
 
     LIBRARY_TABLE_ROW& tableRow = at( aRow );
+    bool               readOnly = m_readOnly;
 
     switch( aCol )
     {
     case COL_URI:
+        if( readOnly )
+        {
+            m_readOnlyAttr->IncRef();
+            return enhanceAttr( m_readOnlyAttr, aRow, aCol, aKind );
+        }
+
         m_uriEditor->IncRef();
         return enhanceAttr( m_uriEditor, aRow, aCol, aKind );
 
     case COL_TYPE:
+        if( readOnly )
+        {
+            m_readOnlyAttr->IncRef();
+            return enhanceAttr( m_readOnlyAttr, aRow, aCol, aKind );
+        }
+
         m_typesEditor->IncRef();
         return enhanceAttr( m_typesEditor, aRow, aCol, aKind );
 
@@ -175,6 +193,12 @@ wxGridCellAttr* LIB_TABLE_GRID_DATA_MODEL::GetAttr( int aRow, int aCol, wxGridCe
     case COL_OPTIONS:
     case COL_DESCR:
     default:
+        if( readOnly )
+        {
+            m_readOnlyAttr->IncRef();
+            return enhanceAttr( m_readOnlyAttr, aRow, aCol, aKind );
+        }
+
         return enhanceAttr( nullptr, aRow, aCol, aKind );
     }
 }
@@ -214,6 +238,10 @@ bool LIB_TABLE_GRID_DATA_MODEL::GetValueAsBool( int aRow, int aCol )
 void LIB_TABLE_GRID_DATA_MODEL::SetValue( int aRow, int aCol, const wxString& aValue )
 {
     if( badCoords( aRow, aCol ) )
+        return;
+
+    // For read-only tables, only enable/visible changes are allowed
+    if( m_readOnly && aCol != COL_ENABLED && aCol != COL_VISIBLE )
         return;
 
     LIBRARY_TABLE_ROW& lrow = at( aRow );
@@ -268,6 +296,9 @@ void LIB_TABLE_GRID_DATA_MODEL::SetValueAsBool( int aRow, int aCol, bool aValue 
 
 bool LIB_TABLE_GRID_DATA_MODEL::InsertRows( size_t aPos, size_t aNumRows  )
 {
+    if( m_readOnly )
+        return false;
+
     if( aPos < size() )
     {
         for( size_t i = 0; i < aNumRows; i++ )
@@ -292,6 +323,9 @@ bool LIB_TABLE_GRID_DATA_MODEL::InsertRows( size_t aPos, size_t aNumRows  )
 
 bool LIB_TABLE_GRID_DATA_MODEL::AppendRows( size_t aNumRows )
 {
+    if( m_readOnly )
+        return false;
+
     // do not modify aNumRows, original value needed for wxGridTableMessage below
     for( int i = aNumRows; i; --i )
         push_back( makeNewRow() );
@@ -311,6 +345,9 @@ bool LIB_TABLE_GRID_DATA_MODEL::AppendRows( size_t aNumRows )
 
 bool LIB_TABLE_GRID_DATA_MODEL::DeleteRows( size_t aPos, size_t aNumRows )
 {
+    if( m_readOnly )
+        return false;
+
     // aPos may be a large positive, e.g. size_t(-1), and the sum of
     // aPos+aNumRows may wrap here, so both ends of the range are tested.
     if( aPos < size() && aPos + aNumRows <= size() )

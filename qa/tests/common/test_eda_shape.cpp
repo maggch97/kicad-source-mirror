@@ -18,7 +18,11 @@
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
+#include <cmath>
+
+#include <base_units.h>
 #include <eda_shape.h>
+#include <math/util.h>
 #include <tool/point_editor_behavior.h>
 #include <qa_utils/geometry/geometry.h> // For KI_TEST::IsVecWithinTol
 #include <geometry/shape_arc.h> // For SHAPE_ARC::DefaultAccuracyForPCB()
@@ -172,6 +176,45 @@ BOOST_AUTO_TEST_CASE( SetArcGeometry )
 }
 
 /**
+ * Editing a small eeschema arc must not snap its radius up to the PCB-scale
+ * 1 mil minimum.  The edit helpers used to hard-code pcbIUScale, which in
+ * schematic IUs (1 IU = 100 nm) is a 25400 IU == 100 mil floor.
+ * See https://gitlab.com/kicad/code/kicad/-/issues/24396.
+ */
+BOOST_AUTO_TEST_CASE( ArcEditKeepsSmallSchematicRadius )
+{
+    // 50 mil radius arc in schematic IUs, well under the buggy 100 mil floor.
+    const int      radius = schIUScale.MilsToIU( 50 );
+    const VECTOR2I center( 0, 0 );
+    const VECTOR2I start( radius, 0 );
+    const VECTOR2I end( 0, radius );
+    const VECTOR2I mid( KiROUND( radius / std::sqrt( 2.0 ) ),
+                        KiROUND( radius / std::sqrt( 2.0 ) ) );
+
+    EDA_SHAPE_MOCK arc( SHAPE_T::ARC );
+    arc.SetArcGeometry( start, mid, end );
+
+    BOOST_REQUIRE_LT( arc.GetRadius(), schIUScale.MilsToIU( 100 ) );
+
+    // Drag the endpoint a few IU; with the bug the radius snaps up to 100 mil.
+    const VECTOR2I newEnd( 5, radius );
+
+    KI_ARC_EDIT::EditArcEndpointKeepCenter( arc, center, start, mid, newEnd, newEnd, schIUScale );
+    BOOST_CHECK_LT( arc.GetRadius(), schIUScale.MilsToIU( 100 ) );
+
+    // Same for the mid-point helper, which has its own minimum-radius clamp.
+    const VECTOR2I smallerMid( KiROUND( ( radius - 100 ) / std::sqrt( 2.0 ) ),
+                               KiROUND( ( radius - 100 ) / std::sqrt( 2.0 ) ) );
+
+    EDA_SHAPE_MOCK arc2( SHAPE_T::ARC );
+    arc2.SetArcGeometry( start, mid, end );
+
+    KI_ARC_EDIT::EditArcMidKeepCenter( arc2, center, start, mid, end, smallerMid, schIUScale );
+    BOOST_CHECK_LT( arc2.GetRadius(), schIUScale.MilsToIU( 100 ) );
+}
+
+
+/**
  * Verify that EDA_POLYGON_POINT_EDIT_BEHAVIOR survives EDA_SHAPE assignment.
  *
  * EDA_SHAPE::operator= replaces m_poly with a new unique_ptr. The behavior must
@@ -204,6 +247,40 @@ BOOST_AUTO_TEST_CASE( PolygonBehaviorSurvivesAssignment )
     BOOST_CHECK_EQUAL( points2.PointsSize(), 3u );
 
     BOOST_CHECK( behavior.UpdatePoints( points ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( GetPolyPointsPreservesOrderAcrossOutlines )
+{
+    // GetPolyPoints flattens every outline of the poly shape into a single
+    // ordered vector. Verify the count and order are preserved across multiple
+    // outlines so the single up-front reserve does not alter behavior.
+    EDA_SHAPE_MOCK shape( SHAPE_T::POLY );
+
+    SHAPE_POLY_SET& poly = shape.GetPolyShape();
+
+    poly.NewOutline();
+    poly.Append( { 0, 0 } );
+    poly.Append( { 1000, 0 } );
+    poly.Append( { 1000, 1000 } );
+
+    poly.NewOutline();
+    poly.Append( { 5000, 5000 } );
+    poly.Append( { 6000, 5000 } );
+
+    const std::vector<VECTOR2I> expected = {
+        { 0, 0 }, { 1000, 0 }, { 1000, 1000 }, { 5000, 5000 }, { 6000, 5000 }
+    };
+
+    const std::vector<VECTOR2I> points = shape.GetPolyPoints();
+
+    BOOST_REQUIRE_EQUAL( points.size(), expected.size() );
+
+    for( size_t ii = 0; ii < expected.size(); ++ii )
+    {
+        BOOST_CHECK_EQUAL( points[ii].x, expected[ii].x );
+        BOOST_CHECK_EQUAL( points[ii].y, expected[ii].y );
+    }
 }
 
 

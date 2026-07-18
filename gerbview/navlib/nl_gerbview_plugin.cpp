@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "nl_gerbview_plugin.h"
@@ -23,12 +23,14 @@
 
 #include <advanced_config.h>
 #include <kiplatform/drivers.h>
+#include <navlib_safe_init.h>
 
 
 NL_GERBVIEW_PLUGIN::NL_GERBVIEW_PLUGIN()
 {
     if( ADVANCED_CFG::GetCfg().m_Use3DConnexionDriver
-        && KIPLATFORM::DRIVERS::Valid3DConnexionDriverVersion() )
+        && KIPLATFORM::DRIVERS::Valid3DConnexionDriverVersion()
+        && !NavlibDriverCrashed() )
     {
         m_impl = std::make_unique<NL_GERBVIEW_PLUGIN_IMPL>();
     }

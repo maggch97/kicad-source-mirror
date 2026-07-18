@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -723,6 +719,10 @@ PANEL_SETUP_TUNING_PROFILE_INFO::DIELECTRIC_INFO PANEL_SETUP_TUNING_PROFILE_INFO
             lossTangent += l_t_layer * aIuScale.IUTomm( layer->GetThickness( subLayerIdx ) );
         }
     }
+
+    // No matching dielectric layers or zero total thickness leaves nothing to average
+    if( totalHeight <= 0.0 )
+        return { 0.0, 0.0, 0.0 };
 
     e_r = e_r / totalHeight;
     lossTangent = lossTangent / totalHeight;

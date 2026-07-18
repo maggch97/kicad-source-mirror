@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_IO_EASYEDAPRO_PARSER_H_
@@ -89,6 +85,9 @@ public:
     SHAPE_LINE_CHAIN ParseContour( nlohmann::json polyData, bool aInFill,
                                    int aMaxError = SHAPE_ARC::DefaultAccuracyForPCB() ) const;
 
+    void FillFootprintModelInfo( FOOTPRINT* footprint, const wxString& modelUuid, const wxString& modelTitle,
+                                 const wxString& modelTransform ) const;
+
 private:
     BOARD*   m_board;
     VECTOR2D m_relOrigin;
@@ -96,9 +95,6 @@ private:
     NETINFO_ITEM* getNet( BOARD* aBoard, const wxString& aNetName );
 
     std::unique_ptr<PAD> createPAD( FOOTPRINT* aFootprint, const nlohmann::json& line );
-
-    void fillFootprintModelInfo( FOOTPRINT* footprint, const wxString& modelUuid,
-                                 const wxString& modelTitle, const wxString& modelTransform ) const;
 };
 
 

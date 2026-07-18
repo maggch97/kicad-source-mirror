@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -42,6 +38,7 @@
 #include <wx/snglinst.h>
 #include <wx/html/htmlwin.h>
 
+#include <api/api_server.h>
 #include <kiway.h>
 #include <build_version.h>
 #include <pgm_base.h>
@@ -71,10 +68,6 @@
 #include <sentry.h>
 #endif
 
-#ifdef KICAD_IPC_API
-#include <api/api_server.h>
-#endif
-
 // Only a single KIWAY is supported in this single_top top level component,
 // which is dedicated to loading only a single DSO.
 KIWAY    Kiway( KFCTL_STANDALONE );
@@ -97,9 +90,7 @@ static struct PGM_SINGLE_TOP : public PGM_BASE
 
         Kiway.OnKiwayEnd();
 
-#ifdef KICAD_IPC_API
         m_api_server.reset();
-#endif
 
         if( m_settings_manager && m_settings_manager->IsOK() )
         {
@@ -410,10 +401,8 @@ bool PGM_SINGLE_TOP::OnPgmInit()
             KIPLATFORM::APP::EnableDarkMode( false );
     }
 
-#ifdef KICAD_IPC_API
     // Create the API server thread once the app event loop exists
     m_api_server = std::make_unique<KICAD_API_SERVER>();
-#endif
 
     // Use KIWAY to create a top window, which registers its existence also.
     // "TOP_FRAME" is a macro that is passed on compiler command line from CMake,
@@ -504,9 +493,7 @@ bool PGM_SINGLE_TOP::OnPgmInit()
 
     PreloadDesignBlockLibraries( &Kiway );
 
-#ifdef KICAD_IPC_API
     m_api_server->SetReadyToReply();
-#endif
 
     return true;
 }

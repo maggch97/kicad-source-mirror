@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>
@@ -249,6 +249,9 @@ NET_SETTINGS::NET_SETTINGS( JSON_SETTINGS* aParent, const std::string& aPath ) :
             },
             {} ) );
 
+    // Let the save drop removed colors instead of merging them back in
+    m_params.back()->SetClearUnknownKeys();
+
     m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "net_chain_classes",
             [&]() -> nlohmann::json
             {
@@ -385,9 +388,41 @@ NET_SETTINGS::~NET_SETTINGS()
 
 bool NET_SETTINGS::operator==( const NET_SETTINGS& aOther ) const
 {
+    // m_netClasses maps name -> shared_ptr<NETCLASS>.  The default pair operator==
+    // would compare the shared_ptrs by pointer identity, missing in-place edits
+    // to the underlying NETCLASS (the UI's normal edit path mutates through the
+    // shared_ptr rather than swapping it).  Compare names and contents instead.
+    auto netclassEntryEqual = []( const auto& aLhs, const auto& aRhs )
+    {
+        if( aLhs.first != aRhs.first )
+            return false;
+
+        if( aLhs.second.get() == aRhs.second.get() )
+            return true;
+
+        if( !aLhs.second || !aRhs.second )
+            return false;
+
+        return aLhs.second->EqualsByPersistedFields( *aRhs.second );
+    };
+
     if( !std::equal( std::begin( m_netClasses ), std::end( m_netClasses ),
-                     std::begin( aOther.m_netClasses ), std::end( aOther.m_netClasses ) ) )
+                     std::begin( aOther.m_netClasses ), std::end( aOther.m_netClasses ),
+                     netclassEntryEqual ) )
         return false;
+
+    // m_defaultNetClass is held by shared_ptr and (per board.cpp / kicad_sexpr_parser.cpp
+    // setup paths) is mutated in place via GetDefaultNetclass()->SetClearance( ... ).
+    // shared_ptr identity is preserved across those edits, so a pointer-only check
+    // would silently drop the most common project edit.  Compare contents.
+    if( static_cast<bool>( m_defaultNetClass ) != static_cast<bool>( aOther.m_defaultNetClass ) )
+        return false;
+
+    if( m_defaultNetClass && aOther.m_defaultNetClass
+        && !m_defaultNetClass->EqualsByPersistedFields( *aOther.m_defaultNetClass ) )
+    {
+        return false;
+    }
 
     // m_netClassPatternAssignments stores std::unique_ptr<EDA_COMBINED_MATCHER>, so a naive
     // std::equal would compare matcher pointer identity and report two settings instances built
@@ -427,6 +462,38 @@ bool NET_SETTINGS::operator==( const NET_SETTINGS& aOther ) const
         return false;
 
     return true;
+}
+
+
+void NET_SETTINGS::CopyFrom( NET_SETTINGS& aOther )
+{
+    if( &aOther == this )
+        return;
+
+    // Flush the source's live field state into its JSON cache so the cache
+    // mirrors what we want to copy.
+    aOther.Store();
+
+    // CloneFrom() copies the JSON tree but leaves m_parent / m_path untouched,
+    // which is what we need: this instance must stay attached to its host
+    // project file so SaveToFile() walks the right m_nested_settings entry.
+    Internals()->CloneFrom( *aOther.Internals() );
+
+    // Repopulate our in-memory NETCLASS / pattern / color state from the cloned
+    // JSON.  Load() rebuilds m_defaultNetClass, m_netClasses, fresh
+    // EDA_COMBINED_MATCHER instances for m_netClassPatternAssignments, and the
+    // remaining maps, decoupling our instance from aOther's lifetime.
+    Load();
+
+    // Load() repopulates persisted state but doesn't clear the derived caches.
+    // Drop them so stale lookups from this instance's pre-CopyFrom life
+    // (composite resolutions, implicit netclasses, chain-derived patterns
+    // rebuilt on every netlist update, and the per-net effective-class cache)
+    // don't survive the swap.
+    m_compositeNetClasses.clear();
+    m_impicitNetClasses.clear();
+    m_netClassChainPatternAssignments.clear();
+    ClearAllCaches();
 }
 
 
@@ -551,7 +618,7 @@ void NET_SETTINGS::SetDefaultNetclass( std::shared_ptr<NETCLASS> netclass )
 }
 
 
-std::shared_ptr<NETCLASS> NET_SETTINGS::GetDefaultNetclass()
+std::shared_ptr<NETCLASS> NET_SETTINGS::GetDefaultNetclass() const
 {
     return m_defaultNetClass;
 }
@@ -755,6 +822,52 @@ const std::map<wxString, KIGFX::COLOR4D>& NET_SETTINGS::GetNetColorAssignments()
 void NET_SETTINGS::ClearNetColorAssignments()
 {
     m_netColorAssignments.clear();
+}
+
+
+bool NET_SETTINGS::RenameNetPathPrefix( const wxString& aOldPrefix, const wxString& aNewPrefix )
+{
+    if( aOldPrefix.IsEmpty() || aOldPrefix == aNewPrefix )
+        return false;
+
+    bool changed = false;
+
+    // Patterns hold the path as plain text, so swap the leading prefix and rebuild the matcher.
+    for( auto& [matcher, netclass] : m_netClassPatternAssignments )
+    {
+        const wxString pattern = matcher->GetPattern();
+
+        if( pattern.StartsWith( aOldPrefix ) )
+        {
+            wxString updated = aNewPrefix + pattern.Mid( aOldPrefix.length() );
+            matcher = std::make_unique<EDA_COMBINED_MATCHER>( updated, CTX_NETCLASS );
+            changed = true;
+        }
+    }
+
+    // Net color keys are full net names, which carry the path too.
+    std::map<wxString, KIGFX::COLOR4D> updatedColors;
+
+    for( const auto& [netName, color] : m_netColorAssignments )
+    {
+        if( netName.StartsWith( aOldPrefix ) )
+        {
+            updatedColors[aNewPrefix + netName.Mid( aOldPrefix.length() )] = color;
+            changed = true;
+        }
+        else
+        {
+            updatedColors[netName] = color;
+        }
+    }
+
+    if( changed )
+    {
+        m_netColorAssignments = std::move( updatedColors );
+        ClearAllCaches();
+    }
+
+    return changed;
 }
 
 

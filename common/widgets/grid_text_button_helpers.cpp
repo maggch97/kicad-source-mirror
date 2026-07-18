@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/checkbox.h>
@@ -250,7 +246,7 @@ protected:
 
         if( filename.IsEmpty() || filename == wxT( "~" ) )
         {
-            FILEDLG_HOOK_EMBED_FILE customize;
+            FILEDLG_HOOK_EMBED_FILE customize( true, EMBED_FILE_CONTEXT::DATASHEET );
 
             wxFileDialog openFileDialog( this, _( "Open file" ), "", "", _( "All Files" ) + wxT( " (*.*)|*.*" ),
                                          wxFD_OPEN | wxFD_FILE_MUST_EXIST );
@@ -388,7 +384,7 @@ protected:
 
         if( !m_fileFilter.IsEmpty() )
         {
-            FILEDLG_HOOK_EMBED_FILE customize( false );
+            FILEDLG_HOOK_EMBED_FILE customize( false, EMBED_FILE_CONTEXT::MODEL_3D );
             wxFileDialog dlg( m_dlg, _( "Select a File" ), fn.GetPath(), fn.GetFullName(),
                               m_fileFilter, wxFD_FILE_MUST_EXIST | wxFD_OPEN );
 

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "tools/symbol_editor_control.h"
@@ -37,9 +33,12 @@
 #include <pgm_base.h>
 #include <sch_painter.h>
 #include <string_utils.h>
+#include <symbol_edit_frame.h>
 #include <symbol_editor/symbol_editor_settings.h>
 #include <symbol_tree_model_adapter.h>
 #include <symbol_viewer_frame.h>
+#include <dialogs/hotkey_cycle_popup.h>
+#include <widgets/editor_tabs_panel.h>
 #include <tool/library_editor_control.h>
 #include <tool/tool_manager.h>
 #include <tools/sch_actions.h>
@@ -47,6 +46,15 @@
 
 #include <wx/filedlg.h>
 #include <kiplatform/ui.h>
+
+#include <dialogs/dialog_kicad_diff.h>
+#include <diff_merge/sym_lib_differ.h>
+#include <diff_merge/sym_diff_canvas_context.h>
+#include <widgets/widget_diff_canvas.h>
+#include <lib_symbol.h>
+#include <symbol_edit_frame.h>
+
+#include <map>
 
 
 bool SYMBOL_EDITOR_CONTROL::Init()
@@ -653,6 +661,8 @@ int SYMBOL_EDITOR_CONTROL::RenameSymbol( const TOOL_EVENT& aEvent )
         editFrame->UpdateMsgPanel();
     }
 
+    editFrame->RenameSymbolTab( libId, LIB_ID( libName, newName ) );
+
     wxDataViewItem treeItem = libMgr.GetAdapter()->FindItem( libId );
     editFrame->UpdateLibraryTree( treeItem, libSymbol );
     editFrame->FocusOnLibId( LIB_ID( libName, newName ) );
@@ -1004,6 +1014,198 @@ int SYMBOL_EDITOR_CONTROL::ShowLibraryTable( const TOOL_EVENT& aEvent )
 }
 
 
+static void showTabSwitcher( SYMBOL_EDIT_FRAME* aFrame, bool aForward )
+{
+    EDITOR_TABS_PANEL* panel = aFrame->GetTabsPanel();
+
+    if( !panel || panel->Model().Entries().size() < 2 )
+        return;
+
+    if( !aFrame->GetHotkeyPopup() )
+        aFrame->CreateHotkeyPopup();
+
+    HOTKEY_CYCLE_POPUP* popup = aFrame->GetHotkeyPopup();
+
+    if( !popup )
+        return;
+
+    wxArrayString labels;
+
+    for( const EDITOR_TABS_MODEL::ENTRY& entry : panel->Model().Entries() )
+        labels.Add( entry.key.AfterFirst( ':' ) );
+
+    const int count = static_cast<int>( labels.GetCount() );
+    const int active = panel->GetActiveTab();
+    const int next = aForward ? ( active + 1 ) % count : ( active - 1 + count ) % count;
+
+    popup->Popup( _( "Switch to Tab" ), labels, next );
+}
+
+
+int SYMBOL_EDITOR_CONTROL::NextTab( const TOOL_EVENT& aEvent )
+{
+    SYMBOL_EDIT_FRAME* editFrame = getEditFrame<SYMBOL_EDIT_FRAME>();
+
+    if( editFrame && editFrame->GetTabsPanel() )
+    {
+        showTabSwitcher( editFrame, true );
+        editFrame->GetTabsPanel()->AdvanceTab( true );
+    }
+
+    return 0;
+}
+
+
+int SYMBOL_EDITOR_CONTROL::PrevTab( const TOOL_EVENT& aEvent )
+{
+    SYMBOL_EDIT_FRAME* editFrame = getEditFrame<SYMBOL_EDIT_FRAME>();
+
+    if( editFrame && editFrame->GetTabsPanel() )
+    {
+        showTabSwitcher( editFrame, false );
+        editFrame->GetTabsPanel()->AdvanceTab( false );
+    }
+
+    return 0;
+}
+
+
+int SYMBOL_EDITOR_CONTROL::CloseTab( const TOOL_EVENT& aEvent )
+{
+    SYMBOL_EDIT_FRAME* editFrame = getEditFrame<SYMBOL_EDIT_FRAME>();
+
+    if( editFrame && editFrame->GetTabsPanel() )
+        editFrame->GetTabsPanel()->CloseTab( editFrame->GetTabsPanel()->GetActiveTab() );
+
+    return 0;
+}
+
+
+int SYMBOL_EDITOR_CONTROL::CompareLibraryWithFile( const TOOL_EVENT& aEvent )
+{
+    SYMBOL_EDIT_FRAME* editFrame = getEditFrame<SYMBOL_EDIT_FRAME>();
+
+    wxCHECK( editFrame, 0 );
+
+    const wxString currentLib = editFrame->GetCurLib();
+
+    if( currentLib.IsEmpty() )
+    {
+        editFrame->ShowInfoBarError( _( "Select a library to compare against a file." ) );
+        return 0;
+    }
+
+    wxFileDialog dlg( editFrame, _( "Choose Library to Compare With" ), wxEmptyString,
+                      wxEmptyString, FILEEXT::KiCadSymbolLibFileWildcard(),
+                      wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+
+    if( dlg.ShowModal() != wxID_OK )
+        return 0;
+
+    wxFileName otherFn( dlg.GetPath() );
+    otherFn.MakeAbsolute();
+
+    if( !otherFn.GetExt().IsSameAs( FILEEXT::KiCadSymbolLibFileExtension, false ) )
+    {
+        editFrame->ShowInfoBarError(
+                _( "Select a KiCad symbol library file (.kicad_sym)." ) );
+        return 0;
+    }
+
+    const wxString otherPath = otherFn.GetFullPath();
+
+    // SYM_LIB_DIFFER::Diff() consumes these borrowed pointers synchronously;
+    // DOCUMENT_DIFF does not retain them.
+    LIB_SYMBOL_LIBRARY_MANAGER& libMgr = editFrame->GetLibManager();
+    wxArrayString               names;
+    libMgr.GetSymbolNames( currentLib, names );
+
+    KICAD_DIFF::SYM_LIB_DIFFER::SYMBOL_MAP beforeMap;
+
+    for( const wxString& name : names )
+    {
+        if( LIB_SYMBOL* sym = libMgr.GetSymbol( name, currentLib ) )
+            beforeMap.emplace( sym->GetName(), sym );
+    }
+
+    std::vector<std::unique_ptr<LIB_SYMBOL>> afterStorage;
+    KICAD_DIFF::SYM_LIB_DIFFER::SYMBOL_MAP   afterMap;
+
+    try
+    {
+        auto loaded = KICAD_DIFF::SYM_LIB_DIFFER::LoadLibrary( otherPath );
+        afterStorage = std::move( loaded.first );
+        afterMap     = std::move( loaded.second );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        editFrame->ShowInfoBarError( wxString::Format( _( "Failed to load %s: %s" ),
+                                                       otherPath, ioe.What() ) );
+        return 0;
+    }
+    catch( const std::exception& e )
+    {
+        editFrame->ShowInfoBarError( wxString::Format( _( "Failed to load %s: %s" ),
+                                                       otherPath,
+                                                       wxString::FromUTF8( e.what() ) ) );
+        return 0;
+    }
+
+    KICAD_DIFF::SYM_LIB_DIFFER differ( beforeMap, afterMap, otherPath );
+    KICAD_DIFF::DOCUMENT_DIFF  result = differ.Diff();
+
+    DIALOG_KICAD_DIFF dlgDiff( editFrame, currentLib, otherPath, result );
+
+    std::map<KIID_PATH, const KICAD_DIFF::ITEM_CHANGE*> changesById;
+
+    for( const KICAD_DIFF::ITEM_CHANGE& c : result.changes )
+        changesById[c.id] = &c;
+
+    auto cloneHolder = std::make_shared<std::vector<std::unique_ptr<LIB_SYMBOL>>>();
+
+    dlgDiff.SetChangeSelectedHandler(
+            [&, cloneHolder]( const KIID_PATH& aId )
+            {
+                WIDGET_DIFF_CANVAS* canvas = dlgDiff.DiffCanvas();
+
+                if( !canvas )
+                    return;
+
+                auto it = changesById.find( aId );
+
+                if( it == changesById.end() || !it->second->refdes )
+                {
+                    KICAD_DIFF::ConfigureSymDiffCanvasContext( *canvas, nullptr, nullptr );
+                    cloneHolder->clear();
+                    return;
+                }
+
+                const wxString& name = *it->second->refdes;
+                auto            beforeIt = beforeMap.find( name );
+                auto            afterIt = afterMap.find( name );
+
+                std::unique_ptr<LIB_SYMBOL> beforeClone =
+                        beforeIt != beforeMap.end() ? beforeIt->second->Flatten() : nullptr;
+                std::unique_ptr<LIB_SYMBOL> afterClone =
+                        afterIt != afterMap.end() ? afterIt->second->Flatten() : nullptr;
+
+                KICAD_DIFF::ConfigureSymDiffCanvasContext( *canvas, beforeClone.get(), afterClone.get() );
+
+                cloneHolder->clear();
+
+                if( beforeClone )
+                    cloneHolder->push_back( std::move( beforeClone ) );
+
+                if( afterClone )
+                    cloneHolder->push_back( std::move( afterClone ) );
+            } );
+
+    dlgDiff.ShowModal();
+
+    return 0;
+}
+
+
 void SYMBOL_EDITOR_CONTROL::setTransitions()
 {
     Go( &SYMBOL_EDITOR_CONTROL::AddLibrary,            ACTIONS::newLibrary.MakeEvent() );
@@ -1033,6 +1235,10 @@ void SYMBOL_EDITOR_CONTROL::setTransitions()
 
     Go( &SYMBOL_EDITOR_CONTROL::FlattenSymbol,         SCH_ACTIONS::flattenSymbol.MakeEvent() );
 
+    Go( &SYMBOL_EDITOR_CONTROL::NextTab,               SCH_ACTIONS::nextSymbolTab.MakeEvent() );
+    Go( &SYMBOL_EDITOR_CONTROL::PrevTab,               SCH_ACTIONS::prevSymbolTab.MakeEvent() );
+    Go( &SYMBOL_EDITOR_CONTROL::CloseTab,              SCH_ACTIONS::closeSymbolTab.MakeEvent() );
+
     Go( &SYMBOL_EDITOR_CONTROL::OpenWithTextEditor,    ACTIONS::openWithTextEditor.MakeEvent() );
     Go( &SYMBOL_EDITOR_CONTROL::OpenDirectory,         ACTIONS::openDirectory.MakeEvent() );
 
@@ -1051,6 +1257,9 @@ void SYMBOL_EDITOR_CONTROL::setTransitions()
 
     Go( &SYMBOL_EDITOR_CONTROL::ShowLibraryTable,      SCH_ACTIONS::showLibFieldsTable.MakeEvent() );
     Go( &SYMBOL_EDITOR_CONTROL::ShowLibraryTable,      SCH_ACTIONS::showRelatedLibFieldsTable.MakeEvent() );
+
+    Go( &SYMBOL_EDITOR_CONTROL::CompareLibraryWithFile,
+        SCH_ACTIONS::compareLibraryWithFile.MakeEvent() );
 
     Go( &SYMBOL_EDITOR_CONTROL::ChangeUnit,            SCH_ACTIONS::previousUnit.MakeEvent() );
     Go( &SYMBOL_EDITOR_CONTROL::ChangeUnit,            SCH_ACTIONS::nextUnit.MakeEvent() );

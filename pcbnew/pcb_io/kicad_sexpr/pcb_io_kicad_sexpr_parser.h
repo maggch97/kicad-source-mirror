@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -41,6 +37,7 @@
 #include <math/box2.h>
 #include <string_any_map.h>
 #include <padstack.h>
+#include <pcb_io/common/plugin_common_layer_mapping.h>
 
 #include <chrono>
 #include <unordered_map>
@@ -144,6 +141,9 @@ public:
      */
     const std::vector<wxString>& GetParseWarnings() const { return m_parseWarnings; }
 
+    /// Handler to remap an appended board's layers onto the destination board, used on mismatch.
+    void SetLayerMappingHandler( LAYER_MAPPING_HANDLER aHandler ) { m_layerMappingHandler = std::move( aHandler ); }
+
 private:
 
     // Group membership info refers to other Uuids in the file.
@@ -220,6 +220,10 @@ private:
     void parseTITLE_BLOCK();
 
     void parseLayers();
+
+    /// Remap the appended layers onto the destination using m_layerMappingHandler, on mismatch.
+    void remapAppendedLayers( const std::vector<LAYER>& aSourceLayers, const LSET& aDestInitialEnabled,
+                              int aDestInitialCopperCount );
     void parseLayer( LAYER* aLayer );
 
     void parseBoardStackup();
@@ -234,6 +238,8 @@ private:
     void parseTEARDROP_PARAMETERS( TEARDROP_PARAMETERS* tdParams );
 
     void parseTextBoxContent( PCB_TEXTBOX* aTextBox );
+
+    void bakeTextBoxLib( PCB_TEXTBOX* aTextBox );
 
     PCB_SHAPE*           parsePCB_SHAPE( BOARD_ITEM* aParent );
     PCB_TEXT*            parsePCB_TEXT( BOARD_ITEM* aParent, PCB_TEXT* aBaseText = nullptr );
@@ -447,6 +453,7 @@ private:
     wxString            m_generatorVersion; ///< Set to the generator version this board requires
     bool                m_appendToExisting; ///< reading into an existing board; reset UUIDs
     bool                m_preserveDestinationStackup; ///< append keeps destination stackup
+    LAYER_MAPPING_HANDLER m_layerMappingHandler;        ///< optional remap of appended layers onto dest
 
     ///< if resetting UUIDs, record new ones to update groups with.
     KIID_MAP            m_resetKIIDMap;

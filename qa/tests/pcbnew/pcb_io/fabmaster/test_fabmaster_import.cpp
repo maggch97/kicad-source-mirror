@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -34,6 +30,8 @@
 
 #include <board.h>
 #include <footprint.h>
+#include <pad.h>
+#include <padstack.h>
 #include <zone.h>
 
 
@@ -121,6 +119,197 @@ BOOST_AUTO_TEST_CASE( StaticShapesPreserved )
     // redundant fills. With the fix, unmatched static shapes are preserved.
     BOOST_CHECK_MESSAGE( zonesWithNets > 0,
                          "Static shape zones with nets should be preserved" );
+}
+
+
+/**
+ * Helper to find a pad by its number within a footprint.
+ */
+static const PAD* findPadByNumber( const FOOTPRINT* aFp, const wxString& aNumber )
+{
+    for( const PAD* pad : aFp->Pads() )
+    {
+        if( pad->GetNumber() == aNumber )
+            return pad;
+    }
+
+    return nullptr;
+}
+
+
+/**
+ * Test that pad-stacks with different shapes on front and back copper layers
+ * are imported using FRONT_INNER_BACK padstack mode.
+ *
+ * The test file contains:
+ *   DIFF_PAD  - CIRCLE on TOP (2.0mm), RECTANGLE on BOTTOM (1.5x3.0mm) with drill
+ *   SAME_PAD  - RECTANGLE on both TOP and BOTTOM (1.0x2.0mm) with drill
+ *   SMD_DIFF  - OVAL on TOP only (0.8x1.6mm), SMD pad
+ */
+BOOST_AUTO_TEST_CASE( PadStackDifferentLayers )
+{
+    std::string dataPath =
+            KI_TEST::GetPcbnewTestDataDir() + "plugins/fabmaster/cds2f_padstack_test.txt";
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    m_fabmasterPlugin.LoadBoard( dataPath, board.get(), nullptr );
+
+    BOOST_REQUIRE( board );
+    BOOST_REQUIRE_GT( board->Footprints().size(), 0 );
+
+    const FOOTPRINT* fp = board->Footprints().front();
+    BOOST_REQUIRE_EQUAL( fp->Pads().size(), 3 );
+
+    // Pin 1 uses DIFF_PAD which has CIRCLE on TOP and RECTANGLE on BOTTOM.
+    // This should use FRONT_INNER_BACK padstack mode.
+    const PAD* pad1 = findPadByNumber( fp, wxT( "1" ) );
+    BOOST_REQUIRE( pad1 );
+    BOOST_CHECK_EQUAL( static_cast<int>( pad1->Padstack().Mode() ),
+                       static_cast<int>( PADSTACK::MODE::FRONT_INNER_BACK ) );
+    BOOST_CHECK_EQUAL( static_cast<int>( pad1->GetShape( F_Cu ) ),
+                       static_cast<int>( PAD_SHAPE::CIRCLE ) );
+    BOOST_CHECK_EQUAL( static_cast<int>( pad1->GetShape( B_Cu ) ),
+                       static_cast<int>( PAD_SHAPE::RECTANGLE ) );
+
+    // Verify front layer size (2.0mm circle)
+    VECTOR2I pad1_front_size = pad1->GetSize( F_Cu );
+    BOOST_CHECK_GT( pad1_front_size.x, 0 );
+    BOOST_CHECK_EQUAL( pad1_front_size.x, pad1_front_size.y );
+
+    // Verify back layer size (1.5x3.0mm rectangle, height > width)
+    VECTOR2I pad1_back_size = pad1->GetSize( B_Cu );
+    BOOST_CHECK_GT( pad1_back_size.x, 0 );
+    BOOST_CHECK_GT( pad1_back_size.y, pad1_back_size.x );
+
+    // Verify drill is present
+    BOOST_CHECK_EQUAL( static_cast<int>( pad1->GetAttribute() ),
+                       static_cast<int>( PAD_ATTRIB::PTH ) );
+    BOOST_CHECK_GT( pad1->GetDrillSizeX(), 0 );
+}
+
+
+/**
+ * Test that pad-stacks with the same shape on all layers remain in NORMAL mode.
+ */
+BOOST_AUTO_TEST_CASE( PadStackSameLayers )
+{
+    std::string dataPath =
+            KI_TEST::GetPcbnewTestDataDir() + "plugins/fabmaster/cds2f_padstack_test.txt";
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    m_fabmasterPlugin.LoadBoard( dataPath, board.get(), nullptr );
+
+    BOOST_REQUIRE( board );
+    BOOST_REQUIRE_GT( board->Footprints().size(), 0 );
+
+    const FOOTPRINT* fp = board->Footprints().front();
+
+    // Pin 2 uses SAME_PAD which has RECTANGLE 1.0x2.0 on both TOP and BOTTOM.
+    // This should stay in NORMAL mode since shapes are identical.
+    const PAD* pad2 = findPadByNumber( fp, wxT( "2" ) );
+    BOOST_REQUIRE( pad2 );
+    BOOST_CHECK_EQUAL( static_cast<int>( pad2->Padstack().Mode() ),
+                       static_cast<int>( PADSTACK::MODE::NORMAL ) );
+    BOOST_CHECK_EQUAL( static_cast<int>( pad2->GetShape( F_Cu ) ),
+                       static_cast<int>( PAD_SHAPE::RECTANGLE ) );
+}
+
+
+/**
+ * Test SMD pads (top-only, no drill) are imported correctly.
+ */
+BOOST_AUTO_TEST_CASE( PadStackSmdPad )
+{
+    std::string dataPath =
+            KI_TEST::GetPcbnewTestDataDir() + "plugins/fabmaster/cds2f_padstack_test.txt";
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    m_fabmasterPlugin.LoadBoard( dataPath, board.get(), nullptr );
+
+    BOOST_REQUIRE( board );
+    BOOST_REQUIRE_GT( board->Footprints().size(), 0 );
+
+    const FOOTPRINT* fp = board->Footprints().front();
+
+    // Pin 3 uses SMD_DIFF which is an OVAL on TOP only (no BOTTOM pad, no drill).
+    const PAD* pad3 = findPadByNumber( fp, wxT( "3" ) );
+    BOOST_REQUIRE( pad3 );
+    BOOST_CHECK_EQUAL( static_cast<int>( pad3->GetAttribute() ),
+                       static_cast<int>( PAD_ATTRIB::SMD ) );
+    BOOST_CHECK_EQUAL( static_cast<int>( pad3->GetShape( F_Cu ) ),
+                       static_cast<int>( PAD_SHAPE::OVAL ) );
+}
+
+
+/**
+ * Test that Allegro area "shapes" (keepouts, keepins and constraint regions) are imported
+ * as KiCad rule areas rather than unconnected copper fill zones.
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/7732
+ *
+ * In Allegro these areas carry no net.  Importing them as copper fill zones silently
+ * creates shorts.  Each Allegro area class maps to a distinct rule-area restriction:
+ *   ROUTE KEEPOUT   -> no tracks, vias, pads or zone fills
+ *   VIA KEEPOUT     -> no vias
+ *   PACKAGE KEEPOUT -> no footprints
+ *   ROUTE/PACKAGE KEEPIN and CONSTRAINT REGION -> named marker with no restrictions
+ *     (KiCad has no equivalent, so the shape is preserved without producing copper)
+ *
+ * The test file mirrors the reporter's board and contains 5 route keepouts, 5 via keepouts,
+ * 3 package keepouts, 1 route keepin, 1 package keepin and 8 constraint regions.
+ */
+BOOST_AUTO_TEST_CASE( AreaClassesImportedAsRuleAreas )
+{
+    std::string dataPath =
+            KI_TEST::GetPcbnewTestDataDir() + "plugins/fabmaster/cds2f_issue7732_shape_pads2.txt";
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    m_fabmasterPlugin.LoadBoard( dataPath, board.get(), nullptr );
+
+    BOOST_REQUIRE( board );
+
+    int routeKeepouts = 0;
+    int viaKeepouts = 0;
+    int footprintKeepouts = 0;
+    int markerAreas = 0;
+
+    for( ZONE* zone : board->Zones() )
+    {
+        if( !zone->GetIsRuleArea() )
+            continue;
+
+        if( zone->GetDoNotAllowFootprints() && !zone->GetDoNotAllowTracks()
+            && !zone->GetDoNotAllowVias() )
+        {
+            footprintKeepouts++;
+        }
+        else if( zone->GetDoNotAllowTracks() && zone->GetDoNotAllowVias()
+                 && zone->GetDoNotAllowPads() && zone->GetDoNotAllowZoneFills() )
+        {
+            routeKeepouts++;
+        }
+        else if( zone->GetDoNotAllowVias() && !zone->GetDoNotAllowTracks()
+                 && !zone->GetDoNotAllowFootprints() )
+        {
+            viaKeepouts++;
+        }
+        else if( !zone->GetDoNotAllowTracks() && !zone->GetDoNotAllowVias()
+                 && !zone->GetDoNotAllowPads() && !zone->GetDoNotAllowFootprints()
+                 && !zone->GetDoNotAllowZoneFills() )
+        {
+            markerAreas++;
+        }
+    }
+
+    BOOST_CHECK_EQUAL( routeKeepouts, 5 );
+    BOOST_CHECK_EQUAL( viaKeepouts, 5 );
+    BOOST_CHECK_EQUAL( footprintKeepouts, 3 );
+
+    // 1 route keepin + 1 package keepin + 8 constraint regions
+    BOOST_CHECK_EQUAL( markerAreas, 10 );
 }
 
 

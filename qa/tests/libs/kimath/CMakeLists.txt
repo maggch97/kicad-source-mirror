@@ -13,11 +13,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program; if not, you may find one here:
-# http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
-# or you may search the http://www.gnu.org website for the version 2 license,
-# or you may write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #
 # Unit tests for KiCad math routines.
@@ -54,8 +50,10 @@ set( QA_KIMATH_SRCS
     geometry/test_shape_poly_set_split_outlines.cpp
     geometry/test_shape_line_chain.cpp
     geometry/test_shape_line_chain_collision.cpp
+    geometry/test_transform_trs.cpp
     geometry/test_vector_utils.cpp
     geometry/test_shape_rect_corner.cpp
+    geometry/test_roundrect.cpp
     geometry/test_packed_rtree.cpp
     geometry/test_dynamic_rtree.cpp
 

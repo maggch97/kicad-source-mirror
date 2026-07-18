@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -63,6 +59,8 @@ public:
 
     bool GetRepourOnClose() { return m_checkRepour->GetValue(); }
 
+    const std::vector<ZONE*>& GetZonesToDelete() const { return m_zonesToDelete; }
+
 protected:
     void OnZoneSelectionChanged( ZONE* aZone );
     void OnDataViewCtrlSelectionChanged( wxDataViewEvent& event ) override;
@@ -88,6 +86,7 @@ protected:
     void OnMoveUpClick( wxCommandEvent& aEvent ) override;
     void OnMoveDownClick( wxCommandEvent& aEvent ) override;
     void OnMoveBottomClick( wxCommandEvent& aEvent ) override;
+    void OnDeleteClick( wxCommandEvent& aEvent ) override;
     void OnAutoAssignClick( wxCommandEvent& aEvent ) override;
     void OnFilterCtrlCancel( wxCommandEvent& aEvent ) override;
     void OnFilterCtrlSearch( wxCommandEvent& aEvent ) override;
@@ -118,4 +117,5 @@ private:
     std::unique_ptr<ZONE_FILLER>          m_filler;
     bool                                  m_isFillingZones;
     bool                                  m_zoneFillComplete;
+    std::vector<ZONE*>                    m_zonesToDelete;
 };

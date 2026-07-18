@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef CACHED_CONTAINER_GPU_H_
@@ -72,6 +68,16 @@ protected:
      */
     bool defragmentResize( unsigned int aNewSize ) override;
     bool defragmentResizeMemcpy( unsigned int aNewSize );
+
+    /**
+     * Grow the buffer while keeping the peak video memory at max(old, new) rather than
+     * old + new, by staging the compacted vertices through host memory and releasing the
+     * old buffer before allocating the replacement.
+     *
+     * @param aNewSize is the new size of the container, expressed in number of vertices.
+     * @return false in case of failure (e.g. mapping the new buffer failed).
+     */
+    bool defragmentResizeStaged( unsigned int aNewSize );
 
     ///< Flag saying if vertex buffer is currently mapped
     bool m_isMapped;

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <footprint_filter.h>
@@ -168,8 +164,10 @@ void FOOTPRINTS_LISTBOX::SetFootprints( FOOTPRINT_LIST& aList, const wxString& a
     if( selection == wxNOT_FOUND )
         selection = 0;
 
+    // Do NOT call wxSafeYield() here. It disables all top-level windows while it runs, which
+    // greys out the search control and drops keystrokes mid-filter. The update locker and
+    // virtual-list refresh below keep the list consistent without a yield.
     DeselectAll();
-    wxSafeYield();
     wxWindowUpdateLocker freeze( this );
     DeleteAllItems();
 

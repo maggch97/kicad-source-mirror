@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/platform.h>
@@ -81,6 +77,35 @@ wxString GL_UTILS::DetectGLBackend( wxGLCanvas* aCanvas )
 #if !wxCHECK_VERSION( 3, 3, 3 )
 int GL_UTILS::SetSwapInterval( wxGLCanvas* aCanvas, int aVal )
 {
+#if defined( __WXGTK__ ) && wxCHECK_VERSION( 3, 3, 2 )
+    // On Wayland the canvas uses EGL, where wxGLCanvasEGL::SwapBuffers() forces the swap interval
+    // back to 0 on the first buffer swap so eglSwapBuffers() cannot block. A raw eglSwapInterval()
+    // poke here would be reverted before the first frame, so we go through wx, which stashes the
+    // request and applies it in place of its own reset.
+    //
+    // wx defaults to EGL on X11 too, but the reset exists there because eglSwapBuffers() blocks for
+    // up to a second on an occluded window with a non-zero interval. Only Wayland gates drawing on a
+    // frame callback and so is safe to leave throttled by vsync, so restrict this to Wayland and let
+    // X11 fall through to the self-throttling return 0.
+    if( wxGetEnv( wxT( "WAYLAND_DISPLAY" ), nullptr ) && aCanvas->GetEGLVersion( nullptr, nullptr ) )
+    {
+        switch( aCanvas->SetSwapInterval( aVal ) )
+        {
+        case wxGLCanvas::SwapInterval::Set:
+            // A negative request enables adaptive vsync, which effectively runs at interval 1.
+            return aVal < 0 ? 1 : aVal;
+
+        case wxGLCanvas::SwapInterval::NonAdaptive:
+            return 1;
+
+        case wxGLCanvas::SwapInterval::NotSet:
+            return 0;
+        }
+
+        return 0;
+    }
+#endif
+
 #if defined( GLAD_GLX )
     // Check that wx is really using GLX
     if( !wxGLCanvas::GetGLXVersion() )

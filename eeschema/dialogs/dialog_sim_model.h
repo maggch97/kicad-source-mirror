@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * https://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DIALOG_SIM_MODEL_H
@@ -67,6 +63,16 @@ public:
 
     ~DIALOG_SIM_MODEL();
 
+    /**
+     * Restore an inferred passive's Value field after WriteFields().
+     *
+     * WriteFields() rewrites Value only when the model is stored in it, so opting out would leave the
+     * parked ${SIM.PARAMS} placeholder behind. This puts the original Value back verbatim. Static so
+     * it can be verified without constructing the dialog.
+     */
+    static void RestoreInferredValue( std::vector<SCH_FIELD>& aFields, const wxString& aOriginalValue,
+                                      bool aOverwritten, bool aStoredInValue );
+
 private:
     bool TransferDataToWindow() override;
     bool TransferDataFromWindow() override;
@@ -113,6 +119,7 @@ private:
     void onPageChanging( wxNotebookEvent& event ) override;
     void onPinAssignmentsGridCellChange( wxGridEvent& aEvent ) override;
     void onPinAssignmentsGridSize( wxSizeEvent& aEvent ) override;
+    void onDecompositionModeChoice( wxCommandEvent& aEvent ) override;
     void onDifferentialCheckbox( wxCommandEvent& event ) override;
     void onSizeParamGrid( wxSizeEvent& event ) override;
 
@@ -122,6 +129,9 @@ private:
 
     void adjustParamGridColumns( int aWidth, bool aForce );
 
+    ///< Show/populate the decomposition controls (multi-unit only) and sync their enabled state.
+    void updateDecompositionControls();
+
     bool isIbisLoaded() { return dynamic_cast<const SIM_LIBRARY_IBIS*>( library() ); }
 
 private:
@@ -130,6 +140,12 @@ private:
     std::vector<SCH_FIELD>&      m_fields;
 
     std::vector<EMBEDDED_FILES*> m_filesStack;
+
+    // Original Value text saved before parking the ${SIM.PARAMS} placeholder, restored verbatim if
+    // the user opts out of storing parameters in Value.
+    wxString                     m_inferredValueRestore;
+    bool                         m_inferredValueOverwritten;
+
     SIM_LIB_MGR                  m_libraryModelsMgr;
     SIM_LIB_MGR                  m_builtinModelsMgr;
     wxString                     m_prevLibrary;

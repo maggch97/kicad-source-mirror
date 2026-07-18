@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <confirm.h>
@@ -130,8 +126,12 @@ bool FOOTPRINT_EDIT_FRAME::Clear_Pcb( bool doAskAboutUnsavedChanges )
     if( is_last_fp_from_brd )
         m_boardFootprintUuids.clear();
 
-    // Clear undo and redo lists because we want a full deletion
-    ClearUndoRedoList();
+    // ClearUndoRedoList frees only the wrappers, leaking the tab history's transient item copies.
+    if( m_tabsPanel )
+        freeUndoRedoCommandsWithItems( m_undoList, m_redoList );
+    else
+        ClearUndoRedoList();
+
     GetScreen()->SetContentModified( false );
 
     // Clear the view so we don't attempt redraws
@@ -139,19 +139,19 @@ bool FOOTPRINT_EDIT_FRAME::Clear_Pcb( bool doAskAboutUnsavedChanges )
 
     if( !m_isClosing )
     {
-        SetBoard( new BOARD );
+        BOARD* newBoard = new BOARD;
 
         if( FOOTPRINT_EDITOR_SETTINGS* cfg = GetSettings() )
-            GetBoard()->GetDesignSettings() = cfg->m_DesignSettings;
+            newBoard->GetDesignSettings() = cfg->m_DesignSettings;
 
-        GetBoard()->SynchronizeNetsAndNetClasses( true );
+        newBoard->SynchronizeNetsAndNetClasses( true );
 
         // This board will only be used to hold a footprint for editing
-        GetBoard()->SetBoardUse( BOARD_USE::FPHOLDER );
+        newBoard->SetBoardUse( BOARD_USE::FPHOLDER );
 
         // Setup our own severities for the Footprint Checker.
         // These are not (at present) user-editable.
-        std::map<int, SEVERITY>& drcSeverities = GetBoard()->GetDesignSettings().m_DRCSeverities;
+        std::map<int, SEVERITY>& drcSeverities = newBoard->GetDesignSettings().m_DRCSeverities;
 
         for( int errorCode = DRCE_FIRST; errorCode <= DRCE_LAST; ++errorCode )
             drcSeverities[ errorCode ] = RPT_SEVERITY_ERROR;
@@ -164,7 +164,17 @@ bool FOOTPRINT_EDIT_FRAME::Clear_Pcb( bool doAskAboutUnsavedChanges )
         drcSeverities[ DRCE_FOOTPRINT_TYPE_MISMATCH ] = RPT_SEVERITY_WARNING;
 
         // clear filename, to avoid overwriting an old file
-        GetBoard()->SetFileName( wxEmptyString );
+        newBoard->SetFileName( wxEmptyString );
+
+        if( m_tabsPanel )
+        {
+            // Install newBoard before freeing the tab-owned boards so nothing aliased is deleted.
+            detachTabsForFullClear( newBoard );
+        }
+        else
+        {
+            SetBoard( newBoard );
+        }
 
         GetScreen()->InitDataPoints( GetPageSizeIU() );
     }

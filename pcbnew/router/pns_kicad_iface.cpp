@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <board.h>
@@ -124,6 +124,101 @@ namespace std
 }
 
 
+// Identifies a pair of items for the temporary clearance cache by their properties (net, layers,
+// kind) instead of their memory address. Items with the same properties get the same clearance
+// from the rules, so they share one cache entry.
+struct TEMP_CLEARANCE_CACHE_KEY
+{
+    struct SIDE
+    {
+        const void* boardItem;
+        const void* net;
+        int         layerStart;
+        int         layerEnd;
+        int         kind;
+        bool        freePad;
+
+        bool operator==( const SIDE& o ) const
+        {
+            return boardItem == o.boardItem && net == o.net && layerStart == o.layerStart && layerEnd == o.layerEnd
+                   && kind == o.kind && freePad == o.freePad;
+        }
+
+        bool operator<( const SIDE& o ) const
+        {
+            if( boardItem != o.boardItem )
+                return boardItem < o.boardItem;
+            if( net != o.net )
+                return net < o.net;
+            if( layerStart != o.layerStart )
+                return layerStart < o.layerStart;
+            if( layerEnd != o.layerEnd )
+                return layerEnd < o.layerEnd;
+            if( kind != o.kind )
+                return kind < o.kind;
+            return freePad < o.freePad;
+        }
+    };
+
+    SIDE A;
+    SIDE B;
+    bool Flag;
+
+    static SIDE makeSide( const PNS::ITEM* aItem )
+    {
+        return SIDE{ (const void*) aItem->BoardItem(),
+                     (const void*) aItem->Net(),
+                     aItem->Layers().Start(),
+                     aItem->Layers().End(),
+                     (int) aItem->Kind(),
+                     aItem->IsFreePad() };
+    }
+
+    TEMP_CLEARANCE_CACHE_KEY( const PNS::ITEM* aA, const PNS::ITEM* aB, bool aFlag ) :
+            Flag( aFlag )
+    {
+        SIDE sa = makeSide( aA );
+        SIDE sb = makeSide( aB );
+
+        // Canonical order so the key is symmetric in (A, B)
+        if( sb < sa )
+        {
+            A = sb;
+            B = sa;
+        }
+        else
+        {
+            A = sa;
+            B = sb;
+        }
+    }
+
+    bool operator==( const TEMP_CLEARANCE_CACHE_KEY& o ) const { return A == o.A && B == o.B && Flag == o.Flag; }
+};
+
+namespace std
+{
+template <>
+struct hash<TEMP_CLEARANCE_CACHE_KEY>
+{
+    std::size_t operator()( const TEMP_CLEARANCE_CACHE_KEY& k ) const
+    {
+        size_t retval = 0xBADC0FFEE0DDF00D;
+
+        for( const TEMP_CLEARANCE_CACHE_KEY::SIDE* s : { &k.A, &k.B } )
+        {
+            hash_combine( retval, hash<const void*>()( s->boardItem ), hash<const void*>()( s->net ),
+                          hash<int>()( s->layerStart ), hash<int>()( s->layerEnd ), hash<int>()( s->kind ),
+                          hash<bool>()( s->freePad ) );
+        }
+
+        hash_combine( retval, hash<bool>()( k.Flag ) );
+        return retval;
+    }
+};
+} // namespace std
+
+
 struct HULL_CACHE_KEY
 {
     const PNS::ITEM* item;
@@ -217,7 +312,7 @@ private:
     std::optional<bool> m_hasUserPhysicalConstraint;
 
     std::unordered_map<CLEARANCE_CACHE_KEY, int> m_clearanceCache;
-    std::unordered_map<CLEARANCE_CACHE_KEY, int> m_tempClearanceCache;
+    std::unordered_map<TEMP_CLEARANCE_CACHE_KEY, int>    m_tempClearanceCache;
     std::unordered_map<HULL_CACHE_KEY, SHAPE_LINE_CHAIN> m_hullCache;
 };
 
@@ -770,19 +865,24 @@ bool PNS_PCBNEW_RULE_RESOLVER::HasUserDefinedPhysicalConstraint()
 int PNS_PCBNEW_RULE_RESOLVER::Clearance( const PNS::ITEM* aA, const PNS::ITEM* aB,
                                          bool aUseClearanceEpsilon )
 {
-    CLEARANCE_CACHE_KEY key( aA, aB, aUseClearanceEpsilon );
+    const bool bothOwned = aA && aB && aA->Owner() && aB->Owner();
 
-    // Search cache (used for actual board items)
-    auto it = m_clearanceCache.find( key );
+    if( bothOwned )
+    {
+        // Search cache (used for actual board items)
+        auto it = m_clearanceCache.find( CLEARANCE_CACHE_KEY( aA, aB, aUseClearanceEpsilon ) );
 
-    if( it != m_clearanceCache.end() )
-        return it->second;
+        if( it != m_clearanceCache.end() )
+            return it->second;
+    }
+    else if( aA && aB )
+    {
+        // Search cache (used for temporary items within an algorithm)
+        auto it = m_tempClearanceCache.find( TEMP_CLEARANCE_CACHE_KEY( aA, aB, aUseClearanceEpsilon ) );
 
-    // Search cache (used for temporary items within an algorithm)
-    it = m_tempClearanceCache.find( key );
-
-    if( it != m_tempClearanceCache.end() )
-        return it->second;
+        if( it != m_tempClearanceCache.end() )
+            return it->second;
+    }
 
     PNS::CONSTRAINT constraint;
     int             rv = 0;
@@ -834,8 +934,7 @@ int PNS_PCBNEW_RULE_RESOLVER::Clearance( const PNS::ITEM* aA, const PNS::ITEM* a
                 }
             }
 
-            // No 'else'; non-plated milled holes get both HOLE_CLEARANCE and EDGE_CLEARANCE
-            if( isEdge( aA ) || IsNonPlatedSlot( aA ) || isEdge( aB ) || IsNonPlatedSlot( aB ) )
+            if( isEdge( aA ) || isEdge( aB ) )
             {
                 if( QueryConstraint( PNS::CONSTRAINT_TYPE::CT_EDGE_CLEARANCE, aA, aB, layer, &constraint ) )
                 {
@@ -869,24 +968,13 @@ int PNS_PCBNEW_RULE_RESOLVER::Clearance( const PNS::ITEM* aA, const PNS::ITEM* a
     if( aUseClearanceEpsilon && rv > 0 )
         rv = std::max( 0, rv - m_clearanceEpsilon );
 
-    /*
-     * It makes no sense to put items that have no owning NODE in the cache - they can be
-     * allocated on stack and we can't really invalidate them in the cache when they are
-     * destroyed.  Probably a better idea would be to use a static unique counter in PNS::ITEM
-     * constructor to generate the cache keys.
-     *
-     * However, algorithms DO greatly benefit from using the cache, so ownerless items need to be
-     * cached.  In order to easily clear those only, a temporary cache is created. If this doesn't
-     * seem nice, an alternative is clearing the full cache once it reaches a certain size. Also
-     * not pretty, but VERY effective to keep things interactive.
-     */
-    if( aA && aB )
-    {
-        if ( aA->Owner() && aB->Owner() )
-            m_clearanceCache[ key ] = rv;
-        else
-            m_tempClearanceCache[ key ] = rv;
-    }
+    // Remember this result so we don't recompute it. Real board items go in the long-lived
+    // cache. Temporary items the router creates while routing go in a separate cache we can
+    // clear on their own.
+    if( bothOwned )
+        m_clearanceCache[CLEARANCE_CACHE_KEY( aA, aB, aUseClearanceEpsilon )] = rv;
+    else if( aA && aB )
+        m_tempClearanceCache[TEMP_CLEARANCE_CACHE_KEY( aA, aB, aUseClearanceEpsilon )] = rv;
 
     return rv;
 }
@@ -1074,7 +1162,7 @@ bool PNS_KICAD_IFACE_BASE::ImportSizes( PNS::SIZES_SETTINGS& aSizes, PNS::ITEM* 
         if( m_ruleResolver->QueryConstraint( PNS::CONSTRAINT_TYPE::CT_WIDTH, &dummyTrack, nullptr,
                                              m_startLayer, &constraint ) )
         {
-            trackWidth = std::max( trackWidth, constraint.m_Value.Opt() );
+            trackWidth = std::max( trackWidth, constraint.m_Value.PinnedOpt() );
             found = true;
 
             if( trackWidth == constraint.m_Value.Opt() )
@@ -1171,8 +1259,8 @@ bool PNS_KICAD_IFACE_BASE::ImportSizes( PNS::SIZES_SETTINGS& aSizes, PNS::ITEM* 
         if( m_ruleResolver->QueryConstraint( PNS::CONSTRAINT_TYPE::CT_DIFF_PAIR_GAP, &dummyTrack,
                                              &coupledTrack, m_startLayer, &constraint ) )
         {
-            diffPairGap = std::max( diffPairGap, constraint.m_Value.Opt() );
-            diffPairViaGap = std::max( diffPairViaGap, constraint.m_Value.Opt() );
+            diffPairGap = std::max( diffPairGap, constraint.m_Value.PinnedOpt() );
+            diffPairViaGap = std::max( diffPairViaGap, constraint.m_Value.PinnedOpt() );
 
             if( diffPairGap == constraint.m_Value.Opt() )
                 aSizes.SetDiffPairGapSource( constraint.m_RuleName );
@@ -3059,7 +3147,7 @@ PNS_LAYER_RANGE PNS_KICAD_IFACE_BASE::SetLayersFromPCBNew( PCB_LAYER_ID aStartLa
 long long int PNS_KICAD_IFACE_BASE::CalculateRoutedPathLength( const PNS::ITEM_SET& aLine, const PNS::SOLID* aStartPad,
                                                                const PNS::SOLID* aEndPad, const NETCLASS* aNetClass )
 {
-    std::vector<LENGTH_DELAY_CALCULATION_ITEM> lengthItems = getLengthDelayCalculationItems( aLine, aNetClass );
+    std::vector<LENGTH_DELAY_CALCULATION_ITEM> lengthItems = GetLengthDelayCalculationItems( aLine, aNetClass );
 
     const PAD* startPad = nullptr;
     const PAD* endPad = nullptr;
@@ -3084,7 +3172,7 @@ long long int PNS_KICAD_IFACE_BASE::CalculateRoutedPathLength( const PNS::ITEM_S
 int64_t PNS_KICAD_IFACE_BASE::CalculateRoutedPathDelay( const PNS::ITEM_SET& aLine, const PNS::SOLID* aStartPad,
                                                         const PNS::SOLID* aEndPad, const NETCLASS* aNetClass )
 {
-    std::vector<LENGTH_DELAY_CALCULATION_ITEM> lengthItems = getLengthDelayCalculationItems( aLine, aNetClass );
+    std::vector<LENGTH_DELAY_CALCULATION_ITEM> lengthItems = GetLengthDelayCalculationItems( aLine, aNetClass );
 
     const PAD* startPad = nullptr;
     const PAD* endPad = nullptr;
@@ -3139,7 +3227,7 @@ int64_t PNS_KICAD_IFACE_BASE::CalculateDelayForShapeLineChain( const SHAPE_LINE_
 
 
 std::vector<LENGTH_DELAY_CALCULATION_ITEM>
-PNS_KICAD_IFACE_BASE::getLengthDelayCalculationItems( const PNS::ITEM_SET& aLine, const NETCLASS* aNetClass ) const
+PNS_KICAD_IFACE_BASE::GetLengthDelayCalculationItems( const PNS::ITEM_SET& aLine, const NETCLASS* aNetClass ) const
 {
     std::vector<LENGTH_DELAY_CALCULATION_ITEM> lengthItems;
 
@@ -3155,6 +3243,7 @@ PNS_KICAD_IFACE_BASE::getLengthDelayCalculationItems( const PNS::ITEM_SET& aLine
             const PCB_LAYER_ID layer = GetBoardLayerFromPNSLayer( lineItem->Layer() );
             item.SetLayers( layer );
             item.SetEffectiveNetClass( aNetClass );
+            item.SetWidth( l->Width() );
 
             lengthItems.emplace_back( std::move( item ) );
         }

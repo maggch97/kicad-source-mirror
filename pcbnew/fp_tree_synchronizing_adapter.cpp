@@ -16,14 +16,11 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * https://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pgm_base.h>
+#include <kiplatform/ui.h>
 #include <project/project_file.h>
 #include <fp_tree_synchronizing_adapter.h>
 #include <footprint_edit_frame.h>
@@ -39,6 +36,7 @@
 
 #include <map>
 
+#include <wx/log.h>
 #include <wx/settings.h>
 
 
@@ -74,6 +72,18 @@ bool FP_TREE_SYNCHRONIZING_ADAPTER::IsContainer( const wxDataViewItem& aItem ) c
 void FP_TREE_SYNCHRONIZING_ADAPTER::Sync( FOOTPRINT_LIBRARY_ADAPTER* aLibs )
 {
     m_libs = aLibs;
+
+    wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "FpSyncAdapter::Sync enter" ) );
+
+    // The work below frees nodes while the caller yields the event loop, so a GtkTreeView scroll
+    // queued earlier would point at freed rows and crash the next frame-clock tick. Drop it first.
+    KIPLATFORM::UI::CancelPendingScroll( m_widget );
+
+    // Detach the GtkTreeView from the model before freeing any node so the frame-clock tick during
+    // the caller's yield has no stale rows to validate. The RAII guard re-attaches on all paths.
+    ResetTreeView resetGuard( *this );
+
+    wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "FpSyncAdapter::Sync freeing/updating nodes" ) );
 
     // Process already stored libraries
     for( auto it = m_tree.m_Children.begin(); it != m_tree.m_Children.end(); )
@@ -144,6 +154,8 @@ void FP_TREE_SYNCHRONIZING_ADAPTER::Sync( FOOTPRINT_LIBRARY_ADAPTER* aLibs )
 
     if( m_libMap.size() > count )
         m_tree.AssignIntrinsicRanks( m_shownColumns );
+
+    wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "FpSyncAdapter::Sync exit" ) );
 }
 
 

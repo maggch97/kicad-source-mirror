@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
@@ -29,8 +28,10 @@
 
 #include <git2.h>
 
+#include <memory>
 #include <vector>
 
+#include <wx/datetime.h>
 #include <wx/dir.h>
 #include <wx/ffile.h>
 #include <wx/filefn.h>
@@ -56,6 +57,51 @@ struct SCOPED_BOOL_OVERRIDE
 
     bool& m_flag;
     bool  m_original;
+};
+
+
+// Restore the backup location on destruction so a thrown BOOST_REQUIRE cannot leak the
+// override into later tests.
+struct SCOPED_BACKUP_LOCATION_OVERRIDE
+{
+    explicit SCOPED_BACKUP_LOCATION_OVERRIDE( BACKUP_LOCATION& aLocation ) :
+            m_location( aLocation ), m_original( aLocation )
+    {
+    }
+
+    ~SCOPED_BACKUP_LOCATION_OVERRIDE() { m_location = m_original; }
+
+    BACKUP_LOCATION& m_location;
+    BACKUP_LOCATION  m_original;
+};
+
+
+struct SCOPED_BACKUP_FORMAT_OVERRIDE
+{
+    explicit SCOPED_BACKUP_FORMAT_OVERRIDE( BACKUP_FORMAT& aFormat ) :
+            m_format( aFormat ), m_original( aFormat )
+    {
+    }
+
+    ~SCOPED_BACKUP_FORMAT_OVERRIDE() { m_format = m_original; }
+
+    BACKUP_FORMAT& m_format;
+    BACKUP_FORMAT  m_original;
+};
+
+
+// Load a project into the settings manager and unload it on destruction, keeping the global
+// active-project state isolated even when a test aborts partway through.
+struct SCOPED_PROJECT_LOAD
+{
+    SCOPED_PROJECT_LOAD( SETTINGS_MANAGER& aMgr, const wxString& aProjectFile ) : m_mgr( aMgr )
+    {
+        m_mgr.LoadProject( aProjectFile.ToStdString() );
+    }
+
+    ~SCOPED_PROJECT_LOAD() { m_mgr.UnloadProject( &m_mgr.Prj(), false ); }
+
+    SETTINGS_MANAGER& m_mgr;
 };
 
 
@@ -567,6 +613,63 @@ BOOST_AUTO_TEST_CASE( FirstAutosaveSkipsCommitWhenStagedMatchesDisk )
 
 
 /**
+ * A saver tied to a document's lifetime token must be skipped, and dropped, once the document is
+ * destroyed.  The autosave timer is shared across editor frames, so a saver that outlives its
+ * BOARD/SCHEMATIC would serialize freed memory -- the autosave-saver use-after-free behind the
+ * crashes in EDA_BASE_FRAME::doAutoSave (Sentry KICAD-159V PCB, KICAD-17F5 SCH).
+ */
+BOOST_AUTO_TEST_CASE( SaverSkippedAfterOwningDocumentDestroyed )
+{
+    LIBGIT2_SCOPE libgit;
+
+    bool&                backupEnabled = Pgm().GetCommonSettings()->m_Backup.enabled;
+    SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
+    backupEnabled = true;
+
+    SCOPED_TEMP_DIR project( wxS( "kicad_qa_saver_lifetime" ) );
+    const wxString&  path = project.Path();
+    const wxString   sep = wxFileName::GetPathSeparator();
+
+    writeTextFile( path + sep + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
+    writeTextFile( path + sep + wxS( "p.kicad_pcb" ), wxS( "(kicad_pcb (version 20240108))\n" ) );
+
+    LOCAL_HISTORY history;
+
+    // The saver only touches this heap counter, so it stays safe to invoke after the board is gone;
+    // gating it on the board's token is the behaviour under test.
+    auto                   runCount = std::make_shared<int>( 0 );
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    history.RegisterSaver( board.get(),
+            [runCount]( const wxString&, std::vector<HISTORY_FILE_DATA>& aFileData )
+            {
+                ++( *runCount );
+
+                HISTORY_FILE_DATA entry;
+                entry.relativePath = wxS( "p.kicad_pcb" );
+                entry.content = "(kicad_pcb (version 20240108) (edited yes))\n";
+                aFileData.push_back( std::move( entry ) );
+            },
+            board->GetHistoryLifetimeToken() );
+
+    // Positive control: while the board is alive the saver runs.
+    history.RunRegisteredSaversAndCommit( path, wxS( "Autosave" ), wxEmptyString );
+    history.WaitForPendingSave();
+    BOOST_CHECK_EQUAL( *runCount, 1 );
+
+    // Destroy the document; its expired token must make both runners skip and drop the saver.
+    board.reset();
+
+    history.RunRegisteredSaversAndCommit( path, wxS( "Autosave" ), wxEmptyString );
+    history.WaitForPendingSave();
+    BOOST_CHECK_MESSAGE( *runCount == 1, "commit runner invoked a saver whose board was destroyed" );
+
+    history.RunRegisteredSaversAsAutosaveFiles( path );
+    BOOST_CHECK_MESSAGE( *runCount == 1, "autosave-file runner invoked a saver whose board was destroyed" );
+}
+
+
+/**
  * Manual save on a fresh project (saver output == disk) must still commit, so the user's
  * first explicit save shows up in the history dialog.  Counterpart to
  * FirstAutosaveSkipsCommitWhenStagedMatchesDisk.
@@ -607,6 +710,186 @@ BOOST_AUTO_TEST_CASE( FirstManualSaveAlwaysCommitsOnFreshProject )
     BOOST_CHECK_MESSAGE( !head.IsEmpty(), "manual save on a fresh project must commit even when staged matches disk" );
 
     history.UnregisterSaver( &history );
+}
+
+
+// With backups enabled but the format set to Zip, autosave uses legacy recovery files, so the
+// incremental git-commit path must be a no-op rather than extending a history the user switched
+// off (issue 24773).
+BOOST_AUTO_TEST_CASE( ZipFormatSkipsIncrementalAutosave )
+{
+    LIBGIT2_SCOPE libgit;
+
+    bool& backupEnabled = Pgm().GetCommonSettings()->m_Backup.enabled;
+    SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
+    backupEnabled = true;
+
+    BACKUP_FORMAT& format = Pgm().GetCommonSettings()->m_Backup.format;
+    SCOPED_BACKUP_FORMAT_OVERRIDE restoreFormat( format );
+    format = BACKUP_FORMAT::ZIP;
+
+    SCOPED_TEMP_DIR project( wxS( "kicad_qa_zip_skips_incremental" ) );
+    const wxString& path = project.Path();
+
+    writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
+    writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "p.kicad_pcb" ),
+                   wxS( "(kicad_pcb (version 20240108))\n" ) );
+
+    LOCAL_HISTORY history;
+
+    auto saver = []( const wxString&, std::vector<HISTORY_FILE_DATA>& aFileData )
+    {
+        HISTORY_FILE_DATA entry;
+        entry.relativePath = wxS( "p.kicad_pcb" );
+        entry.content = "(kicad_pcb (version 20240108) (edited yes))\n";
+        aFileData.push_back( std::move( entry ) );
+    };
+
+    history.RegisterSaver( &history, saver );
+
+    BOOST_REQUIRE( history.RunRegisteredSaversAndCommit( path, wxS( "Autosave" ), wxEmptyString ) );
+    history.WaitForPendingSave();
+
+    BOOST_CHECK_MESSAGE( history.GetHeadHash( path ).IsEmpty(),
+                         "zip backup format must not create incremental autosave commits" );
+
+    history.UnregisterSaver( &history );
+}
+
+
+// The Zip backup format must reliably write legacy recovery files on autosave so a crash does
+// not lose work between manual saves (issue 24773).
+BOOST_AUTO_TEST_CASE( ZipFormatWritesRecoveryFiles )
+{
+    bool& backupEnabled = Pgm().GetCommonSettings()->m_Backup.enabled;
+    SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
+    backupEnabled = true;
+
+    BACKUP_FORMAT& format = Pgm().GetCommonSettings()->m_Backup.format;
+    SCOPED_BACKUP_FORMAT_OVERRIDE restoreFormat( format );
+    format = BACKUP_FORMAT::ZIP;
+
+    BACKUP_LOCATION& location = Pgm().GetCommonSettings()->m_Backup.location;
+    SCOPED_BACKUP_LOCATION_OVERRIDE restoreLocation( location );
+    location = BACKUP_LOCATION::PROJECT_DIR;
+
+    SCOPED_TEMP_DIR project( wxS( "kicad_qa_zip_recovery_files" ) );
+    const wxString& path = project.Path();
+    const wxString  sep = wxFileName::GetPathSeparator();
+
+    writeTextFile( path + sep + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
+
+    SETTINGS_MANAGER&   mgr = Pgm().GetSettingsManager();
+    SCOPED_PROJECT_LOAD loadedProject( mgr, path + sep + wxS( "p.kicad_pro" ) );
+
+    LOCAL_HISTORY history;
+
+    auto saver = []( const wxString&, std::vector<HISTORY_FILE_DATA>& aFileData )
+    {
+        HISTORY_FILE_DATA entry;
+        entry.relativePath = wxS( "p.kicad_pcb" );
+        entry.content = "(kicad_pcb (version 20240108) (edited yes))\n";
+        aFileData.push_back( std::move( entry ) );
+    };
+
+    history.RegisterSaver( &history, saver );
+
+    BOOST_REQUIRE( history.RunRegisteredSaversAsAutosaveFiles( path ) );
+
+    wxString autosavePath = path + sep + wxS( "_autosave-p.kicad_pcb" );
+    BOOST_CHECK_MESSAGE( wxFileExists( autosavePath ),
+                         "zip backup format must write autosave recovery files" );
+
+    history.UnregisterSaver( &history );
+}
+
+
+// A content-identical autosave with a newer mtime (cloud-sync touch) must not be flagged
+// stale, or recovery prompts fire on every open with nothing to restore (issue 24126).
+BOOST_AUTO_TEST_CASE( CloudSyncTouchedAutosaveFalselyFlaggedStale )
+{
+    bool&                backupEnabled = Pgm().GetCommonSettings()->m_Backup.enabled;
+    SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
+    backupEnabled = true;
+
+    BACKUP_LOCATION& location = Pgm().GetCommonSettings()->m_Backup.location;
+    SCOPED_BACKUP_LOCATION_OVERRIDE restoreLocation( location );
+    location = BACKUP_LOCATION::PROJECT_DIR;
+
+    SCOPED_TEMP_DIR project( wxS( "kicad_qa_cloudsync_autosave" ) );
+    const wxString& path = project.Path();
+    const wxString  sep = wxFileName::GetPathSeparator();
+
+    // FindStaleAutosaveFiles resolves the autosave root through the active project, so it must
+    // be loaded; the .kicad_pro must exist on disk first for LoadProject to succeed.
+    writeTextFile( path + sep + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
+
+    SETTINGS_MANAGER&   mgr = Pgm().GetSettingsManager();
+    SCOPED_PROJECT_LOAD loadedProject( mgr, path + sep + wxS( "p.kicad_pro" ) );
+
+    const wxString sourcePath = path + sep + wxS( "p.kicad_pcb" );
+    const wxString autosavePath = path + sep + wxS( "_autosave-p.kicad_pcb" );
+    const wxString boardContent = wxS( "(kicad_pcb (version 20240108))\n" );
+
+    // Byte-identical source and "_autosave-" companion, mirroring a clean save.
+    writeTextFile( sourcePath, boardContent );
+    writeTextFile( autosavePath, boardContent );
+
+    LOCAL_HISTORY history;
+
+    // Cloud-sync touch gives the identical autosave a strictly newer mtime.
+    wxDateTime srcMtime = wxFileName( sourcePath ).GetModificationTime();
+    wxDateTime newerMtime = srcMtime + wxTimeSpan::Seconds( 60 );
+    BOOST_REQUIRE( wxFileName( autosavePath ).SetTimes( &newerMtime, &newerMtime, nullptr ) );
+
+    std::vector<wxString> exts{ wxS( "kicad_pcb" ) };
+    auto                  stale = history.FindStaleAutosaveFiles( path, exts );
+
+    BOOST_CHECK_MESSAGE( stale.empty(),
+                         "Content-identical autosave with newer mtime was flagged stale, "
+                         "triggering a spurious recovery prompt (issue 24126)" );
+}
+
+
+// Counterpart to the above: an autosave whose content genuinely differs (a real unsaved edit)
+// must still be flagged stale so recovery continues to fire.
+BOOST_AUTO_TEST_CASE( DivergentAutosaveStillFlaggedStale )
+{
+    bool&                backupEnabled = Pgm().GetCommonSettings()->m_Backup.enabled;
+    SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
+    backupEnabled = true;
+
+    BACKUP_LOCATION& location = Pgm().GetCommonSettings()->m_Backup.location;
+    SCOPED_BACKUP_LOCATION_OVERRIDE restoreLocation( location );
+    location = BACKUP_LOCATION::PROJECT_DIR;
+
+    SCOPED_TEMP_DIR project( wxS( "kicad_qa_divergent_autosave" ) );
+    const wxString& path = project.Path();
+    const wxString  sep = wxFileName::GetPathSeparator();
+
+    writeTextFile( path + sep + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
+
+    SETTINGS_MANAGER&   mgr = Pgm().GetSettingsManager();
+    SCOPED_PROJECT_LOAD loadedProject( mgr, path + sep + wxS( "p.kicad_pro" ) );
+
+    const wxString sourcePath = path + sep + wxS( "p.kicad_pcb" );
+    const wxString autosavePath = path + sep + wxS( "_autosave-p.kicad_pcb" );
+
+    // Autosave content diverges from the source, a genuine unsaved edit to recover.
+    writeTextFile( sourcePath, wxS( "(kicad_pcb (version 20240108))\n" ) );
+    writeTextFile( autosavePath, wxS( "(kicad_pcb (version 20240108) (edited yes))\n" ) );
+
+    LOCAL_HISTORY history;
+
+    wxDateTime srcMtime = wxFileName( sourcePath ).GetModificationTime();
+    wxDateTime newerMtime = srcMtime + wxTimeSpan::Seconds( 60 );
+    BOOST_REQUIRE( wxFileName( autosavePath ).SetTimes( &newerMtime, &newerMtime, nullptr ) );
+
+    std::vector<wxString> exts{ wxS( "kicad_pcb" ) };
+    auto                  stale = history.FindStaleAutosaveFiles( path, exts );
+
+    BOOST_CHECK_MESSAGE( stale.size() == 1,
+                         "Genuinely divergent autosave must still be flagged stale for recovery" );
 }
 
 

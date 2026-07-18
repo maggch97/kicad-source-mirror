@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <json_common.h>
@@ -170,9 +170,8 @@ COMPONENT_CLASS_SETTINGS::loadAssignment( const nlohmann::json& aJson )
 
 bool COMPONENT_CLASS_SETTINGS::operator==( const COMPONENT_CLASS_SETTINGS& aOther ) const
 {
-    // TODO: Implement this
-    throw;
-    //return true;
+    return m_enableSheetComponentClasses == aOther.m_enableSheetComponentClasses
+           && m_componentClassAssignments == aOther.m_componentClassAssignments;
 }
 
 
@@ -233,7 +232,7 @@ wxString COMPONENT_CLASS_ASSIGNMENT_DATA::GetAssignmentInDRCLanguage() const
     if( m_conditions.empty() )
     {
         // A condition which always applies the netclass
-        return wxString::Format( wxT( "(version 1) (assign_component_class \"%s\")" ), m_componentClass );
+        return wxString::Format( wxT( "(version 2) (assign_component_class \"%s\")" ), m_componentClass );
     }
 
     // Lambda to format a comma-separated list of references in to a DRC expression
@@ -375,7 +374,7 @@ wxString COMPONENT_CLASS_ASSIGNMENT_DATA::GetAssignmentInDRCLanguage() const
     }
 
     if( conditionsExprs.empty() )
-        return wxString::Format( wxT( "(version 1) (assign_component_class \"%s\")" ), m_componentClass );
+        return wxString::Format( wxT( "(version 2) (assign_component_class \"%s\")" ), m_componentClass );
 
     wxString allConditionsExpr = conditionsExprs[0];
 
@@ -387,7 +386,7 @@ wxString COMPONENT_CLASS_ASSIGNMENT_DATA::GetAssignmentInDRCLanguage() const
             allConditionsExpr = allConditionsExpr + operatorExpr + *itr;
     }
 
-    return wxString::Format( wxT( "(version 1) (assign_component_class \"%s\" (condition \"%s\" ) )" ),
+    return wxString::Format( wxT( "(version 2) (assign_component_class \"%s\" (condition \"%s\" ) )" ),
                              m_componentClass,
                              allConditionsExpr );
 }

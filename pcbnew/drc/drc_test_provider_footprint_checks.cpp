@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <drc/drc_engine.h>
@@ -36,7 +32,8 @@
     - DRCE_PADSTACK,
     - DRCE_PADSTACK_INVALID,
     - DRCE_FOOTPRINT (unknown or duplicate pads in net-tie pad groups),
-    - DRCE_SHORTING_ITEMS
+    - DRCE_SHORTING_ITEMS,
+    - DRCE_FOOTPRINT_SCALED_WITH_PADS
 */
 
 class DRC_TEST_PROVIDER_FOOTPRINT_CHECKS : public DRC_TEST_PROVIDER
@@ -83,6 +80,20 @@ bool DRC_TEST_PROVIDER_FOOTPRINT_CHECKS::Run()
                         errorHandler( footprint, nullptr, nullptr, DRCE_FOOTPRINT_TYPE_MISMATCH,
                                       aMsg, footprint->GetPosition(), footprint->GetLayer() );
                     } );
+        }
+
+        if( !m_drcEngine->IsErrorLimitExceeded( DRCE_FOOTPRINT_SCALED_WITH_PADS ) )
+        {
+            const TRANSFORM_TRS& xform = footprint->GetTransform();
+
+            if( !xform.IsUniformScale() || xform.GetScaleX() != 1.0 )
+            {
+                if( !footprint->Pads().empty() )
+                {
+                    errorHandler( footprint, nullptr, nullptr, DRCE_FOOTPRINT_SCALED_WITH_PADS, wxEmptyString,
+                                  footprint->GetPosition(), footprint->GetLayer() );
+                }
+            }
         }
 
         if( !m_drcEngine->IsErrorLimitExceeded( DRCE_PAD_TH_WITH_NO_HOLE )

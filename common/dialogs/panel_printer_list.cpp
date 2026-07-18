@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialogs/panel_printer_list.h>
@@ -162,7 +162,7 @@ PANEL_PRINTER_LIST::~PANEL_PRINTER_LIST()
 }
 
 
-bool PANEL_PRINTER_LIST::AsPrintersAvailable()
+bool PANEL_PRINTER_LIST::HasPrintersAvailable()
 {
     return  m_choicePrinter->GetCount() > 0;
 }
@@ -172,7 +172,7 @@ void PANEL_PRINTER_LIST::onPrinterChoice( wxCommandEvent& event )
 {
     int select = m_choicePrinter->GetSelection();
 
-    if( m_choicePrinter->GetString( select ) == m_defaultPrinterName )
+    if( select != wxNOT_FOUND && m_choicePrinter->GetString( select ) == m_defaultPrinterName )
         m_stPrinterState->SetLabel( _( "Default printer" ) );
     else
         m_stPrinterState->SetLabel( wxEmptyString );
@@ -183,11 +183,10 @@ void PANEL_PRINTER_LIST::onPrinterChoice( wxCommandEvent& event )
 
 wxString PANEL_PRINTER_LIST::GetSelectedPrinterName()
 {
-    if( AsPrintersAvailable() )
-    {
-        int select = m_choicePrinter->GetSelection();
+    int select = m_choicePrinter->GetSelection();
+
+    if( select != wxNOT_FOUND )
         m_selectedPrinterName = m_choicePrinter->GetString( select );
-    }
     else
         m_selectedPrinterName.Empty();
 

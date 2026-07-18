@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DIALOG_IMPORTED_LAYERS_H
@@ -55,7 +55,12 @@ private:
     void RemoveMappings( int aStatus );
     void DeleteListItems( const wxArrayInt& aRowsToDelete, wxListCtrl* aListCtrl );
 
+    void AutoMatchLayers();
+
     const INPUT_LAYER_DESC* GetLayerDescription( const wxString& aLayerName ) const;
+
+    /// KiCad layer name to display, using the destination board's names when available.
+    wxString KiCadLayerName( PCB_LAYER_ID aLayer ) const;
 
     static wxString WrapRequired( const wxString& aLayerName );
     static wxString UnwrapRequired( const wxString& aLayerName );
@@ -72,6 +77,7 @@ private:
     const int selected = wxLIST_STATE_SELECTED;
     const int allitems = wxLIST_STATE_DONTCARE;
 
+    BOARD*                           m_board = nullptr;
     std::vector<INPUT_LAYER_DESC>    m_input_layers;
     std::vector<wxString>            m_unmatched_layer_names;
     std::map<wxString, PCB_LAYER_ID> m_matched_layers_map;

@@ -179,6 +179,14 @@ wxString UOP::Format() const
         str = wxString::Format( "FCALL" );
         break;
 
+    case TR_OP_JZ:
+        str = wxString::Format( "JZ -> %d", m_jumpTarget );
+        break;
+
+    case TR_OP_JNZ:
+        str = wxString::Format( "JNZ -> %d", m_jumpTarget );
+        break;
+
     default:
         str = wxString::Format( "%s %d", formatOpName( m_op ).c_str(), m_op );
         break;
@@ -820,6 +828,37 @@ static std::vector<TREE_NODE*> squashParamList( TREE_NODE* root )
 }
 
 
+// Flatten a pure identifier chain (e.g. "A" or "A.Parent") that forms the receiver of a
+// property or method access into a dotted variable name.  Returns false when the receiver
+// is anything else (for example the result of another method call), which is unsupported.
+// Every node consumed is marked visited so the code generator does not re-process it.
+static bool flattenVarChain( TREE_NODE* aNode, wxString& aResult )
+{
+    if( aNode->op == TR_IDENTIFIER )
+    {
+        aResult = formatNode( aNode );
+        aNode->isVisited = true;
+        return true;
+    }
+
+    if( aNode->op == TR_STRUCT_REF && aNode->leaf[0] && aNode->leaf[1]
+            && aNode->leaf[1]->op == TR_IDENTIFIER )
+    {
+        wxString base;
+
+        if( !flattenVarChain( aNode->leaf[0], base ) )
+            return false;
+
+        aResult = base + wxT( "." ) + formatNode( aNode->leaf[1] );
+        aNode->leaf[1]->isVisited = true;
+        aNode->isVisited = true;
+        return true;
+    }
+
+    return false;
+}
+
+
 bool COMPILER::generateUCode( UCODE* aCode, CONTEXT* aPreflightContext )
 {
     std::vector<TREE_NODE*> stack;
@@ -827,6 +866,10 @@ bool COMPILER::generateUCode( UCODE* aCode, CONTEXT* aPreflightContext )
     int                     numericValueCount = 0;
     wxString                missingUnitsMsg;
     int                     missingUnitsSrcPos = 0;
+
+    // Short-circuit jumps for && / || awaiting their target backpatched once the right-hand
+    // operand's microcode has been emitted.
+    std::map<TREE_NODE*, UOP*> scJumps;
 
     if( !m_tree )
     {
@@ -869,10 +912,12 @@ bool COMPILER::generateUCode( UCODE* aCode, CONTEXT* aPreflightContext )
 
         case TR_STRUCT_REF:
         {
-            // leaf[0]: object
+            // leaf[0]: object (a variable name, or a "." chain such as "A.Parent")
             // leaf[1]: field (TR_IDENTIFIER) or TR_OP_FUNC_CALL
 
-            if( node->leaf[0]->op != TR_IDENTIFIER )
+            wxString itemName;
+
+            if( !flattenVarChain( node->leaf[0], itemName ) )
             {
                 int pos = node->leaf[0]->srcPos;
 
@@ -896,7 +941,6 @@ bool COMPILER::generateUCode( UCODE* aCode, CONTEXT* aPreflightContext )
                     // leaf[0]: object
                     // leaf[1]: field
 
-                    wxString itemName = formatNode( node->leaf[0] );
                     wxString propName = formatNode( node->leaf[1] );
                     std::unique_ptr<VAR_REF> vref = aCode->CreateVarRef( itemName, propName );
 
@@ -911,7 +955,6 @@ bool COMPILER::generateUCode( UCODE* aCode, CONTEXT* aPreflightContext )
                         reportError( CST_CODEGEN, msg, node->leaf[1]->srcPos - (int) propName.length() );
                     }
 
-                    node->leaf[0]->isVisited = true;
                     node->leaf[1]->isVisited = true;
 
                     node->SetUop( TR_UOP_PUSH_VAR, std::move( vref ) );
@@ -925,7 +968,6 @@ bool COMPILER::generateUCode( UCODE* aCode, CONTEXT* aPreflightContext )
                     //    leaf[0]: function name
                     //    leaf[1]: parameter
 
-                    wxString                 itemName = formatNode( node->leaf[0] );
                     std::unique_ptr<VAR_REF> vref = aCode->CreateVarRef( itemName, "" );
 
                     if( !vref )
@@ -997,7 +1039,6 @@ bool COMPILER::generateUCode( UCODE* aCode, CONTEXT* aPreflightContext )
                     // leaf[0]: object
                     // leaf[1]: malformed syntax
 
-                    wxString itemName = formatNode( node->leaf[0] );
                     wxString propName = formatNode( node->leaf[1] );
                     std::unique_ptr<VAR_REF> vref = aCode->CreateVarRef( itemName, propName );
 
@@ -1103,6 +1144,17 @@ bool COMPILER::generateUCode( UCODE* aCode, CONTEXT* aPreflightContext )
             }
             else if( node->leaf[1] && !node->leaf[1]->isVisited )
             {
+                // The left operand's microcode is now fully emitted.  For && / || insert the
+                // short-circuit jump here, before the right operand, so the right side can be
+                // skipped at run time when the left already decides the result.
+                if( node->op == TR_OP_BOOL_AND || node->op == TR_OP_BOOL_OR )
+                {
+                    UOP* jump = new UOP( node->op == TR_OP_BOOL_AND ? TR_OP_JZ : TR_OP_JNZ );
+                    aCode->AddOp( jump );
+                    aCode->MarkHasJumps();
+                    scJumps[node] = jump;
+                }
+
                 stack.push_back( node->leaf[1] );
                 node->leaf[1]->isVisited = true;
             }
@@ -1116,6 +1168,12 @@ bool COMPILER::generateUCode( UCODE* aCode, CONTEXT* aPreflightContext )
         {
             aCode->AddOp( node->uop );
             node->uop = nullptr;
+
+            // Backpatch the matching short-circuit jump to land just past this combine op.
+            auto jumpIt = scJumps.find( node );
+
+            if( jumpIt != scJumps.end() )
+                jumpIt->second->SetJumpTarget( aCode->GetSize() );
         }
 
         stack.pop_back();
@@ -1138,10 +1196,40 @@ bool COMPILER::generateUCode( UCODE* aCode, CONTEXT* aPreflightContext )
 }
 
 
-void UOP::Exec( CONTEXT* ctx )
+// Normalized boolean results pushed when && / || short-circuits, so the skipped combine op's output
+// contract (an UNSCALED numeric 1/0) is met for any enclosing operator without allocating a fresh
+// value on the hot path.  A numeric VALUE is immutable once set (only deferred values mutate on
+// read), so DRC's worker threads can share these by reference, just as numeric literals are.
+static const VALUE g_shortCircuitFalse( 0.0 );
+static const VALUE g_shortCircuitTrue( 1.0 );
+
+
+int UOP::Exec( CONTEXT* ctx )
 {
     switch( m_op )
     {
+    case TR_OP_JZ:
+        // Short-circuit && when the left side is false, then jump past the right-hand microcode.
+        if( ctx->Top()->AsDouble() == 0.0 )
+        {
+            ctx->Pop();
+            ctx->Push( const_cast<VALUE*>( &g_shortCircuitFalse ) );
+            return m_jumpTarget;
+        }
+
+        return -1;
+
+    case TR_OP_JNZ:
+        // Short-circuit || when the left side is true, then jump past the right-hand microcode.
+        if( ctx->Top()->AsDouble() != 0.0 )
+        {
+            ctx->Pop();
+            ctx->Push( const_cast<VALUE*>( &g_shortCircuitTrue ) );
+            return m_jumpTarget;
+        }
+
+        return -1;
+
     case TR_UOP_PUSH_VAR:
     {
         VALUE* value = nullptr;
@@ -1170,13 +1258,13 @@ void UOP::Exec( CONTEXT* ctx )
             ctx->Push( m_value.get() );
         }
 
-        return;
+        return -1;
 
     case TR_OP_METHOD_CALL:
         if( m_func )
             m_func( ctx, m_ref.get() );
 
-        return;
+        return -1;
 
     default:
         break;
@@ -1299,7 +1387,7 @@ void UOP::Exec( CONTEXT* ctx )
         rp->Set( result );
         rp->SetUnits( resultUnits );
         ctx->Push( rp );
-        return;
+        return -1;
     }
     else if( m_op & TR_OP_UNARY_MASK )
     {
@@ -1322,8 +1410,10 @@ void UOP::Exec( CONTEXT* ctx )
         rp->Set( result );
         rp->SetUnits( resultUnits );
         ctx->Push( rp );
-        return;
+        return -1;
     }
+
+    return -1;
 }
 
 
@@ -1331,8 +1421,24 @@ VALUE* UCODE::Run( CONTEXT* ctx )
 {
     try
     {
-        for( UOP* op : m_ucode )
-            op->Exec( ctx );
+        if( m_hasJumps )
+        {
+            for( std::size_t ip = 0; ip < m_ucode.size(); )
+            {
+                int next = m_ucode[ip]->Exec( ctx );
+
+                // Backpatched jump targets are always forward, past the combine op; a non-forward
+                // or stale target would spin or read out of range, so reject it.
+                wxASSERT( next < 0 || static_cast<std::size_t>( next ) > ip );
+
+                ip = ( next < 0 ) ? ip + 1 : static_cast<std::size_t>( next );
+            }
+        }
+        else
+        {
+            for( UOP* op : m_ucode )
+                op->Exec( ctx );
+        }
     }
     catch(...)
     {

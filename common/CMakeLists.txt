@@ -107,6 +107,8 @@ set( KICOMMON_SRCS
     git/git_commit_handler.cpp
     git/git_config_handler.cpp
     git/git_compare_handler.cpp
+    git/kigit_driver_registry.cpp
+    git/kigit_merge_blob_utils.cpp
     git/git_init_handler.cpp
     git/project_git_utils.cpp
     git/git_pull_handler.cpp
@@ -123,6 +125,24 @@ set( KICOMMON_SRCS
     git/git_backend.cpp
     git/kigit_orphan_registry.cpp
     git/libgit_backend.cpp
+
+    # Diff/merge engine
+    diff_merge/auto_resolution.cpp
+    diff_merge/diff_tree_grouping.cpp
+    diff_merge/kicad_diff_types.cpp
+    diff_merge/diff_scene.cpp
+    diff_merge/diff_doc_kind.cpp
+    diff_merge/merge_dispatch.cpp
+    diff_merge/identity_reconciler.cpp
+    diff_merge/kicad_differ.cpp
+    diff_merge/kicad_merge_engine.cpp
+    diff_merge/merge_validation_pipeline.cpp
+    diff_merge/merge_validators.cpp
+    diff_merge/project_file_patch.cpp
+    diff_merge/property_value_converter.cpp
+
+    # Properties
+    properties/wx_any_utils.cpp
 
     # Jobs
     jobs/job.cpp
@@ -151,17 +171,26 @@ set( KICOMMON_SRCS
     jobs/job_export_sch_netlist.cpp
     jobs/job_export_sch_plot.cpp
     jobs/job_export_sch_pythonbom.cpp
+    jobs/job_special_archive.cpp
     jobs/job_special_copyfiles.cpp
     jobs/job_special_execute.cpp
+    jobs/job_unknown.cpp
     jobs/jobset.cpp
     jobs/job_fp_export_svg.cpp
     jobs/job_fp_upgrade.cpp
     jobs/job_gerber_diff.cpp
     jobs/job_gerber_export_png.cpp
     jobs/job_gerber_info.cpp
+    jobs/job_import_utils.cpp
     jobs/job_pcb_import.cpp
+    jobs/job_sch_import.cpp
     jobs/job_pcb_render.cpp
     jobs/job_pcb_drc.cpp
+    jobs/job_diff_base.cpp
+    jobs/job_pcb_diff.cpp
+    jobs/job_fp_diff.cpp
+    jobs/job_sch_diff.cpp
+    jobs/job_sym_diff.cpp
     jobs/job_rc.cpp
     jobs/job_sch_erc.cpp
     jobs/job_sym_export_svg.cpp
@@ -294,6 +323,7 @@ set( KICOMMON_SRCS
     oauth/oauth_session.cpp
     oauth/secure_token_store.cpp
     paths.cpp
+    pin_map.cpp
     project.cpp
     remote_provider_client.cpp
     remote_provider_metadata.cpp
@@ -322,8 +352,13 @@ set( KICOMMON_SRCS
     io/io_base.cpp
     io/io_utils.cpp
 
-    api/serializable.cpp
+    api/api_handler.cpp
+    api/api_plugin.cpp
+    api/api_plugin_manager.cpp
+    api/api_server.cpp
     api/api_utils.cpp
+    api/python_manager.cpp
+    api/serializable.cpp
 
     startwizard/startwizard.cpp
     startwizard/startwizard_provider_libraries.cpp
@@ -337,16 +372,9 @@ if( UNIX AND NOT APPLE )
     )
 endif()
 
-if( KICAD_IPC_API )
-    set( KICOMMON_SRCS
-        ${KICOMMON_SRCS}
-        api/api_handler.cpp
-        api/api_plugin.cpp
-        api/api_plugin_manager.cpp
-        api/api_server.cpp
-        api/python_manager.cpp
-    )
-endif()
+list( APPEND KICOMMON_SRCS
+    navlib_safe_init.cpp
+)
 
 add_library( kicommon SHARED
     ${KICOMMON_SRCS}
@@ -375,6 +403,7 @@ target_link_libraries( kicommon
     core
     kiapi
     kimath
+    kinng
     kiplatform
     nlohmann_json
     nlohmann_json_schema_validator
@@ -385,6 +414,7 @@ target_link_libraries( kicommon
     rapidcsv
     sexpr
     glad
+    thread-pool
     ${ZSTD_LIBRARY}
     ${wxWidgets_LIBRARIES}
     ${LIBGIT2_LIBRARIES}
@@ -405,12 +435,6 @@ if( KICAD_USE_SENTRY )
         sentry )
 
     set_property(SOURCE app_monitor.cpp APPEND PROPERTY COMPILE_DEFINITIONS KICAD_SENTRY_DSN="${KICAD_SENTRY_DSN}")
-endif()
-
-if( KICAD_IPC_API )
-    target_link_libraries( kicommon
-        kinng
-        )
 endif()
 
 include( ${KICAD_CMAKE_MODULE_PATH}/KiCadVersion.cmake )
@@ -448,6 +472,15 @@ endif()
 
 target_compile_definitions( kicommon PRIVATE KICOMMON_DLL=1 )
 
+# Feed the desktop application identifiers to the Wayland app_id logic in pgm_base.cpp
+# so the compositor matches windows to the installed desktop files (regular, Flatpak,
+# and Nightly builds each install a different reverse-DNS prefix).
+if( UNIX AND NOT APPLE )
+    set_property( SOURCE pgm_base.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+        KICAD_DESKTOP_APP_NAME="${KICAD_APP_NAME}"
+        KICAD_DESKTOP_APP_PREFIX="${KICAD_APP_PREFIX}" )
+endif()
+
 target_include_directories( kicommon
     PUBLIC
         .
@@ -459,7 +492,6 @@ target_include_directories( kicommon
         $<TARGET_PROPERTY:kiapi,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:picosha2,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:nlohmann_json_schema_validator,INTERFACE_INCLUDE_DIRECTORIES>
-        $<TARGET_PROPERTY:thread-pool,INTERFACE_INCLUDE_DIRECTORIES>
     )
 
 add_dependencies( kicommon pegtl version_header )
@@ -498,6 +530,12 @@ set( COMMON_DLG_SRCS
     dialogs/dialog_autosave_recovery_base.cpp
     dialogs/dialog_book_reporter.cpp
     dialogs/dialog_book_reporter_base.cpp
+    dialogs/dialog_git_mr_review.cpp
+    dialogs/dialog_git_mr_review_base.cpp
+    dialogs/dialog_kicad_diff.cpp
+    dialogs/dialog_kicad_diff_base.cpp
+    dialogs/dialog_kicad_merge_3way.cpp
+    dialogs/dialog_kicad_merge_3way_base.cpp
     dialogs/dialog_color_picker.cpp
     dialogs/dialog_color_picker_base.cpp
     dialogs/dialog_configure_paths.cpp
@@ -596,12 +634,15 @@ set( COMMON_WIDGET_SRCS
     widgets/footprint_choice.cpp
     widgets/footprint_diff_widget.cpp
     widgets/footprint_preview_widget.cpp
+    widgets/widget_diff_canvas.cpp
     widgets/footprint_select_widget.cpp
     widgets/grid_bitmap_toggle.cpp
     widgets/grid_button.cpp
     widgets/grid_checkbox.cpp
     widgets/grid_color_swatch_helpers.cpp
     widgets/wx_infobar.cpp
+    widgets/editor_tabs_panel.cpp
+    widgets/kicad_tab_art.cpp
     widgets/layer_box_selector.cpp
     widgets/layer_presentation.cpp
     widgets/lib_tree.cpp
@@ -697,6 +738,7 @@ set( COMMON_IO_SRCS
 
     # Eagle
     io/eagle/eagle_parser.cpp
+    io/eagle/eagle_bin_parser.cpp
 
     # EasyEDA
     io/easyeda/easyeda_parser_base.cpp
@@ -705,6 +747,13 @@ set( COMMON_IO_SRCS
     # EasyEDA pro
     io/easyedapro/easyedapro_parser.cpp
     io/easyedapro/easyedapro_import_utils.cpp
+    io/easyedapro/easyedapro_v3_parser.cpp
+
+    # DipTrace
+    io/diptrace/diptrace_binary_reader.cpp
+
+    # P-CAD
+    io/pcad/s_expr_loader.cpp
 
     io/csv.cpp
     )
@@ -743,6 +792,7 @@ set( COMMON_SRCS
 	${FONT_SRCS}
     ${COMMON_IMPORT_GFX_SRCS}
     ${COMMON_TRANSLINE_CALCULATION_SRCS}
+    track_width_calculations.cpp
     base_screen.cpp
     bin_mod.cpp
     bitmap_base.cpp
@@ -799,6 +849,10 @@ set( COMMON_SRCS
 
 set( COMMON_SRCS
     ${COMMON_SRCS}
+
+    diff_merge/diff_renderer_gal.cpp
+    diff_merge/diff_renderer_plotter.cpp
+    diff_merge/diff_job_output.cpp
 
     origin_viewitem.cpp
 
@@ -861,13 +915,10 @@ if( UNIX AND NOT APPLE )
     )
 endif()
 
-    if( KICAD_IPC_API )
-    set( COMMON_SRCS
-        ${COMMON_SRCS}
-        api/api_handler_common.cpp
-        api/api_handler_editor.cpp
-    )
-endif()
+list( APPEND COMMON_SRCS
+    api/api_handler_common.cpp
+    api/api_handler_editor.cpp
+)
 
 add_library( common STATIC
     ${COMMON_SRCS}
@@ -903,6 +954,7 @@ add_dependencies( common compoundfilereader )  # used by altium_parser.cpp
 target_link_libraries( common
     libcontext
     kimath
+    kinng
     kiplatform
     kicommon
     core
@@ -928,12 +980,6 @@ target_link_libraries( common
 if( KICAD_USE_SENTRY )
     target_link_libraries( common
         sentry )
-endif()
-
-if( KICAD_IPC_API )
-    target_link_libraries( common
-        kinng
-        )
 endif()
 
 target_include_directories( common
@@ -967,6 +1013,7 @@ set( PCB_COMMON_SRCS
     ${CMAKE_SOURCE_DIR}/pcbnew/teardrop/teardrop_parameters.cpp     #needed by board_design_settings.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/router/pns_meander.cpp               #needed by board_design_settings.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/board.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/board_exchange_footprint.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/board_text_var_adapter.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/component_classes/component_class.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/component_classes/component_class_assignment_rule.cpp
@@ -979,6 +1026,7 @@ set( PCB_COMMON_SRCS
     ${CMAKE_SOURCE_DIR}/pcbnew/pcb_group.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/pcb_marker.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/footprint.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/footprint_courtyard_index.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/footprint_utils.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/footprint_library_adapter.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/fix_board_shape.cpp

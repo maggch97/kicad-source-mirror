@@ -14,14 +14,15 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
 #include <layer_ids.h>
 #include <lseq.h>
 #include <dialog_map_layers.h>
+#include <board.h>
 #include <pcb_base_frame.h>
 #include <pcbnew_settings.h>
 
@@ -41,6 +42,15 @@ wxString DIALOG_MAP_LAYERS::UnwrapRequired( const wxString& aLayerName )
         return aLayerName;
 
     return aLayerName.Left( aLayerName.Length() - 2 );
+}
+
+
+wxString DIALOG_MAP_LAYERS::KiCadLayerName( PCB_LAYER_ID aLayer ) const
+{
+    if( m_board )
+        return m_board->GetLayerName( aLayer );
+
+    return LayerName( aLayer );
 }
 
 
@@ -81,7 +91,7 @@ PCB_LAYER_ID DIALOG_MAP_LAYERS::GetSelectedLayerID()
 
     for( int layer = 0; layer < PCB_LAYER_ID_COUNT; ++layer )
     {
-        if( LayerName( ToLAYER_ID( layer ) ) == selectedKiCadLayerName )
+        if( KiCadLayerName( ToLAYER_ID( layer ) ) == selectedKiCadLayerName )
             return ToLAYER_ID( layer );
     }
 
@@ -122,7 +132,7 @@ void DIALOG_MAP_LAYERS::AddMappings()
             != wxNOT_FOUND )
     {
         wxString selectedLayerName = m_unmatched_layers_list->GetItemText( itemIndex );
-        wxString kiName            = LayerName( selectedKiCadLayerID );
+        wxString kiName = KiCadLayerName( selectedKiCadLayerID );
 
         // add layer pair to the GUI list and also to the map
         long newItemIndex = m_matched_layers_list->InsertItem( 0, selectedLayerName );
@@ -148,7 +158,8 @@ void DIALOG_MAP_LAYERS::AddMappings()
     DeleteListItems( rowsToDelete, m_unmatched_layers_list );
 
     // Auto select the first item to improve ease-of-use
-    m_unmatched_layers_list->SetItemState( 0, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED );
+    if( m_unmatched_layers_list->GetItemCount() > 0 )
+        m_unmatched_layers_list->SetItemState( 0, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED );
 }
 
 
@@ -183,22 +194,21 @@ void DIALOG_MAP_LAYERS::DeleteListItems( const wxArrayInt& aRowsToDelete, wxList
 }
 
 
-void DIALOG_MAP_LAYERS::OnAutoMatchLayersClicked( wxCommandEvent& event )
+void DIALOG_MAP_LAYERS::AutoMatchLayers()
 {
-    // Iterate through each selected layer in the unmatched layers list
     int        itemIndex = -1;
     wxArrayInt rowsToDelete;
 
     while( ( itemIndex = m_unmatched_layers_list->GetNextItem( itemIndex, wxLIST_NEXT_ALL,
                                                                wxLIST_STATE_DONTCARE ) ) != wxNOT_FOUND )
     {
-        wxString     layerName      = m_unmatched_layers_list->GetItemText( itemIndex );
+        wxString     layerName = m_unmatched_layers_list->GetItemText( itemIndex );
         PCB_LAYER_ID autoMatchLayer = GetAutoMatchLayerID( layerName );
 
         if( autoMatchLayer == PCB_LAYER_ID::UNDEFINED_LAYER )
             continue;
 
-        wxString kiName = LayerName( autoMatchLayer );
+        wxString kiName = KiCadLayerName( autoMatchLayer );
 
         // add layer pair to the GUI list and also to the map
         long newItemIndex = m_matched_layers_list->InsertItem( 0, layerName );
@@ -223,9 +233,18 @@ void DIALOG_MAP_LAYERS::OnAutoMatchLayersClicked( wxCommandEvent& event )
 }
 
 
+void DIALOG_MAP_LAYERS::OnAutoMatchLayersClicked( wxCommandEvent& event )
+{
+    AutoMatchLayers();
+}
+
+
 DIALOG_MAP_LAYERS::DIALOG_MAP_LAYERS( wxWindow* aParent, const std::vector<INPUT_LAYER_DESC>& aLayerDesc ) :
         DIALOG_IMPORTED_LAYERS_BASE( aParent )
 {
+    if( PCB_BASE_FRAME* frame = dynamic_cast<PCB_BASE_FRAME*>( aParent ) )
+        m_board = frame->GetBoard();
+
     LSET kiCadLayers;
 
     // Read in the input layers
@@ -284,7 +303,7 @@ DIALOG_MAP_LAYERS::DIALOG_MAP_LAYERS( wxWindow* aParent, const std::vector<INPUT
 
     for( PCB_LAYER_ID layer : kicadLayersSeq )
     {
-        wxString kiName = LayerName( layer );
+        wxString kiName = KiCadLayerName( layer );
 
         wxListItem item;
         item.SetId( row );
@@ -300,6 +319,8 @@ DIALOG_MAP_LAYERS::DIALOG_MAP_LAYERS( wxWindow* aParent, const std::vector<INPUT
         m_cbKeepKiCadLayerNames->SetValue( frame->GetPcbNewSettings()->m_ImportKeepKiCadLayerNames );
 
     SetupStandardButtons();
+    m_sdbSizerOK->SetDefault();
+    m_sdbSizerOK->SetFocus();
 
     Fit();
     finishDialogSettings();
@@ -332,6 +353,10 @@ DIALOG_MAP_LAYERS::RunModal( wxWindow* aParent, const std::vector<INPUT_LAYER_DE
     while( !dataOk )
     {
         dlg.ShowModal();
+
+        // If the user accepted with no mappings, apply suggested AutoMapLayer values.
+        if( dlg.m_matched_layers_map.empty() )
+            dlg.AutoMatchLayers();
 
         if( dlg.GetUnmappedRequiredLayers().size() > 0 )
         {

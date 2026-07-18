@@ -13,15 +13,17 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
 
 #include <wx/dialog.h>
 #include <wx/panel.h>
+#include <wx/aui/auibook.h>
 #include <widgets/wx_grid.h>
+#include <widgets/wx_aui_art_providers.h>
 
 
 class PANEL_NOTEBOOK_BASE : public wxPanel
@@ -33,6 +35,21 @@ public:
                          const wxString& name = wxEmptyString ) :
             wxPanel( parent, id, pos, size, style, name )
     { }
+
+    bool Reparent( wxWindowBase* newParent ) override
+    {
+        // This is called from wxAuiNotebook::AddPage / InsertPageAt
+        // We need WX_AUI_TAB_ART to hide the close button cleanly.
+        if( wxAuiNotebook* notebook = wxDynamicCast( newParent, wxAuiNotebook ) )
+        {
+            if( !dynamic_cast<WX_AUI_TAB_ART*>( notebook->GetArtProvider() ) )
+            {
+                wxFAIL_MSG( "Set wxAuiNotebook WX_AUI_TAB_ART before adding pages" );
+            }
+        }
+
+        return wxPanel::Reparent( newParent );
+    }
 
     void SetProjectTied( bool aYes ) { m_projectTied = aYes; }
     bool GetProjectTied() { return m_projectTied; }

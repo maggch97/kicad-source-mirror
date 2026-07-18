@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/log.h>
@@ -653,6 +653,36 @@ TOPOLOGY::WALK_RESULT TOPOLOGY::walkTuningPath( ROUTER_IFACE* aRouterIface, LINE
                 best.m_length = current.pathLength;
                 best.m_items = current.pathItems;
                 best.m_endPad = pad;
+            }
+
+            // Continue through an in-line pad so tuning spans the whole net.
+            current.visited.insert( pad );
+
+            for( ITEM* item : hits )
+            {
+                if( !item->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T ) )
+                    continue;
+
+                if( item->Net() != net || current.visited.contains( item ) )
+                    continue;
+
+                LINE contLine = m_world->AssembleLine( static_cast<LINKED_ITEM*>( item ), nullptr, false, true );
+
+                VECTOR2I ep = current.endpoint;
+                bool     startNear = ( contLine.CPoint( 0 ) - ep ).SquaredEuclideanNorm()
+                                 <= ( contLine.CLastPoint() - ep ).SquaredEuclideanNorm();
+
+                STATE nextState;
+                nextState.endpoint = startNear ? contLine.CLastPoint() : contLine.CPoint( 0 );
+                nextState.pathItems = current.pathItems;
+                nextState.pathItems.Add( contLine );
+                nextState.pathLength = current.pathLength + contLine.CLine().Length();
+                nextState.visited = current.visited;
+
+                for( LINKED_ITEM* link : contLine.Links() )
+                    nextState.visited.insert( link );
+
+                stateStack.push( std::move( nextState ) );
             }
 
             continue;

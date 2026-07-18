@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "command_jobset_run.h"
@@ -30,6 +30,7 @@
 #include <settings/settings_manager.h>
 
 #include <macros.h>
+#include <wx/filename.h>
 #include <wx/tokenzr.h>
 #include <jobs_runner.h>
 #include <reporter.h>
@@ -68,6 +69,10 @@ int CLI::JOBSET_RUN_COMMAND::doPerform( KIWAY& aKiway )
     wxString  projectFile = m_argInput.ToStdString();
 
     wxString outputKey = From_UTF8( m_argParser.get<std::string>( ARG_OUTPUT ).c_str() );
+
+    wxFileName projectFn( projectFile );
+    projectFn.MakeAbsolute();
+    projectFile = projectFn.GetFullPath();
 
     if( !Pgm().GetSettingsManager().LoadProject( projectFile ) )
     {

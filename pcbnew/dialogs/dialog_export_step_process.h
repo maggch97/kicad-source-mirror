@@ -16,16 +16,14 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "dialog_export_step_process_base.h"
 #include <wx/process.h>
 #include <wx/msgqueue.h>
+
+#include <vector>
 
 class wxProcess;
 class wxThread;
@@ -43,6 +41,13 @@ public:
     DIALOG_EXPORT_STEP_LOG( wxWindow* aParent, const wxString& aStepCmd );
     ~DIALOG_EXPORT_STEP_LOG() override;
 
+    /**
+     * Register files that should be removed once the subprocess is known to have terminated (or
+     * been reparented away). The dialog takes ownership of cleanup timing to avoid races where
+     * a still-running kicad-cli process would read files that the caller already deleted.
+     */
+    void SetTempFilesToCleanup( std::vector<wxString> aPaths );
+
 private:
     void appendMessage( const wxString& aMessage );
     void onProcessTerminate( wxProcessEvent& aEvent );
@@ -50,8 +55,13 @@ private:
     void onClose( wxCloseEvent& event );
     bool TransferDataToWindow() override;
 
+    void cleanupTempFiles();
+
     wxProcess*                    m_process;
     wxThread*                     m_stdioThread;
     wxMessageQueue<STATE_MESSAGE> m_msgQueue;
     wxString                      m_startMessage;
+
+    std::vector<wxString>         m_tempFiles;
+    bool                          m_tempFilesCleaned = false;
 };

@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PROJECT_COMPONENT_CLASS_SETTINGS_H
@@ -87,6 +87,17 @@ public:
 
     /// Returns the DRC rules language for this component class assignment
     wxString GetAssignmentInDRCLanguage() const;
+
+    bool operator==( const COMPONENT_CLASS_ASSIGNMENT_DATA& aOther ) const
+    {
+        return m_componentClass == aOther.m_componentClass && m_conditions == aOther.m_conditions
+               && m_conditionsOperator == aOther.m_conditionsOperator;
+    }
+
+    bool operator!=( const COMPONENT_CLASS_ASSIGNMENT_DATA& aOther ) const
+    {
+        return !operator==( aOther );
+    }
 
 protected:
     /// The name of the component class for this assignment rule

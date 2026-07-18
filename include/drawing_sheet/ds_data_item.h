@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef  DS_DATA_ITEM_H
@@ -304,13 +300,11 @@ public:
     virtual int GetPenSizeIU() override;
 
     /**
-     * Try to build text which is an increment of m_TextBase
-     * has meaning only if m_TextBase is a basic text (one char)
-     * If the basic char is a digit, build a number
-     * If the basic char is a letter, use the letter with ASCII code
-     * aIncr + (basic char ascc code)
+     * Build an incremented copy of m_TextBase into m_FullText.
+     * The rightmost letter or number is stepped by aIncr, carrying within its
+     * own type (a letter rolls z -> aa, a number counts up). If nothing can be
+     * stepped, m_FullText is left equal to m_TextBase.
      * @param aIncr = the increment value
-     * return the incremented label in m_FullText
      */
     void IncrementLabel( int aIncr );
 

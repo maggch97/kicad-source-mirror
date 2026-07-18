@@ -14,11 +14,7 @@
 * GNU General Public License for more details.
 *
 * You should have received a copy of the GNU General Public License
-* along with this program; if not, you may find one here:
-* http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
-* or you may search the http://www.gnu.org website for the version 2 license,
-* or you may write to the Free Software Foundation, Inc.,
-* 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include <json_common.h>
@@ -161,6 +157,59 @@ SYMBOL_EDITOR_SETTINGS::SYMBOL_EDITOR_SETTINGS() :
                 { "images", true },
                 { "otherItems", true }
             } ) );
+
+    m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "open_tabs",
+            [&]() -> nlohmann::json
+            {
+                nlohmann::json ret = nlohmann::json::array();
+
+                for( const OPEN_TAB& tab : m_OpenTabs )
+                {
+                    nlohmann::json entry;
+
+                    entry["lib"]        = tab.lib.ToUTF8();
+                    entry["name"]       = tab.name.ToUTF8();
+                    entry["unit"]       = tab.unit;
+                    entry["body_style"] = tab.bodyStyle;
+                    entry["preview"] = tab.preview;
+
+                    ret.push_back( entry );
+                }
+
+                return ret;
+            },
+            [&]( const nlohmann::json& aVal )
+            {
+                m_OpenTabs.clear();
+
+                if( !aVal.is_array() )
+                    return;
+
+                for( const nlohmann::json& entry : aVal )
+                {
+                    if( !entry.is_object() || !entry.contains( "lib" ) || !entry.contains( "name" ) )
+                        continue;
+
+                    OPEN_TAB tab;
+
+                    tab.lib  = wxString::FromUTF8( entry["lib"].get<std::string>() );
+                    tab.name = wxString::FromUTF8( entry["name"].get<std::string>() );
+
+                    if( entry.contains( "unit" ) )
+                        tab.unit = entry["unit"].get<int>();
+
+                    if( entry.contains( "body_style" ) )
+                        tab.bodyStyle = entry["body_style"].get<int>();
+
+                    if( entry.contains( "preview" ) )
+                        tab.preview = entry["preview"].get<bool>();
+
+                    m_OpenTabs.push_back( tab );
+                }
+            },
+            nlohmann::json::array() ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "active_tab", &m_ActiveTabKey, wxEmptyString ) );
 
     registerMigration( 0, 1,
                        [&]() -> bool

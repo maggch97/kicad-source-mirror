@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <advanced_config.h>
@@ -288,7 +284,6 @@ static struct PCB_TABLECELL_DESC
 
         propMgr.Mask( TYPE_HASH( PCB_TABLECELL ), TYPE_HASH( BOARD_CONNECTED_ITEM ), _HKI( "Net" ) );
 
-        propMgr.Mask( TYPE_HASH( PCB_TABLECELL ), TYPE_HASH( PCB_TEXTBOX ), _HKI( "Knockout" ) );
         propMgr.Mask( TYPE_HASH( PCB_TABLECELL ), TYPE_HASH( PCB_TEXTBOX ), _HKI( "Border" ) );
         propMgr.Mask( TYPE_HASH( PCB_TABLECELL ), TYPE_HASH( PCB_TEXTBOX ), _HKI( "Border Style" ) );
         propMgr.Mask( TYPE_HASH( PCB_TABLECELL ), TYPE_HASH( PCB_TEXTBOX ), _HKI( "Border Width" ) );

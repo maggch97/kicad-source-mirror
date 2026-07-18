@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -258,6 +254,12 @@ static const std::vector<std::tuple<std::string, std::map<wxString, wxString>>> 
     // Correct reading errors
     { "|A|B=C\0", { { "B", "C" } } },
     { "|A=B|C\0", { { "A", "B" } } },
+    // DESIGNATOR/NAME/TEXT overbar conversion is exempt for RECORD=4 (LABEL) and applied for
+    // any other record type, independent of whether RECORD precedes or trails the text key.
+    { "|RECORD=4|TEXT=\\A\\B\0", { { "RECORD", "4" }, { "TEXT", "\\A\\B" } } },
+    { "|TEXT=\\A\\B|RECORD=4\0", { { "RECORD", "4" }, { "TEXT", "\\A\\B" } } },
+    { "|RECORD=25|TEXT=\\A\\B\0", { { "RECORD", "25" }, { "TEXT", "~{A}B" } } },
+    { "|TEXT=\\A\\B|RECORD=25\0", { { "RECORD", "25" }, { "TEXT", "~{A}B" } } },
 };
 
 /**

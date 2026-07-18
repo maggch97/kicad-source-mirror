@@ -13,14 +13,15 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <boost/test/unit_test.hpp>
 #include <wx/app.h>
 
 #include <mock_pgm_base.h>
+#include <pcbnew_settings.h>
 #include <pgm_base.h>
 #include <settings/settings_manager.h>
 #include <qa_utils/wx_utils/wx_assert.h>
@@ -47,6 +48,10 @@ bool init_unit_test()
 
         Pgm().InitPgm( true, true );
         Pgm().GetSettingsManager().LoadProject( "" );
+
+        // Board commits read PCBNEW_SETTINGS from the program settings manager, which the
+        // pcbnew kiface registers in a real session
+        Pgm().GetSettingsManager().RegisterSettings( new PCBNEW_SETTINGS, false );
     }
 
     return ok;

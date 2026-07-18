@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "widgets/listbox_tricks.h"
@@ -214,14 +210,14 @@ void LISTBOX_TRICKS::OnListBoxRDown( wxMouseEvent& aEvent )
     menu.Bind( wxEVT_COMMAND_MENU_SELECTED,
                [&]( wxCommandEvent& aCmd )
                {
-                   switch( aEvent.GetId() )
+                   switch( aCmd.GetId() )
                    {
                    case ID_COPY:      listBoxCopy();              break;
                    case ID_PASTE:     listBoxPaste();             break;
                    case ID_CUT:       listBoxCut();               break;
                    case ID_DELETE:    listBoxDeleteSelected();    break;
                    case ID_DUPLICATE: listBoxDuplicateSelected(); break;
-                   default:           aEvent.Skip();
+                   default: aCmd.Skip();
                    }
                } );
 

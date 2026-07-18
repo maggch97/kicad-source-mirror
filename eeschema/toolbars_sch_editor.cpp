@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <advanced_config.h>
@@ -132,8 +128,9 @@ std::optional<TOOLBAR_CONFIGURATION> SCH_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
               .AppendAction( SCH_ACTIONS::syncAllSheetsPins );
 
         config.AppendSeparator()
-              .AppendAction( SCH_ACTIONS::placeSchematicText )
-              .AppendAction( SCH_ACTIONS::drawTextBox )
+              .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Text objects" ) )
+                            .AddAction( SCH_ACTIONS::placeSchematicText )
+                            .AddAction( SCH_ACTIONS::drawTextBox ) )
               .AppendAction( SCH_ACTIONS::drawTable )
               .AppendAction( SCH_ACTIONS::drawRectangle )
               .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Circle" ) )
@@ -259,12 +256,8 @@ void SCH_EDIT_FRAME::configureToolbars()
             [this]( ACTION_TOOLBAR* aToolbar )
             {
 
-#ifdef KICAD_IPC_API
                 bool haveApiPlugins = Pgm().GetCommonSettings()->m_Api.enable_server
                                         && !Pgm().GetPluginManager().GetActionsForScope( PluginActionScope() ).empty();
-#else
-                bool haveApiPlugins = false;
-#endif
 
                 if( haveApiPlugins )
                 {
@@ -380,10 +373,13 @@ void SCH_EDIT_FRAME::onVariantSelected( wxCommandEvent& aEvent )
 }
 
 
-bool SCH_EDIT_FRAME::ShowAddVariantDialog()
+bool SCH_EDIT_FRAME::ShowAddVariantDialog( wxWindow* aParent )
 {
+    if( !aParent )
+        aParent = this;
+
     // Create a dialog with both name and description fields
-    wxDialog dlg( this, wxID_ANY, _( "New Design Variant" ), wxDefaultPosition, wxDefaultSize,
+    wxDialog dlg( aParent, wxID_ANY, _( "New Design Variant" ), wxDefaultPosition, wxDefaultSize,
                   wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER );
 
     wxBoxSizer* mainSizer = new wxBoxSizer( wxVERTICAL );

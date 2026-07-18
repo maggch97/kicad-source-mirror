@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -120,6 +116,14 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
 
     const bool curved_ratsnest = cfg->m_Display.m_DisplayRatsnestLinesCurved;
 
+    // Adaptive tessellation filter for the curved ratsnest. The ratsnest is only a visual
+    // hint, so there is no need to tessellate the Bezier to the default 10 nm precision: a
+    // polyline whose deviation from the true curve stays below line_width/2 is fully hidden
+    // by the line's own thickness. We use line_width/4 for a 2x safety margin. The filter is
+    // in world units and scales with zoom (line width is already world-scaled above), so it
+    // produces far fewer segments without any visible faceting.
+    const double curveFilter = curved_ratsnest ? ( gal->GetLineWidth() / 4.0 ) : 0.0;
+
     // Draw the "dynamic" ratsnest (i.e. for objects that may be currently being moved)
     for( const RN_DYNAMIC_LINE& l : m_data->GetLocalRatsnest() )
     {
@@ -164,7 +168,7 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
                 int dy = l.b.y - l.a.y;
                 const VECTOR2I center = VECTOR2I( l.a.x + 0.5 * dx - 0.1 * dy,
                                                   l.a.y + 0.5 * dy + 0.1 * dx );
-                gal->DrawCurve( l.a, center, center, l.b );
+                gal->DrawCurve( l.a, center, center, l.b, curveFilter );
             }
             else
             {
@@ -274,7 +278,7 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
                         int dy = target.y - source.y;
                         const VECTOR2I center = VECTOR2I( source.x + 0.5 * dx - 0.1 * dy,
                                                           source.y + 0.5 * dy + 0.1 * dx );
-                        gal->DrawCurve( source, center, center, target );
+                        gal->DrawCurve( source, center, center, target, curveFilter );
                     }
                     else
                     {

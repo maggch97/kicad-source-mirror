@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 syntax = "proto3";
@@ -256,12 +256,56 @@ message NetClassForNetsResponse
 }
 
 /*
+ * Netlist import
+ */
+
+// How schematic components are matched to board footprints during netlist import.
+enum NetlistMatchMode
+{
+  NMM_UNKNOWN = 0;
+  NMM_UUID = 1;      // Match by unique ID.
+  NMM_REFERENCE = 2; // Match by reference designator.
+}
+
+// Imports a netlist file exported from the schematic and updates the board.
+// Returns ImportNetlistResponse.
+message ImportNetlist
+{
+  kiapi.common.types.DocumentSpecifier board = 1;
+
+  // Path to the netlist file.
+  string netlist_path = 2;
+
+  // If true, report planned changes without modifying the board.
+  bool dry_run = 3;
+
+  NetlistMatchMode match_mode = 4;
+
+  bool delete_extra_footprints = 5;
+  bool update_footprints = 6;
+  bool transfer_groups = 7;
+  bool override_locks = 8;
+}
+
+message ImportNetlistResponse
+{
+  uint32 error_count = 1;
+  uint32 warning_count = 2;
+  uint32 new_footprint_count = 3;
+
+  // Human-readable report of changes and any warnings or errors.
+  string report = 4;
+}
+
+/*
  * Blocking operations
  */
 
 // Refills some or all zones on the board.
-// This is a blocking operation; it will return Empty immediately, but KiCad will return
-// ApiStatusCode.AS_BUSY to all future API requests until the zone fill has completed.
+// When zones is empty and a board editor is running, all zones are refilled in the background:
+// Empty is returned immediately and KiCad returns ApiStatusCode.AS_BUSY to all future API
+// requests until the fill completes.  When specific zones are given, or in headless sessions,
+// the fill runs synchronously and the response is not sent until it has completed.
 message RefillZones
 {
   kiapi.common.types.DocumentSpecifier board = 1;

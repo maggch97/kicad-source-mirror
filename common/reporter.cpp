@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <mutex>
@@ -99,6 +95,65 @@ REPORTER& WX_STRING_REPORTER::Report( const wxString& aText, SEVERITY aSeverity 
 
     m_string << aText << wxS( "\n" );
     return *this;
+}
+
+
+REPORTER& SYNC_REPORTER::Report( const wxString& aText, SEVERITY aSeverity )
+{
+    std::lock_guard lock( m_mutex );
+
+    m_reporter.Report( aText, aSeverity );
+    return *this;
+}
+
+
+REPORTER& SYNC_REPORTER::ReportTail( const wxString& aText, SEVERITY aSeverity )
+{
+    std::lock_guard lock( m_mutex );
+
+    m_reporter.ReportTail( aText, aSeverity );
+    return *this;
+}
+
+
+REPORTER& SYNC_REPORTER::ReportHead( const wxString& aText, SEVERITY aSeverity )
+{
+    std::lock_guard lock( m_mutex );
+
+    m_reporter.ReportHead( aText, aSeverity );
+    return *this;
+}
+
+
+void SYNC_REPORTER::Clear()
+{
+    std::lock_guard lock( m_mutex );
+
+    m_reporter.Clear();
+}
+
+
+bool SYNC_REPORTER::HasMessage() const
+{
+    std::lock_guard lock( m_mutex );
+
+    return m_reporter.HasMessage();
+}
+
+
+bool SYNC_REPORTER::HasMessageOfSeverity( int aSeverityMask ) const
+{
+    std::lock_guard lock( m_mutex );
+
+    return m_reporter.HasMessageOfSeverity( aSeverityMask );
+}
+
+
+EDA_UNITS SYNC_REPORTER::GetUnits() const
+{
+    std::lock_guard lock( m_mutex );
+
+    return m_reporter.GetUnits();
 }
 
 
@@ -203,16 +258,18 @@ REPORTER& WXLOG_REPORTER::Report( const wxString& aMsg, SEVERITY aSeverity )
 {
     REPORTER::Report( aMsg, aSeverity );
 
+    // aMsg is finished content; pass it as a "%s" argument so a stray '%' in
+    // reported data is not read as a format specifier (bogus varargs -> assert).
     switch( aSeverity )
     {
-    case RPT_SEVERITY_ERROR:     wxLogError( aMsg );                  break;
-    case RPT_SEVERITY_WARNING:   wxLogWarning( aMsg );                break;
-    case RPT_SEVERITY_UNDEFINED: wxLogMessage( aMsg );                break;
-    case RPT_SEVERITY_INFO:      wxLogInfo( aMsg );                   break;
-    case RPT_SEVERITY_ACTION:    wxLogInfo( aMsg );                   break;
-    case RPT_SEVERITY_DEBUG:     wxLogTrace( traceReporter, aMsg );   break;
-    case RPT_SEVERITY_EXCLUSION:                                      break;
-    case RPT_SEVERITY_IGNORE:                                         break;
+    case RPT_SEVERITY_ERROR:     wxLogError( wxS( "%s" ), aMsg );                break;
+    case RPT_SEVERITY_WARNING:   wxLogWarning( wxS( "%s" ), aMsg );              break;
+    case RPT_SEVERITY_UNDEFINED: wxLogMessage( wxS( "%s" ), aMsg );             break;
+    case RPT_SEVERITY_INFO:      wxLogInfo( wxS( "%s" ), aMsg );                 break;
+    case RPT_SEVERITY_ACTION:    wxLogInfo( wxS( "%s" ), aMsg );                 break;
+    case RPT_SEVERITY_DEBUG:     wxLogTrace( traceReporter, wxS( "%s" ), aMsg ); break;
+    case RPT_SEVERITY_EXCLUSION:                                                 break;
+    case RPT_SEVERITY_IGNORE:                                                    break;
     }
 
     return *this;
@@ -311,7 +368,11 @@ REPORTER& STATUSBAR_REPORTER::Report( const wxString& aText, SEVERITY aSeverity 
 {
     REPORTER::Report( aText, aSeverity );
 
-    if( m_statusBar )
+    // KiCad status bars give most fields a fixed width, so ellipsize to fit rather than let a
+    // long message (e.g. an archive entry path) be clipped mid-character.
+    if( KISTATUSBAR* kiStatusBar = dynamic_cast<KISTATUSBAR*>( m_statusBar ) )
+        kiStatusBar->SetEllipsedTextField( aText, m_position );
+    else if( m_statusBar )
         m_statusBar->SetStatusText( aText, m_position );
 
     return *this;

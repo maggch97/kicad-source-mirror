@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -171,18 +167,15 @@ void TRACK_BALL::Interpolate( float t )
         break;
     }
 
-    const float t0 = 1.0f - t;
-    double      quat[4];
-    quat[0] = m_quat_t0[0] * t0 + m_quat_t1[0] * t;
-    quat[1] = m_quat_t0[1] * t0 + m_quat_t1[1] * t;
-    quat[2] = m_quat_t0[2] * t0 + m_quat_t1[2] * t;
-    quat[3] = m_quat_t0[3] * t0 + m_quat_t1[3] * t;
+    glm::quat q0( (float) m_quat_t0[3], (float) m_quat_t0[0], (float) m_quat_t0[1], (float) m_quat_t0[2] );
+    glm::quat q1( (float) m_quat_t1[3], (float) m_quat_t1[0], (float) m_quat_t1[1], (float) m_quat_t1[2] );
 
-    float rotationMatrix[4][4];
+    if( glm::dot( q0, q1 ) < 0.0f )
+        q1 = -q1;
 
-    build_rotmatrix( rotationMatrix, quat );
+    const glm::quat q = glm::normalize( glm::slerp( q0, q1, t ) );
 
-    m_rotationMatrix = glm::make_mat4( &rotationMatrix[0][0] );
+    m_rotationMatrix = glm::mat4_cast( glm::conjugate( q ) );
 
     CAMERA::Interpolate( t );
 }

@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef CLASS_NETCLASS_H
@@ -57,6 +53,19 @@ public:
     NETCLASS& operator=( const NETCLASS& ) = delete;
 
     bool operator==( const NETCLASS& other ) const;
+
+    /**
+     * Compare every persisted field (name, priority, sized fields, colors,
+     * line style, tuning profile) to detect in-place edits that the shallow
+     * operator== misses.  Used by NET_SETTINGS::operator== to spot user edits
+     * to the default netclass that mutate the existing shared_ptr rather than
+     * swapping it.
+     *
+     * Description is intentionally NOT compared because the JSON serializer
+     * does not persist it -- including it would mark every load-round-tripped
+     * instance unequal.
+     */
+    bool EqualsByPersistedFields( const NETCLASS& aOther ) const;
 
     wxString GetClass() const
     {

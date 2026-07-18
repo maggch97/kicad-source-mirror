@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <boost/test/unit_test.hpp>
@@ -198,6 +194,42 @@ BOOST_AUTO_TEST_CASE( RepairDuplicateItemUuidsKeepsEarlierTraversalWinner )
     BOOST_CHECK_EQUAL( board->ResolveItem( liveShape->m_Uuid, true ), liveShape );
 
     delete board;
+}
+
+
+BOOST_AUTO_TEST_CASE( RemovingResolvedChildEvictsCacheOnFootprintHolder )
+{
+    // Regression for the RC_TREE_MODEL::GetValue use-after-free: ResolveItem() caches a
+    // footprint child on demand, but the cache eviction in FOOTPRINT::Remove is gated on the
+    // parent footprint being indexed.  A footprint-holder board never indexes anything (
+    // CacheItemById early-returns), yet ResolveItem still caches children, so removing and
+    // freeing a resolved child leaves a dangling id in the cache.  A later resolve then hands
+    // back the freed pointer.
+    BOARD* board = new BOARD();
+    board->SetBoardUse( BOARD_USE::FPHOLDER );
+
+    auto footprint = std::make_unique<FOOTPRINT>( board );
+    auto pad = new PAD( footprint.get() );
+    pad->SetNumber( "1" );
+
+    const KIID padId = pad->m_Uuid;
+    footprint->Add( pad );
+
+    FOOTPRINT* liveFootprint = footprint.get();
+    board->Add( footprint.release() );
+
+    // Resolve the pad the way a results-tree row does.  On the buggy code this caches the pad
+    // even though the holder board never indexed its parent footprint.
+    BOOST_REQUIRE_EQUAL( board->ResolveItem( padId, true ), pad );
+
+    // Remove and destroy the pad through the footprint, as a footprint edit does.
+    liveFootprint->Remove( pad );
+    const bool staleEntrySurvived = board->GetItemByIdCache().contains( padId );
+
+    delete pad;
+    delete board;
+
+    BOOST_CHECK( !staleEntrySurvived );
 }
 
 

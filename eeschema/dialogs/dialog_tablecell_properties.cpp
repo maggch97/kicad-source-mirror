@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <gr_text.h>
@@ -53,6 +49,11 @@ DIALOG_TABLECELL_PROPERTIES::DIALOG_TABLECELL_PROPERTIES( SCH_EDIT_FRAME* aFrame
     wxASSERT( m_cells.size() > 0 && m_cells[0] );
 
     m_cellText->SetEOLMode( wxSTC_EOL_LF );
+
+    // Wrapping is display-only and does not insert newlines into the stored text.
+    m_cellText->SetWrapMode( wxSTC_WRAP_WORD );
+    m_cellText->SetWrapVisualFlags( wxSTC_WRAPVISUALFLAG_END );
+    m_cellText->SetWrapIndentMode( wxSTC_WRAPINDENT_INDENT );
 
 #ifdef _WIN32
     // Without this setting, on Windows, some esoteric unicode chars create display issue

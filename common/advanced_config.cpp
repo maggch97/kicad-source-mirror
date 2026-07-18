@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <advanced_config.h>
@@ -65,6 +61,7 @@ static const wxChar IncrementalConnectivity[] = wxT( "IncrementalConnectivity" )
 static const wxChar Use3DConnexionDriver[] = wxT( "3DConnexionDriver" );
 static const wxChar ExtraFillMargin[] = wxT( "ExtraFillMargin" );
 static const wxChar EnableCreepageSlot[] = wxT( "EnableCreepageSlot" );
+static const wxChar RealtimeCreepage[] = wxT( "RealtimeCreepage" );
 static const wxChar DRCEpsilon[] = wxT( "DRCEpsilon" );
 static const wxChar DRCSliverWidthTolerance[] = wxT( "DRCSliverWidthTolerance" );
 static const wxChar DRCSliverMinimumLength[] = wxT( "DRCSliverMinimumLength" );
@@ -116,6 +113,7 @@ static const wxChar OcePluginAngularDeflection[] = wxT( "OcePluginAngularDeflect
 static const wxChar TriangulateSimplificationLevel[] = wxT( "TriangulateSimplificationLevel" );
 static const wxChar TriangulateMinimumArea[] = wxT( "TriangulateMinimumArea" );
 static const wxChar EnableCacheFriendlyFracture[] = wxT( "EnableCacheFriendlyFracture" );
+static const wxChar TriangulateDelaunayRefine[] = wxT( "TriangulateDelaunayRefine" );
 static const wxChar EnableAPILogging[] = wxT( "EnableAPILogging" );
 static const wxChar MaxFileSystemWatchers[] = wxT( "MaxFileSystemWatchers" );
 static const wxChar MinorSchematicGraphSize[] = wxT( "MinorSchematicGraphSize" );
@@ -150,6 +148,13 @@ static const wxChar PadsSchTextHeightScale[] = wxT( "PadsSchTextHeightScale" );
 static const wxChar PadsSchTextWidthScale[] = wxT( "PadsSchTextWidthScale" );
 static const wxChar PadsTextAnchorOffsetNm[] = wxT( "PadsTextAnchorOffsetNm" );
 static const wxChar PcbImportMinObjectSizeNm[] = wxT( "PcbImportMinObjectSizeNm" );
+static const wxChar DiffSkewOverlayTrackInflation[] = wxT( "DiffSkewOverlayTrackInflation" );
+static const wxChar DiffSkewTrackGapInflation[] = wxT( "DiffSkewTrackGapInflation" );
+static const wxChar DiffSkewCosThetaParallelTestValue[] = wxT( "DiffSkewCosThetaParallelTestValue" );
+static const wxChar DiffSkewColourInterpolationLogStrength[] = wxT( "DiffSkewColourInterpolationLogStrength" );
+static const wxChar DiffSkewTargetDiffSegmentSize[] = wxT( "DiffSkewTargetDiffSegmentSize" );
+static const wxChar EagleImportFieldsCanAutoplace[] = wxT( "EagleImportFieldsCanAutoplace" );
+
 
 } // namespace AC_KEYS
 
@@ -242,6 +247,7 @@ ADVANCED_CFG::ADVANCED_CFG()
 
     m_ExtraClearance = 0.0005;
     m_EnableCreepageSlot = false;
+    m_RealtimeCreepage = false;
     m_DRCEpsilon = 0.0005; // 0.5um is small enough not to materially violate
                            // any constraints.
     m_SliverWidthTolerance = 0.08;
@@ -301,6 +307,7 @@ ADVANCED_CFG::ADVANCED_CFG()
     m_TriangulateMinimumArea = 1000;
 
     m_EnableCacheFriendlyFracture = true;
+    m_TriangulateDelaunayRefine = true;
 
     m_MaxFilesystemWatchers = 16384;
 
@@ -347,6 +354,14 @@ ADVANCED_CFG::ADVANCED_CFG()
     m_PadsSchTextWidthScale  = 0.46;
     m_PadsTextAnchorOffsetNm = 350000;
     m_PcbImportMinObjectSizeNm = 1000;
+
+    m_DiffSkewOverlayTrackInflation = 1.1;
+    m_DiffSkewTrackGapInflation = 1.2;
+    m_DiffSkewCosThetaParallelTestValue = 0.9999;
+    m_DiffSkewColourInterpolationLogStrength = 9.0;
+    m_DiffSkewTargetDiffSegmentSize = 5e4;
+
+    m_EagleImportFieldsCanAutoplace = true;
 
     loadFromConfigFile();
 }
@@ -409,6 +424,9 @@ void ADVANCED_CFG::loadSettings( wxConfigBase& aCfg )
 
     m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::EnableCreepageSlot, &m_EnableCreepageSlot,
                                                            m_EnableCreepageSlot ) );
+
+    m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::RealtimeCreepage, &m_RealtimeCreepage,
+                                                           m_RealtimeCreepage ) );
 
     m_entries.push_back(
             std::make_unique<PARAM_CFG_DOUBLE>( true, AC_KEYS::DRCEpsilon, &m_DRCEpsilon, m_DRCEpsilon, 0.0, 1.0 ) );
@@ -576,6 +594,10 @@ void ADVANCED_CFG::loadSettings( wxConfigBase& aCfg )
                                                            &m_EnableCacheFriendlyFracture,
                                                            m_EnableCacheFriendlyFracture ) );
 
+    m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::TriangulateDelaunayRefine,
+                                                           &m_TriangulateDelaunayRefine,
+                                                           m_TriangulateDelaunayRefine ) );
+
     m_entries.push_back( std::make_unique<PARAM_CFG_INT>(
             true, AC_KEYS::MaxFileSystemWatchers, &m_MaxFilesystemWatchers, m_MaxFilesystemWatchers, 0, 2147483647 ) );
 
@@ -688,7 +710,30 @@ void ADVANCED_CFG::loadSettings( wxConfigBase& aCfg )
 
     m_entries.push_back( std::make_unique<PARAM_CFG_WXSTRING>( true, AC_KEYS::RouterTestCaseDirectory, &m_RouterTestCaseDirectory, wxS( "" ) ) );
 
-    
+    m_entries.push_back( std::make_unique<PARAM_CFG_DOUBLE>( true, AC_KEYS::DiffSkewOverlayTrackInflation,
+                                                             &m_DiffSkewOverlayTrackInflation,
+                                                             m_DiffSkewOverlayTrackInflation, 0.0, 10.0 ) );
+
+    m_entries.push_back( std::make_unique<PARAM_CFG_DOUBLE>( true, AC_KEYS::DiffSkewTrackGapInflation,
+                                                             &m_DiffSkewTrackGapInflation, m_DiffSkewTrackGapInflation,
+                                                             0.0, 10.0 ) );
+
+    m_entries.push_back( std::make_unique<PARAM_CFG_DOUBLE>( true, AC_KEYS::DiffSkewCosThetaParallelTestValue,
+                                                             &m_DiffSkewCosThetaParallelTestValue,
+                                                             m_DiffSkewCosThetaParallelTestValue, 0.0, 1.0 ) );
+
+    m_entries.push_back( std::make_unique<PARAM_CFG_DOUBLE>( true, AC_KEYS::DiffSkewColourInterpolationLogStrength,
+                                                             &m_DiffSkewColourInterpolationLogStrength,
+                                                             m_DiffSkewColourInterpolationLogStrength, 0.1, 20.0 ) );
+
+    m_entries.push_back( std::make_unique<PARAM_CFG_DOUBLE>( true, AC_KEYS::DiffSkewTargetDiffSegmentSize,
+                                                             &m_DiffSkewTargetDiffSegmentSize,
+                                                             m_DiffSkewTargetDiffSegmentSize, 1.0, 1e10 ) );
+
+    m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::EagleImportFieldsCanAutoplace,
+                                                           &m_EagleImportFieldsCanAutoplace, m_EagleImportFieldsCanAutoplace ) );
+
+
     // Special case for trace mask setting...we just grab them and set them immediately
     // Because we even use wxLogTrace inside of advanced config
     m_entries.push_back( std::make_unique<PARAM_CFG_WXSTRING>( true, AC_KEYS::TraceMasks, &m_traceMasks, wxS( "" ) ) );

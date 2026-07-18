@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pcb_generator.h>
@@ -77,6 +73,7 @@
 #include <router/pns_solid.h>
 #include <router/pns_topology.h>
 #include <router/router_preview_item.h>
+#include <router/pns_helpers.h>
 
 #include <dialogs/dialog_tuning_pattern_properties.h>
 
@@ -468,49 +465,6 @@ PCB_TUNING_PATTERN::PCB_TUNING_PATTERN( BOARD_ITEM* aParent, PCB_LAYER_ID aLayer
 }
 
 
-static VECTOR2I snapToNearestTrack( const VECTOR2I& aP, BOARD* aBoard, NETINFO_ITEM* aNet,
-                                    PCB_TRACK** aNearestTrack )
-{
-    SEG::ecoord   minDist_sq = VECTOR2I::ECOORD_MAX;
-    VECTOR2I      closestPt = aP;
-
-    for( PCB_TRACK *track : aBoard->Tracks() )
-    {
-        if( aNet && track->GetNet() != aNet )
-            continue;
-
-        VECTOR2I nearest;
-
-        if( track->Type() == PCB_ARC_T )
-        {
-            PCB_ARC*  pcbArc = static_cast<PCB_ARC*>( track );
-            SHAPE_ARC arc( pcbArc->GetStart(), pcbArc->GetMid(), pcbArc->GetEnd(),
-                           pcbArc->GetWidth() );
-
-            nearest = arc.NearestPoint( aP );
-        }
-        else
-        {
-            SEG seg( track->GetStart(), track->GetEnd() );
-            nearest = seg.NearestPoint( aP );
-        }
-
-        SEG::ecoord dist_sq = ( nearest - aP ).SquaredEuclideanNorm();
-
-        if( dist_sq < minDist_sq )
-        {
-            minDist_sq = dist_sq;
-            closestPt = nearest;
-
-            if( aNearestTrack )
-                *aNearestTrack = track;
-        }
-    }
-
-    return closestPt;
-}
-
-
 bool PCB_TUNING_PATTERN::baselineValid()
 {
     if( m_tuningMode == DIFF_PAIR )
@@ -725,10 +679,22 @@ void PCB_TUNING_PATTERN::EditStart( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_
     }
 
     PCB_TRACK* track = nullptr;
-    m_origin = snapToNearestTrack( m_origin, aBoard, nullptr, &track );
+    m_origin = PNS::HELPERS::SnapToNearestTrack( m_origin, aBoard, nullptr, &track );
     wxCHECK( track, /* void */ );
 
     m_settings.m_netClass = track->GetEffectiveNetClass();
+
+    auto getTimeDomainTuningEnabled = [this, aBoard]()
+    {
+        const std::shared_ptr<TUNING_PROFILES> tuningParams =
+                aBoard->GetProject()->GetProjectFile().TuningProfileParameters();
+        const TUNING_PROFILE& profile = tuningParams->GetTuningProfile( m_settings.m_netClass->GetTuningProfile() );
+
+        if( profile.m_EnableTimeDomainTuning )
+            return true;
+
+        return false;
+    };
 
     if( !m_settings.m_overrideCustomRules )
     {
@@ -759,7 +725,7 @@ void PCB_TUNING_PATTERN::EditStart( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_
             }
             else if( track->GetEffectiveNetClass()->HasTuningProfile() )
             {
-                m_settings.m_isTimeDomain = true;
+                m_settings.m_isTimeDomain = getTimeDomainTuningEnabled();
                 aTool->GetManager()->PostEvent( EVENTS::SelectedItemsModified );
             }
         }
@@ -770,7 +736,7 @@ void PCB_TUNING_PATTERN::EditStart( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_
             NETINFO_ITEM* coupledNet = aBoard->DpCoupledNet( net );
 
             if( coupledNet )
-                snapToNearestTrack( m_origin, aBoard, coupledNet, &coupledTrack );
+                PNS::HELPERS::SnapToNearestTrack( m_origin, aBoard, coupledNet, &coupledTrack );
 
             pnsCoupledItem.SetParent( coupledTrack );
             pnsCoupledItem.SetNet( coupledNet );
@@ -796,7 +762,7 @@ void PCB_TUNING_PATTERN::EditStart( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_
                 }
                 else if( track->GetEffectiveNetClass()->HasTuningProfile() )
                 {
-                    m_settings.m_isTimeDomain = true;
+                    m_settings.m_isTimeDomain = getTimeDomainTuningEnabled();
                     aTool->GetManager()->PostEvent( EVENTS::SelectedItemsModified );
                 }
             }
@@ -825,131 +791,14 @@ void PCB_TUNING_PATTERN::EditStart( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_
 }
 
 
-static PNS::LINKED_ITEM* pickSegment( PNS::ROUTER* aRouter, const VECTOR2I& aWhere, int aLayer,
-                                      VECTOR2I&               aPointOut,
-                                      const SHAPE_LINE_CHAIN& aBaseline = SHAPE_LINE_CHAIN() )
-{
-    int  maxSlopRadius = aRouter->Sizes().Clearance() + aRouter->Sizes().TrackWidth() / 2;
-
-    static const int  candidateCount = 2;
-    PNS::LINKED_ITEM* prioritized[candidateCount];
-    SEG::ecoord       dist[candidateCount];
-    SEG::ecoord       distBaseline[candidateCount];
-    VECTOR2I          point[candidateCount];
-
-    for( int i = 0; i < candidateCount; i++ )
-    {
-        prioritized[i] = nullptr;
-        dist[i] = VECTOR2I::ECOORD_MAX;
-        distBaseline[i] = VECTOR2I::ECOORD_MAX;
-    }
-
-    for( int slopRadius : { 0, maxSlopRadius } )
-    {
-        PNS::ITEM_SET candidates = aRouter->QueryHoverItems( aWhere, slopRadius );
-
-        for( PNS::ITEM* item : candidates.Items() )
-        {
-            if( !item->OfKind( PNS::ITEM::SEGMENT_T | PNS::ITEM::ARC_T ) )
-                continue;
-
-            if( !item->IsRoutable() )
-                continue;
-
-            if( !item->Layers().Overlaps( aLayer ) )
-                continue;
-
-            PNS::LINKED_ITEM* linked = static_cast<PNS::LINKED_ITEM*>( item );
-
-            if( item->Kind() & PNS::ITEM::ARC_T )
-            {
-                PNS::ARC* pnsArc = static_cast<PNS::ARC*>( item );
-
-                VECTOR2I    nearest = pnsArc->Arc().NearestPoint( aWhere );
-                SEG::ecoord d0 = ( nearest - aWhere ).SquaredEuclideanNorm();
-
-                if( d0 > dist[1] )
-                    continue;
-
-                if( aBaseline.PointCount() > 0 )
-                {
-                    SEG::ecoord dcBaseline;
-                    VECTOR2I    target = pnsArc->Arc().GetArcMid();
-
-                    if( aBaseline.SegmentCount() > 0 )
-                        dcBaseline = aBaseline.SquaredDistance( target );
-                    else
-                        dcBaseline = ( aBaseline.CPoint( 0 ) - target ).SquaredEuclideanNorm();
-
-                    if( dcBaseline > distBaseline[1] )
-                        continue;
-
-                    distBaseline[1] = dcBaseline;
-                }
-
-                prioritized[1] = linked;
-                dist[1] = d0;
-                point[1] = nearest;
-            }
-            else if( item->Kind() & PNS::ITEM::SEGMENT_T )
-            {
-                PNS::SEGMENT* segm = static_cast<PNS::SEGMENT*>( item );
-
-                VECTOR2I    nearest = segm->CLine().NearestPoint( aWhere, false );
-                SEG::ecoord dd = ( aWhere - nearest ).SquaredEuclideanNorm();
-
-                if( dd > dist[1] )
-                    continue;
-
-                if( aBaseline.PointCount() > 0 )
-                {
-                    SEG::ecoord dcBaseline;
-                    VECTOR2I    target = segm->Shape( -1 )->Centre();
-
-                    if( aBaseline.SegmentCount() > 0 )
-                        dcBaseline = aBaseline.SquaredDistance( target );
-                    else
-                        dcBaseline = ( aBaseline.CPoint( 0 ) - target ).SquaredEuclideanNorm();
-
-                    if( dcBaseline > distBaseline[1] )
-                        continue;
-
-                    distBaseline[1] = dcBaseline;
-                }
-
-                prioritized[1] = segm;
-                dist[1] = dd;
-                point[1] = nearest;
-            }
-        }
-    }
-
-    PNS::LINKED_ITEM* rv = nullptr;
-
-    for( int i = 0; i < candidateCount; i++ )
-    {
-        PNS::LINKED_ITEM* item = prioritized[i];
-
-        if( item && ( aLayer < 0 || item->Layers().Overlaps( aLayer ) ) )
-        {
-            rv = item;
-            aPointOut = point[i];
-            break;
-        }
-    }
-
-    return rv;
-}
-
-
 static std::optional<PNS::LINE> getPNSLine( const VECTOR2I& aStart, const VECTOR2I& aEnd,
                                             PNS::ROUTER* router, int layer, VECTOR2I& aStartOut,
                                             VECTOR2I& aEndOut )
 {
     PNS::NODE* world = router->GetWorld();
 
-    PNS::LINKED_ITEM* startItem = pickSegment( router, aStart, layer, aStartOut );
-    PNS::LINKED_ITEM* endItem = pickSegment( router, aEnd, layer, aEndOut );
+    PNS::LINKED_ITEM* startItem = PNS::HELPERS::PickSegment( router, aStart, layer, aStartOut );
+    PNS::LINKED_ITEM* endItem = PNS::HELPERS::PickSegment( router, aEnd, layer, aEndOut );
 
     for( PNS::LINKED_ITEM* testItem : { startItem, endItem } )
     {
@@ -973,13 +822,13 @@ bool PCB_TUNING_PATTERN::initBaseLine( PNS::ROUTER* aRouter, int aPNSLayer, BOAR
 {
     PNS::NODE* world = aRouter->GetWorld();
 
-    aStart = snapToNearestTrack( aStart, aBoard, aNet, nullptr );
-    aEnd = snapToNearestTrack( aEnd, aBoard, aNet, nullptr );
+    aStart = PNS::HELPERS::SnapToNearestTrack( aStart, aBoard, aNet, nullptr );
+    aEnd = PNS::HELPERS::SnapToNearestTrack( aEnd, aBoard, aNet, nullptr );
 
     VECTOR2I startSnapPoint, endSnapPoint;
 
-    PNS::LINKED_ITEM* startItem = pickSegment( aRouter, aStart, aPNSLayer, startSnapPoint );
-    PNS::LINKED_ITEM* endItem = pickSegment( aRouter, aEnd, aPNSLayer, endSnapPoint );
+    PNS::LINKED_ITEM* startItem = PNS::HELPERS::PickSegment( aRouter, aStart, aPNSLayer, startSnapPoint );
+    PNS::LINKED_ITEM* endItem = PNS::HELPERS::PickSegment( aRouter, aEnd, aPNSLayer, endSnapPoint );
 
     wxASSERT( startItem );
     wxASSERT( endItem );
@@ -1013,7 +862,7 @@ bool PCB_TUNING_PATTERN::initBaseLines( PNS::ROUTER* aRouter, int aPNSLayer, BOA
 
     PCB_TRACK* track = nullptr;
 
-    m_origin = snapToNearestTrack( m_origin, aBoard, nullptr, &track );
+    m_origin = PNS::HELPERS::SnapToNearestTrack( m_origin, aBoard, nullptr, &track );
     wxCHECK( track, false );
 
     NETINFO_ITEM* net = track->GetNet();
@@ -1027,8 +876,8 @@ bool PCB_TUNING_PATTERN::initBaseLines( PNS::ROUTER* aRouter, int aPNSLayer, BOA
     {
         if( NETINFO_ITEM* coupledNet = aBoard->DpCoupledNet( net ) )
         {
-            VECTOR2I coupledStart = snapToNearestTrack( m_origin, aBoard, coupledNet, nullptr );
-            VECTOR2I coupledEnd = snapToNearestTrack( m_end, aBoard, coupledNet, nullptr );
+            VECTOR2I coupledStart = PNS::HELPERS::SnapToNearestTrack( m_origin, aBoard, coupledNet, nullptr );
+            VECTOR2I coupledEnd = PNS::HELPERS::SnapToNearestTrack( m_end, aBoard, coupledNet, nullptr );
 
             return initBaseLine( aRouter, aPNSLayer, aBoard, coupledStart, coupledEnd, coupledNet,
                                  m_baseLineCoupled );
@@ -1126,7 +975,7 @@ void PCB_TUNING_PATTERN::Remove( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_COM
             success &= removeToBaseline( router, pnslayer, *m_baseLineCoupled );
 
         if( !success )
-            recoverBaseline( router );
+            recoverBaseline( router, pnslayer );
     }
 
     const std::vector<GENERATOR_PNS_CHANGES>& allPnsChanges = aTool->GetRouterChanges();
@@ -1152,13 +1001,13 @@ void PCB_TUNING_PATTERN::Remove( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_COM
 }
 
 
-bool PCB_TUNING_PATTERN::recoverBaseline( PNS::ROUTER* aRouter )
+bool PCB_TUNING_PATTERN::recoverBaseline( PNS::ROUTER* aRouter, int aPNSLayer )
 {
     PNS::SOLID queryItem;
 
     SHAPE_LINE_CHAIN* chain = static_cast<SHAPE_LINE_CHAIN*>( getOutline().Clone() );
     queryItem.SetShape( chain );        // PNS::SOLID takes ownership
-    queryItem.SetLayer( m_layer );
+    queryItem.SetLayer( aPNSLayer );
 
     int lineWidth = 0;
 
@@ -1199,18 +1048,18 @@ bool PCB_TUNING_PATTERN::recoverBaseline( PNS::ROUTER* aRouter )
         NETINFO_ITEM* recoverNet = GetBoard()->FindNet( m_lastNetName );
         PNS::LINE     recoverLine;
 
-        recoverLine.SetLayer( m_layer );
+        recoverLine.SetLayer( aPNSLayer );
         recoverLine.SetWidth( lineWidth );
         recoverLine.Line() = *m_baseLine;
         recoverLine.SetNet( recoverNet );
         branch->Add( recoverLine, false );
 
-    if( m_tuningMode == DIFF_PAIR )
+        if( m_tuningMode == DIFF_PAIR )
         {
             NETINFO_ITEM* recoverCoupledNet = GetBoard()->DpCoupledNet( recoverNet );
             PNS::LINE recoverLineCoupled;
 
-            recoverLineCoupled.SetLayer( m_layer );
+            recoverLineCoupled.SetLayer( aPNSLayer );
             recoverLineCoupled.SetWidth( lineWidth );
             recoverLineCoupled.Line() = *m_baseLineCoupled;
             recoverLineCoupled.SetNet( recoverCoupledNet );
@@ -1384,8 +1233,8 @@ bool PCB_TUNING_PATTERN::Update( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_COM
 
     wxCHECK( m_baseLine, false );
 
-    PNS::LINKED_ITEM* startItem = pickSegment( router, m_origin, pnslayer, startSnapPoint, *m_baseLine);
-    PNS::LINKED_ITEM* endItem = pickSegment( router, m_end, pnslayer, endSnapPoint, *m_baseLine );
+    PNS::LINKED_ITEM* startItem = PNS::HELPERS::PickSegment( router, m_origin, pnslayer, startSnapPoint, *m_baseLine );
+    PNS::LINKED_ITEM* endItem = PNS::HELPERS::PickSegment( router, m_end, pnslayer, endSnapPoint, *m_baseLine );
 
     wxASSERT( startItem );
     wxASSERT( endItem );
@@ -2492,7 +2341,7 @@ void PCB_TUNING_PATTERN::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame,
 
     if( m_tuningMode == DIFF_PAIR_SKEW )
     {
-        constraint = drcEngine->EvalRules( SKEW_CONSTRAINT, primaryItem, coupledItem, m_layer );
+        constraint = drcEngine->EvalRules( SKEW_CONSTRAINT, primaryItem, coupledItem, GetLayer() );
 
         if( constraint.IsNull() || m_settings.m_overrideCustomRules )
         {
@@ -2515,10 +2364,10 @@ void PCB_TUNING_PATTERN::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame,
     else
     {
         // Prefer chain-level constraint if available
-        constraint = drcEngine->EvalRules( NET_CHAIN_LENGTH_CONSTRAINT, primaryItem, coupledItem, m_layer );
+        constraint = drcEngine->EvalRules( NET_CHAIN_LENGTH_CONSTRAINT, primaryItem, coupledItem, GetLayer() );
 
         if( constraint.IsNull() || constraint.GetSeverity() == RPT_SEVERITY_IGNORE )
-            constraint = drcEngine->EvalRules( LENGTH_CONSTRAINT, primaryItem, coupledItem, m_layer );
+            constraint = drcEngine->EvalRules( LENGTH_CONSTRAINT, primaryItem, coupledItem, GetLayer() );
 
         if( constraint.IsNull() || m_settings.m_overrideCustomRules )
         {

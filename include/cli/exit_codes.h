@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef CLI_EXIT_CODES_H
@@ -36,6 +36,10 @@ namespace CLI
         /// Rules check violation count was greater than 0.
         static const int ERR_RC_VIOLATIONS = 5;
         static const int ERR_JOBS_RUN_FAILED = 6;
+
+        /// No plugin for the requested face recognized the input file format.  Used quietly by the
+        /// import jobs so the top-level import command can probe the other face before failing.
+        static const int ERR_UNKNOWN_FILE_FORMAT = 7;
     };
 }
 

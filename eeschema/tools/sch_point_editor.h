@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef SCH_POINT_EDITOR_H
@@ -57,6 +53,13 @@ public:
      * other tools.
      */
     bool HasPoint() { return m_editedPoint != nullptr; }
+
+    /**
+     * Return true while a point is actively being dragged (the model is mid-mutation between
+     * grab and release).  Lets the frame defer work, such as the autosave snapshot, that must
+     * not run over a live edit.
+     */
+    bool IsDragging() const { return m_inDrag; }
 
     ///< Set up handlers for various events.
     void setTransitions() override;
@@ -115,6 +118,9 @@ private:
 
     ///< Currently edited point, NULL if there is none.
     EDIT_POINT* m_editedPoint;
+
+    ///< True while a point drag is in progress (between grab and release).
+    bool m_inDrag;
 
     ARC_EDIT_MODE m_arcEditMode;
 

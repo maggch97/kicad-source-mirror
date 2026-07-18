@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef PCB_NET_INSPECTOR_PANEL_DATA_MODEL
@@ -391,6 +391,14 @@ public:
         m_netChainLength = aValue;
     }
 
+    int64_t GetNetChainDelay() const { return m_netChainDelay; }
+
+    void SetNetChainDelay( int64_t aValue )
+    {
+        m_column_changed[COLUMN_NET_CHAIN_LENGTH] |= ( m_netChainDelay != aValue );
+        m_netChainDelay = aValue;
+    }
+
     int64_t GetPadDieDelay() const { return m_pad_die_delay; }
 
     void SetPadDieDelay( int64_t aValue )
@@ -496,6 +504,7 @@ private:
     int64_t       m_pad_die_length = 0;
     int64_t       m_pad_die_delay = 0;
     int64_t       m_netChainLength = 0;
+    int64_t       m_netChainDelay = 0;
 
     std::map<PCB_LAYER_ID, int64_t> m_layer_wire_length{};
     std::map<PCB_LAYER_ID, int64_t> m_layer_wire_delay{};
@@ -760,9 +769,14 @@ public:
                                        } );
 
                 wxASSERT( p != m_items.end() );
+
+                // Keep the parent alive through the ItemDeleted notification; erasing it from
+                // m_items destroys the LIST_ITEM, after which parent would be dangling.
+                wxDataViewItem             grandParent( parent->Parent() );
+                std::unique_ptr<LIST_ITEM> removedParent = std::move( *p );
                 m_items.erase( p );
 
-                ItemDeleted( wxDataViewItem( parent->Parent() ), wxDataViewItem( parent ) );
+                ItemDeleted( grandParent, wxDataViewItem( removedParent.get() ) );
             }
         }
 
@@ -793,6 +807,8 @@ public:
 
     void deleteAllItems()
     {
+        // BeforeReset() drives the canceller, dropping any deferred EnsureVisible before the
+        // clear frees items it may point at.
         BeforeReset();
         m_items.clear();
         AfterReset();
@@ -964,7 +980,10 @@ protected:
             }
             else if( aCol == COLUMN_NET_CHAIN_LENGTH )
             {
-                aOutValue = m_parent.formatLength( i->GetNetChainLength() );
+                if( m_show_time_domain_details )
+                    aOutValue = m_parent.formatDelay( i->GetNetChainDelay() );
+                else
+                    aOutValue = m_parent.formatLength( i->GetNetChainLength() );
             }
             else if( aCol > COLUMN_LAST_STATIC_COL && aCol <= m_parent.m_columns.size() )
             {
@@ -1070,9 +1089,13 @@ protected:
             if( !m_show_time_domain_details && i1.GetTotalLength() != i2.GetTotalLength() )
                 return compareUInt( i1.GetTotalLength(), i2.GetTotalLength(), aAsc );
         }
-        else if( aCol == COLUMN_NET_CHAIN_LENGTH && i1.GetNetChainLength() != i2.GetNetChainLength() )
+        else if( aCol == COLUMN_NET_CHAIN_LENGTH )
         {
-            return compareUInt( i1.GetNetChainLength(), i2.GetNetChainLength(), aAsc );
+            if( m_show_time_domain_details && i1.GetNetChainDelay() != i2.GetNetChainDelay() )
+                return compareUInt( i1.GetNetChainDelay(), i2.GetNetChainDelay(), aAsc );
+
+            if( !m_show_time_domain_details && i1.GetNetChainLength() != i2.GetNetChainLength() )
+                return compareUInt( i1.GetNetChainLength(), i2.GetNetChainLength(), aAsc );
         }
         else if( aCol > COLUMN_LAST_STATIC_COL && aCol < m_parent.m_columns.size() )
         {

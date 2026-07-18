@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "convert/allegro_parser.h"
@@ -1062,7 +1058,7 @@ static std::unique_ptr<BLOCK_BASE> ParseBlock_0x1C_PADSTACK( FILE_STREAM& aStrea
 
     data.m_UnknownByte1 = aStream.ReadU8();
     data.m_N = aStream.ReadU8();
-    data.m_UnknownByte2 = aStream.ReadU8();
+    data.m_StartLayer = aStream.ReadU8();
 
     data.m_Key = aStream.ReadU32();
     block->SetKey( data.m_Key );
@@ -1191,12 +1187,17 @@ static std::unique_ptr<BLOCK_BASE> ParseBlock_0x1C_PADSTACK( FILE_STREAM& aStrea
         comp.m_X3 = aStream.ReadS32();
         comp.m_X4 = aStream.ReadS32();
 
-        comp.m_StrPtr = aStream.ReadU32();
-
-        // The last component has a different size only in < 17.2
-        if( aVer >= FMT_VER::V_172 || i < nComps - 1 )
+        if( aVer >= FMT_VER::V_172 )
         {
             comp.m_Z2 = aStream.ReadU32();
+            comp.m_ShapePtr = aStream.ReadU32();
+        }
+        else
+        {
+            comp.m_ShapePtr = aStream.ReadU32();
+
+            if(i < nComps - 1)
+                comp.m_Z2 = aStream.ReadU32();
         }
     }
 
@@ -1794,6 +1795,7 @@ static BLK_0x30_STR_WRAPPER::TEXT_PROPERTIES ParseTextProps( FILE_STREAM& aStrea
     {
     case 0x00: props.m_Reversal = BLK_0x30_STR_WRAPPER::TEXT_REVERSAL::STRAIGHT; break;
     case 0x01: props.m_Reversal = BLK_0x30_STR_WRAPPER::TEXT_REVERSAL::REVERSED; break;
+    case 0x03: props.m_Reversal = BLK_0x30_STR_WRAPPER::TEXT_REVERSAL::REVERSED_3; break;
     case 0x0c:
     default:
         props.m_Reversal = BLK_0x30_STR_WRAPPER::TEXT_REVERSAL::UNKNOWN;

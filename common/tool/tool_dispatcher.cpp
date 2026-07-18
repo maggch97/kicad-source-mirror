@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "tool/tool_dispatcher.h"
@@ -129,6 +125,8 @@ struct TOOL_DISPATCHER::BUTTON_STATE
 
 
 TOOL_DISPATCHER::TOOL_DISPATCHER( TOOL_MANAGER* aToolMgr ) :
+    m_lastKeyCode( 0 ),
+    m_lastKeyTime( 0 ),
     m_toolMgr( aToolMgr )
 {
     m_sysDragMinX = wxSystemSettings::GetMetric( wxSYS_DRAG_X );
@@ -200,12 +198,21 @@ void TOOL_DISPATCHER::ResetState()
 {
     for( BUTTON_STATE* st : m_buttons )
         st->Reset();
+
+    m_lastKeyCode = 0;
+    m_lastKeyTime = 0;
 }
 
 
 KIGFX::VIEW* TOOL_DISPATCHER::getView()
 {
     return m_toolMgr->GetView();
+}
+
+
+bool TOOL_DISPATCHER::IsPastDragThreshold( const VECTOR2D& aOffset, int aDragMinX, int aDragMinY )
+{
+    return abs( aOffset.x ) > aDragMinX || abs( aOffset.y ) > aDragMinY;
 }
 
 
@@ -221,6 +228,24 @@ bool TOOL_DISPATCHER::handleMouseButton( wxEvent& aEvent, int aIndex, bool aMoti
     bool up = false, down = false;
     bool dblClick = type == st->dblClickEvent;
     bool state = st->GetState();
+
+    if( dblClick )
+    {
+        // If the mouse moved significantly between clicks, this is a fast click-drag, not a
+        // double-click. Demote to a regular mouse-down so drag detection works normally.
+        VECTOR2D offset = m_lastMousePosScreen - st->dragOriginScreen;
+
+        if( IsPastDragThreshold( offset, m_sysDragMinX, m_sysDragMinY ) )
+        {
+            dblClick = false;
+            down = true;
+
+            // Treat this as a fresh press so a stale pressed state from a missed button-up
+            // does not keep the previous drag origin.
+            st->pressed = false;
+            st->dragging = false;
+        }
+    }
 
     if( !dblClick )
     {
@@ -279,7 +304,7 @@ bool TOOL_DISPATCHER::handleMouseButton( wxEvent& aEvent, int aIndex, bool aMoti
 #endif
             VECTOR2D offset = m_lastMousePosScreen - st->dragOriginScreen;
 
-            if( abs( offset.x ) > m_sysDragMinX || abs( offset.y ) > m_sysDragMinY )
+            if( IsPastDragThreshold( offset, m_sysDragMinX, m_sysDragMinY ) )
                 st->dragging = true;
 
         }
@@ -496,6 +521,31 @@ void TOOL_DISPATCHER::flushPendingClicks()
 }
 
 
+bool TOOL_DISPATCHER::ShouldDropAutoRepeat( int aKeyCode, wxLongLong aNowMs, bool aKeyIsDown,
+                                            int& aLastKey, wxLongLong& aLastTimeMs )
+{
+    bool sameBurst = aKeyCode == aLastKey && ( aNowMs - aLastTimeMs ) < AutoRepeatWindowMs;
+
+    aLastKey = aKeyCode;
+    aLastTimeMs = aNowMs;
+
+    return sameBurst && !aKeyIsDown;
+}
+
+
+bool TOOL_DISPATCHER::isStaleAutoRepeat( const wxKeyEvent& aKeyEvent )
+{
+    int key = aKeyEvent.GetKeyCode();
+
+    // wxGetKeyState answers reliably for letters, digits and the named WXK_ codes used as
+    // hotkeys; modifier-only keys never reach here.
+    bool keyIsDown = wxGetKeyState( static_cast<wxKeyCode>( key ) );
+
+    return ShouldDropAutoRepeat( key, wxGetLocalTimeMillis(), keyIsDown, m_lastKeyCode,
+                                 m_lastKeyTime );
+}
+
+
 void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
 {
     bool            motion = false;
@@ -504,6 +554,7 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
     std::optional<TOOL_EVENT> evt;
     bool            keyIsEscape  = false;  // True if the keypress was the escape key
     bool            keyIsSpecial = false;  // True if the key is a special key code
+    bool            droppedStaleAutoRepeat = false;  // True if a backlogged repeat was discarded
     wxWindow*       focus = wxWindow::FindFocus();
 
     // Required in win32 to ensure wxTimer events get scheduled in between other events
@@ -639,6 +690,22 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
         }
 
         evt = GetToolEvent( ke, &keyIsSpecial );
+
+        // Drop backlogged OS key auto-repeat events that arrive after the key was released so a
+        // slow hotkey action (e.g. Rotate on a large selection) stops when the key is let go
+        // instead of running the whole queued burst. Only ordinary hotkey presses are filtered;
+        // cancel (escape) is always honoured.
+        if( evt && !evt->IsCancel() && !keyIsEscape && isStaleAutoRepeat( *ke ) )
+        {
+            evt.reset();
+            droppedStaleAutoRepeat = true;
+        }
+
+        if( evt && !evt->IsCancel() && m_toolMgr->GetViewControls() )
+        {
+            evt->SetMousePosition( m_lastMousePos );
+            evt->SetHasPosition( true );
+        }
     }
     else if( type == wxEVT_MENU_OPEN || type == wxEVT_MENU_CLOSE || type == wxEVT_MENU_HIGHLIGHT )
     {
@@ -727,7 +794,9 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
     // (PAGE_UP, PAGE_DOWN) have predefined actions (like move thumbtrack cursor), and we do
     // not want these actions executed (most are handled by KiCad)
 
-    if( !evt || type == wxEVT_LEFT_DOWN )
+    // A dropped stale auto-repeat must be fully swallowed; skipping it would let wx menu
+    // accelerators re-run the same hotkey after the key was released.
+    if( ( !evt && !droppedStaleAutoRepeat ) || type == wxEVT_LEFT_DOWN )
         aEvent.Skip();
 
     // Not handled wxEVT_CHAR must be Skipped (sent to GUI).
@@ -738,7 +807,8 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
     if( ( type == wxEVT_CHAR || type == wxEVT_CHAR_HOOK )
              && !keyIsSpecial
              && !handled
-             && !keyIsEscape )
+             && !keyIsEscape
+             && !droppedStaleAutoRepeat )
     {
         aEvent.Skip();
     }

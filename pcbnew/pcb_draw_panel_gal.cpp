@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "pcb_draw_panel_gal.h"
@@ -625,7 +621,7 @@ void PCB_DRAW_PANEL_GAL::OnShow()
 }
 
 
-void PCB_DRAW_PANEL_GAL::setDefaultLayerOrder()
+void ApplyPcbGalLayerOrder( KIGFX::VIEW* aView )
 {
     for( int i = 0; (unsigned) i < sizeof( GAL_LAYER_ORDER ) / sizeof( int ); ++i )
     {
@@ -635,12 +631,18 @@ void PCB_DRAW_PANEL_GAL::setDefaultLayerOrder()
         // MW: Gross hack to make SetTopLayer bring the correct bitmap layer to
         // the top of the other bitmaps, but still below all the other layers
         if( layer >= LAYER_BITMAP_START && layer < LAYER_BITMAP_END )
-            m_view->SetLayerOrder( layer, i - KIGFX::VIEW::TOP_LAYER_MODIFIER, false );
+            aView->SetLayerOrder( layer, i - KIGFX::VIEW::TOP_LAYER_MODIFIER, false );
         else
-            m_view->SetLayerOrder( layer, i, false );
+            aView->SetLayerOrder( layer, i, false );
     }
 
-    m_view->SortOrderedLayers();
+    aView->SortOrderedLayers();
+}
+
+
+void PCB_DRAW_PANEL_GAL::setDefaultLayerOrder()
+{
+    ApplyPcbGalLayerOrder( m_view );
 }
 
 

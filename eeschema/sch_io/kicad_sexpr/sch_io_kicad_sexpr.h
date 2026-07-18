@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef SCH_IO_KICAD_SEXPR_H_
@@ -185,7 +185,7 @@ protected:
                                                 ///< calls, enabling screen reuse across top-level
                                                 ///< sheets that share sub-sheet files.
     SCH_SHEET_PATH          m_currentSheetPath;
-    SCHEMATIC*              m_schematic;
+    SCHEMATIC*              m_schematic = nullptr;  ///< init() reads this before assigning it.
     OUTPUTFORMATTER*        m_out;              ///< The formatter for saving SCH_SCREEN objects.
     SCH_IO_KICAD_SEXPR_LIB_CACHE* m_cache;
 

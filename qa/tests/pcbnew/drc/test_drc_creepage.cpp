@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -96,5 +92,52 @@ BOOST_FIXTURE_TEST_CASE( CreepageHVvsGND, DRC_CREEPAGE_TEST_FIXTURE )
 
     // The board has HV and GND netclass traces ~3.25mm apart. The custom rule requires
     // 8mm creepage between HV and GND netclasses, so at least one violation must be detected.
+    BOOST_CHECK_GE( violations.size(), 1 );
+}
+
+
+/**
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/23653
+ *
+ * A board with an extra line on Edge.Cuts that prevents GetBoardPolygonOutlines
+ * from forming a valid polygon should still produce creepage violations. Previously
+ * the creepage test bailed out entirely when the outline was malformed.
+ */
+BOOST_FIXTURE_TEST_CASE( CreepageMalformedEdge, DRC_CREEPAGE_TEST_FIXTURE )
+{
+    KI_TEST::LoadBoard( m_settingsManager, "creepage/creepage_malformed_edge", m_board );
+
+    BOOST_REQUIRE_MESSAGE( m_board, "Failed to load board creepage_malformed_edge" );
+
+    std::vector<std::shared_ptr<DRC_ITEM>> violations;
+    BOARD_DESIGN_SETTINGS&                 bds = m_board->GetDesignSettings();
+
+    BOOST_REQUIRE_MESSAGE( bds.m_DRCEngine, "DRC engine not initialized" );
+
+    for( int ii = DRCE_FIRST; ii <= DRCE_LAST; ++ii )
+        bds.m_DRCSeverities[ii] = SEVERITY::RPT_SEVERITY_IGNORE;
+
+    bds.m_DRCSeverities[DRCE_CREEPAGE] = SEVERITY::RPT_SEVERITY_ERROR;
+
+    bds.m_DRCEngine->SetViolationHandler(
+            [&]( const std::shared_ptr<DRC_ITEM>& aItem, const VECTOR2I& aPos, int aLayer,
+                 const std::function<void( PCB_MARKER* )>& aPathGenerator )
+            {
+                if( bds.GetSeverity( aItem->GetErrorCode() ) == SEVERITY::RPT_SEVERITY_ERROR )
+                    violations.push_back( aItem );
+            } );
+
+    bds.m_DRCEngine->RunTests( EDA_UNITS::MM, true, false );
+
+    bds.m_DRCEngine->ClearViolationHandler();
+
+    BOOST_TEST_MESSAGE( wxString::Format( "Found %d creepage violations (malformed edge)",
+                                          (int) violations.size() ) );
+
+    for( const auto& v : violations )
+        BOOST_TEST_MESSAGE( wxString::Format( "  Violation: %s", v->GetErrorMessage( false ) ) );
+
+    // Same board geometry as CreepageHVvsGND but with an extra malformed Edge.Cuts line.
+    // The creepage DRC must still detect violations even when the board outline is invalid.
     BOOST_CHECK_GE( violations.size(), 1 );
 }

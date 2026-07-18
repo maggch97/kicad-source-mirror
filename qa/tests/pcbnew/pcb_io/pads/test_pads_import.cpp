@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pcbnew_utils/board_test_utils.h>
@@ -26,6 +22,7 @@
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
 #include <pcb_io/pads/pcb_io_pads.h>
+#include <pcb_io/pads/pads_parser.h>
 #include <layer_ids.h>
 #include <padstack.h>
 #include <board.h>
@@ -40,6 +37,7 @@
 #include <pcb_dimension.h>
 #include <project/net_settings.h>
 #include <board_stackup_manager/board_stackup.h>
+#include <map>
 #include <set>
 
 
@@ -1413,13 +1411,16 @@ BOOST_AUTO_TEST_CASE( Issue23393_NetClassImport )
 
 
 /**
- * Verify that route arcs (CW/CCW) from PADS are imported as proper semicircles.
+ * Verify that a PADS route arc (CW/CCW) is imported as one arc spanning the two
+ * neighbouring corners, with no straight remnant.
  *
- * Issue #23540: route arcs specified with only CW/CCW direction (no explicit
- * center/radius) were imported with degenerate geometry because the arc
- * midpoint was computed from zero center and zero radius.
+ * Issues #23540 / #23612: a route arc is stored as three corners where the middle
+ * corner is the arc center. The arc begins on the preceding corner and ends on the
+ * following one. Treating the center corner as an ordinary vertex produced a
+ * half-length arc to the center plus a straight track from the center to the pad,
+ * so the curved track rendered as two straight lines to the pad.
  */
-BOOST_AUTO_TEST_CASE( Issue23540_RouteArcSemicircle )
+BOOST_AUTO_TEST_CASE( Issue23612_RouteArcSpansNeighbours )
 {
     PCB_IO_PADS plugin;
 
@@ -1430,7 +1431,8 @@ BOOST_AUTO_TEST_CASE( Issue23540_RouteArcSemicircle )
 
     BOOST_REQUIRE( board != nullptr );
 
-    int arcCount = 0;
+    int      arcCount = 0;
+    PCB_ARC* routeArc = nullptr;
 
     for( PCB_TRACK* trk : board->Tracks() )
     {
@@ -1439,6 +1441,7 @@ BOOST_AUTO_TEST_CASE( Issue23540_RouteArcSemicircle )
 
         PCB_ARC* arc = static_cast<PCB_ARC*>( trk );
         arcCount++;
+        routeArc = arc;
 
         EDA_ANGLE angle = arc->GetAngle();
         double absDeg = std::abs( angle.AsDegrees() );
@@ -1452,7 +1455,6 @@ BOOST_AUTO_TEST_CASE( Issue23540_RouteArcSemicircle )
 
         // In PADS the CW arc from left to right goes upward. After the Y-axis
         // flip to KiCad coordinates, "upward on screen" means smaller Y values.
-        // The arc midpoint Y must be less than both endpoint Y values.
         int chordY = ( start.y + end.y ) / 2;
 
         BOOST_CHECK_MESSAGE( mid.y < chordY,
@@ -1460,8 +1462,619 @@ BOOST_AUTO_TEST_CASE( Issue23540_RouteArcSemicircle )
                 "chord center Y=" << chordY );
     }
 
-    BOOST_CHECK_MESSAGE( arcCount >= 1,
-            "expected at least 1 PCB_ARC from route CW/CCW arc, got " << arcCount );
+    BOOST_REQUIRE_MESSAGE( arcCount == 1,
+            "expected exactly 1 PCB_ARC from route CW/CCW arc, got " << arcCount );
+
+    // The arc's net carries only the arc: treating the center corner as a vertex
+    // leaves a straight track from the center to the pad on the same net.
+    int straightOnArcNet = 0;
+
+    for( PCB_TRACK* trk : board->Tracks() )
+    {
+        if( trk->Type() == PCB_TRACE_T && trk->GetNetCode() == routeArc->GetNetCode() )
+            straightOnArcNet++;
+    }
+
+    BOOST_CHECK_MESSAGE( straightOnArcNet == 0,
+            "route arc net should contain no straight track remnant, got "
+            << straightOnArcNet );
+}
+
+
+/**
+ * Verify RF finger pad offsets are not double-rotated on import (issue #23425).
+ *
+ * The reporter's board ({TXN004} controlCARD docking station) has a 180-pin HSEC8
+ * edge connector (J3) whose finger pads are defined with FINORI 90 and a non-zero
+ * FINOFFSET. In PADS, finger_offset runs along the finger's long axis and is stored
+ * in the pad-local coordinate system (before rotation). PAD::ShapePos() applies the
+ * full pad orientation when computing the shape center, so the importer must NOT
+ * pre-rotate the offset vector by layer_def.rotation. Doing so rotated the offset
+ * twice, shifting every finger pad sideways and visibly misaligning the connector.
+ *
+ * After the fix the stored offset is purely along pad-local X (offset.y == 0); a
+ * double rotation by 90 degrees would instead leave offset.x == 0 and put the
+ * magnitude on offset.y, which these checks reject.
+ */
+BOOST_AUTO_TEST_CASE( ImportFingerPadOffsetIssue23425 )
+{
+    PCB_IO_PADS plugin;
+
+    wxString filename = KI_TEST::GetPcbnewTestDataDir()
+                        + "plugins/pads/issue23425/controlCARDDockingStation.asc";
+
+    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+
+    BOOST_REQUIRE( board != nullptr );
+
+    FOOTPRINT* j3 = nullptr;
+
+    for( FOOTPRINT* fp : board->Footprints() )
+    {
+        if( fp->GetReference() == wxT( "J3" ) )
+        {
+            j3 = fp;
+            break;
+        }
+    }
+
+    BOOST_REQUIRE_MESSAGE( j3, "J3 (HSEC8 edge connector) not found on board" );
+
+    // FINOFFSET 1143000 BASIC units * (25400 / 38100) = 762000 nm (30 mil)
+    const int expectedOffset = 762000;
+    const int tolerance = 1000;   // 1um
+
+    int offsetPadCount = 0;
+
+    for( PAD* pad : j3->Pads() )
+    {
+        VECTOR2I offset = pad->GetOffset( F_Cu );
+
+        if( offset == VECTOR2I( 0, 0 ) )
+            continue;
+
+        offsetPadCount++;
+
+        // Stored unrotated in pad-local space: all magnitude on X, none on Y.
+        BOOST_CHECK_MESSAGE( offset.y == 0,
+                "J3 pad " << pad->GetNumber()
+                << " offset Y should be 0 (unrotated pad-local), got " << offset.y );
+
+        BOOST_CHECK_MESSAGE( std::abs( std::abs( offset.x ) - expectedOffset ) < tolerance,
+                "J3 pad " << pad->GetNumber()
+                << " offset X magnitude " << std::abs( offset.x )
+                << " should be ~" << expectedOffset );
+    }
+
+    // The connector's signal fingers all carry the offset; before the fix none of
+    // them satisfied the checks above. Require a substantial number so a parser
+    // change that stops applying the offset entirely cannot pass silently.
+    BOOST_CHECK_MESSAGE( offsetPadCount >= 90,
+            "expected the HSEC8 finger pads to carry a finger offset; got "
+            << offsetPadCount );
+}
+
+
+/**
+ * Verify padstack import for issue #23391.
+ *
+ * A padstack whose layer -2 and layer -1 entries share the same shape but have
+ * different sizes must use NORMAL mode (not FRONT_INNER_BACK).  The primary
+ * (layer -2, component-side) size must be preserved, and top-placed and
+ * bottom-placed instances of the same footprint must produce identical pad sizes.
+ *
+ * A padstack with different shapes on layer -2 and -1 (square pin-1) must still
+ * use FRONT_INNER_BACK so the shape difference is preserved.
+ */
+BOOST_AUTO_TEST_CASE( ImportIssue23391 )
+{
+    PCB_IO_PADS plugin;
+
+    wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23391.asc";
+
+    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+
+    BOOST_REQUIRE( board != nullptr );
+
+    // Collect mounting-hole footprints (MTG_HOLE_TYPE: E1/E2 top, E3/E4 bottom)
+    // and connector footprints (SQ_PIN1_TYPE: X1 top, X2 bottom).
+    PAD* mtg_top_pad = nullptr;
+    PAD* mtg_bot_pad = nullptr;
+    PAD* conn_top_pin1 = nullptr;
+    PAD* conn_bot_pin1 = nullptr;
+
+    for( FOOTPRINT* fp : board->Footprints() )
+    {
+        wxString ref = fp->GetReference();
+
+        for( PAD* pad : fp->Pads() )
+        {
+            if( ref == "E1" )
+                mtg_top_pad = pad;
+            else if( ref == "E3" )
+                mtg_bot_pad = pad;
+            else if( ref == "X1" && pad->GetNumber() == "1" )
+                conn_top_pin1 = pad;
+            else if( ref == "X2" && pad->GetNumber() == "1" )
+                conn_bot_pin1 = pad;
+        }
+    }
+
+    BOOST_REQUIRE_MESSAGE( mtg_top_pad, "E1 (top mounting hole) not found" );
+    BOOST_REQUIRE_MESSAGE( mtg_bot_pad, "E3 (bottom mounting hole) not found" );
+    BOOST_REQUIRE_MESSAGE( conn_top_pin1, "X1 pin 1 (top connector square pad) not found" );
+    BOOST_REQUIRE_MESSAGE( conn_bot_pin1, "X2 pin 1 (bottom connector square pad) not found" );
+
+    // Same-shape / different-size padstack must remain in NORMAL mode.
+    BOOST_CHECK_MESSAGE(
+            mtg_top_pad->Padstack().Mode() == PADSTACK::MODE::NORMAL,
+            "Mounting hole with same shape but different sizes should use NORMAL padstack mode" );
+
+    BOOST_CHECK_MESSAGE(
+            mtg_bot_pad->Padstack().Mode() == PADSTACK::MODE::NORMAL,
+            "Bottom-placed mounting hole should also use NORMAL padstack mode" );
+
+    // Both instances of the same footprint must have identical pad sizes.
+    VECTOR2I top_size = mtg_top_pad->GetSize( F_Cu );
+    VECTOR2I bot_size = mtg_bot_pad->GetSize( F_Cu );
+
+    BOOST_CHECK_MESSAGE(
+            top_size == bot_size,
+            "Top and bottom mounting holes should have equal pad size on F_Cu; "
+            "top=" << top_size.x << " bot=" << bot_size.x );
+
+    // The primary (layer -2) size must be used, not the secondary (layer -1) size.
+    // In the test file layer -2 = 200 mils and layer -1 = 150 mils.
+    // At 1 mil = 25400 nm, 200 mils = 5080000 nm.
+    BOOST_CHECK_MESSAGE(
+            top_size.x > 0,
+            "Mounting hole pad size must be non-zero" );
+
+    // Different-shape padstack (square vs round) must still use FRONT_INNER_BACK.
+    BOOST_CHECK_MESSAGE(
+            conn_top_pin1->Padstack().Mode() == PADSTACK::MODE::FRONT_INNER_BACK,
+            "Connector pin-1 with square-on-top / round-on-bottom must use FRONT_INNER_BACK" );
+
+    // Square (RECTANGLE) shape must appear on F_Cu for the top-placed connector.
+    BOOST_CHECK_MESSAGE(
+            conn_top_pin1->GetShape( F_Cu ) == PAD_SHAPE::RECTANGLE,
+            "Top connector pin-1 must have RECTANGLE shape on F_Cu" );
+
+    BOOST_CHECK_MESSAGE(
+            conn_top_pin1->GetShape( B_Cu ) == PAD_SHAPE::CIRCLE,
+            "Top connector pin-1 must have CIRCLE shape on B_Cu" );
+
+    // After Flip, the bottom-placed connector pin-1 must have the shapes swapped.
+    BOOST_CHECK_MESSAGE(
+            conn_bot_pin1->GetShape( F_Cu ) == PAD_SHAPE::CIRCLE,
+            "Bottom connector pin-1 must have CIRCLE shape on F_Cu after flip" );
+
+    BOOST_CHECK_MESSAGE(
+            conn_bot_pin1->GetShape( B_Cu ) == PAD_SHAPE::RECTANGLE,
+            "Bottom connector pin-1 must have RECTANGLE shape on B_Cu after flip" );
+}
+
+
+/**
+ * Verify in-circuit test point import (issue 23637).
+ *
+ * In-circuit test points are zero-drill vias placed on a route layer and tagged
+ * in the *TESTPOINT* section.  Two bugs existed before the fix:
+ *   1. The test point via was also emitted as a bare PCB_VIA by loadTracksAndVias(),
+ *      creating a duplicate object and a DRC open-connection error.
+ *   2. loadTestPoints() always placed the footprint on F.Cu when side=0 ("through"),
+ *      even though the pad definition's soldermask layer indicates B.Cu.
+ *
+ * synthetic_testpoint.asc defines two test point via types:
+ *   TP_BOTTOM_SMD  drill=0, routing-layer pad (layer 0) + soldermask bottom (28)
+ *                  -> SMD footprint on B.Cu, pad ~0.8mm
+ *   TP_TOP_SMD     drill=0, top copper pad (layer -2) + soldermask top (25)
+ *                  -> SMD footprint on F.Cu, pad ~0.8mm
+ */
+BOOST_AUTO_TEST_CASE( InCircuitTestPointImport )
+{
+    PCB_IO_PADS plugin;
+
+    wxString filename =
+            KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/synthetic_testpoint.asc";
+
+    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+
+    BOOST_REQUIRE( board != nullptr );
+
+    // R1 (1 part) + 2 test point footprints = 3 total
+    BOOST_CHECK_EQUAL( board->Footprints().size(), 3u );
+
+    FOOTPRINT* tpBottom = nullptr;
+    FOOTPRINT* tpTop    = nullptr;
+
+    for( FOOTPRINT* fp : board->Footprints() )
+    {
+        if( fp->GetValue() == wxT( "TP_BOTTOM_SMD" ) )
+            tpBottom = fp;
+        else if( fp->GetValue() == wxT( "TP_TOP_SMD" ) )
+            tpTop = fp;
+    }
+
+    // TP_BOTTOM_SMD: stack has soldermask bottom (layer 28) -> must land on B.Cu
+    BOOST_REQUIRE_MESSAGE( tpBottom, "TP_BOTTOM_SMD test point footprint should exist" );
+    BOOST_CHECK_EQUAL( tpBottom->Pads().size(), 1u );
+
+    if( tpBottom->Pads().size() == 1 )
+    {
+        PAD* pad = tpBottom->Pads().front();
+        BOOST_CHECK_MESSAGE( pad->IsOnLayer( B_Cu ),
+                             "TP_BOTTOM_SMD pad should be on B.Cu" );
+        BOOST_CHECK_MESSAGE( !pad->IsOnLayer( F_Cu ),
+                             "TP_BOTTOM_SMD pad should not be on F.Cu" );
+
+        // Pad size: 1200000 BASIC * 2/3 = 800000 nm (0.8mm).  Allow 5% tolerance.
+        int padSize = pad->GetSize( PADSTACK::ALL_LAYERS ).x;
+        BOOST_CHECK_MESSAGE( padSize > 700000 && padSize < 900000,
+                             "TP_BOTTOM_SMD pad size " << padSize << " should be ~800000 nm" );
+    }
+
+    // TP_TOP_SMD: explicit top copper pad (layer -2) -> must land on F.Cu
+    BOOST_REQUIRE_MESSAGE( tpTop, "TP_TOP_SMD test point footprint should exist" );
+    BOOST_CHECK_EQUAL( tpTop->Pads().size(), 1u );
+
+    if( tpTop->Pads().size() == 1 )
+    {
+        PAD* pad = tpTop->Pads().front();
+        BOOST_CHECK_MESSAGE( pad->IsOnLayer( F_Cu ),
+                             "TP_TOP_SMD pad should be on F.Cu" );
+        BOOST_CHECK_MESSAGE( !pad->IsOnLayer( B_Cu ),
+                             "TP_TOP_SMD pad should not be on B.Cu" );
+
+        int padSize = pad->GetSize( PADSTACK::ALL_LAYERS ).x;
+        BOOST_CHECK_MESSAGE( padSize > 700000 && padSize < 900000,
+                             "TP_TOP_SMD pad size " << padSize << " should be ~800000 nm" );
+    }
+
+    // Test point positions must NOT also appear as bare PCB_VIA objects.
+    // Before the fix, loadTracksAndVias() placed a PCB_VIA at each test point
+    // position, creating a duplicate and causing DRC open-connection errors.
+    VECTOR2I tpBottomPos( 0, 0 );
+    VECTOR2I tpTopPos( 0, 0 );
+
+    if( tpBottom )
+        tpBottomPos = tpBottom->GetPosition();
+
+    if( tpTop )
+        tpTopPos = tpTop->GetPosition();
+
+    for( PCB_TRACK* trk : board->Tracks() )
+    {
+        PCB_VIA* via = dynamic_cast<PCB_VIA*>( trk );
+
+        if( !via )
+            continue;
+
+        VECTOR2I pos = via->GetPosition();
+
+        BOOST_CHECK_MESSAGE( pos != tpBottomPos,
+                             "TP_BOTTOM_SMD position should not have a bare PCB_VIA" );
+        BOOST_CHECK_MESSAGE( pos != tpTopPos,
+                             "TP_TOP_SMD position should not have a bare PCB_VIA" );
+    }
+}
+
+
+/**
+ * Issue #23856: PADS PCB import got text and pad details wrong.
+ *
+ *   1. Free text containing non-ASCII bytes (e.g. the copyright sign) was
+ *      dropped entirely because the raw ISO-8859-1 content was treated as UTF-8.
+ *   2. Finger pad orientation (PADS FINORI) was reset to zero by a later round
+ *      pad-stack layer entry, so oval/rectangular fingers were not rotated.
+ *   3. Free text on the back of the board ignored the PADS mirror flag, so it
+ *      read left-to-right instead of mirrored.
+ */
+BOOST_AUTO_TEST_CASE( Issue23856_TextAndPadOrientation )
+{
+    PCB_IO_PADS plugin;
+    wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23856.asc";
+
+    std::unique_ptr<BOARD> board;
+    board.reset( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    BOOST_REQUIRE( board != nullptr );
+
+    // Issue 1 + 3: free text with the copyright character must survive import,
+    // and back-side text must be mirrored.
+    int copyrightCount = 0;
+    bool frontCopyrightNotMirrored = false;
+    bool backCopyrightMirrored = false;
+
+    for( BOARD_ITEM* item : board->Drawings() )
+    {
+        PCB_TEXT* t = dynamic_cast<PCB_TEXT*>( item );
+
+        if( !t )
+            continue;
+
+        // No imported free text should be empty (empty == dropped on decode).
+        BOOST_CHECK_MESSAGE( !t->GetText().IsEmpty(),
+                "imported free text should not be empty" );
+
+        if( t->GetText().Contains( wxT( "TEXMATE" ) ) )
+        {
+            copyrightCount++;
+
+            // Copyright sign previously broke the UTF-8 decode.
+            BOOST_CHECK_MESSAGE( t->GetText().Contains( wxString::FromUTF8( "©" ) ),
+                    "copyright text should retain the (c) character" );
+
+            if( t->GetLayer() == F_SilkS )
+            {
+                BOOST_CHECK_MESSAGE( !t->IsMirrored(),
+                        "front silkscreen text should not be mirrored" );
+                frontCopyrightNotMirrored = true;
+            }
+            else if( IsBackLayer( t->GetLayer() ) )
+            {
+                BOOST_CHECK_MESSAGE( t->IsMirrored(),
+                        "back-side text should be mirrored" );
+                backCopyrightMirrored = true;
+            }
+        }
+    }
+
+    BOOST_CHECK_MESSAGE( copyrightCount >= 2,
+            "expected the copyright text on both front and back, got " << copyrightCount );
+    BOOST_CHECK( frontCopyrightNotMirrored );
+    BOOST_CHECK( backCopyrightMirrored );
+
+    // Issue 2: CN1 finger pads use FINORI 90, which must not be reset to zero by
+    // the back-side round entry of the through-hole stack.
+    bool foundCN1 = false;
+
+    for( FOOTPRINT* fp : board->Footprints() )
+    {
+        if( fp->GetReference() != wxT( "CN1" ) )
+            continue;
+
+        foundCN1 = true;
+
+        BOOST_CHECK_MESSAGE( fp->Pads().size() >= 10,
+                "CN1 should have at least 10 pads, got " << fp->Pads().size() );
+
+        for( PAD* pad : fp->Pads() )
+        {
+            // Oval/rectangle finger pads must carry the 90 degree finger rotation.
+            if( pad->GetShape( F_Cu ) == PAD_SHAPE::OVAL
+                || pad->GetShape( F_Cu ) == PAD_SHAPE::RECTANGLE )
+            {
+                BOOST_CHECK_MESSAGE(
+                        pad->GetOrientation() == EDA_ANGLE( 90, DEGREES_T ),
+                        "CN1 finger pad " << pad->GetNumber().ToStdString()
+                            << " should be oriented 90 degrees, got "
+                            << pad->GetOrientation().AsDegrees() );
+            }
+        }
+    }
+
+    BOOST_CHECK_MESSAGE( foundCN1, "CN1 footprint should be imported" );
+}
+
+
+/**
+ * Verify that RT/ST thermal relief pad-stack entries map the PADS thermal-relief
+ * geometry onto KiCad pad overrides (issue #23392): a THERMAL zone connection, a
+ * spoke-width override, and, when the relief outer diameter exceeds the pad size, a
+ * thermal-gap override derived as (outer - pad_size) / 2. Reliefs whose outer diameter
+ * equals the pad size carry no gap and must leave the gap override unset.
+ */
+BOOST_AUTO_TEST_CASE( Issue23392_ThermalReliefGap )
+{
+    PCB_IO_PADS plugin;
+    wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23393/demo.asc";
+
+    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    BOOST_REQUIRE( board != nullptr );
+
+    auto findFP = [&]( const wxString& aRef ) -> FOOTPRINT*
+    {
+        for( FOOTPRINT* fp : board->Footprints() )
+        {
+            if( fp->GetReference() == aRef )
+                return fp;
+        }
+
+        return nullptr;
+    };
+
+    const int tolerance = 5000;  // 5 um
+
+    // L1 carries an RT relief whose outer diameter (4110000) exceeds the pad size
+    // (3750000), so every pad gets a THERMAL connection, a spoke-width override, and a
+    // gap override of (4110000 - 3750000) / 2 scaled to internal units.
+    {
+        FOOTPRINT* l1 = findFP( "L1" );
+        BOOST_REQUIRE_MESSAGE( l1, "L1 footprint should be imported" );
+        BOOST_REQUIRE( !l1->Pads().empty() );
+
+        for( PAD* pad : l1->Pads() )
+        {
+            BOOST_CHECK_MESSAGE( pad->GetLocalZoneConnection() == ZONE_CONNECTION::THERMAL,
+                    "L1 pad " << pad->GetNumber().ToStdString()
+                        << " should have THERMAL zone connection" );
+
+            std::optional<int> spoke = pad->GetLocalThermalSpokeWidthOverride();
+            BOOST_REQUIRE_MESSAGE( spoke.has_value(),
+                    "L1 pad " << pad->GetNumber().ToStdString()
+                        << " should have a spoke-width override" );
+            BOOST_CHECK_MESSAGE( std::abs( spoke.value() - 1000000 ) < tolerance,
+                    "L1 pad " << pad->GetNumber().ToStdString() << " spoke width "
+                        << spoke.value() << " should be ~1000000 nm" );
+
+            std::optional<int> gap = pad->GetLocalThermalGapOverride();
+            BOOST_REQUIRE_MESSAGE( gap.has_value(),
+                    "L1 pad " << pad->GetNumber().ToStdString()
+                        << " should have a thermal gap override" );
+            BOOST_CHECK_MESSAGE( std::abs( gap.value() - 120000 ) < tolerance,
+                    "L1 pad " << pad->GetNumber().ToStdString() << " thermal gap "
+                        << gap.value() << " should be ~120000 nm" );
+        }
+    }
+
+    // E1 carries an RT relief whose outer diameter equals the pad size, so it must have a
+    // THERMAL connection but NO gap override.
+    {
+        FOOTPRINT* e1 = findFP( "E1" );
+        BOOST_REQUIRE_MESSAGE( e1, "E1 footprint should be imported" );
+        BOOST_REQUIRE( !e1->Pads().empty() );
+
+        PAD* pad = e1->Pads().front();
+        BOOST_CHECK_MESSAGE( pad->GetLocalZoneConnection() == ZONE_CONNECTION::THERMAL,
+                "E1 pad should have THERMAL zone connection" );
+        BOOST_CHECK_MESSAGE( !pad->GetLocalThermalGapOverride().has_value(),
+                "E1 pad should NOT have a thermal gap override (outer == pad size)" );
+    }
+}
+
+
+/**
+ * Issue 23241: PADS V5.0 part import drops every other part.
+ *
+ * V5.0 text/label entries use 2 lines (value + name) while V9+ uses 3 lines
+ * (value + font + name). Reading 3 lines per label in V5.0 format consumes
+ * the next part's header line, causing alternating parts to be dropped.
+ */
+BOOST_AUTO_TEST_CASE( Issue23241_V5Parts )
+{
+    PCB_IO_PADS plugin;
+
+    wxString filename =
+            KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23241/partsandattr.asc";
+
+    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+
+    BOOST_REQUIRE( board != nullptr );
+
+    // The file contains parts on both layers. Verify the specific parts mentioned
+    // in the bug report are present.
+    std::set<wxString> refDes;
+
+    for( FOOTPRINT* fp : board->Footprints() )
+        refDes.insert( fp->GetReference() );
+
+    BOOST_CHECK_MESSAGE( refDes.count( wxT( "J1" ) ), "J1 should be present" );
+    BOOST_CHECK_MESSAGE( refDes.count( wxT( "J2" ) ), "J2 should be present" );
+    BOOST_CHECK_MESSAGE( refDes.count( wxT( "J3" ) ), "J3 should be present" );
+    BOOST_CHECK_MESSAGE( refDes.count( wxT( "J4" ) ), "J4 should be present" );
+    BOOST_CHECK_MESSAGE( refDes.count( wxT( "J5" ) ), "J5 should be present" );
+    BOOST_CHECK_MESSAGE( refDes.count( wxT( "U1" ) ), "U1 should be present" );
+    BOOST_CHECK_MESSAGE( refDes.count( wxT( "U2" ) ), "U2 should be present" );
+    BOOST_CHECK_MESSAGE( refDes.count( wxT( "U3" ) ), "U3 should be present" );
+    BOOST_CHECK_MESSAGE( refDes.count( wxT( "U4" ) ), "U4 should be present" );
+}
+
+
+/**
+ * Issue 23241: verify the V5.0 parser reads decal terminals correctly.
+ *
+ * V5.0 terminal lines have no pin number (4 tokens), while V9+ has
+ * a pin number (5 tokens). Both formats must produce valid terminals.
+ */
+BOOST_AUTO_TEST_CASE( Issue23241_V5DecalTerminals )
+{
+    PADS_IO::PARSER parser;
+
+    wxString filename =
+            KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23241/partsandattr.asc";
+
+    parser.Parse( filename );
+
+    const auto& decals = parser.GetPartDecals();
+
+    auto it = decals.find( "104130-6" );
+    BOOST_REQUIRE_MESSAGE( it != decals.end(), "104130-6 decal should exist" );
+    BOOST_REQUIRE_EQUAL( it->second.terminals.size(), 34u );
+
+    auto sop_it = decals.find( "SOP16" );
+    BOOST_REQUIRE_MESSAGE( sop_it != decals.end(), "SOP16 decal should exist" );
+    BOOST_REQUIRE_EQUAL( sop_it->second.terminals.size(), 16u );
+
+    // V5.0 terminals carry no pin number, so the parser synthesizes sequential
+    // names 1..N. Empty or duplicate names would break pad-to-net mapping, which
+    // a bare count check cannot catch.
+    BOOST_CHECK_EQUAL( it->second.terminals.front().name, "1" );
+    BOOST_CHECK_EQUAL( it->second.terminals.back().name, "34" );
+    BOOST_CHECK_EQUAL( sop_it->second.terminals.front().name, "1" );
+    BOOST_CHECK_EQUAL( sop_it->second.terminals.back().name, "16" );
+}
+
+
+/**
+ * Verify RF (rectangular finger) pads carrying a PADS corner radius import as
+ * roundrect rather than plain rectangle (issue 23297).
+ *
+ * R1 (RESC1005X40N) uses "RF 0.000 900000 0 105000": 900000-unit finger, so the
+ * roundrect ratio is 105000 / 900000 = 0.1167.  D1 (SOT95P280X100-6N) uses
+ * "RF 0.000 1650000 0 225000" over an 825000 height, so the ratio is the radius
+ * over the shorter side, 225000 / 825000 = 0.2727.  Scaling is linear so the
+ * ratios are unit-independent.
+ */
+BOOST_AUTO_TEST_CASE( Issue23297_RfPadCornerRadius )
+{
+    PCB_IO_PADS plugin;
+
+    wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23297.asc";
+
+    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+
+    BOOST_REQUIRE( board != nullptr );
+
+    const double tolerance = 0.005;
+
+    struct EXPECTED
+    {
+        int    padCount;
+        double ratio;
+    };
+
+    const std::map<wxString, EXPECTED> expected = {
+        { wxT( "R1" ), { 2, 105000.0 / 900000.0 } },
+        { wxT( "D1" ), { 6, 225000.0 / 825000.0 } },
+    };
+
+    int checkedRefs = 0;
+
+    for( FOOTPRINT* fp : board->Footprints() )
+    {
+        auto it = expected.find( fp->GetReference() );
+
+        if( it == expected.end() )
+            continue;
+
+        checkedRefs++;
+
+        int roundRectCount = 0;
+
+        for( PAD* pad : fp->Pads() )
+        {
+            BOOST_CHECK_MESSAGE( pad->GetShape( F_Cu ) == PAD_SHAPE::ROUNDRECT,
+                    fp->GetReference() << " pad " << pad->GetNumber()
+                        << " should import as roundrect" );
+
+            if( pad->GetShape( F_Cu ) != PAD_SHAPE::ROUNDRECT )
+                continue;
+
+            BOOST_CHECK_MESSAGE(
+                    std::abs( pad->GetRoundRectRadiusRatio( F_Cu ) - it->second.ratio ) < tolerance,
+                    fp->GetReference() << " pad " << pad->GetNumber() << " ratio "
+                        << pad->GetRoundRectRadiusRatio( F_Cu ) << " should be ~" << it->second.ratio );
+
+            roundRectCount++;
+        }
+
+        BOOST_CHECK_MESSAGE( roundRectCount == it->second.padCount,
+                fp->GetReference() << " should have " << it->second.padCount
+                    << " roundrect pads, got " << roundRectCount );
+    }
+
+    BOOST_CHECK_MESSAGE( checkedRefs == (int) expected.size(),
+            "expected R1 and D1 footprints to be imported, found " << checkedRefs );
 }
 
 

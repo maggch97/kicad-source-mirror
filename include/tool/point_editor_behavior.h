@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -26,6 +22,7 @@
 
 #include <wx/debug.h>
 
+#include <base_units.h>
 #include <settings/app_settings.h>
 #include <eda_shape.h>
 #include <tool/edit_points.h>
@@ -434,7 +431,8 @@ class EDA_ARC_POINT_EDIT_BEHAVIOR : public POINT_EDIT_BEHAVIOR
 {
 public:
     EDA_ARC_POINT_EDIT_BEHAVIOR( EDA_SHAPE& aArc, const ARC_EDIT_MODE& aArcEditMode,
-                                 KIGFX::VIEW_CONTROLS& aViewContols );
+                                 KIGFX::VIEW_CONTROLS& aViewContols,
+                                 const EDA_IU_SCALE& aIuScale );
 
     void MakePoints( EDIT_POINTS& aPoints ) override;
 
@@ -458,7 +456,31 @@ private:
     // The arc edit mode, which is injected from the editor
     const ARC_EDIT_MODE&  m_arcEditMode;
     KIGFX::VIEW_CONTROLS& m_viewControls;
+    // IU scale of the owning editor, used to derive the minimum arc radius
+    const EDA_IU_SCALE&   m_iuScale;
 };
 
 
 ARC_EDIT_MODE IncrementArcEditMode( ARC_EDIT_MODE aMode );
+
+
+namespace KI_ARC_EDIT
+{
+/**
+ * Move an arc endpoint around the existing center, pulling the opposite
+ * endpoint along to keep the radius.  The radius floor is 1 mil in
+ * @p aIuScale's units, so callers pass their own scale to avoid snapping
+ * small arcs up to the PCB minimum.  Exposed for unit testing.
+ */
+void EditArcEndpointKeepCenter( EDA_SHAPE& aArc, const VECTOR2I& aCenter, const VECTOR2I& aStart,
+                                const VECTOR2I& aMid, const VECTOR2I& aEnd, const VECTOR2I& aCursor,
+                                const EDA_IU_SCALE& aIuScale );
+
+/**
+ * Move the mid point of an arc while keeping the center, rotating the
+ * endpoints onto the new radius.  See EditArcEndpointKeepCenter for @p aIuScale.
+ */
+void EditArcMidKeepCenter( EDA_SHAPE& aArc, const VECTOR2I& aCenter, const VECTOR2I& aStart,
+                           const VECTOR2I& aMid, const VECTOR2I& aEnd, const VECTOR2I& aCursor,
+                           const EDA_IU_SCALE& aIuScale );
+} // namespace KI_ARC_EDIT

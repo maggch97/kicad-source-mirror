@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "symbol_editor_edit_tool.h"
@@ -49,6 +45,7 @@
 #include <sch_io/kicad_sexpr/sch_io_kicad_sexpr.h>
 #include <sch_textbox.h>
 #include <lib_symbol_library_manager.h>
+#include <widgets/lib_tree.h>
 #include <wx/textdlg.h>     // for wxTextEntryDialog
 #include <math/util.h>      // for KiROUND
 #include <io/kicad/kicad_io_utils.h>
@@ -1056,15 +1053,24 @@ void SYMBOL_EDITOR_EDIT_TOOL::editSymbolPropertiesFromLibrary( const LIB_ID& aLi
     if( dlg.ShowQuasiModal() != wxID_OK )
         return;
 
-    // Update the buffered symbol with the changes
-    libMgr.UpdateSymbol( &tempSymbol, libName );
+    wxString newName = tempSymbol.GetName();
+
+    // Update the buffered symbol with the changes.  A rename has to be keyed on the old name so
+    // the existing buffer is renamed in place rather than a duplicate being created under the new
+    // name.
+    if( newName != symbolName )
+        libMgr.UpdateSymbolAfterRename( &tempSymbol, symbolName, libName );
+    else
+        libMgr.UpdateSymbol( &tempSymbol, libName );
 
     // Mark the library as modified
-    libMgr.SetSymbolModified( symbolName, libName );
+    libMgr.SetSymbolModified( newName, libName );
 
     // Update the tree view
-    wxDataViewItem treeItem = libMgr.GetAdapter()->FindItem( aLibId );
+    LIB_ID         newLibId( libName, newName );
+    wxDataViewItem treeItem = libMgr.GetAdapter()->FindItem( newLibId );
     m_frame->UpdateLibraryTree( treeItem, &tempSymbol );
+    m_frame->GetLibTree()->SelectLibId( newLibId );
 }
 
 
@@ -1102,6 +1108,34 @@ void SYMBOL_EDITOR_EDIT_TOOL::editSymbolProperties()
         // and if units are interchangeable, graphic items are common to units
         tools->SetDrawSpecificUnit( symbol->UnitsLocked() );
     }
+}
+
+
+int SYMBOL_EDITOR_EDIT_TOOL::EditSymbolPinMaps( const TOOL_EVENT& aEvent )
+{
+    LIB_SYMBOL* symbol = m_frame->GetCurSymbol();
+
+    if( !symbol )
+    {
+        wxBell();
+        return 0;
+    }
+
+    m_toolMgr->RunAction( ACTIONS::cancelInteractive );
+    m_toolMgr->RunAction( ACTIONS::selectionClear );
+
+    DIALOG_LIB_SYMBOL_PROPERTIES dlg( m_frame, symbol );
+    dlg.SelectPinMapPage();
+
+    // This dialog can subsequently invoke a KIWAY_PLAYER as a quasimodal frame, so it must be run
+    // quasimodally to keep that support working.
+    if( dlg.ShowQuasiModal() != wxID_OK )
+        return 0;
+
+    m_frame->RebuildSymbolUnitAndBodyStyleLists();
+    m_frame->OnModify();
+
+    return 0;
 }
 
 
@@ -1304,6 +1338,10 @@ int SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins( const TOOL_EVENT& aEvent )
             if( !result.IsEmpty() )
                 result += wxT(",");
 
+            // The prefix may contain characters that are structural in stacked notation (e.g. a pin
+            // numbered "foo,bar3"); escape it so it round-trips as a single pin number.
+            wxString escPrefix = EscapeStackedPinItem( prefix );
+
             // Sort numeric values for this prefix
             std::sort( numbers.begin(), numbers.end() );
 
@@ -1326,11 +1364,11 @@ int SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins( const TOOL_EVENT& aEvent )
 
                 // Add range or single number with prefix
                 if( end > start + 1 )  // Range of 3+ numbers
-                    result += wxString::Format( wxT("%s%ld-%s%ld"), prefix, start, prefix, end );
+                    result += wxString::Format( wxT("%s%ld-%s%ld"), escPrefix, start, escPrefix, end );
                 else if( end == start + 1 )  // Two consecutive numbers
-                    result += wxString::Format( wxT("%s%ld,%s%ld"), prefix, start, prefix, end );
+                    result += wxString::Format( wxT("%s%ld,%s%ld"), escPrefix, start, escPrefix, end );
                 else  // Single number
-                    result += wxString::Format( wxT("%s%ld"), prefix, start );
+                    result += wxString::Format( wxT("%s%ld"), escPrefix, start );
 
                 i++;
             }
@@ -1341,7 +1379,7 @@ int SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins( const TOOL_EVENT& aEvent )
         {
             if( !result.IsEmpty() )
                 result += wxT(",");
-            result += nonNum;
+            result += EscapeStackedPinItem( nonNum );
         }
 
         return result;
@@ -1483,7 +1521,7 @@ int SYMBOL_EDITOR_EDIT_TOOL::UpdateSymbolFields( const TOOL_EVENT& aEvent )
     if( !symbol )
         return 0;
 
-    if( !symbol->IsDerived() )
+    if( !symbol->CanUpdateFieldsFromParent() )
     {
         m_frame->ShowInfoBarError( _( "Symbol is not derived from another symbol." ) );
     }
@@ -1852,6 +1890,7 @@ void SYMBOL_EDITOR_EDIT_TOOL::setTransitions()
 
     Go( &SYMBOL_EDITOR_EDIT_TOOL::Properties,         SCH_ACTIONS::properties.MakeEvent() );
     Go( &SYMBOL_EDITOR_EDIT_TOOL::Properties,         SCH_ACTIONS::symbolProperties.MakeEvent() );
+    Go( &SYMBOL_EDITOR_EDIT_TOOL::EditSymbolPinMaps,  SCH_ACTIONS::editSymbolPinMaps.MakeEvent() );
     Go( &SYMBOL_EDITOR_EDIT_TOOL::PinTable,           SCH_ACTIONS::pinTable.MakeEvent() );
     Go( &SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins, SCH_ACTIONS::convertStackedPins.MakeEvent() );
     Go( &SYMBOL_EDITOR_EDIT_TOOL::ExplodeStackedPin,  SCH_ACTIONS::explodeStackedPin.MakeEvent() );

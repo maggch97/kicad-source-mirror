@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/filename.h>
@@ -46,10 +42,13 @@
 #include <pcb_io/fabmaster/pcb_io_fabmaster.h>
 #include <pcb_io/easyeda/pcb_io_easyeda_plugin.h>
 #include <pcb_io/easyedapro/pcb_io_easyedapro.h>
+#include <pcb_io/easyedapro/pcb_io_easyedapro_v3.h>
 #include <pcb_io/ipc2581/pcb_io_ipc2581.h>
 #include <pcb_io/odbpp/pcb_io_odbpp.h>
 #include <pcb_io/pads/pcb_io_pads.h>
 #include <pcb_io/sprint_layout/pcb_io_sprint_layout.h>
+#include <pcb_io/diptrace/pcb_io_diptrace.h>
+#include <pcb_io/autotrax/pcb_io_autotrax.h>
 #include <reporter.h>
 #include <libraries/library_table_parser.h>
 
@@ -199,17 +198,25 @@ void PCB_IO_MGR::Save( PCB_FILE_T aFileType, const wxString& aFileName, BOARD* a
 }
 
 
-bool PCB_IO_MGR::ConvertLibrary( const std::map<std::string, UTF8>& aOldFileProps,
-                                 const wxString& aOldFilePath, const wxString& aNewFilePath,
-                                 REPORTER* aReporter )
+bool PCB_IO_MGR::ConvertLibrary( const std::map<std::string, UTF8>& aOldFileProps, const wxString& aOldFilePath,
+                                 const wxString& aNewFilePath, REPORTER* aReporter )
 {
     PCB_IO_MGR::PCB_FILE_T oldFileType = PCB_IO_MGR::GuessPluginTypeFromLibPath( aOldFilePath );
 
     if( oldFileType == PCB_IO_MGR::FILE_TYPE_NONE )
         return false;
 
+    // A nested library table has no plugin to enumerate it; reject it before dereferencing
+    // the null plugin below.
+    if( oldFileType == PCB_IO_MGR::NESTED_TABLE )
+        return false;
+
     IO_RELEASER<PCB_IO> oldFilePI( PCB_IO_MGR::FindPlugin( oldFileType ) );
     IO_RELEASER<PCB_IO> kicadPI( PCB_IO_MGR::FindPlugin( PCB_IO_MGR::KICAD_SEXP ) );
+
+    if( !oldFilePI || !kicadPI )
+        return false;
+
     wxArrayString fpNames;
     wxFileName newFileName( aNewFilePath );
 
@@ -245,18 +252,24 @@ bool PCB_IO_MGR::ConvertLibrary( const std::map<std::string, UTF8>& aOldFileProp
                 // as a fatal error.
                 // this can be just a illegal filename used for the footprint
                 if( aReporter )
+                {
                     aReporter->Report( wxString::Format( "Footprint \"%s\" can't be saved. Skipped",
                                                          fpName ),
                                        SEVERITY::RPT_SEVERITY_WARNING );
+                }
             }
         }
     }
     catch( IO_ERROR& io_err )
     {
         if( aReporter )
+        {
             aReporter->Report( wxString::Format( "Library '%s' Convert err: \"%s\"",
-                                             aOldFilePath, io_err.What() ),
+                                                 aOldFilePath,
+                                                 io_err.What() ),
                                 SEVERITY::RPT_SEVERITY_ERROR );
+        }
+
         return false;
     }
     catch( ... )
@@ -324,6 +337,11 @@ static PCB_IO_MGR::REGISTER_PLUGIN registerEasyEDAProPlugin(
         wxT( "EasyEDA / JLCEDA Pro" ),
         []() -> PCB_IO* { return new PCB_IO_EASYEDAPRO; });
 
+static PCB_IO_MGR::REGISTER_PLUGIN registerEasyEDAProV3Plugin(
+        PCB_IO_MGR::EASYEDAPRO_V3,
+        wxT( "EasyEDA / JLCEDA Pro v3" ),
+        []() -> PCB_IO* { return new PCB_IO_EASYEDAPRO_V3; });
+
 static PCB_IO_MGR::REGISTER_PLUGIN registerFabmasterPlugin(
         PCB_IO_MGR::FABMASTER,
         wxT( "Fabmaster" ),
@@ -363,4 +381,14 @@ static PCB_IO_MGR::REGISTER_PLUGIN registerSprintLayoutPlugin(
         PCB_IO_MGR::SPRINT_LAYOUT,
         wxT( "Sprint Layout" ),
         []() -> PCB_IO* { return new PCB_IO_SPRINT_LAYOUT; } );
+
+static PCB_IO_MGR::REGISTER_PLUGIN registerDipTracePlugin(
+        PCB_IO_MGR::DIPTRACE,
+        wxT( "DipTrace" ),
+        []() -> PCB_IO* { return new PCB_IO_DIPTRACE; } );
+
+static PCB_IO_MGR::REGISTER_PLUGIN registerAutotraxPlugin(
+        PCB_IO_MGR::AUTOTRAX,
+        wxT( "Protel Autotrax" ),
+        []() -> PCB_IO* { return new PCB_IO_AUTOTRAX; } );
 // clang-format on

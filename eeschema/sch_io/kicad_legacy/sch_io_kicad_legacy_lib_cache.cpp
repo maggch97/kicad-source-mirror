@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <magic_enum.hpp>
@@ -917,6 +917,12 @@ SCH_SHAPE* SCH_IO_KICAD_LEGACY_LIB_CACHE::loadArc( LINE_READER& aReader )
         arc->SetEnd( arc->GetStart() );
         arc->SetStart( temp );
     }
+
+    // Re-run SetArcGeometry so the internal representation matches what the s-expression
+    // loader produces. Without this, the arc center stored internally after a legacy load
+    // differs from the center recalculated by SetArcGeometry during s-expression load,
+    // causing false ERC "symbol mismatch" warnings after save and reopen.
+    arc->SetArcGeometry( arc->GetStart(), arc->GetArcMid(), arc->GetEnd() );
 
     return arc;
 }

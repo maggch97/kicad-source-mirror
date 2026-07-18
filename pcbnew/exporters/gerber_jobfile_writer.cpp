@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -356,6 +352,11 @@ void GERBER_JOBFILE_WRITER::addJSONFilesAttributes()
                 gbr_layer_id << wxT( "Inr" );
         }
 
+        else if( IsUserLayer( layer ) )
+        {
+            gbr_layer_id = wxT( "Other,User" );
+        }
+
         else
         {
             switch( layer )
@@ -405,22 +406,6 @@ void GERBER_JOBFILE_WRITER::addJSONFilesAttributes()
             case B_CrtYd:
             case F_CrtYd:
                 skip_file = true;
-                break;
-
-            case Dwgs_User:
-            case Cmts_User:
-            case Eco1_User:
-            case Eco2_User:
-            case User_1:
-            case User_2:
-            case User_3:
-            case User_4:
-            case User_5:
-            case User_6:
-            case User_7:
-            case User_8:
-            case User_9:
-                gbr_layer_id = wxT( "Other,User" );
                 break;
 
             default:

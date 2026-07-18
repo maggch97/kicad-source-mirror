@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <functional>
@@ -499,18 +495,19 @@ void PCB_BASE_EDIT_FRAME::PutDataInPreviousState( PICKED_ITEMS_LIST* aList, bool
                 BOARD_ITEM*           image = static_cast<BOARD_ITEM*>( aList->GetPickedItemLink( ii ) );
                 BOARD_ITEM_CONTAINER* parent = GetBoard();
 
+                // The stored pointer can be stale if a swap (e.g. ExchangeFootprint)
+                // replaced the live item earlier. Resolve by UUID to find the current one.
+                if( BOARD_ITEM* resolved = GetBoard()->ResolveItem( item->m_Uuid, true ) )
+                    item = resolved;
+
                 if( item->GetParentFootprint() )
-                {
-                    // We need the current item and it's parent, which may be different from what
-                    // was stored if we're multiple frames up the undo stack.
-                    item = GetBoard()->ResolveItem( item->m_Uuid );
                     parent = item->GetParentFootprint();
-                }
 
                 view->Remove( item );
                 parent->Remove( item, REMOVE_MODE::BULK );
 
-                item->SwapItemData( image );
+                if( item->Type() != PCB_MARKER_T )
+                    item->SwapItemData( image );
 
                 clear_local_ratsnest_flags( item );
                 item->ClearFlags( UR_TRANSIENT );
@@ -640,6 +637,10 @@ void PCB_BASE_EDIT_FRAME::PutDataInPreviousState( PICKED_ITEMS_LIST* aList, bool
         BOARD_ITEM* parentGroup = GetBoard()->ResolveItem( wrapper.GetGroupId(), true );
         wrapper.GetItem()->SetParentGroup( dynamic_cast<PCB_GROUP*>( parentGroup ) );
 
+        // Restore the group's member list, which BOARD::Remove() cleared above.
+        if( PCB_GROUP* parentPcbGroup = dynamic_cast<PCB_GROUP*>( parentGroup ) )
+            parentPcbGroup->GetItems().insert( wrapper.GetItem() );
+
         if( EDA_GROUP* group = dynamic_cast<PCB_GROUP*>( wrapper.GetItem() ) )
         {
             // Items list may contain dodgy pointers, so don't use RemoveAll()
@@ -669,7 +670,7 @@ void PCB_BASE_EDIT_FRAME::PutDataInPreviousState( PICKED_ITEMS_LIST* aList, bool
         {
             // Connectivity may have changed; rebuild internal caches to remove stale items
             GetBoard()->BuildConnectivity();
-            Compile_Ratsnest( false );
+            GetBoard()->CompileRatsnest();
         }
 
         if( solder_mask_dirty )

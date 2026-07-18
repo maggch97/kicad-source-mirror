@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -124,11 +124,16 @@ protected:
     /// Working copy of a table
     LIBRARY_TABLE m_table;
 
+    /// Cached read-only state of the underlying table file.  Computed once at
+    /// construction to avoid filesystem stat() calls during grid rendering.
+    bool m_readOnly;
+
     std::function<void()> m_changeCallback;
 
     wxGridCellAttr* m_uriEditor;
     wxGridCellAttr* m_typesEditor;
     wxGridCellAttr* m_boolAttr;
+    wxGridCellAttr* m_readOnlyAttr;
     wxGridCellAttr* m_warningAttr;
     wxGridCellAttr* m_noStatusAttr;
     wxGridCellAttr* m_editSettingsAttr;

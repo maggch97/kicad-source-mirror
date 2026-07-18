@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -30,6 +26,7 @@ class DIALOG_GROUP_PROPERTIES;
 class EDA_DRAW_FRAME;
 class EDA_GROUP;
 class SELECTION_TOOL;
+class wxString;
 
 
 class GROUP_TOOL : public TOOL_INTERACTIVE
@@ -70,6 +67,9 @@ public:
 protected:
     ///< Set up handlers for various events.
     void setTransitions() override;
+
+    ///< Check if an item can be a direct member of a group.
+    virtual bool canGroupItem( EDA_ITEM* aItem, wxString& aErrorMsg ) const = 0;
 
     ///< Get the correctly casted group type from the item.
     /// Works around our lack of working dynamic_cast.

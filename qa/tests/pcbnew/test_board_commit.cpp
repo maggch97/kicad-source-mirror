@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <boost/test/unit_test.hpp>
@@ -23,9 +23,12 @@
 #include <board.h>
 #include <board_commit.h>
 #include <footprint.h>
+#include <pad.h>
 #include <pcb_shape.h>
 #include <pcb_text.h>
 #include <pcb_group.h>
+#include <pcb_view.h>
+#include <tools/pcb_selection_tool.h>
 
 BOOST_AUTO_TEST_SUITE( BoardCommit )
 
@@ -99,6 +102,64 @@ BOOST_AUTO_TEST_CASE( RemoveFootprintTextFromBoardEditor )
     }
 
     BOOST_CHECK_EQUAL( fp->GraphicalItems().size(), 0 );
+}
+
+// A COMMIT object reused across Push() calls (such as the group tool's persistent commit)
+// must not carry m_addedItems from one commit into the next.  If it does, modifying a
+// previously-added item in a later commit is silently dropped and no undo entry is created.
+// This is the root cause of nested-group undo corruption (work item 24146).
+BOOST_AUTO_TEST_CASE( ReusedCommitModifyAfterAdd )
+{
+    BOARD        board;
+    TOOL_MANAGER mgr;
+    mgr.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+    KI_TEST::DUMMY_TOOL* dummyTool = new KI_TEST::DUMMY_TOOL();
+    mgr.RegisterTool( dummyTool );
+
+    BOARD_COMMIT commit( &mgr, true, false );
+
+    PCB_SHAPE* shape = new PCB_SHAPE( &board, SHAPE_T::SEGMENT );
+
+    // First commit adds the shape.  After Push the commit is reused.
+    commit.Add( shape );
+    commit.Push( wxT( "Add" ), SKIP_UNDO );
+
+    // Modifying the already-added shape in the next commit must record a change.
+    commit.Modify( shape );
+    BOOST_CHECK_EQUAL( commit.GetStatus( shape ), CHT_MODIFY );
+}
+
+// Removing a footprint frees its pads, fields and other owned children with it.  A child that
+// sits in the selection on its own (the footprint itself unselected) must be pruned as well, or
+// PCB_SELECTION::updateDrawList() dereferences the freed child on the next repaint.
+BOOST_AUTO_TEST_CASE( RemoveFootprintPrunesSelectedChildren )
+{
+    BOARD           board;
+    KIGFX::PCB_VIEW view;
+    TOOL_MANAGER    mgr;
+    mgr.SetEnvironment( &board, &view, nullptr, nullptr, nullptr );
+
+    PCB_SELECTION_TOOL* selTool = new PCB_SELECTION_TOOL;
+    mgr.RegisterTool( selTool );
+
+    FOOTPRINT* fp = new FOOTPRINT( &board );
+    PAD*       pad = new PAD( fp );
+    fp->Add( pad );
+    board.Add( fp );
+
+    selTool->AddItemToSel( pad, true );
+
+    BOOST_REQUIRE( selTool->GetSelection().Contains( pad ) );
+    BOOST_REQUIRE( !fp->IsSelected() );
+
+    BOARD_COMMIT commit( &mgr, true, false );
+    commit.Remove( fp );
+    commit.Push( wxT( "Delete footprint" ), SKIP_UNDO | SKIP_TEARDROPS );
+
+    BOOST_CHECK( !selTool->GetSelection().Contains( pad ) );
+
+    // With SKIP_UNDO the removed footprint is ours to free
+    delete fp;
 }
 
 BOOST_AUTO_TEST_SUITE_END()

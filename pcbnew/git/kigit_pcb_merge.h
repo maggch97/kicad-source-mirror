@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef KIGIT_PCB_MERGE_H
@@ -26,7 +22,6 @@
 #include <git2.h>
 #include <git2/sys/merge.h>
 
-#include <memory>
 #include <wx/string.h>
 
 #include <board.h>
@@ -44,9 +39,17 @@ class KIGIT_PCB_MERGE
         KIGIT_PCB_MERGE( git_merge_driver_source* aSource, git_buf* aBuf ) : m_mergeDriver( aSource ), m_result( aBuf )
         {}
 
-        virtual ~KIGIT_PCB_MERGE();
+        virtual ~KIGIT_PCB_MERGE() = default;
 
         int Merge();
+
+        /**
+         * libgit2 merge-driver apply callback shim. Registered with the
+         * driver registry under the name "kicad-pcb" so `.gitattributes`
+         * entries `merge=kicad-pcb` route here.
+         */
+        static int Apply( const git_merge_driver_source* aSrc, const char** aPathOut,
+                          unsigned int* aModeOut, git_buf* aMergedOut );
 
         std::set<BOARD_ITEM*>& GetWeModifiedTheyDeleted()
         {
@@ -64,7 +67,6 @@ class KIGIT_PCB_MERGE
         }
 
     protected:
-        std::unique_ptr<BOARD> readBoard( wxString& aFilename );
         KIGIT_PCB_MERGE_DIFFERENCES compareBoards( BOARD* aAncestor, BOARD* aOther );
         void findSetDifferences( const BOARD_ITEM_SET& aAncestorSet, const BOARD_ITEM_SET& aOtherSet,
                                  std::vector<BOARD_ITEM*>& aAdded, std::vector<BOARD_ITEM*>& aRemoved,

@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>                          // for min
@@ -763,6 +759,7 @@ void BRDITEMS_PLOTTER::PlotText( const EDA_TEXT* aText, PCB_LAYER_ID aLayer, boo
     const VECTOR2I& pos = aText->GetTextPos();
 
     TEXT_ATTRIBUTES attrs = aText->GetAttributes();
+    attrs.m_Size = aText->GetTextSize();
     attrs.m_StrokeWidth = aText->GetEffectiveTextPenWidth();
     attrs.m_Angle = aText->GetDrawRotation();
     attrs.m_Multiline = false;
@@ -1344,7 +1341,9 @@ void BRDITEMS_PLOTTER::PlotDrillMarks()
             if( pad->GetDrillSize().x == 0 )
                 continue;
 
-            if( ( pad->GetLayerSet() & m_layerMask ).none() )
+            // Skip marks on layers the pad isn't on for Gerber only (24416). Other
+            // formats keep them as a drill map, e.g. Edge.Cuts (24867).
+            if( m_plotter->GetPlotterType() == PLOT_FORMAT::GERBER && ( pad->GetLayerSet() & m_layerMask ).none() )
                 continue;
 
             if( m_plotter->GetPlotterType() != PLOT_FORMAT::DXF || GetDXFPlotMode() == FILLED )

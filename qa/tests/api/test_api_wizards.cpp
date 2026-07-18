@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <boost/test/unit_test.hpp>
@@ -29,7 +29,6 @@
 BOOST_AUTO_TEST_SUITE( ApiWizards )
 
 
-#ifdef KICAD_IPC_API
 BOOST_AUTO_TEST_CASE( QueryWizards )
 {
     wxFileName qaPath( KI_TEST::GetPcbnewTestDataDir() );
@@ -80,6 +79,5 @@ BOOST_AUTO_TEST_CASE( QueryWizards )
         }
     }
 }
-#endif
 
 BOOST_AUTO_TEST_SUITE_END()

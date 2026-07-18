@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef GRAPHICS_IMPORTER_BUFFER_H
@@ -32,6 +28,7 @@
 #include <math/matrix3x3.h>
 #include <math/box2.h>
 #include <list>
+#include <wx/string.h>
 
 
 class IMPORTED_SHAPE
@@ -47,10 +44,14 @@ public:
     void SetParentShapeIndex( int aIndex ) { m_parentShapeIndex = aIndex; }
     int  GetParentShapeIndex() const { return m_parentShapeIndex; }
 
+    void            SetSourceLayer( const wxString& aSourceLayer ) { m_sourceLayer = aSourceLayer; }
+    const wxString& GetSourceLayer() const { return m_sourceLayer; }
+
     virtual BOX2D GetBoundingBox() const = 0;
 
 protected:
     int m_parentShapeIndex = -1;
+    wxString m_sourceLayer;
 };
 
 
@@ -478,6 +479,10 @@ private:
 class GRAPHICS_IMPORTER_BUFFER : public GRAPHICS_IMPORTER
 {
 public:
+    void SetCurrentSourceLayer( const wxString& aSourceLayer ) override { m_currentSourceLayer = aSourceLayer; }
+
+    const wxString& GetCurrentSourceLayer() const { return m_currentSourceLayer; }
+
     void AddLine( const VECTOR2D& aStart, const VECTOR2D& aEnd,
                   const IMPORTED_STROKE& aStroke ) override;
 
@@ -512,6 +517,8 @@ public:
 
     std::list<std::unique_ptr<IMPORTED_SHAPE>>& GetShapes() { return m_shapes; }
 
+    std::vector<wxString> GetSourceLayers() const;
+
     void ClearShapes() { m_shapes.clear(); }
 
     void PostprocessNestedPolygons();
@@ -519,6 +526,7 @@ public:
 protected:
     /// List of imported shapes.
     std::list<std::unique_ptr<IMPORTED_SHAPE>> m_shapes;
+    wxString                                   m_currentSourceLayer;
 };
 
 #endif /* GRAPHICS_IMPORTER_BUFFER */

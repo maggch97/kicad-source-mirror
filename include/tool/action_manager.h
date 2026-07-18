@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef ACTION_MANAGER_H_
@@ -29,9 +25,12 @@
 
 #include <list>
 #include <map>
+#include <optional>
 #include <string>
 #include <set>
+#include <vector>
 
+#include <frame_type.h>
 #include <tool/selection_conditions.h>
 
 class TOOL_BASE;
@@ -66,15 +65,41 @@ struct ACTION_CONDITIONS
         return *this;
     }
 
+    /**
+     * Set a separate condition for direct command dispatch (hotkeys and navlib buttons). When set,
+     * it is used instead of enableCondition, allowing menu items to appear disabled while the
+     * action still fires for immediate-mode operations like rotate and mirror.
+     */
+    ACTION_CONDITIONS& HotkeyEnable( const SELECTION_CONDITION& aCondition )
+    {
+        hotkeyCondition = aCondition;
+        return *this;
+    }
+
     ACTION_CONDITIONS& Show( const SELECTION_CONDITION& aCondition )
     {
         showCondition = aCondition;
         return *this;
     }
 
+    /**
+     * Return the condition that direct command dispatch should use, falling back to
+     * enableCondition when no separate dispatch condition has been set.
+     */
+    const SELECTION_CONDITION& GetHotkeyCondition() const
+    {
+        if( hotkeyCondition )
+            return *hotkeyCondition;
+
+        return enableCondition;
+    }
+
     SELECTION_CONDITION checkCondition;     ///< Returns true if the UI control should be checked
     SELECTION_CONDITION enableCondition;    ///< Returns true if the UI control should be enabled
     SELECTION_CONDITION showCondition;      ///< Returns true if the UI control should be shown
+
+    /// Optional separate condition for hotkey dispatch (when empty, enableCondition is used)
+    std::optional<SELECTION_CONDITION> hotkeyCondition;
 };
 
 /**
@@ -133,6 +158,19 @@ public:
      * @return True if there was an action associated with the hotkey, false otherwise.
      */
     bool RunHotKey( int aHotKey ) const;
+
+    /**
+     * Return the action-name namespace prefix (e.g. "pcbnew.", "eeschema.") shared by the
+     * actions native to a given frame, or an empty string when the frame has no namespace.
+     */
+    static std::string FrameNamespacePrefix( FRAME_T aFrameType );
+
+    /**
+     * Reorder global actions sharing a hotkey so that one native to the given frame is tried
+     * first when the user has bound the matched slot away from its default.
+     */
+    static void PromoteUserBoundFrameAction( std::vector<const TOOL_ACTION*>& aGlobalActions, FRAME_T aFrameType,
+                                             int aMatchedHotKey );
 
     /**
      * Return the hot key associated with a given action or 0 if there is none.

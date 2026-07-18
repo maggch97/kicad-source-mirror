@@ -16,12 +16,10 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+
+#include <set>
 
 #include <refdes_utils.h>
 #include <hash.h>
@@ -103,6 +101,19 @@ void SCH_SYMBOL_VARIANT::InitializeAttributes( const SCH_SYMBOL& aSymbol )
     m_ExcludedFromSim = aSymbol.GetExcludedFromSim();
     m_ExcludedFromBoard = aSymbol.GetExcludedFromBoard();
     m_ExcludedFromPosFiles = aSymbol.GetExcludedFromPosFiles();
+
+    // Snapshot the base pin-map override so a variant created for an unrelated attribute does not
+    // mask the base override on read (issue #2282).
+    m_PinMapOverride = aSymbol.GetPinMapOverride();
+}
+
+
+bool SCH_SYMBOL_VARIANT::HasDifferentials( const SCH_SYMBOL& aSymbol ) const
+{
+    return m_DNP != aSymbol.GetDNP() || m_ExcludedFromBOM != aSymbol.GetExcludedFromBOM()
+           || m_ExcludedFromSim != aSymbol.GetExcludedFromSim() || m_ExcludedFromBoard != aSymbol.GetExcludedFromBoard()
+           || m_ExcludedFromPosFiles != aSymbol.GetExcludedFromPosFiles() || !m_Fields.empty()
+           || !m_PinMapOverride.IsDefault();
 }
 
 
@@ -113,6 +124,13 @@ void SCH_SHEET_VARIANT::InitializeAttributes( const SCH_SHEET& aSheet )
     m_ExcludedFromSim = aSheet.GetExcludedFromSim();
     m_ExcludedFromBoard = aSheet.GetExcludedFromBoard();
     m_ExcludedFromPosFiles = false;  // Sheets don't have position files exclusion
+}
+
+
+bool SCH_SHEET_VARIANT::HasDifferentials( const SCH_SHEET& aSheet ) const
+{
+    return m_DNP != aSheet.GetDNP() || m_ExcludedFromBOM != aSheet.GetExcludedFromBOM()
+           || m_ExcludedFromSim != aSheet.GetExcludedFromSim() || !m_Fields.empty();
 }
 
 
@@ -153,6 +171,8 @@ SCH_SHEET_PATH& SCH_SHEET_PATH::operator=( SCH_SHEET_PATH&& aOther )
     m_virtualPageNumber  = aOther.m_virtualPageNumber;
     m_current_hash       = aOther.m_current_hash;
     m_cached_page_number = aOther.m_cached_page_number;
+    m_cached_path_valid  = aOther.m_cached_path_valid;
+    m_cached_path        = std::move( aOther.m_cached_path );
 
     m_recursion_test_cache = std::move( aOther.m_recursion_test_cache );
 
@@ -179,6 +199,8 @@ void SCH_SHEET_PATH::initFromOther( const SCH_SHEET_PATH& aOther )
     m_virtualPageNumber  = aOther.m_virtualPageNumber;
     m_current_hash       = aOther.m_current_hash;
     m_cached_page_number = aOther.m_cached_page_number;
+    m_cached_path_valid  = aOther.m_cached_path_valid;
+    m_cached_path        = aOther.m_cached_path;
 
     // Note: don't copy m_recursion_test_cache as it is slow and we want std::vector<SCH_SHEET_PATH>
     // to be very fast to construct for use in the connectivity algorithm.
@@ -188,6 +210,7 @@ void SCH_SHEET_PATH::initFromOther( const SCH_SHEET_PATH& aOther )
 void SCH_SHEET_PATH::Rehash()
 {
     m_current_hash = 0;
+    m_cached_path_valid = false;
 
     for( SCH_SHEET* sheet : m_sheets )
         hash_combine( m_current_hash, sheet->m_Uuid.Hash() );
@@ -437,27 +460,34 @@ wxString SCH_SHEET_PATH::PathAsString() const
 
 KIID_PATH SCH_SHEET_PATH::Path() const
 {
-    KIID_PATH path;
+    if( m_cached_path_valid )
+        return m_cached_path;
+
+    m_cached_path.clear();
     size_t size = m_sheets.size();
 
     if( m_sheets.empty() )
-        return path;
+    {
+        m_cached_path_valid = true;
+        return m_cached_path;
+    }
 
     if( m_sheets[0]->m_Uuid != niluuid )
     {
-        path.reserve( size );
-        path.push_back( m_sheets[0]->m_Uuid );
+        m_cached_path.reserve( size );
+        m_cached_path.push_back( m_sheets[0]->m_Uuid );
     }
     else
     {
         // Skip the virtual root
-        path.reserve( size - 1 );
+        m_cached_path.reserve( size - 1 );
     }
 
     for( size_t i = 1; i < size; i++ )
-        path.push_back( m_sheets[i]->m_Uuid );
+        m_cached_path.push_back( m_sheets[i]->m_Uuid );
 
-    return path;
+    m_cached_path_valid = true;
+    return m_cached_path;
 }
 
 
@@ -534,18 +564,13 @@ void SCH_SHEET_PATH::UpdateAllScreenReferences() const
                         || aItem->Type() == SCH_SHAPE_T );
             } );
 
-    std::optional<wxString> variantName;
-    const SCHEMATIC* schematic = LastScreen()->Schematic();
-
-    if( schematic )
-        variantName = schematic->GetCurrentVariant();
-
     for( SCH_ITEM* item : items )
     {
         if( item->Type() == SCH_SYMBOL_T )
         {
             SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
 
+            // GetRef() and GetUnitSelection() are O(1) via the symbol's instance path index.
             symbol->GetField( FIELD_T::REFERENCE )->SetText( symbol->GetRef( this ) );
             symbol->SetUnit( symbol->GetUnitSelection( this ) );
             LastScreen()->Update( item, false );
@@ -888,8 +913,7 @@ void SCH_SHEET_PATH::CheckForMissingSymbolInstances( const wxString& aProjectNam
 
             // Legacy schematics that are not shared do not contain separate instance data.
             // The symbol reference and unit are saved in the reference field and unit entries.
-            if( ( LastScreen()->GetRefCount() <= 1 ) &&
-                ( LastScreen()->GetFileFormatVersionAtLoad() <= 20200310 ) )
+            if( !IsSharedPath() && ( LastScreen()->GetFileFormatVersionAtLoad() <= 20200310 ) )
             {
                 SCH_FIELD* refField = symbol->GetField( FIELD_T::REFERENCE );
                 symbolInstance.m_Reference = refField->GetShownText( this, true );
@@ -996,6 +1020,24 @@ void SCH_SHEET_PATH::MakeFilePathRelativeToParentSheet()
                      "\n    sheet '%s' file name '%s'." ),
                 screen->GetFileName(), parentScreen->GetFileName(), PathHumanReadable(),
                 Last()->GetFileName() );
+}
+
+
+bool SCH_SHEET_PATH::IsSharedPath() const
+{
+    SCH_SHEET_PATH tmp = *this;
+
+    while( !tmp.empty() )
+    {
+        wxCHECK2( tmp.LastScreen(), continue );
+
+        if( tmp.LastScreen()->GetRefCount() > 1 )
+            return true;
+
+        tmp.pop_back();
+    }
+
+    return false;
 }
 
 
@@ -1692,6 +1734,60 @@ void SCH_SHEET_LIST::SetInitialPageNumbers()
         instance.SetPageNumber( tmp );
         pageNumber += 1;
     }
+}
+
+
+bool SCH_SHEET_LIST::RepairPageNumbers()
+{
+    // A page number is claimed by the first sheet in the list that uses it.  Any sheet with an
+    // empty page number, or one repeating a number an earlier sheet already claimed, is reassigned
+    // to the lowest unused positive integer.  The stored string is compared as-is, so custom
+    // schemes (e.g. "A", "1.1") are preserved when unique.  Every distinct existing page number is
+    // reserved up front so a reassignment never steals a number a later, non-conflicting sheet
+    // already holds.
+    std::set<wxString> reservedPageIds;
+
+    for( const SCH_SHEET_PATH& instance : *this )
+    {
+        if( instance.Last()->IsVirtualRootSheet() )
+            continue;
+
+        const wxString pageNumber = instance.GetPageNumber();
+
+        if( !pageNumber.IsEmpty() )
+            reservedPageIds.insert( pageNumber );
+    }
+
+    std::set<wxString> assignedPageIds;
+    bool               modified = false;
+    long               nextPage = 1;
+
+    for( SCH_SHEET_PATH& instance : *this )
+    {
+        if( instance.Last()->IsVirtualRootSheet() )
+            continue;
+
+        const wxString pageNumber = instance.GetPageNumber();
+
+        // Keep the first sheet to claim a given page number.
+        if( !pageNumber.IsEmpty() && assignedPageIds.insert( pageNumber ).second )
+            continue;
+
+        wxString pageStr = wxString::Format( wxT( "%ld" ), nextPage );
+
+        while( reservedPageIds.count( pageStr ) || assignedPageIds.count( pageStr ) )
+        {
+            nextPage++;
+            pageStr = wxString::Format( wxT( "%ld" ), nextPage );
+        }
+
+        instance.SetPageNumber( pageStr );
+        assignedPageIds.insert( pageStr );
+        nextPage++;
+        modified = true;
+    }
+
+    return modified;
 }
 
 

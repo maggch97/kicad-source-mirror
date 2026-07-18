@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <bitmaps.h>
@@ -85,7 +81,7 @@ bool DIALOG_IMPORT_SETTINGS::UpdateImportSettingsButton()
               || m_NetclassesOpt->IsChecked() || m_SeveritiesOpt->IsChecked() || m_TextAndGraphicsOpt->IsChecked()
               || m_FormattingOpt->IsChecked() || m_TracksAndViasOpt->IsChecked() || m_TuningPatternsOpt->IsChecked()
               || m_CustomRulesOpt->IsChecked() || m_ComponentClassesOpt->IsChecked() || m_TuningProfilesOpt->IsChecked()
-              || m_TeardropsOpt->IsChecked() );
+              || m_TeardropsOpt->IsChecked() || m_ZonesOpt->IsChecked() || m_ZoneHatchingOffsetsOpt->IsChecked() );
 
     m_sdbSizer1OK->Enable( buttonEnableState );
 
@@ -112,7 +108,13 @@ bool DIALOG_IMPORT_SETTINGS::TransferDataToWindow()
 
 void DIALOG_IMPORT_SETTINGS::OnBrowseClicked( wxCommandEvent& event )
 {
-    wxFileName fn = m_frame->GetBoard()->GetFileName();
+    // Honor a path the user has already entered; fall back to the board's location
+    // when the field is empty or its directory no longer exists.
+    wxString   currentPath = m_filePathCtrl->GetValue();
+    wxFileName fn( currentPath.IsEmpty() ? m_frame->GetBoard()->GetFileName() : currentPath );
+
+    if( !fn.DirExists() )
+        fn = m_frame->GetBoard()->GetFileName();
 
     wxFileDialog dlg( this, _( "Import Settings From" ), fn.GetPath(), fn.GetFullName(),
                       FILEEXT::PcbFileWildcard(),
@@ -148,6 +150,8 @@ void DIALOG_IMPORT_SETTINGS::OnSelectAll( wxCommandEvent& event )
     m_ConstraintsOpt->SetValue( m_showSelectAllOnBtn );
     m_NetclassesOpt->SetValue( m_showSelectAllOnBtn );
     m_TracksAndViasOpt->SetValue( m_showSelectAllOnBtn );
+    m_ZonesOpt->SetValue( m_showSelectAllOnBtn );
+    m_ZoneHatchingOffsetsOpt->SetValue( m_showSelectAllOnBtn );
     m_MaskAndPasteOpt->SetValue( m_showSelectAllOnBtn );
     m_SeveritiesOpt->SetValue( m_showSelectAllOnBtn );
     m_TeardropsOpt->SetValue( m_showSelectAllOnBtn );

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -1218,7 +1214,7 @@ struct PADSTACK_COMPONENT
      * * 0x0F objects when the type is 0x06
      * * 0x28 objects when the type is 0x16
      */
-    uint32_t m_StrPtr;
+    uint32_t m_ShapePtr;
 
     // In versions < 17.2, seems to be not present in the last entry.
     std::optional<uint32_t> m_Z2;
@@ -1357,7 +1353,7 @@ struct BLK_0x1C_PADSTACK
      * The number of something. Drives the size of an array (with a multiplier).
      */
     uint8_t  m_N;
-    uint8_t  m_UnknownByte2;
+    uint8_t  m_StartLayer;
     uint32_t m_Key;
     uint32_t m_Next;
 
@@ -2035,9 +2031,10 @@ struct BLK_0x30_STR_WRAPPER
 
     enum class TEXT_REVERSAL
     {
-        STRAIGHT,
-        REVERSED,
-        UNKNOWN,
+        STRAIGHT = 0,
+        REVERSED = 1,
+        REVERSED_3 = 3, // Seen on some boards
+        UNKNOWN
     };
 
     enum class TEXT_ALIGNMENT
@@ -2279,8 +2276,9 @@ struct BLK_0x36_DEF_TABLE
     {
         std::array<uint8_t, 28> m_Unknown;
 
-        // This is in Nvidia Jetson (17.4), not in EVK BaseBoard (17.2)
-        COND_GE<FMT_VER::V_174, uint32_t> m_Unknown2;
+        // The trailing word first appears in 17.5. On 17.4 the record is 28 bytes, and
+        // reading a phantom word here overruns every slot and desyncs the object stream.
+        COND_GE<FMT_VER::V_175, uint32_t> m_Unknown2;
     };
 
     struct X06

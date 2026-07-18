@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -27,8 +27,11 @@
 #include <vector>
 #include <common.h>
 #include <env_paths.h>
+#include <env_vars.h>
+#include <jobs/job_export_pcb_stats.h>
 #include <pgm_base.h>
 #include <settings/environment.h>
+#include <title_block.h>
 #include <wx/filename.h>
 #include <wx/utils.h>
 
@@ -182,6 +185,140 @@ BOOST_AUTO_TEST_CASE( ConsecutiveEscaped )
     }
 
     BOOST_CHECK_EQUAL( dollarCount, 2 );
+}
+
+// Issue 23599: backslash path separator before text variable should NOT be treated as an escape.
+// This test documents the ExpandTextVars behavior: \${ IS treated as an escape at this level.
+// The fix is applied at call sites that deal with file paths, which normalize backslashes to
+// forward slashes before calling ExpandTextVars.
+BOOST_AUTO_TEST_CASE( BackslashBeforeVariableIsEscape )
+{
+    wxString result = ExpandTextVars( wxT( "subdir\\${VAR}_file.txt" ), &resolver );
+
+    // ExpandTextVars treats \${ as an escape, so VAR is NOT expanded
+    BOOST_CHECK( result.Contains( wxT( "<<<ESC_DOLLAR:" ) ) );
+}
+
+
+// With forward slashes the variable is expanded normally
+BOOST_AUTO_TEST_CASE( ForwardSlashBeforeVariableExpands )
+{
+    wxString result = ExpandTextVars( wxT( "subdir/${VAR}_file.txt" ), &resolver );
+
+    BOOST_CHECK( result == wxT( "subdir/value_file.txt" ) );
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+
+// Issue 24776: user-entered file paths with a text variable immediately after a backslash
+// separator (e.g. the Symbol Fields Table BOM export path "Output\BoM\${PROJECTNAME}.csv")
+// must expand. Callers route the path through NormalizeFilePathForTextVars before ExpandTextVars.
+BOOST_FIXTURE_TEST_SUITE( NormalizeFilePathForTextVarsTests, ExpandTextVarsFixture )
+
+BOOST_AUTO_TEST_CASE( BackslashSeparatorBeforeVarExpands )
+{
+    wxString path = NormalizeFilePathForTextVars( wxT( "Output\\BoM\\${VAR}_file.csv" ) );
+    wxString result = ExpandTextVars( path, &resolver );
+
+    // Only the backslash immediately before the variable is rewritten to a separator; the
+    // variable expands and the earlier literal backslash is preserved.
+    BOOST_CHECK_MESSAGE( !result.Contains( wxT( "<<<ESC_DOLLAR:" ) ),
+                         "Variable after backslash separator should expand, not escape. Got: " + result );
+    BOOST_CHECK( result == wxT( "Output\\BoM/value_file.csv" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( MultipleVarsAfterBackslashSeparators )
+{
+    wxString path = NormalizeFilePathForTextVars( wxT( "Output\\BoM\\${X}_V${Y}.csv" ) );
+    wxString result = ExpandTextVars( path, &resolver );
+
+    BOOST_CHECK( result == wxT( "Output\\BoM/5_V2.csv" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ForwardSlashPathUnchanged )
+{
+    wxString path = NormalizeFilePathForTextVars( wxT( "Output/BoM/${VAR}.csv" ) );
+    wxString result = ExpandTextVars( path, &resolver );
+
+    BOOST_CHECK( result == wxT( "Output/BoM/value.csv" ) );
+}
+
+
+// Backslashes that do not immediately precede a text variable are a legitimate part of the
+// filename (notably on POSIX) and must survive normalization unchanged.
+BOOST_AUTO_TEST_CASE( NonVariableBackslashesArePreserved )
+{
+    wxString path = NormalizeFilePathForTextVars( wxT( "Output\\BoM\\literal.csv" ) );
+
+    BOOST_CHECK( path == wxT( "Output\\BoM\\literal.csv" ) );
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+
+// Issue 23599: JOB::ResolveOutputPath must expand text variables even when preceded by backslash
+// path separators. This suite tests the fix in ResolveOutputPath that normalizes backslashes
+// before calling ExpandTextVars.
+BOOST_AUTO_TEST_SUITE( JobResolveOutputPath )
+
+BOOST_AUTO_TEST_CASE( BackslashPathSeparatorBeforeTextVar )
+{
+    JOB_EXPORT_PCB_STATS job;
+
+    TITLE_BLOCK titleBlock;
+    titleBlock.SetRevision( wxT( "RevA" ) );
+    job.SetTitleBlock( titleBlock );
+
+    // Simulates Windows path with text variable immediately after backslash separator
+    wxString path = wxT( "Board Stats\\${REVISION}_Stats.txt" );
+    wxString result = job.ResolveOutputPath( path, false, nullptr );
+
+    // The variable should be expanded, not escaped
+    BOOST_CHECK_MESSAGE( !result.Contains( wxT( "<<<ESC_DOLLAR:" ) ),
+                         "Text variable after backslash path separator should not be escaped. Got: "
+                                 + result );
+    BOOST_CHECK_MESSAGE( result.Contains( wxT( "RevA" ) ),
+                         "Expected resolved REVISION in path. Got: " + result );
+}
+
+
+BOOST_AUTO_TEST_CASE( BackslashPathSeparatorBeforeMultipleTextVars )
+{
+    JOB_EXPORT_PCB_STATS job;
+
+    TITLE_BLOCK titleBlock;
+    titleBlock.SetRevision( wxT( "B" ) );
+    titleBlock.SetComment( 0, wxT( "DWG-001" ) );
+    job.SetTitleBlock( titleBlock );
+
+    // The COMMENT1 variable maps to Comment(0) in TITLE_BLOCK
+    wxString path = wxT( "Output\\${COMMENT1}_${REVISION}_file.txt" );
+    wxString result = job.ResolveOutputPath( path, false, nullptr );
+
+    BOOST_CHECK_MESSAGE( result.Contains( wxT( "DWG-001" ) ),
+                         "Expected COMMENT1 expanded in path. Got: " + result );
+    BOOST_CHECK_MESSAGE( result.Contains( wxT( "_B_" ) ),
+                         "Expected REVISION expanded in path. Got: " + result );
+}
+
+
+BOOST_AUTO_TEST_CASE( TextVarNotFirstInFilename )
+{
+    JOB_EXPORT_PCB_STATS job;
+
+    TITLE_BLOCK titleBlock;
+    titleBlock.SetRevision( wxT( "C" ) );
+    job.SetTitleBlock( titleBlock );
+
+    // When there's literal text between the backslash and the variable, it always worked
+    wxString path = wxT( "Output\\Generated_${REVISION}_file.txt" );
+    wxString result = job.ResolveOutputPath( path, false, nullptr );
+
+    BOOST_CHECK_MESSAGE( result.Contains( wxT( "Generated_C_file.txt" ) ),
+                         "Expected variable expansion with preceding literal text. Got: " + result );
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -452,6 +589,137 @@ BOOST_AUTO_TEST_CASE( UndefinedReferenceLeavesLiteralMarker )
 
     // Restore so the fixture destructor sees a known state.
     wxSetEnv( wxS( "KICAD_QA_INNER" ), innerPath );
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+
+/**
+ * Regression test for KiCad GitLab issue #24460.
+ *
+ * The expander has a compatibility fallback that resolves an unset versioned library var
+ * (e.g. KICAD7_FOOTPRINT_DIR on a v10 install) to the current install's library directory.
+ * That fallback was gated on the glob "KICAD*_FOOTPRINT_DIR", which also matches user-defined
+ * names such as KICAD_USER_FOOTPRINT_DIR.  When such a user var was not present in the process
+ * environment, the expander silently rewrote ${KICAD_USER_FOOTPRINT_DIR} to the stock footprint
+ * directory, so the library loaded from the wrong (empty) location with no error.
+ */
+struct VersionedEnvVarFallbackFixture
+{
+    wxString                versionedName;
+    wxString                stockDir;
+    std::optional<wxString> oldVersioned;
+    std::optional<wxString> oldUser;
+    std::optional<wxString> oldLegacy;
+
+    VersionedEnvVarFallbackFixture()
+    {
+        versionedName = ENV_VAR::GetVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) );
+        stockDir = wxString::FromUTF8(
+                ( std::filesystem::temp_directory_path() / "kicad-qa-24460-stock.pretty" ).generic_string() );
+
+        wxString existing;
+
+        if( wxGetEnv( versionedName, &existing ) )
+            oldVersioned = existing;
+
+        if( wxGetEnv( wxS( "KICAD_USER_FOOTPRINT_DIR" ), &existing ) )
+            oldUser = existing;
+
+        if( wxGetEnv( wxS( "KICAD5_FOOTPRINT_DIR" ), &existing ) )
+            oldLegacy = existing;
+
+        // The current install advertises a stock footprint directory; a stale user var and an
+        // older versioned var are both absent.
+        wxSetEnv( versionedName, stockDir );
+        wxUnsetEnv( wxS( "KICAD_USER_FOOTPRINT_DIR" ) );
+        wxUnsetEnv( wxS( "KICAD5_FOOTPRINT_DIR" ) );
+    }
+
+    ~VersionedEnvVarFallbackFixture()
+    {
+        auto restore = [&]( const wxString& aName, const std::optional<wxString>& aOld )
+        {
+            if( aOld )
+                wxSetEnv( aName, *aOld );
+            else
+                wxUnsetEnv( aName );
+        };
+
+        restore( versionedName, oldVersioned );
+        restore( wxS( "KICAD_USER_FOOTPRINT_DIR" ), oldUser );
+        restore( wxS( "KICAD5_FOOTPRINT_DIR" ), oldLegacy );
+    }
+};
+
+BOOST_FIXTURE_TEST_SUITE( VersionedEnvVarFallback, VersionedEnvVarFallbackFixture )
+
+BOOST_AUTO_TEST_CASE( UserVarIsNotTreatedAsVersionedLibraryDir )
+{
+    const wxString uri = wxS( "${KICAD_USER_FOOTPRINT_DIR}/conn_custom.pretty" );
+
+    wxString expanded = ExpandEnvVarSubstitutions( uri, nullptr );
+
+    // An unresolved user var must stay literal, never the stock library directory.
+    BOOST_CHECK_EQUAL( expanded, uri );
+    BOOST_CHECK( !expanded.Contains( stockDir ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( LegacyVersionedVarStillResolvesToCurrentDir )
+{
+    BOOST_REQUIRE( wxS( "KICAD5_FOOTPRINT_DIR" ) != versionedName );
+
+    wxString expanded =
+            ExpandEnvVarSubstitutions( wxS( "${KICAD5_FOOTPRINT_DIR}/conn_custom.pretty" ), nullptr );
+
+    BOOST_CHECK_EQUAL( expanded, stockDir + wxS( "/conn_custom.pretty" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( DeprecatedUnversionedAliasStillResolves )
+{
+    // KICAD_SYMBOL_DIR is a documented deprecated alias for the versioned symbol dir; it must
+    // still fall back to the current install even though it carries no version digits.
+    wxString symbolName = ENV_VAR::GetVersionedEnvVarName( wxS( "SYMBOL_DIR" ) );
+    std::optional<wxString> oldSymbol;
+    std::optional<wxString> oldAlias;
+    wxString                existing;
+
+    if( wxGetEnv( symbolName, &existing ) )
+        oldSymbol = existing;
+
+    if( wxGetEnv( wxS( "KICAD_SYMBOL_DIR" ), &existing ) )
+        oldAlias = existing;
+
+    wxSetEnv( symbolName, stockDir );
+    wxUnsetEnv( wxS( "KICAD_SYMBOL_DIR" ) );
+
+    wxString expanded =
+            ExpandEnvVarSubstitutions( wxS( "${KICAD_SYMBOL_DIR}/Device.kicad_sym" ), nullptr );
+
+    BOOST_CHECK_EQUAL( expanded, stockDir + wxS( "/Device.kicad_sym" ) );
+
+    if( oldSymbol )
+        wxSetEnv( symbolName, *oldSymbol );
+    else
+        wxUnsetEnv( symbolName );
+
+    if( oldAlias )
+        wxSetEnv( wxS( "KICAD_SYMBOL_DIR" ), *oldAlias );
+    else
+        wxUnsetEnv( wxS( "KICAD_SYMBOL_DIR" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( IsVersionedEnvVarPredicate )
+{
+    BOOST_CHECK( ENV_VAR::IsVersionedEnvVar( wxS( "KICAD7_FOOTPRINT_DIR" ), wxS( "FOOTPRINT_DIR" ) ) );
+    BOOST_CHECK( ENV_VAR::IsVersionedEnvVar( wxS( "KICAD10_FOOTPRINT_DIR" ), wxS( "FOOTPRINT_DIR" ) ) );
+
+    BOOST_CHECK( !ENV_VAR::IsVersionedEnvVar( wxS( "KICAD_USER_FOOTPRINT_DIR" ), wxS( "FOOTPRINT_DIR" ) ) );
+    BOOST_CHECK( !ENV_VAR::IsVersionedEnvVar( wxS( "KICAD_FOOTPRINT_DIR" ), wxS( "FOOTPRINT_DIR" ) ) );
+    BOOST_CHECK( !ENV_VAR::IsVersionedEnvVar( wxS( "KICAD7_SYMBOL_DIR" ), wxS( "FOOTPRINT_DIR" ) ) );
 }
 
 BOOST_AUTO_TEST_SUITE_END()

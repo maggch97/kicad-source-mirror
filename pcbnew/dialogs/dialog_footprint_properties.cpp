@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <3d_viewer/eda_3d_viewer_frame.h>
@@ -30,6 +26,7 @@
 #include <board_design_settings.h>
 #include <board.h>
 #include <footprint.h>
+#include <eda_group.h>
 #include <confirm.h>
 #include <dialogs/dialog_text_entry.h>
 #include <filename_resolver.h>
@@ -387,6 +384,7 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataToWindow()
     m_itemsGrid->SetRowLabelSize( 0 );
 
     Layout();
+    m_itemsGrid->SetMinVisibleRows( this, 4 );
     m_initialized = true;
 
     return true;
@@ -571,6 +569,9 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
         if( board )
             board->UncacheItemById( existing->m_Uuid );
 
+        if( EDA_GROUP* parentGroup = existing->GetParentGroup() )
+            parentGroup->RemoveItem( existing );
+
         delete existing;
     }
 
@@ -608,6 +609,9 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
 
         m_footprint->Add( newField );
         view->Add( newField );
+
+        if( EDA_GROUP* parentGroup = newField->GetParentGroup() )
+            parentGroup->AddItem( newField );
 
         if( newField->IsSelected() )
         {

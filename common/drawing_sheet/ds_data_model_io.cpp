@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <memory>
@@ -165,8 +161,9 @@ void DS_DATA_MODEL_IO::Format( DS_DATA_MODEL* aModel, std::vector<DS_DATA_ITEM*>
 {
     LOCALE_IO   toggle;     // switch on/off the locale "C" notation
 
-    m_out->Print( "(kicad_wks (version %d) (generator \"pl_editor\") (generator_version %s)",
+    m_out->Print( "(kicad_wks (version %d) (generator %s) (generator_version %s)",
                   SEXPR_WORKSHEET_FILE_VERSION,
+                  m_out->Quotew( aModel->GetGenerator() ).c_str(),
                   m_out->Quotew( GetMajorMinorVersion() ).c_str() );
 
     for( DS_DATA_ITEM* item : aItemsList )
@@ -207,8 +204,9 @@ void DS_DATA_MODEL_IO::Format( DS_DATA_MODEL* aSheet ) const
 {
     LOCALE_IO   toggle;     // switch on/off the locale "C" notation
 
-    m_out->Print( "(kicad_wks (version %d) (generator \"pl_editor\") (generator_version %s)",
+    m_out->Print( "(kicad_wks (version %d) (generator %s) (generator_version %s)",
                   SEXPR_WORKSHEET_FILE_VERSION,
+                  m_out->Quotew( aSheet->GetGenerator() ).c_str(),
                   m_out->Quotew( GetMajorMinorVersion() ).c_str() );
 
     // Setup

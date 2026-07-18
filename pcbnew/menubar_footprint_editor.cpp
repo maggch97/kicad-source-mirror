@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "footprint_edit_frame.h"
@@ -83,6 +79,9 @@ void FOOTPRINT_EDIT_FRAME::doReCreateMenuBar()
     fileMenu->Add( submenuExport );
 
     fileMenu->AppendSeparator();
+    fileMenu->Add( PCB_ACTIONS::compareFpLibraryWithFile );
+
+    fileMenu->AppendSeparator();
     fileMenu->Add( PCB_ACTIONS::footprintProperties );
 
     fileMenu->AppendSeparator();
@@ -135,6 +134,11 @@ void FOOTPRINT_EDIT_FRAME::doReCreateMenuBar()
     showHidePanels->Add( ACTIONS::showLibraryTree,       ACTION_MENU::CHECK );
     showHidePanels->Add( PCB_ACTIONS::showLayersManager, ACTION_MENU::CHECK );
     viewMenu->Add( showHidePanels );
+    viewMenu->AppendSeparator();
+
+    viewMenu->Add( PCB_ACTIONS::nextFootprintTab );
+    viewMenu->Add( PCB_ACTIONS::prevFootprintTab );
+    viewMenu->Add( PCB_ACTIONS::closeFootprintTab );
     viewMenu->AppendSeparator();
 
     viewMenu->Add( ACTIONS::showFootprintBrowser );

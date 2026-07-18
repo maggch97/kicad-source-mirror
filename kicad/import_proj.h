@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef IMPORT_PROJ_H
@@ -79,7 +79,16 @@ private:
 
     void addLocalLibraries( const std::set<wxString>& aLibName, FRAME_T aFrameType );
 
-    void EasyEDAProProjectHandler();
+    /**
+     * @brief Pre-commit one collision-free generated footprint-cache nickname into m_properties so
+     *        the schematic and PCB imports agree on where residual footprints land.
+     */
+    void setImportCacheNickname();
+
+    /// Join the basenames of the given library paths into a source-library property value.
+    wxString joinSourceLibNicknames( const std::set<wxString>& aPaths ) const;
+
+    void EasyEDAProProjectHandler( int aImportedSchFileType, int aImportedPcbFileType );
 
     void AltiumProjectHandler();
 

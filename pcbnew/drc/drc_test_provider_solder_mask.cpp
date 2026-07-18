@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <common.h>
@@ -126,6 +122,11 @@ private:
 
 void DRC_TEST_PROVIDER_SOLDER_MASK::addItemToRTrees( BOARD_ITEM* aItem )
 {
+    // Rule areas are purely logical: no copper, no mask, no silk.  Skip them entirely
+    // so they cannot contribute to solder-mask bridge or silk-to-mask collisions.
+    if( aItem->Type() == PCB_ZONE_T && static_cast<ZONE*>( aItem )->GetIsRuleArea() )
+        return;
+
     for( PCB_LAYER_ID layer : { F_Mask, B_Mask } )
     {
         if( !aItem->IsOnLayer( layer ) )

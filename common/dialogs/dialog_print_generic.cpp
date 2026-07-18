@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialogs/dialog_print_generic.h>
@@ -23,6 +23,7 @@
 #include <printout.h>
 #include <pgm_base.h>
 #include <confirm.h>
+#include <printing.h>
 
 #include <wx/print.h>
 #include <wx/printdlg.h>
@@ -91,7 +92,7 @@ DIALOG_PRINT_GENERIC::DIALOG_PRINT_GENERIC( EDA_DRAW_FRAME* aParent, PRINTOUT_SE
         m_settings( aSettings )
 {
     // Show m_panelPrinters only if there are printers to list:
-    m_panelPrinters->Show( m_panelPrinters->AsPrintersAvailable() );
+    m_panelPrinters->Show( m_panelPrinters->HasPrintersAvailable() );
 
     SetupStandardButtons( { { wxID_OK,     _( "Print" )         },
                             { wxID_APPLY,  _( "Print Preview" ) },
@@ -309,6 +310,7 @@ void DIALOG_PRINT_GENERIC::onPrintButtonClick( wxCommandEvent& event )
         else
         {
             *s_printData = printer.GetPrintDialogData().GetPrintData();
+            KIPLATFORM::PRINTING::ResetPrintToFilePath( *s_printData );
         }
     }
 

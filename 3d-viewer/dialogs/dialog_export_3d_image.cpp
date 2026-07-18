@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include "dialog_export_3d_image.h"
@@ -31,20 +27,26 @@
 #include <wx/bmpbuttn.h>
 #include <wx/statline.h>
 
-DIALOG_EXPORT_3D_IMAGE::DIALOG_EXPORT_3D_IMAGE( wxWindow* aParent, const wxSize& aSize ) :
+DIALOG_EXPORT_3D_IMAGE::DIALOG_EXPORT_3D_IMAGE( wxWindow* aParent, const wxSize& aCanvasSize,
+                                                EDA_3D_VIEWER_SETTINGS::EXPORT_IMAGE_SETTINGS* aCfg ) :
         DIALOG_SHIM( aParent, wxID_ANY, _( "Export 3D View" ), wxDefaultPosition, wxDefaultSize,
                      wxDEFAULT_DIALOG_STYLE ),
-        m_format( EDA_3D_VIEWER_EXPORT_FORMAT::PNG ),
-        m_originalSize( aSize ),
-        m_width( aSize.GetWidth() ),
-        m_height( aSize.GetHeight() ),
-        m_xResolution( 300.0 ),
-        m_yResolution( 300.0 ),
-        m_lockAspectRatio( true ),
-        m_sizeUnits( SIZE_UNITS::PIXELS ),
-        m_resolutionUnits( RESOLUTION_UNITS::PIXELS_PER_INCH )
+        m_cfg( aCfg ),
+        m_originalSize( aCanvasSize ),
+        m_width( aCfg && aCfg->width > 0 ? aCfg->width : aCanvasSize.GetWidth() ),
+        m_height( aCfg && aCfg->height > 0 ? aCfg->height : aCanvasSize.GetHeight() ),
+        m_xResolution( aCfg ? aCfg->x_resolution : 300.0 ),
+        m_yResolution( aCfg ? aCfg->y_resolution : 300.0 ),
+        m_lockAspectRatio( aCfg ? aCfg->lock_aspect_ratio : true ),
+        m_sizeUnits( aCfg ? static_cast<SIZE_UNITS>( aCfg->size_units ) : SIZE_UNITS::PIXELS ),
+        m_resolutionUnits( aCfg ? static_cast<RESOLUTION_UNITS>( aCfg->resolution_units )
+                                : RESOLUTION_UNITS::PIXELS_PER_INCH )
 {
     m_aspectRatio = static_cast<double>(m_width) / static_cast<double>(m_height);
+
+    // State is persisted through EXPORT_IMAGE_SETTINGS, so opt out of the generic
+    // control-state save and restore.
+    OptOut( this );
 
     wxBoxSizer* mainSizer = new wxBoxSizer( wxVERTICAL );
 
@@ -64,7 +66,8 @@ DIALOG_EXPORT_3D_IMAGE::DIALOG_EXPORT_3D_IMAGE( wxWindow* aParent, const wxSize&
     sizeGrid->Add( m_spinWidth, 1, wxEXPAND );
 
     // Lock button - will span 2 rows
-    m_lockButton = new wxBitmapButton( this, wxID_ANY, KiBitmapBundle( BITMAPS::locked ) );
+    m_lockButton = new wxBitmapButton( this, wxID_ANY,
+                                       KiBitmapBundle( m_lockAspectRatio ? BITMAPS::locked : BITMAPS::unlocked ) );
     sizeGrid->Add( m_lockButton, 0, wxALIGN_CENTER | wxALL, 2 );
 
     // Size units choice
@@ -73,7 +76,7 @@ DIALOG_EXPORT_3D_IMAGE::DIALOG_EXPORT_3D_IMAGE( wxWindow* aParent, const wxSize&
     m_choiceSizeUnits->Append( _( "%" ) );
     m_choiceSizeUnits->Append( _( "mm" ) );
     m_choiceSizeUnits->Append( _( "in" ) );
-    m_choiceSizeUnits->SetSelection( 0 ); // pixels
+    m_choiceSizeUnits->SetSelection( static_cast<int>( m_sizeUnits ) );
     sizeGrid->Add( m_choiceSizeUnits, 0, wxEXPAND );
 
     // Height row
@@ -116,7 +119,7 @@ DIALOG_EXPORT_3D_IMAGE::DIALOG_EXPORT_3D_IMAGE( wxWindow* aParent, const wxSize&
     m_choiceResolutionUnits = new wxChoice( this, wxID_ANY );
     m_choiceResolutionUnits->Append( _( "pixels/in" ) );
     m_choiceResolutionUnits->Append( _( "pixels/mm" ) );
-    m_choiceResolutionUnits->SetSelection( 0 ); // pixels/in
+    m_choiceResolutionUnits->SetSelection( static_cast<int>( m_resolutionUnits ) );
     resGrid->Add( m_choiceResolutionUnits, 0, wxEXPAND );
 
     // Y Resolution row
@@ -156,35 +159,34 @@ DIALOG_EXPORT_3D_IMAGE::DIALOG_EXPORT_3D_IMAGE( wxWindow* aParent, const wxSize&
 
 bool DIALOG_EXPORT_3D_IMAGE::TransferDataFromWindow()
 {
-    // Convert current values back to pixels if needed
     double width = m_spinWidth->GetValue();
     double height = m_spinHeight->GetValue();
+    double xRes = m_spinXResolution->GetValue();
+    double yRes = m_spinYResolution->GetValue();
 
-    switch( m_sizeUnits )
+    if( m_resolutionUnits == RESOLUTION_UNITS::PIXELS_PER_MM )
     {
-    case SIZE_UNITS::PIXELS:
-        m_width = static_cast<int>( width );
-        m_height = static_cast<int>( height );
-        break;
-    case SIZE_UNITS::PERCENT:
-        // Assume 100% = original size
-        m_width = static_cast<int>( width * m_originalSize.GetWidth() / 100.0 );
-        m_height = static_cast<int>( height * m_originalSize.GetHeight() / 100.0 );
-        break;
-    case SIZE_UNITS::MM:
-        // Convert mm to pixels using resolution
-        m_width = static_cast<int>( width * m_xResolution / 25.4 );
-        m_height = static_cast<int>( height * m_yResolution / 25.4 );
-        break;
-    case SIZE_UNITS::INCHES:
-        // Convert inches to pixels using resolution
-        m_width = static_cast<int>( width * m_xResolution );
-        m_height = static_cast<int>( height * m_yResolution );
-        break;
+        xRes *= 25.4;
+        yRes *= 25.4;
     }
+
+    wxSize pixelSize = GetPixelSize( width, height, xRes, yRes, m_sizeUnits );
+    m_width = pixelSize.GetWidth();
+    m_height = pixelSize.GetHeight();
 
     m_xResolution = m_spinXResolution->GetValue();
     m_yResolution = m_spinYResolution->GetValue();
+
+    if( m_cfg )
+    {
+        m_cfg->width = m_width;
+        m_cfg->height = m_height;
+        m_cfg->x_resolution = m_xResolution;
+        m_cfg->y_resolution = m_yResolution;
+        m_cfg->size_units = static_cast<int>( m_sizeUnits );
+        m_cfg->resolution_units = static_cast<int>( m_resolutionUnits );
+        m_cfg->lock_aspect_ratio = m_lockAspectRatio;
+    }
 
     return true;
 }
@@ -289,8 +291,8 @@ wxSize DIALOG_EXPORT_3D_IMAGE::GetPixelSize( double aWidth, double aHeight, doub
     case SIZE_UNITS::PIXELS:
         return wxSize( static_cast<int>( aWidth ), static_cast<int>( aHeight ) );
     case SIZE_UNITS::PERCENT:
-        return wxSize( static_cast<int>( 100.0 * m_originalSize.GetWidth() ),
-                       static_cast<int>( 100.0 * m_originalSize.GetHeight() ) );
+        return wxSize( static_cast<int>( aWidth * m_originalSize.GetWidth() / 100.0 ),
+                       static_cast<int>( aHeight * m_originalSize.GetHeight() / 100.0 ) );
     case SIZE_UNITS::MM:
         return wxSize( static_cast<int>( aWidth * aXResolution / 25.4 ),
                        static_cast<int>( aHeight * aYResolution / 25.4 ) );

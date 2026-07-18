@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <sim/sim_model_ngspice.h>
@@ -98,15 +94,17 @@ void NGSPICE_MODEL_INFO_MAP::addHFET()
     modelInfos[MODEL_TYPE::HFET1].modelParams.emplace_back( "nhfet", 166, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_BOOL, "", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "N HFET device" );
     modelInfos[MODEL_TYPE::HFET1].modelParams.emplace_back( "phfet", 167, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_BOOL, "", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "P HFET device" );
     // Instance parameters
-// FIXME: Default values were lost for some reason, filled them with "".
+    // Defaults mirror the ngspice hfet1 device (hfetsetup.c length/width/m, hfettemp.c dtemp).
+    // off/icvds/icvgs carry no static default (icvds/icvgs are derived from node voltages in
+    // hfetgetic.c), and temp tracks the circuit temperature, so those stay empty.
     modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "off", 7, SIM_MODEL::PARAM::DIR_OUT, SIM_VALUE::TYPE_BOOL, "", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Device initially off", true );
-    modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "m", 11, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "", "", "Parallel Multiplier", true );
-    modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "l", 1, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "m", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "", "", "Length of device", true );
-    modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "w", 2, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "m", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "", "", "Width of device", true );
+    modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "m", 11, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "1", "", "Parallel Multiplier", true );
+    modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "l", 1, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "m", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "1e-06", "", "Length of device", true );
+    modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "w", 2, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "m", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "2e-05", "", "Width of device", true );
     modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "icvds", 3, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "V", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Initial D-S voltage", true );
     modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "icvgs", 4, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "V", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Initial G-S voltage", true );
     modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "temp", 5, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "°C", SIM_MODEL::PARAM::CATEGORY::PRINCIPAL, "", "", "Instance temperature", true );
-    modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "dtemp", 10, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "°C", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Instance temperature difference", true );
+    modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "dtemp", 10, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "°C", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "0", "", "Instance temperature difference", true );
     modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "dnode", 201, SIM_MODEL::PARAM::DIR_OUT, SIM_VALUE::TYPE_INT, "", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Number of drain node", true );
     modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "gnode", 202, SIM_MODEL::PARAM::DIR_OUT, SIM_VALUE::TYPE_INT, "", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Number of gate node", true );
     modelInfos[MODEL_TYPE::HFET1].instanceParams.emplace_back( "snode", 203, SIM_MODEL::PARAM::DIR_OUT, SIM_VALUE::TYPE_INT, "", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Number of source node", true );
@@ -172,14 +170,17 @@ void NGSPICE_MODEL_INFO_MAP::addHFET()
     modelInfos[MODEL_TYPE::HFET2].modelParams.emplace_back( "vt1", 136, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "", SIM_MODEL::PARAM::CATEGORY::DC, "", "", "" );
     modelInfos[MODEL_TYPE::HFET2].modelParams.emplace_back( "vt2", 137, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "", SIM_MODEL::PARAM::CATEGORY::DC, "", "", "" );
     // Instance parameters
+    // Defaults mirror the ngspice hfet2 device (hfet2setup.c length/width/m, hfet2temp.c dtemp).
+    // off/icvds/icvgs carry no static default (icvds/icvgs derive from node voltages in
+    // hfet2getic.c), and temp tracks the circuit temperature, so those stay empty.
     modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "off", 6, SIM_MODEL::PARAM::DIR_OUT, SIM_VALUE::TYPE_BOOL, "", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Device initialli OFF", true );
-    modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "m", 11, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "", "", "Parallel Multiplier", true );
-    modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "l", 1, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "m", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "", "", "Length of device", true );
-    modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "w", 2, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "m", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "", "", "Width of device", true );
+    modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "m", 11, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "1", "", "Parallel Multiplier", true );
+    modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "l", 1, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "m", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "1e-06", "", "Length of device", true );
+    modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "w", 2, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "m", SIM_MODEL::PARAM::CATEGORY::GEOMETRY, "2e-05", "", "Width of device", true );
     modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "icvds", 3, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "V", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Initial D-S voltage", true );
     modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "icvgs", 4, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "V", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Initial G-S voltage", true );
     modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "temp", 9, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "°C", SIM_MODEL::PARAM::CATEGORY::PRINCIPAL, "", "", "Instance temperature", true );
-    modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "dtemp", 10, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "°C", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Instance temperature difference", true );
+    modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "dtemp", 10, SIM_MODEL::PARAM::DIR_INOUT, SIM_VALUE::TYPE_FLOAT, "°C", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "0", "", "Instance temperature difference", true );
     modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "dnode", 201, SIM_MODEL::PARAM::DIR_OUT, SIM_VALUE::TYPE_INT, "", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Number of drain node", true );
     modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "gnode", 202, SIM_MODEL::PARAM::DIR_OUT, SIM_VALUE::TYPE_INT, "", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Number of gate node", true );
     modelInfos[MODEL_TYPE::HFET2].instanceParams.emplace_back( "snode", 203, SIM_MODEL::PARAM::DIR_OUT, SIM_VALUE::TYPE_INT, "", SIM_MODEL::PARAM::CATEGORY::SUPERFLUOUS, "", "", "Number of source node", true );

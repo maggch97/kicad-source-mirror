@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DIALOG_GIT_REPOSITORY_H_
@@ -94,6 +90,9 @@ public:
         }
     }
 
+protected:
+    virtual bool TransferDataToWindow() override;
+
 private:
     void OnUpdateUI( wxUpdateUIEvent& event ) override;
     void OnLocationExit( wxFocusEvent& event ) override;
@@ -114,9 +113,9 @@ private:
     std::tuple<bool,wxString,wxString,wxString> isValidHTTPS( const wxString& url );
     std::tuple<bool,wxString, wxString> isValidSSH( const wxString& url );
 
-private:
     git_repository* m_repository;
     wxString        m_fullURL;
+    wxString        m_incomeURL;
 
     wxString        m_prevFile;
 

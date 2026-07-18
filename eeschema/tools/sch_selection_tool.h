@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef SCH_SELECTION_TOOL_H
@@ -129,6 +125,12 @@ public:
                                      bool aPromoteGroups = false );
 
     /**
+     * In general we don't want to select both a parent and any of it's children.  This includes
+     * both symbols and their items, and groups and their members.
+     */
+    void FilterCollectorForHierarchy( SCH_COLLECTOR& aCollector, bool aMultiselect ) const;
+
+    /**
      * Perform a click-type selection at a point (usually the cursor position).
      *
      * @param aWhere Point from which the selection should be made.
@@ -171,6 +173,12 @@ public:
     int SelectColumns( const TOOL_EVENT& aEvent );
     int SelectRows( const TOOL_EVENT& aEvent );
     int SelectTable( const TOOL_EVENT& aEvent );
+
+    /**
+     * Stop the pending disambiguation timer so its menu cannot fire.  Used by other tools (e.g.
+     * the point editor) that take over the drag once Ctrl is held for grid-snap override.
+     */
+    void CancelDisambiguation() { m_disambiguateTimer.Stop(); }
 
     ///< Clear current selection event handler.
     int ClearSelection( const TOOL_EVENT& aEvent );
@@ -376,11 +384,6 @@ private:
      */
     bool itemPassesFilter( EDA_ITEM* aItem, SCH_SELECTION_FILTER_OPTIONS* aRejected = nullptr );
 
-    /**
-     * In general we don't want to select both a parent and any of it's children.  This includes
-     * both symbols and their items, and groups and their members.
-     */
-    void filterCollectorForHierarchy( SCH_COLLECTOR& aCollector, bool aMultiselect ) const;
     void filterCollectedItems( SCH_COLLECTOR& aCollector, bool aMultiSelect );
 
     ///< Set up handlers for various events.

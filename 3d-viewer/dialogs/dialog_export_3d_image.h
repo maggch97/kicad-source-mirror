@@ -14,17 +14,14 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
 
 #include "dialog_shim.h"
 #include <3d_viewer/eda_3d_viewer_frame.h> // for EDA_3D_VIEWER_EXPORT_FORMAT
+#include <3d_viewer/eda_3d_viewer_settings.h>
 #include <wx/spinctrl.h>
 #include <wx/choice.h>
 #include <wx/stattext.h>
@@ -47,8 +44,8 @@ enum class RESOLUTION_UNITS
 class DIALOG_EXPORT_3D_IMAGE : public DIALOG_SHIM
 {
 public:
-    DIALOG_EXPORT_3D_IMAGE( wxWindow* aParent,
-                            const wxSize& aSize );
+    DIALOG_EXPORT_3D_IMAGE( wxWindow* aParent, const wxSize& aCanvasSize,
+                            EDA_3D_VIEWER_SETTINGS::EXPORT_IMAGE_SETTINGS* aCfg );
 
     wxSize GetSize() const { return wxSize( m_width, m_height ); }
     double GetXResolution() const { return m_xResolution; }
@@ -72,7 +69,7 @@ private:
     void ConvertResolutionUnits( RESOLUTION_UNITS aFromUnit, RESOLUTION_UNITS aToUnit );
 
 private:
-    EDA_3D_VIEWER_EXPORT_FORMAT m_format;
+    EDA_3D_VIEWER_SETTINGS::EXPORT_IMAGE_SETTINGS* m_cfg;
     wxSize m_originalSize;
     int m_width;
     int m_height;

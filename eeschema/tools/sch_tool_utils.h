@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -32,6 +28,7 @@
 class SCHEMATIC;
 class SCH_REFERENCE;
 class SCH_REFERENCE_LIST;
+class SCH_SCREEN;
 class SCH_SYMBOL;
 class SCH_PIN;
 class SCHEMATIC;
@@ -113,3 +110,15 @@ bool SymbolHasSheetInstances( const SCH_SYMBOL& aSymbol, const wxString& aCurren
  * @return a set of human-readable sheet names, or the original sheet path if no name can be resolved in this schmatic (this happens when sheets are shared across projects)
  */
 std::set<wxString> GetSheetNamesFromPaths( const std::set<wxString>& aSheetPaths, const SCHEMATIC& aSchematic );
+
+/**
+ * Return aBaseName, or aBaseName + smallest free integer if a sheet with that name already
+ * exists on aScreen. Case insensitive, like the ERC duplicate sheet name check.
+ */
+wxString UniqueSheetName( SCH_SCREEN* aScreen, const wxString& aBaseName );
+
+/**
+ * Return aBaseName, or aBaseName + smallest free integer if a group with that name already
+ * exists on aScreen.
+ */
+wxString UniqueGroupName( SCH_SCREEN* aScreen, const wxString& aBaseName );

@@ -13,14 +13,15 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
 
 #include <bitmaps.h>
 #include <widgets/bitmap_button.h>
+#include <widgets/wx_dataviewctrl.h>
 
 #include <wx/dataview.h>
 #include <wx/gbsizer.h>
@@ -88,5 +89,5 @@ protected:
     wxGridBagSizer* m_sizerOuter;
     wxSearchCtrl*   m_searchCtrl;
     BITMAP_BUTTON*  m_configureBtn;
-    wxDataViewCtrl* m_netsList;
+    WX_DATAVIEWCTRL* m_netsList;
 };

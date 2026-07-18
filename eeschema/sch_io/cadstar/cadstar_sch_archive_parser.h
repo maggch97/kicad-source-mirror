@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -414,11 +414,11 @@ public:
 
         struct CONNECTION_SCH : CADSTAR_ARCHIVE_PARSER::NET::CONNECTION ///< "CONN" nodename
         {
-            LAYER_ID           LayerID; ///< Sheet on which the connection is drawn
-            std::vector<POINT> Path;
-            GROUP_ID           GroupID = wxEmptyString;
-            REUSEBLOCKREF      ReuseBlockRef;
-            LINECODE_ID        ConnectionLineCode;
+            LAYER_ID            LayerID; ///< Sheet on which the connection is drawn
+            std::vector<VERTEX> Path;
+            GROUP_ID            GroupID = wxEmptyString;
+            REUSEBLOCKREF       ReuseBlockRef;
+            LINECODE_ID         ConnectionLineCode;
 
             void Parse( XNODE* aNode, PARSER_CONTEXT* aContext ) override;
         };

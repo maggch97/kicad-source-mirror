@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef __PCB_ACTIONS_H
@@ -478,6 +474,9 @@ public:
     static TOOL_ACTION editFpInFpEditor;
     static TOOL_ACTION editLibFpInFpEditor;
 
+    static TOOL_ACTION toggleExcludeFromBOM;
+    static TOOL_ACTION toggleExcludeFromPosFiles;
+
     static TOOL_ACTION showLayersManager;
     static TOOL_ACTION showNetInspector;
     static TOOL_ACTION zonesManager;
@@ -514,6 +513,7 @@ public:
     static TOOL_ACTION importFootprint;
     static TOOL_ACTION exportFootprint;
 
+    static TOOL_ACTION compareFpLibraryWithFile;
     static TOOL_ACTION footprintProperties;
     static TOOL_ACTION defaultPadProperties;
     static TOOL_ACTION padTable;
@@ -583,9 +583,17 @@ public:
     static TOOL_ACTION boardReannotate;
     static TOOL_ACTION repairBoard;
     static TOOL_ACTION repairFootprint;
+
+    // Footprint Editor document tabs
+    static TOOL_ACTION nextFootprintTab;
+    static TOOL_ACTION prevFootprintTab;
+    static TOOL_ACTION closeFootprintTab;
+
     static TOOL_ACTION inspectClearance;
     static TOOL_ACTION inspectConstraints;
     static TOOL_ACTION diffFootprint;
+    static TOOL_ACTION compareBoardWithFile;
+    static TOOL_ACTION compareBoardWithHistory;
     static TOOL_ACTION showFootprintAssociations;
     static TOOL_ACTION collect3DModels;
 
@@ -638,6 +646,9 @@ public:
     static TOOL_ACTION showWizards;
     static TOOL_ACTION resetWizardPrms;
     static TOOL_ACTION exportFpToEditor;
+
+    /// Display of phase skew between differential pair tracks
+    static TOOL_ACTION showDiffPhaseSkew;
 };
 
 class PCB_EVENTS

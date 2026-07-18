@@ -13,8 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <sch_io/pads/sch_io_pads.h>
@@ -138,44 +138,11 @@ static SCH_TEXT* createSchText( const PADS_SCH::TEXT_ITEM& aText, const VECTOR2I
     if( aText.width_factor > 0 )
         schText->SetTextThickness( schIUScale.MilsToIU( aText.width_factor ) );
 
-    // PADS justification: value = vertical_offset + horizontal_code
-    // Vertical offsets: bottom=0, top=2, middle=8
-    // Horizontal codes: left=0, right=1, center=4
-    int justVal = aText.justification;
-    int hCode = 0;
-    int vGroup = 0;
-
-    if( justVal >= 8 )
-    {
-        vGroup = 2;  // middle
-        hCode = justVal - 8;
-    }
-    else if( justVal >= 2 )
-    {
-        vGroup = 1;  // top
-        hCode = justVal - 2;
-    }
-    else
-    {
-        vGroup = 0;  // bottom
-        hCode = justVal;
-    }
-
-    switch( hCode )
-    {
-    default:
-    case 0: schText->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );   break;
-    case 1: schText->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );  break;
-    case 4: schText->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER ); break;
-    }
-
-    switch( vGroup )
-    {
-    default:
-    case 0: schText->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM ); break;
-    case 1: schText->SetVertJustify( GR_TEXT_V_ALIGN_TOP );    break;
-    case 2: schText->SetVertJustify( GR_TEXT_V_ALIGN_CENTER ); break;
-    }
+    GR_TEXT_H_ALIGN_T hJustify = GR_TEXT_H_ALIGN_LEFT;
+    GR_TEXT_V_ALIGN_T vJustify = GR_TEXT_V_ALIGN_BOTTOM;
+    PADS_COMMON::DecodeJustification( aText.justification, hJustify, vJustify );
+    schText->SetHorizJustify( hJustify );
+    schText->SetVertJustify( vJustify );
 
     if( aText.rotation != 0 )
         schText->SetTextAngleDegrees( aText.rotation * 90.0 );
@@ -834,8 +801,20 @@ SCH_SHEET* SCH_IO_PADS::LoadSchematicFile( const wxString&                    aF
                                 int fieldTextSize = schIUScale.MilsToIU( 50 );
                                 valField->SetTextSize(
                                         VECTOR2I( fieldTextSize, fieldTextSize ) );
-                                valField->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-                                valField->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
+
+                                // Keep the PADS-authored alignment instead of forcing
+                                // center; otherwise this override undoes the justification
+                                // applied by ApplyFieldSettings.
+                                GR_TEXT_H_ALIGN_T hJustify = GR_TEXT_H_ALIGN_LEFT;
+                                GR_TEXT_V_ALIGN_T vJustify = GR_TEXT_V_ALIGN_BOTTOM;
+                                PADS_COMMON::DecodeJustification( attr.justification,
+                                                                  hJustify, vJustify );
+
+                                if( part.mirror_flags & 1 )
+                                    hJustify = GetFlippedAlignment( hJustify );
+
+                                valField->SetHorizJustify( hJustify );
+                                valField->SetVertJustify( vJustify );
                                 break;
                             }
                         }
@@ -943,6 +922,16 @@ SCH_SHEET* SCH_IO_PADS::LoadSchematicFile( const wxString&                    aF
             continue;
 
         signalOpcIds.insert( "@@@O" + std::to_string( opc.id ) );
+    }
+
+    // Map each off-page anchor (@@@O..) to its *NETNAMES* entry. PADS authors the label
+    // side there, which is the authoritative orientation when the stub wire is degenerate.
+    std::map<std::string, PADS_SCH::NETNAME_LABEL> netNameLabels;
+
+    for( const PADS_SCH::NETNAME_LABEL& nn : parser.GetNetNameLabels() )
+    {
+        if( !nn.anchor_ref.empty() )
+            netNameLabels[nn.anchor_ref] = nn;
     }
 
     // Create wires and connectivity on each sheet
@@ -1085,7 +1074,7 @@ SCH_SHEET* SCH_IO_PADS::LoadSchematicFile( const wxString&                    aF
 
         // Create net labels, skipping power nets that get dedicated symbols
         schBuilder.CreateNetLabels( sheetSignals, ctx.screen, signalOpcIds,
-                                    powerSignalNames );
+                                    powerSignalNames, netNameLabels );
 
         // Place off-page connectors: power/ground types become SCH_SYMBOL with
         // KiCad standard power graphics; signal types become SCH_GLOBALLABEL.
@@ -1171,15 +1160,28 @@ SCH_SHEET* SCH_IO_PADS::LoadSchematicFile( const wxString&                    aF
         }
     }
 
-    // Place free text items from *TEXT* section on the first (or only) sheet
+    // Resolve a parsed item's sheet number to its screen, falling back to the
+    // first sheet when the number is unknown. Each *SHT* section in PADS Logic
+    // is followed by its own *TEXT* and *LINES* blocks, so items are tagged with
+    // the sheet number current at parse time.
+    auto screenForSheet =
+            [&]( int aSheetNumber ) -> SCH_SCREEN*
+            {
+                auto ctxIt = sheetContexts.find( aSheetNumber );
+
+                return ctxIt != sheetContexts.end() ? ctxIt->second.screen
+                                                    : sheetContexts.begin()->second.screen;
+            };
+
+    // Place free text items from *TEXT* section on the correct sheet.
     if( !sheetContexts.empty() )
     {
-        SCH_SCREEN* textScreen = sheetContexts.begin()->second.screen;
-
         for( const PADS_SCH::TEXT_ITEM& textItem : parser.GetTextItems() )
         {
             if( textItem.content.empty() )
                 continue;
+
+            SCH_SCREEN* textScreen = screenForSheet( textItem.sheet_number );
 
             VECTOR2I pos( schIUScale.MilsToIU( KiROUND( textItem.position.x ) ),
                           pageHeightIU
@@ -1189,15 +1191,16 @@ SCH_SHEET* SCH_IO_PADS::LoadSchematicFile( const wxString&                    aF
         }
     }
 
-    // Place graphic lines from *LINES* section (skip the border template)
+    // Place graphic lines from *LINES* section (skip the border template) on
+    // the sheet they belong to.
     if( !sheetContexts.empty() )
     {
-        SCH_SCREEN* linesScreen = sheetContexts.begin()->second.screen;
-
         for( const PADS_SCH::LINES_ITEM& linesItem : parser.GetLinesItems() )
         {
             if( linesItem.name == params.border_template )
                 continue;
+
+            SCH_SCREEN* linesScreen = screenForSheet( linesItem.sheet_number );
 
             double ox = linesItem.origin.x;
             double oy = linesItem.origin.y;

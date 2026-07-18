@@ -13,8 +13,8 @@
 * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 * General Public License for more details.
 *
-* You should have received a copy of the GNU General Public License along
-* with this program.  If not, see <http://www.gnu.org/licenses/>.
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include "pcb_io_ipc2581.h"
@@ -108,6 +108,17 @@ static size_t ipcPadstackHash( const PAD* aPad )
 {
     size_t hash = hash_fp_item( aPad, 0 );
     mixBackdrillIntoPadstackHash( hash, aPad->Padstack() );
+
+    // The padstack definition emits one entry per layer in the pad's layer set, and the mask
+    // and paste entries include the per-side margins.  Neither is captured by hash_fp_item(),
+    // so mix them in to keep distinct padstacks from collapsing onto a single definition.
+    hash_combine( hash, std::hash<BASE_SET>{}( aPad->GetLayerSet() ) );
+    hash_combine( hash, aPad->GetSolderMaskExpansion( F_Mask ), aPad->GetSolderMaskExpansion( B_Mask ) );
+
+    VECTOR2I frontPaste = aPad->GetSolderPasteMargin( F_Paste );
+    VECTOR2I backPaste = aPad->GetSolderPasteMargin( B_Paste );
+    hash_combine( hash, frontPaste.x, frontPaste.y, backPaste.x, backPaste.y );
+
     return hash;
 }
 
@@ -600,7 +611,14 @@ size_t PCB_IO_IPC2581::lineHash( int aWidth, LINE_STYLE aDashType )
 
 size_t PCB_IO_IPC2581::shapeHash( const PCB_SHAPE& aShape )
 {
-    return hash_fp_item( &aShape, HASH_POS | REL_COORD );
+    size_t hash = hash_fp_item( &aShape, HASH_POS | REL_COORD );
+
+    // hash_fp_item does not distinguish rectangles by their corner radius, so two rects that
+    // differ only in radius would otherwise share one primitive.
+    if( aShape.GetShape() == SHAPE_T::RECTANGLE )
+        hash_combine( hash, aShape.GetCornerRadius() );
+
+    return hash;
 }
 
 
@@ -909,8 +927,28 @@ void PCB_IO_IPC2581::addText( wxXmlNode* aContentNode, EDA_TEXT* aText,
 
 void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAYER_ID aLayer )
 {
+    int      maxError = m_board->GetDesignSettings().m_MaxError;
+    wxString name;
+
+    // Per-side margin baked into the exported geometry on the solder mask and paste layers,
+    // mirroring PlotStandardLayer() in plot_board_layers.cpp so the export matches the
+    // plotted artwork.
+    VECTOR2I margin;
+
+    if( IsSolderMaskLayer( aLayer ) )
+        margin.x = margin.y = aPad.GetSolderMaskExpansion( aLayer );
+    else if( aLayer == F_Paste || aLayer == B_Paste )
+        margin = aPad.GetSolderPasteMargin( aLayer );
+
+    // The same pad yields different geometry per layer: complex padstacks differ between
+    // copper layers and the mask/paste margins are layer-specific.  The primitive cache must
+    // therefore be keyed on the effective shape layer and the margin as well as the pad
+    // itself, otherwise the first layer processed (copper) is reused for the mask and paste
+    // layers, silently dropping the margins.
     size_t hash = hash_fp_item( &aPad, 0 );
-    auto   iter = m_std_shape_dict.find( hash );
+    hash_combine( hash, aPad.Padstack().EffectiveLayerFor( aLayer ), margin.x, margin.y );
+
+    auto iter = m_std_shape_dict.find( hash );
 
     if( iter != m_std_shape_dict.end() )
     {
@@ -919,17 +957,7 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAY
         return;
     }
 
-    int      maxError = m_board->GetDesignSettings().m_MaxError;
-    wxString name;
-    VECTOR2I expansion{ 0, 0 };
-
-    if( LSET( { F_Mask, B_Mask } ).Contains( aLayer ) )
-        expansion.x = expansion.y = 2 * aPad.GetSolderMaskExpansion( PADSTACK::ALL_LAYERS );
-
-    if( LSET( { F_Paste, B_Paste } ).Contains( aLayer ) )
-        expansion = 2 * aPad.GetSolderPasteMargin( PADSTACK::ALL_LAYERS );
-
-    switch( aPad.GetShape( PADSTACK::ALL_LAYERS ) )
+    switch( aPad.GetShape( aLayer ) )
     {
     case PAD_SHAPE::CIRCLE:
     {
@@ -939,9 +967,10 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAY
         wxXmlNode* entry_node = appendNode( m_shape_std_node, "EntryStandard" );
         addAttribute( entry_node,  "id", name );
 
+        int diameter = aPad.GetSize( aLayer ).x + 2 * margin.x;
+
         wxXmlNode* circle_node = appendNode( entry_node, "Circle" );
-        circle_node->AddAttribute( "diameter",
-                                   floatVal( m_scale * ( expansion.x + aPad.GetSizeX() ) ) );
+        addAttribute( circle_node, "diameter", floatVal( m_scale * diameter ) );
         break;
     }
 
@@ -953,14 +982,32 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAY
         wxXmlNode* entry_node = appendNode( m_shape_std_node, "EntryStandard" );
         addAttribute( entry_node,  "id", name );
 
-        wxXmlNode* rect_node = appendNode( entry_node, "RectCenter" );
-        VECTOR2D pad_size = aPad.GetSize( PADSTACK::ALL_LAYERS ) + expansion;
-        addAttribute( rect_node,  "width", floatVal( m_scale * std::abs( pad_size.x ) ) );
-        addAttribute( rect_node,  "height", floatVal( m_scale * std::abs( pad_size.y ) ) );
+        VECTOR2I pad_size = aPad.GetSize( aLayer ) + 2 * margin;
+
+        // A positive margin inflates the rectangle into a rounded rectangle (the Minkowski
+        // sum of the rectangle and a disc of radius margin); the board plotter promotes the
+        // shape the same way.
+        if( margin.x > 0 )
+        {
+            wxXmlNode* rect_node = appendNode( entry_node, "RectRound" );
+            addAttribute( rect_node, "width", floatVal( m_scale * std::abs( pad_size.x ) ) );
+            addAttribute( rect_node, "height", floatVal( m_scale * std::abs( pad_size.y ) ) );
+            addAttribute( rect_node, "radius", floatVal( m_scale * margin.x ) );
+            addAttribute( rect_node, "upperRight", "true" );
+            addAttribute( rect_node, "upperLeft", "true" );
+            addAttribute( rect_node, "lowerRight", "true" );
+            addAttribute( rect_node, "lowerLeft", "true" );
+        }
+        else
+        {
+            wxXmlNode* rect_node = appendNode( entry_node, "RectCenter" );
+            addAttribute( rect_node, "width", floatVal( m_scale * std::abs( pad_size.x ) ) );
+            addAttribute( rect_node, "height", floatVal( m_scale * std::abs( pad_size.y ) ) );
+        }
 
         break;
-
     }
+
     case PAD_SHAPE::OVAL:
     {
         name = wxString::Format( "OVAL_%zu", m_std_shape_dict.size() + 1 );
@@ -969,8 +1016,9 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAY
         wxXmlNode* entry_node = appendNode( m_shape_std_node, "EntryStandard" );
         addAttribute( entry_node,  "id", name );
 
+        VECTOR2I pad_size = aPad.GetSize( aLayer ) + 2 * margin;
+
         wxXmlNode* oval_node = appendNode( entry_node, "Oval" );
-        VECTOR2D pad_size = aPad.GetSize( PADSTACK::ALL_LAYERS ) + expansion;
         addAttribute( oval_node,  "width", floatVal( m_scale * pad_size.x ) );
         addAttribute( oval_node,  "height", floatVal( m_scale * pad_size.y ) );
 
@@ -985,12 +1033,28 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAY
         wxXmlNode* entry_node = appendNode( m_shape_std_node, "EntryStandard" );
         addAttribute( entry_node,  "id", name );
 
+        VECTOR2I pad_size = aPad.GetSize( aLayer ) + 2 * margin;
+        int      radius;
+
+        // An isotropic margin inflates a rounded rectangle into another rounded rectangle
+        // whose corner radius grows by the margin (Minkowski sum with a disc).  An
+        // anisotropic margin (e.g. a relative paste margin on a non-square pad) has no such
+        // closed form, so preserve the radius ratio against the adjusted size instead.  Both
+        // match PlotStandardLayer().
+        if( margin.x == margin.y )
+        {
+            radius = std::max( 0, aPad.GetRoundRectCornerRadius( aLayer ) + margin.x );
+        }
+        else
+        {
+            radius = KiROUND( aPad.GetRoundRectRadiusRatio( aLayer )
+                              * std::min( std::abs( pad_size.x ), std::abs( pad_size.y ) ) );
+        }
+
         wxXmlNode* roundrect_node = appendNode( entry_node, "RectRound" );
-        VECTOR2D pad_size = aPad.GetSize( PADSTACK::ALL_LAYERS ) + expansion;
         addAttribute( roundrect_node,  "width", floatVal( m_scale * pad_size.x ) );
         addAttribute( roundrect_node,  "height", floatVal( m_scale * pad_size.y ) );
-        roundrect_node->AddAttribute( "radius",
-                                      floatVal( m_scale * aPad.GetRoundRectCornerRadius( PADSTACK::ALL_LAYERS ) ) );
+        addAttribute( roundrect_node, "radius", floatVal( m_scale * radius ) );
         addAttribute( roundrect_node,  "upperRight", "true" );
         addAttribute( roundrect_node,  "upperLeft", "true" );
         addAttribute( roundrect_node,  "lowerRight", "true" );
@@ -1007,26 +1071,49 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAY
         wxXmlNode* entry_node = appendNode( m_shape_std_node, "EntryStandard" );
         addAttribute( entry_node,  "id", name );
 
-        wxXmlNode* chamfered_node = appendNode( entry_node, "RectCham" );
-        VECTOR2D pad_size = aPad.GetSize( PADSTACK::ALL_LAYERS ) + expansion;
-        addAttribute( chamfered_node,  "width", floatVal( m_scale * pad_size.x ) );
-        addAttribute( chamfered_node,  "height", floatVal( m_scale * pad_size.y ) );
+        if( margin.x <= 0 || margin.x != margin.y )
+        {
+            // A deflated (or anisotropically inflated) chamfered rectangle keeps its
+            // parametric shape, with the chamfer ratio applied to the adjusted size; this is
+            // what PlotStandardLayer() plots.
+            VECTOR2I pad_size = aPad.GetSize( aLayer ) + 2 * margin;
 
-        int shorterSide = std::min( pad_size.x, pad_size.y );
-        int chamfer = std::max( 0, KiROUND( aPad.GetChamferRectRatio( PADSTACK::ALL_LAYERS ) * shorterSide ) );
+            wxXmlNode* chamfered_node = appendNode( entry_node, "RectCham" );
+            addAttribute( chamfered_node, "width", floatVal( m_scale * pad_size.x ) );
+            addAttribute( chamfered_node, "height", floatVal( m_scale * pad_size.y ) );
 
-        addAttribute( chamfered_node,  "chamfer", floatVal( m_scale * chamfer ) );
+            int shorterSide = std::min( pad_size.x, pad_size.y );
+            int chamfer = std::max( 0, KiROUND( aPad.GetChamferRectRatio( aLayer ) * shorterSide ) );
 
-        int positions = aPad.GetChamferPositions( PADSTACK::ALL_LAYERS );
+            addAttribute( chamfered_node, "chamfer", floatVal( m_scale * chamfer ) );
 
-        if( positions & RECT_CHAMFER_TOP_LEFT )
-            addAttribute( chamfered_node,  "upperLeft", "true" );
-        if( positions & RECT_CHAMFER_TOP_RIGHT )
-            addAttribute( chamfered_node,  "upperRight", "true" );
-        if( positions & RECT_CHAMFER_BOTTOM_LEFT )
-            addAttribute( chamfered_node,  "lowerLeft", "true" );
-        if( positions & RECT_CHAMFER_BOTTOM_RIGHT )
-            addAttribute( chamfered_node,  "lowerRight", "true" );
+            int positions = aPad.GetChamferPositions( aLayer );
+
+            if( positions & RECT_CHAMFER_TOP_LEFT )
+                addAttribute( chamfered_node, "upperLeft", "true" );
+            if( positions & RECT_CHAMFER_TOP_RIGHT )
+                addAttribute( chamfered_node, "upperRight", "true" );
+            if( positions & RECT_CHAMFER_BOTTOM_LEFT )
+                addAttribute( chamfered_node, "lowerLeft", "true" );
+            if( positions & RECT_CHAMFER_BOTTOM_RIGHT )
+                addAttribute( chamfered_node, "lowerRight", "true" );
+        }
+        else
+        {
+            // An isotropically inflated chamfered rectangle is no longer a chamfered
+            // rectangle (the chamfer corners become rounded), so export the polygon the
+            // board plotter produces: the original outline inflated with rounded corners.
+            PAD dummy( aPad );
+            dummy.SetPosition( VECTOR2I( 0, 0 ) );
+            dummy.SetOffset( aLayer, VECTOR2I( 0, 0 ) );
+            dummy.SetOrientation( ANGLE_0 );
+
+            SHAPE_POLY_SET outline;
+            dummy.TransformShapeToPolygon( outline, aLayer, 0, maxError, ERROR_INSIDE );
+            outline.InflateWithLinkedHoles( margin.x, CORNER_STRATEGY::ROUND_ALL_CORNERS, maxError );
+
+            addContourNode( entry_node, outline );
+        }
 
         break;
     }
@@ -1039,8 +1126,8 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAY
         wxXmlNode* entry_node = appendNode( m_shape_std_node, "EntryStandard" );
         addAttribute( entry_node,  "id", name );
 
-        VECTOR2I       pad_size = aPad.GetSize( PADSTACK::ALL_LAYERS );
-        VECTOR2I       trap_delta = aPad.GetDelta( PADSTACK::ALL_LAYERS );
+        VECTOR2I       pad_size = aPad.GetSize( aLayer );
+        VECTOR2I       trap_delta = aPad.GetDelta( aLayer );
         SHAPE_POLY_SET outline;
         outline.NewOutline();
         int dx = pad_size.x / 2;
@@ -1055,10 +1142,9 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAY
 
         // Shape polygon can have holes so use InflateWithLinkedHoles(), not Inflate()
         // which can create bad shapes if margin.x is < 0
-        if( expansion.x )
+        if( margin.x )
         {
-            outline.InflateWithLinkedHoles( expansion.x, CORNER_STRATEGY::ROUND_ALL_CORNERS,
-                                            maxError );
+            outline.InflateWithLinkedHoles( margin.x, CORNER_STRATEGY::ROUND_ALL_CORNERS, maxError );
         }
 
         addContourNode( entry_node, outline );
@@ -1074,12 +1160,12 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAY
         addAttribute( entry_node,  "id", name );
 
         SHAPE_POLY_SET shape;
-        aPad.MergePrimitivesAsPolygon( PADSTACK::ALL_LAYERS, &shape );
+        aPad.MergePrimitivesAsPolygon( aLayer, &shape );
 
-        if( expansion != VECTOR2I( 0, 0 ) )
+        // Custom pads are expected to have margin.x == margin.y (see PlotStandardLayer()).
+        if( margin.x )
         {
-            shape.InflateWithLinkedHoles( std::max( expansion.x, expansion.y ),
-                                          CORNER_STRATEGY::ROUND_ALL_CORNERS, maxError );
+            shape.InflateWithLinkedHoles( margin.x, CORNER_STRATEGY::ROUND_ALL_CORNERS, maxError );
         }
 
         addContourNode( entry_node, shape );
@@ -1092,7 +1178,6 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAY
 
     if( !name.empty() )
     {
-        m_std_shape_dict.emplace( hash, name );
         wxXmlNode* shape_node = appendNode( aContentNode, "StandardPrimitiveRef" );
         addAttribute( shape_node,  "id", name );
     }
@@ -1225,24 +1310,23 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PCB_SHAPE& aShape,
         int width = std::abs( aShape.GetRectangleWidth() );
         int height = std::abs( aShape.GetRectangleHeight() );
         int stroke_width = aShape.GetStroke().GetWidth();
+        int corner_radius = aShape.GetCornerRadius();
 
         wxXmlNode* rect_node = appendNode( special_node, "RectRound" );
         addLineDesc( rect_node, aShape.GetStroke().GetWidth(), aShape.GetStroke().GetLineStyle(),
                      true );
 
-        if( aShape.GetFillMode() == FILL_T::NO_FILL )
+        // RectRound rounds only the corners whose flag is set. KiCad rounds all four when the
+        // rectangle carries a corner radius, so drive the flags off the radius rather than the
+        // fill mode. A filled rect is grown by the stroke width the same as before.
+        wxString cornerFlag = corner_radius > 0 ? "true" : "false";
+        addAttribute( rect_node,  "upperRight", cornerFlag );
+        addAttribute( rect_node,  "upperLeft", cornerFlag );
+        addAttribute( rect_node,  "lowerRight", cornerFlag );
+        addAttribute( rect_node,  "lowerLeft", cornerFlag );
+
+        if( aShape.GetFillMode() != FILL_T::NO_FILL )
         {
-            addAttribute( rect_node,  "upperRight", "false" );
-            addAttribute( rect_node,  "upperLeft", "false" );
-            addAttribute( rect_node,  "lowerRight", "false" );
-            addAttribute( rect_node,  "lowerLeft", "false" );
-        }
-        else
-        {
-            addAttribute( rect_node,  "upperRight", "true" );
-            addAttribute( rect_node,  "upperLeft", "true" );
-            addAttribute( rect_node,  "lowerRight", "true" );
-            addAttribute( rect_node,  "lowerLeft", "true" );
             width += stroke_width;
             height += stroke_width;
         }
@@ -1251,7 +1335,7 @@ void PCB_IO_IPC2581::addShape( wxXmlNode* aContentNode, const PCB_SHAPE& aShape,
 
         addAttribute( rect_node,  "width", floatVal( m_scale * width ) );
         addAttribute( rect_node,  "height", floatVal( m_scale * height ) );
-        addAttribute( rect_node,  "radius", floatVal( m_scale * ( stroke_width / 2.0 ) ) );
+        addAttribute( rect_node,  "radius", floatVal( m_scale * corner_radius ) );
 
         break;
     }
@@ -3475,6 +3559,9 @@ void PCB_IO_IPC2581::generateComponents( wxXmlNode* aStepNode )
 
             EDA_ANGLE fp_angle = fp->GetOrientation().Normalize();
 
+            if( fp->IsFlipped() )
+                fp_angle = ( fp_angle.Invert() - ANGLE_180 ).Normalize();
+
             if( fp_angle != ANGLE_0 )
                 addAttribute( xformNode, "rotation", floatVal( fp_angle.AsDegrees(), 2 ) );
 
@@ -3572,8 +3659,13 @@ void PCB_IO_IPC2581::generateLayerFeatures( wxXmlNode* aStepNode )
         for( PCB_FIELD* field : fp->GetFields() )
             elements[field->GetLayer()][0].push_back( field );
 
+        // A graphic can live on several layers at once (e.g. copper + mask). KiCad plots it on
+        // each, so emit it on every layer in its set rather than only its primary layer.
         for( BOARD_ITEM* item : fp->GraphicalItems() )
-            elements[item->GetLayer()][0].push_back( item );
+        {
+            for( PCB_LAYER_ID layer : item->GetLayerSet().Seq() )
+                elements[layer][0].push_back( item );
+        }
 
         for( PAD* pad : fp->Pads() )
         {
@@ -3587,14 +3679,22 @@ void PCB_IO_IPC2581::generateLayerFeatures( wxXmlNode* aStepNode )
 
             // Some SMD pad definitions omit the mask layer even though their copper needs a
             // mask opening. Add those implicit mask features on the corresponding copper side.
+            // This only applies when the pad authors no mask side at all. A pad that carries a
+            // mask on one side only (e.g. *.Cu + B.Mask) has intentionally suppressed the other,
+            // so it must not receive an implicit opening there.
             // Solder paste is intentionally NOT added here. Absence of F.Paste/B.Paste in the
             // pad's layer set means "no paste" and must be respected, e.g. for thermal/exposed
             // pads whose stencil apertures are modeled as separate paste-only pads.
-            if( pad->IsOnLayer( F_Cu ) && pad->FlashLayer( F_Cu ) && !pad->IsOnLayer( F_Mask ) )
-                elements[F_Mask][pad->GetNetCode()].push_back( pad );
+            bool hasAuthoredMask = pad->IsOnLayer( F_Mask ) || pad->IsOnLayer( B_Mask );
 
-            if( pad->IsOnLayer( B_Cu ) && pad->FlashLayer( B_Cu ) && !pad->IsOnLayer( B_Mask ) )
-                elements[B_Mask][pad->GetNetCode()].push_back( pad );
+            if( !hasAuthoredMask )
+            {
+                if( pad->IsOnLayer( F_Cu ) && pad->FlashLayer( F_Cu ) )
+                    elements[F_Mask][pad->GetNetCode()].push_back( pad );
+
+                if( pad->IsOnLayer( B_Cu ) && pad->FlashLayer( B_Cu ) )
+                    elements[B_Mask][pad->GetNetCode()].push_back( pad );
+            }
         }
     }
 
@@ -3971,12 +4071,7 @@ void PCB_IO_IPC2581::generateLayerSetNet( wxXmlNode* aLayerNode, PCB_LAYER_ID aL
                     }
                 }
 
-                FOOTPRINT* fp = pad->GetParentFootprint();
-
-                if( fp && fp->IsFlipped() )
-                    addPad( padSetNode, pad, FlipLayer( aLayer ) );
-                else
-                    addPad( padSetNode, pad, aLayer );
+                addPad( padSetNode, pad, aLayer );
             };
 
     for( BOARD_ITEM* item : aItems )
@@ -4254,6 +4349,13 @@ void PCB_IO_IPC2581::SaveBoard( const wxString& aFileName, BOARD* aBoard,
     m_units_str = "MILLIMETER";
     m_scale = 1.0 / PCB_IU_PER_MM;
     m_sigfig = 6;
+
+    // The base PCB_IO interface permits a null property set; alias it to an empty
+    // map so the optional lookups below remain valid.
+    const std::map<std::string, UTF8> emptyProperties;
+
+    if( !aProperties )
+        aProperties = &emptyProperties;
 
     if( auto it = aProperties->find( "units" ); it != aProperties->end() )
     {

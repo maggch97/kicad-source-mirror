@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -32,6 +28,8 @@
 #include <sch_field.h>
 #include <sch_pin.h>
 #include <lib_tree_item.h>
+#include <pin_map.h>
+#include <set>
 #include <vector>
 #include <core/multivector.h>
 #include <default_values.h>
@@ -70,6 +68,39 @@ struct LIB_SYMBOL_UNIT
     int m_unit;                       ///< The unit number.
     int m_bodyStyle;                  ///< The alternate body style of the unit.
     std::vector<SCH_ITEM*> m_items;   ///< The items unique to this unit and alternate body style.
+};
+
+
+/**
+ * Options controlling how a derived symbol's fields are reconciled with its parent.
+ *
+ * @see LIB_SYMBOL::SyncFieldsFromParent
+ */
+struct LIB_FIELD_SYNC_OPTIONS
+{
+    /// Reconcile every field.  When false only the names in m_updateFields are touched.
+    bool m_updateAllFields = true;
+
+    /// Field names to reconcile when m_updateAllFields is false.
+    std::set<wxString> m_updateFields;
+
+    /// Drop fields not present in the parent.
+    bool m_removeExtraFields = false;
+
+    /// Copy parent visibility and name-shown flags.
+    bool m_resetVisibility = false;
+
+    /// Copy parent text effects (font, justification, etc.) but keep local visibility/position.
+    bool m_resetEffects = false;
+
+    /// Copy parent field positions.
+    bool m_resetPositions = false;
+
+    /// Copy parent text when the parent value is non-empty.
+    bool m_resetText = false;
+
+    /// Copy parent text even when the parent value is empty.
+    bool m_resetEmptyText = false;
 };
 
 
@@ -219,6 +250,54 @@ public:
         return m_fpFilters;
     }
 
+    /// Pin-to-pad mapping (issue #2282).  The pin maps and the associated-footprint list are a
+    /// coupled bundle for inheritance purposes; see GetEffectivePinMaps().
+
+    const PIN_MAP_SET& GetPinMaps() const { return m_pinMaps; }
+    PIN_MAP_SET&       PinMaps() { return m_pinMaps; }
+    void               SetPinMaps( const PIN_MAP_SET& aPinMaps ) { m_pinMaps = aPinMaps; }
+
+    const std::vector<ASSOCIATED_FOOTPRINT>& GetAssociatedFootprints() const { return m_associatedFootprints; }
+
+    void SetAssociatedFootprints( std::vector<ASSOCIATED_FOOTPRINT> aList )
+    {
+        m_associatedFootprints = std::move( aList );
+    }
+
+    /**
+     * @return the pin maps in effect for this symbol.
+     *
+     * Pin maps and associated footprints inherit as a single bundle.  If this symbol defines
+     * either its own pin maps or its own associated footprints, both come from this symbol;
+     * otherwise both are inherited from the parent chain together.  This prevents a derived
+     * symbol from mixing its own associations with the parent's maps (or vice versa).
+     */
+    const PIN_MAP_SET& GetEffectivePinMaps() const
+    {
+        if( !definesOwnPinMapBundle() && IsDerived() )
+        {
+            if( std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
+                return parent->GetEffectivePinMaps();
+        }
+
+        return m_pinMaps;
+    }
+
+    /**
+     * @return the associated footprints in effect for this symbol, inherited as a coupled bundle
+     *         with the pin maps.  @see GetEffectivePinMaps().
+     */
+    const std::vector<ASSOCIATED_FOOTPRINT>& GetEffectiveAssociatedFootprints() const
+    {
+        if( !definesOwnPinMapBundle() && IsDerived() )
+        {
+            if( std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
+                return parent->GetEffectiveAssociatedFootprints();
+        }
+
+        return m_associatedFootprints;
+    }
+
     /**
      * Get the bounding box for the symbol.
      *
@@ -304,6 +383,22 @@ public:
      * Create a copy of the SCH_FIELDs, sorted in ordinal order.
      */
     void CopyFields( std::vector<SCH_FIELD>& aList );
+
+    /**
+     * Reconcile this derived symbol's fields with those of its (flattened) parent.
+     *
+     * Existing fields are updated in place according to \a aOptions, fields the parent
+     * has but this symbol lacks are added, and (optionally) fields not present in the
+     * parent are dropped.  Does nothing when the symbol has no parent.
+     */
+    void SyncFieldsFromParent( const LIB_FIELD_SYNC_OPTIONS& aOptions );
+
+    /**
+     * @return true when SyncFieldsFromParent() can do something, i.e. the symbol is derived
+     * from a resolvable parent.  Shared by the "Update Symbol Fields" action's enable
+     * condition and its tool handler so the two never disagree.
+     */
+    bool CanUpdateFieldsFromParent() const { return IsDerived(); }
 
     /**
      * Add a field.  Takes ownership of the pointer.
@@ -609,6 +704,7 @@ public:
      */
     std::vector<UNIT_PIN_INFO> GetUnitPinInfo() const;
 
+
     // Deprecated: use GetGraphicalPins(). This override remains to satisfy SYMBOL's pure virtual.
     std::vector<SCH_PIN*> GetPins() const override;
 
@@ -873,6 +969,10 @@ private:
 
     void deleteAllFields();
 
+    /// @return true when this symbol defines its own pin-map bundle (either named maps or
+    ///         associated footprints), so the bundle is not inherited from the parent.
+    bool definesOwnPinMapBundle() const { return !m_pinMaps.IsEmpty() || !m_associatedFootprints.empty(); }
+
     void cacheSearchTerms();
     void cachePinCount();
     void cacheShownDescription();
@@ -905,6 +1005,13 @@ private:
     wxString            m_keyWords;         ///< Search keywords
     wxArrayString       m_fpFilters;        ///< List of suitable footprint names for the symbol (wild card
                                             ///< names accepted).
+
+    /// Named pin-to-pad maps owned by this symbol (issue #2282).
+    PIN_MAP_SET m_pinMaps;
+
+    /// Footprints associated with this symbol, each tied to a named pin map.  Coupled with
+    /// m_pinMaps for inheritance.
+    std::vector<ASSOCIATED_FOOTPRINT> m_associatedFootprints;
 
     /// A list of jumper pin groups, each of which is a set of pin numbers that should be jumpered
     /// together (treated as internally connected for the purposes of connectivity)

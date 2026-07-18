@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialogs/dialog_reference_image_properties.h>
@@ -184,7 +180,9 @@ void DIALOG_REFERENCE_IMAGE_PROPERTIES::onScaleChanged( wxCommandEvent& aEvent )
     if( scale <= 0 )
         return;
 
-    m_imageEditor->SetScale( scale );
+    // Update the preview and size fields, but leave the scale field alone.  SetScale()
+    // would rewrite it and send the caret back to the start on every keystroke.
+    m_imageEditor->UpdateImageScale( scale );
     VECTOR2I size = m_imageEditor->GetImageSize();
     m_width.ChangeDoubleValue( size.x );
     m_height.ChangeDoubleValue( size.y );

@@ -14,18 +14,17 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * https://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <sim/kibis/kibis.h>
 #include <sim/sim_model_ibis.h>
 #include <sim/sim_library_ibis.h>
 #include <fmt/core.h>
+#include <paths.h>
 #include <wx/filename.h>
+#include <wx/file.h>
+#include <wx/log.h>
 #include <kiway.h>
 #include <schematic.h>
 #include "sim_lib_mgr.h"
@@ -251,19 +250,144 @@ SIM_MODEL_IBIS::SIM_MODEL_IBIS( TYPE aType ) :
 
 void SIM_MODEL_IBIS::SwitchSingleEndedDiff( bool aDiff )
 {
+    SetIOMode( aDiff ? IBIS_IO_MODE::DIFFERENTIAL : IBIS_IO_MODE::SINGLE_ENDED );
+}
+
+
+std::vector<wxString> SIM_MODEL_IBIS::GetSpiceIncludes( const SPICE_ITEM& aItem, SCHEMATIC* aSchematic,
+                                                        REPORTER& aReporter ) const
+{
+    wxFileName cacheFn;
+    cacheFn.AssignDir( PATHS::GetUserCachePath() );
+    cacheFn.AppendDir( wxT( "ibis" ) );
+    cacheFn.SetFullName( aItem.refName + ".cache" );
+
+    wxFile cacheFile( cacheFn.GetFullPath(), wxFile::write );
+
+    if( !cacheFile.IsOpened() )
+        wxLogError( _( "Could not open file '%s' to write IBIS model" ), cacheFn.GetFullPath() );
+
+    const SPICE_GENERATOR_IBIS& spiceGenerator = static_cast<const SPICE_GENERATOR_IBIS&>( SpiceGenerator() );
+
+    wxString    cacheFilepath = cacheFn.GetPath( wxPATH_GET_VOLUME | wxPATH_GET_SEPARATOR );
+    std::string modelData = spiceGenerator.IbisDevice( aItem, aSchematic, cacheFilepath, aReporter );
+
+    cacheFile.Write( wxString( modelData ) );
+
+    return { cacheFn.GetFullPath() };
+}
+
+
+void SIM_MODEL_IBIS::SetIOMode( IBIS_IO_MODE aMode )
+{
+    m_ioMode = aMode;
     ClearPins();
 
-    if( aDiff )
+    switch( aMode )
     {
+    case IBIS_IO_MODE::SINGLE_ENDED:
+        AddPin( { "GND", "1" } );
+        AddPin( { "IN/OUT", "2" } );
+        removeSwitchStateParam();
+        break;
+
+    case IBIS_IO_MODE::DIFFERENTIAL:
         AddPin( { "GND", "1" } );
         AddPin( { "+", "2" } );
         AddPin( { "-", "3" } );
+        removeSwitchStateParam();
+        break;
+
+    case IBIS_IO_MODE::SERIES:
+        AddPin( { "PIN_A", "1" } );
+        AddPin( { "PIN_B", "2" } );
+        break;
     }
-    else
+}
+
+
+void SIM_MODEL_IBIS::addSwitchStateParam()
+{
+    if( FindParam( "sw_state" ) )
+        return;
+
+    // INFO must outlive every PARAM that references it (PARAM stores const INFO&).
+    static const PARAM::INFO info = [&]
     {
-        AddPin( { "GND", "1" } );
-        AddPin( { "IN/OUT", "2" } );
+        PARAM::INFO i;
+        i.name = "sw_state";
+        i.type = SIM_VALUE::TYPE_FLOAT;
+        i.unit = "";
+        i.category = PARAM::CATEGORY::PRINCIPAL;
+        i.defaultValue = "1";
+        i.description = _( "Switch state (1 = on, 0 = off)" ).ToStdString();
+        i.isSpiceInstanceParam = true;
+        i.spiceInstanceName = "SW_STATE";
+        return i;
+    }();
+
+    AddParam( info );
+}
+
+
+void SIM_MODEL_IBIS::removeSwitchStateParam()
+{
+    // PARAM is not assignable; erase-from-middle is illegal.  sw_state is
+    // the only post-construction append, so back() is safe.
+    if( !m_params.empty() && m_params.back().info.name == "sw_state" )
+        m_params.pop_back();
+}
+
+
+bool SIM_MODEL_IBIS::SetIbisModel( const SIM_LIBRARY_IBIS& aLib, const std::string& aPinNumber,
+                                   const std::string& aModelName )
+{
+    KIBIS_COMPONENT* kcomp = aLib.m_kibis.GetComponent( GetComponentName() );
+
+    if( !kcomp )
+        return false;
+
+    KIBIS_MODEL* kmodel = aLib.m_kibis.GetModel( aModelName );
+
+    if( !kmodel )
+        return false;
+
+    KIBIS_PIN* kpin = kcomp->GetPin( aPinNumber );
+
+    switch( kmodel->m_type )
+    {
+    case IBIS_MODEL_TYPE::SERIES:
+    case IBIS_MODEL_TYPE::SERIES_SWITCH:
+    {
+        SetIOMode( IBIS_IO_MODE::SERIES );
+
+        m_partnerPin.clear();
+
+        if( kpin )
+        {
+            if( KIBIS_PIN* partner = kpin->SeriesPartner() )
+                m_partnerPin = partner->m_pinNumber;
+        }
+
+        if( kmodel->m_type == IBIS_MODEL_TYPE::SERIES_SWITCH )
+            addSwitchStateParam();
+        else
+            removeSwitchStateParam();
+
+        break;
     }
+
+    default:
+        m_partnerPin.clear();
+        removeSwitchStateParam();
+
+        if( m_ioMode == IBIS_IO_MODE::SERIES )
+            SetIOMode( IBIS_IO_MODE::SINGLE_ENDED );
+
+        break;
+    }
+
+    return true;
 }
 
 SIM_MODEL_IBIS::SIM_MODEL_IBIS( TYPE aType, const SIM_MODEL_IBIS& aSource ) :
@@ -286,6 +410,19 @@ SIM_MODEL_IBIS::SIM_MODEL_IBIS( TYPE aType, const SIM_MODEL_IBIS& aSource ) :
     m_ibisModels = aSource.GetIbisModels();
 
     m_enableDiff = aSource.CanDifferential();
+    m_partnerPin = aSource.m_partnerPin;
+
+    // SetIOMode does not touch sw_state; re-add it for SERIES_SWITCH sources.
+    SetIOMode( aSource.m_ioMode );
+
+    if( aSource.IsSeries() )
+    {
+        if( const PARAM* srcSwState = aSource.FindParam( "sw_state" ) )
+        {
+            addSwitchStateParam();
+            SetParamValue( "sw_state", srcSwState->value );
+        }
+    }
 }
 
 

@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -34,6 +30,7 @@ class LIB_SYMBOL;
 class SCH_PIN_TABLE_DATA_MODEL;
 class SCH_EDIT_FRAME;
 class PANEL_EMBEDDED_FILES;
+class PANEL_SYMBOL_PIN_MAP;
 
 
 // The dialog can be closed for several reasons.
@@ -60,6 +57,12 @@ public:
     ~DIALOG_SYMBOL_PROPERTIES() override;
 
     SCH_EDIT_FRAME* GetParent();
+
+    /**
+     * Select the Pin Map page so the dialog opens directly on the pin-to-pad mapping editor
+     * (issue #2282).  Call before showing the dialog.
+     */
+    void SelectPinMapPage();
 
 private:
     bool TransferDataToWindow() override;
@@ -109,6 +112,8 @@ private:
     FIELDS_GRID_TABLE*        m_fields;
     SCH_PIN_TABLE_DATA_MODEL* m_dataModel;
     PANEL_EMBEDDED_FILES*     m_embeddedFiles;
+    PANEL_SYMBOL_PIN_MAP*     m_pinMapPanel;
+    bool                      m_forcePinMapPage = false;
 };
 
 #endif // DIALOG_SYMBOL_PROPERTIES_H

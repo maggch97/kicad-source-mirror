@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
@@ -70,7 +66,12 @@ BOOST_FIXTURE_TEST_CASE( DRCCustomRuleSeverityTest, DRC_REGRESSION_TEST_FIXTURE 
                 PCB_MARKER temp( aItem, aPos );
 
                 if( bds.m_DrcExclusions.find( temp.SerializeToString() ) == bds.m_DrcExclusions.end() )
+                {
                     violations.push_back( *aItem );
+                    // temp goes out of scope after the lambda. The copy in `violations`
+                    // would otherwise carry a dangling marker pointer.
+                    violations.back().SetParent( nullptr );
+                }
             } );
 
     bds.m_DRCEngine->RunTests( EDA_UNITS::MM, true, false );

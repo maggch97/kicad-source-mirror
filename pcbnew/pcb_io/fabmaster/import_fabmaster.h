@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -101,6 +97,18 @@ private:
     bool has_pins;
 
 
+    /// Per-layer pad geometry within a pad stack
+    struct FM_PAD_LAYER
+    {
+        PAD_SHAPE   shape = PAD_SHAPE::CIRCLE;
+        std::string custom_name;
+        bool        is_octogon = false;
+        int         width = 0;
+        int         height = 0;
+        int         x_offset = 0;
+        int         y_offset = 0;
+    };
+
     struct FM_PAD
     {
         std::string name;
@@ -127,6 +135,7 @@ private:
         int y_offset;
         int antipad_size;
         std::set<std::string> copper_layers;  ///< Copper layers with non-zero annular ring
+        std::map<std::string, FM_PAD_LAYER> layer_shapes;  ///< Per-layer shape overrides
 
         struct HASH
         {

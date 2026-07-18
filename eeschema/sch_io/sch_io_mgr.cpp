@@ -16,8 +16,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <wx/filename.h>
@@ -32,11 +32,14 @@
 #include <sch_io/cadstar/sch_io_cadstar_archive.h>
 #include <sch_io/easyeda/sch_io_easyeda.h>
 #include <sch_io/easyedapro/sch_io_easyedapro.h>
+#include <sch_io/easyedapro/sch_io_easyedapro_v3.h>
 #include <sch_io/geda/sch_io_geda.h>
 #include <sch_io/database/sch_io_database.h>
 #include <sch_io/ltspice/sch_io_ltspice.h>
 #include <sch_io/http_lib/sch_io_http_lib.h>
 #include <sch_io/pads/sch_io_pads.h>
+#include <sch_io/diptrace/sch_io_diptrace.h>
+#include <sch_io/pcad/sch_io_pcad.h>
 #include <common.h>     // for ExpandEnvVarSubstitutions
 
 #include <wildcards_and_files_ext.h>
@@ -76,10 +79,13 @@ SCH_IO* SCH_IO_MGR::FindPlugin( SCH_FILE_T aFileType )
     case SCH_EAGLE:           return new SCH_IO_EAGLE();
     case SCH_EASYEDA:         return new SCH_IO_EASYEDA();
     case SCH_EASYEDAPRO:      return new SCH_IO_EASYEDAPRO();
+    case SCH_EASYEDAPRO_V3: return new SCH_IO_EASYEDAPRO_V3();
     case SCH_GEDA:            return new SCH_IO_GEDA();
     case SCH_LTSPICE:         return new SCH_IO_LTSPICE();
     case SCH_HTTP:            return new SCH_IO_HTTP_LIB();
     case SCH_PADS:            return new SCH_IO_PADS();
+    case SCH_DIPTRACE:        return new SCH_IO_DIPTRACE();
+    case SCH_PCAD:            return new SCH_IO_PCAD();
     default:                  return nullptr;
     }
 }
@@ -101,10 +107,13 @@ const wxString SCH_IO_MGR::ShowType( SCH_FILE_T aType )
     case SCH_EAGLE:           return wxString( wxT( "EAGLE" ) );
     case SCH_EASYEDA:         return wxString( wxT( "EasyEDA (JLCEDA) Std" ) );
     case SCH_EASYEDAPRO:      return wxString( wxT( "EasyEDA (JLCEDA) Pro" ) );
+    case SCH_EASYEDAPRO_V3: return wxString( wxT( "EasyEDA (JLCEDA) Pro v3" ) );
     case SCH_GEDA:            return wxString( wxT( "gEDA / Lepton EDA" ) );
     case SCH_LTSPICE:         return wxString( wxT( "LTspice" ) );
     case SCH_HTTP:            return wxString( wxT( "HTTP" ) );
     case SCH_PADS:            return wxString( wxT( "PADS Logic" ) );
+    case SCH_DIPTRACE:        return wxString( wxT( "DipTrace" ) );
+    case SCH_PCAD:            return wxString( wxT( "P-CAD" ) );
     case SCH_NESTED_TABLE:    return LIBRARY_TABLE_ROW::TABLE_TYPE_NAME;
     default:                  return wxString::Format( _( "Unknown SCH_FILE_T value: %d" ), aType );
     }
@@ -133,6 +142,8 @@ SCH_IO_MGR::SCH_FILE_T SCH_IO_MGR::EnumFromStr( const wxString& aType )
         return SCH_EASYEDA;
     else if( aType == wxT( "EasyEDA (JLCEDA) Pro" ) )
         return SCH_EASYEDAPRO;
+    else if( aType == wxT( "EasyEDA (JLCEDA) Pro v3" ) )
+        return SCH_EASYEDAPRO_V3;
     else if( aType == wxT( "gEDA / Lepton EDA" ) )
         return SCH_GEDA;
     else if( aType == wxT( "LTspice" ) )
@@ -141,6 +152,10 @@ SCH_IO_MGR::SCH_FILE_T SCH_IO_MGR::EnumFromStr( const wxString& aType )
         return SCH_HTTP;
     else if( aType == wxT( "PADS Logic" ) )
         return SCH_PADS;
+    else if( aType == wxT( "DipTrace" ) )
+        return SCH_DIPTRACE;
+    else if( aType == wxT( "P-CAD" ) )
+        return SCH_PCAD;
     else if( aType == LIBRARY_TABLE_ROW::TABLE_TYPE_NAME )
         return SCH_NESTED_TABLE;
 
@@ -224,6 +239,11 @@ bool SCH_IO_MGR::ConvertLibrary( std::map<std::string, UTF8>* aOldFileProps, con
     SCH_IO_MGR::SCH_FILE_T oldFileType = SCH_IO_MGR::GuessPluginTypeFromLibPath( aOldFilePath );
 
     if( oldFileType == SCH_IO_MGR::SCH_FILE_UNKNOWN )
+        return false;
+
+    // A nested library table has no plugin to enumerate it; reject it before the null-plugin
+    // path below.
+    if( oldFileType == SCH_IO_MGR::SCH_NESTED_TABLE )
         return false;
 
     // Live backends are not convertible to a static .kicad_sym snapshot.  HTTP requires a

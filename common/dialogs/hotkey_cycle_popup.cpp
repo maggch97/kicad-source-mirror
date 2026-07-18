@@ -14,15 +14,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <dialogs/hotkey_cycle_popup.h>
 #include <eda_draw_frame.h>
+
+#include <wx/utils.h>
 
 #ifdef __WXGTK__
 #define LIST_BOX_H_PADDING 20
@@ -105,8 +103,32 @@ void HOTKEY_CYCLE_POPUP::Popup( const wxString& aTitle, const wxArrayString& aIt
     m_showTimer->StartOnce( SHOW_TIME_MS );
 
     Show( true );
-    Centre();
     SetFocus();
+}
+
+
+bool HOTKEY_CYCLE_POPUP::Show( bool aShow )
+{
+#ifdef __WXGTK__
+    // On Wayland, window positions cannot be changed after mapping. DIALOG_SHIM::Show() calls
+    // Raise() -> gtk_window_present() before wxDialog::Show(), prematurely mapping the window so
+    // the compositor places it at its default position instead of centered on the parent. Centre
+    // before mapping and bypass DIALOG_SHIM::Show() since this transient popup needs no geometry
+    // save/restore.
+    if( aShow && wxGetEnv( wxT( "WAYLAND_DISPLAY" ), nullptr ) )
+    {
+        clampToWorkArea();
+        Centre();
+        return wxDialog::Show( true );
+    }
+#endif
+
+    bool ret = DIALOG_SHIM::Show( aShow );
+
+    if( aShow )
+        Centre();
+
+    return ret;
 }
 
 

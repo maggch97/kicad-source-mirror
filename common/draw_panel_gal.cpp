@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include <eda_draw_frame.h>
 #include <kiface_base.h>
@@ -39,6 +35,7 @@
 #include <gal/cursors.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <gal/opengl/opengl_gal.h>
+#include <gal/opengl/gpu_oom_error.h>
 #include <gal/cairo/cairo_gal.h>
 #include <math/vector2wx.h>
 
@@ -202,11 +199,15 @@ void EDA_DRAW_PANEL_GAL::onPaint( wxPaintEvent& WXUNUSED( aEvent ) )
 
 bool EDA_DRAW_PANEL_GAL::recoverFromGalError( const std::exception& aError )
 {
+    // A predicted GPU out-of-memory cannot be cured by reinitializing OpenGL; it would just
+    // hit the same VRAM ceiling. Skip straight to the software fallback.
+    const bool gpuOutOfMemory = dynamic_cast<const KIGFX::GPU_OOM_ERROR*>( &aError ) != nullptr;
+
     try
     {
         // Sleep/wake and GPU resets can invalidate the entire GL context.
         // Try a full reinit of the current backend before falling back.
-        if( !m_glRecoveryAttempted )
+        if( !gpuOutOfMemory && !m_glRecoveryAttempted )
         {
             m_glRecoveryAttempted = true;
             GAL_TYPE prevBackend = m_backend;

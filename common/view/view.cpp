@@ -18,11 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -1444,7 +1440,12 @@ void VIEW::updateBbox( VIEW_ITEM* aItem )
     wxASSERT( aItem->m_viewPrivData ); //must have a viewPrivData
 
     const BOX2I  new_bbox = aItem->ViewBBox();
-    const BOX2I& old_bbox = aItem->m_viewPrivData->m_bbox;
+
+    // The R-tree removal below keys on the bbox the item was inserted with, so it must be
+    // copied before the m_bbox overwrite that follows rather than aliased to it. Otherwise
+    // a moved item is removed with the wrong box and the R-tree falls back to a full-tree
+    // search instead of the targeted removal.
+    const BOX2I  old_bbox = aItem->m_viewPrivData->m_bbox;
 
     if( new_bbox == old_bbox )
         return;
@@ -1754,6 +1755,9 @@ std::unique_ptr<VIEW> VIEW::DataReference() const
 
 void VIEW::SetVisible( VIEW_ITEM* aItem, bool aIsVisible )
 {
+    if( !aItem )
+        return;
+
     VIEW_ITEM_DATA* viewData = aItem->viewPrivData();
 
     if( !viewData )
@@ -1775,6 +1779,9 @@ void VIEW::SetVisible( VIEW_ITEM* aItem, bool aIsVisible )
 
 void VIEW::Hide( VIEW_ITEM* aItem, bool aHide, bool aHideOverlay )
 {
+    if( !aItem )
+        return;
+
     VIEW_ITEM_DATA* viewData = aItem->viewPrivData();
 
     if( !viewData )

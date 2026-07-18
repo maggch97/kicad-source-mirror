@@ -15,20 +15,19 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
  * @brief Pcbnew PLUGIN for Altium *.PcbDoc format.
  */
 
+#include <set>
+
 #include <wx/string.h>
 
 #include <font/fontconfig.h>
+#include <project.h>
 #include <pcb_io_altium_designer.h>
 #include <altium_pcb.h>
 #include <altium_pcb_compound_file.h>
@@ -48,19 +47,19 @@
 void ApplyAltiumProjectVariantsToBoard( BOARD* aBoard,
                                         const std::vector<ALTIUM_PROJECT_VARIANT>& aVariants )
 {
-    std::map<wxString, FOOTPRINT*> fpByRef;
-    std::map<KIID, FOOTPRINT*>     fpByUid;
+    std::map<wxString, FOOTPRINT*>          fpByRef;
+    std::map<KIID, std::vector<FOOTPRINT*>> fpByUid;
 
     for( FOOTPRINT* fp : aBoard->Footprints() )
     {
         fpByRef[fp->GetReference()] = fp;
 
-        // The Altium PCB importer stores sourceUniqueID as the last element of the
-        // footprint path. Use it to disambiguate repeated designators.
+        // The importer stores the component unique id as the last path element. Repeated
+        // channels share one id across footprints, so collect all of them to detect ambiguity.
         const KIID_PATH& path = fp->GetPath();
 
         if( path.size() >= 2 )
-            fpByUid[path.back()] = fp;
+            fpByUid[path.back()].push_back( fp );
     }
 
     for( const ALTIUM_PROJECT_VARIANT& pv : aVariants )
@@ -74,18 +73,14 @@ void ApplyAltiumProjectVariantsToBoard( BOARD* aBoard,
         {
             FOOTPRINT* target = nullptr;
 
-            // Prefer UniqueId matching to handle repeated designators correctly
+            // Prefer unique-id matching, but only when it resolves to a single footprint. A
+            // shared id (repeated channels) is ambiguous, so fall back to the designator.
             if( !entry.uniqueId.empty() )
             {
-                wxString normalizedUid = entry.uniqueId;
+                auto it = fpByUid.find( AltiumUniqueIdToKiid( entry.uniqueId ) );
 
-                if( normalizedUid.starts_with( wxT( "\\" ) ) )
-                    normalizedUid = normalizedUid.Mid( 1 );
-
-                auto it = fpByUid.find( KIID( normalizedUid ) );
-
-                if( it != fpByUid.end() )
-                    target = it->second;
+                if( it != fpByUid.end() && it->second.size() == 1 )
+                    target = it->second.front();
             }
 
             if( !target )
@@ -125,6 +120,50 @@ void ApplyAltiumProjectVariantsToBoard( BOARD* aBoard,
         }
     }
 }
+
+void ApplyAltiumProjectParametersToProject( PROJECT* aProject,
+                                            const std::map<wxString, wxString>& aParameters )
+{
+    if( !aProject )
+        return;
+
+    // Names KiCad resolves contextually (board fields, title block, special strings). Importing
+    // them as project variables would shadow nothing useful and could surprise the user, so they
+    // are left to native resolution.
+    static const std::set<wxString> reserved = {
+        wxS( "LAYER" ),         wxS( "FILENAME" ),      wxS( "FILEPATH" ),
+        wxS( "PROJECTNAME" ),   wxS( "VARIANT" ),       wxS( "VARIANT_DESC" ),
+        wxS( "ISSUE_DATE" ),    wxS( "CURRENT_DATE" ),  wxS( "CURRENT_TIME_LOCALE" ),
+        wxS( "CURRENT_TIME_HH_MM_SS" ), wxS( "REVISION" ), wxS( "TITLE" ),
+        wxS( "COMPANY" ),       wxS( "COMMENT1" ),      wxS( "COMMENT2" ),
+        wxS( "COMMENT3" ),      wxS( "COMMENT4" ),      wxS( "COMMENT5" ),
+        wxS( "COMMENT6" ),      wxS( "COMMENT7" ),      wxS( "COMMENT8" ),
+        wxS( "COMMENT9" ),      wxS( "VCSHASH" ),       wxS( "VCSSHORTHASH" ),
+        wxS( "KICAD_VERSION" ), wxS( "PAPER" ),         wxS( "SHEETNAME" ),
+        wxS( "SHEETPATH" ),     wxS( "DRC_WARNING" ),   wxS( "DRC_ERROR" ),
+        wxS( "ERC_WARNING" ),   wxS( "ERC_ERROR" )
+    };
+
+    std::map<wxString, wxString>& textVars = aProject->GetTextVars();
+    bool                          added = false;
+
+    for( const auto& [name, value] : aParameters )
+    {
+        if( reserved.count( name ) )
+            continue;
+
+        // Don't clobber a variable the user (or a prior import step) already set.
+        if( textVars.count( name ) )
+            continue;
+
+        textVars[name] = value;
+        added = true;
+    }
+
+    if( added )
+        aProject->IncrementTextVarsTicker();
+}
+
 
 PCB_IO_ALTIUM_DESIGNER::PCB_IO_ALTIUM_DESIGNER() :
         PCB_IO( wxS( "Altium Designer" ) )
@@ -214,6 +253,7 @@ BOARD* PCB_IO_ALTIUM_DESIGNER::LoadBoard( const wxString& aFileName, BOARD* aApp
             { ALTIUM_PCB_DIR::REGIONS6, "Regions6" },
             { ALTIUM_PCB_DIR::RULES6, "Rules6" },
             { ALTIUM_PCB_DIR::SHAPEBASEDREGIONS6, "ShapeBasedRegions6" },
+            { ALTIUM_PCB_DIR::SMARTUNIONS, "SmartUnions" },
             { ALTIUM_PCB_DIR::TEXTS6, "Texts6" },
             { ALTIUM_PCB_DIR::TRACKS6, "Tracks6" },
             { ALTIUM_PCB_DIR::VIAS6, "Vias6" },
@@ -236,10 +276,15 @@ BOARD* PCB_IO_ALTIUM_DESIGNER::LoadBoard( const wxString& aFileName, BOARD* aApp
 
     if( m_props && m_props->count( "project_file" ) )
     {
-        auto variants = ParseAltiumProjectVariants( m_props->at( "project_file" ) );
+        const wxString& projectFile = m_props->at( "project_file" );
+
+        auto variants = ParseAltiumProjectVariants( projectFile );
 
         if( !variants.empty() )
             ApplyAltiumProjectVariantsToBoard( m_board, variants );
+
+        ApplyAltiumProjectParametersToProject( aProject,
+                                               ParseAltiumProjectParameters( projectFile ) );
     }
 
     return m_board;
@@ -429,8 +474,9 @@ std::vector<FOOTPRINT*> PCB_IO_ALTIUM_DESIGNER::GetImportedCachedLibraryFootprin
 {
     std::vector<FOOTPRINT*> footprints;
 
+    // caller owns result, clone not alias
     for( FOOTPRINT* fp : m_board->Footprints() )
-        footprints.push_back( fp );
+        footprints.push_back( static_cast<FOOTPRINT*>( fp->Clone() ) );
 
     return footprints;
 }

@@ -69,9 +69,9 @@ Rotation values are stored as millidegrees (divide by 1000 to get
 degrees). The rotation is NOT negated despite the Y-axis flip (same
 convention as Altium).
 
-Pad rotation in 0x0D blocks is board-absolute, meaning it includes
-the parent footprint's rotation. To get the footprint-local pad
-rotation for KiCad, subtract the footprint's rotation.
+Pad coordinates and rotation in 0x0D blocks are in the footprint's
+local (unrotated, unflipped) space. Graphics, text, and areas on a
+placed instance are board-absolute with final layers already applied.
 
 ## Linked Lists
 
@@ -206,10 +206,36 @@ Padstacks had a major overhaul in V17.2:
 
 The first few fields in the header are the same in all versions:
 
-* Block type (and some other numbers which drive a list size)
+* Block type
+* `m_UnknownByte1`
+* `m_N`: drives the size of a trailing uint32 array (`m_N * 8` pre-V172,
+  `m_N * 10` V172+)
+* `m_StartLayer`: 0-based index of the first copper layer in the
+  padstack span
 * Key
 * Next block key
 * The padstack name string key
+
+The version-specific header variant (`HEADER_v16x` / `HEADER_v17x`)
+follows and contains `m_LayerCount`, the number of copper layers
+spanned by the padstack.
+
+#### Via Layer Span
+
+Blind and buried vias (0x33) inherit their span from the referenced
+0x1C padstack:
+
+- `start = m_StartLayer` (0-based copper index)
+- `count = m_LayerCount` from the padstack header
+- `end = start + count - 1`
+
+Importer rules:
+
+- `count > 1` and `count < totalCu`: set a blind/buried via between
+  `start` and `end` (BLIND when either endpoint is an outer copper
+  layer, else BURIED)
+- `count == 1` or `count >= totalCu`: import as a through via
+  (F_Cu to B_Cu)
 
 #### Drill Diameter
 
@@ -289,8 +315,12 @@ Each PADSTACK_COMPONENT has a `m_Type` field selecting the shape:
 | 0x1C  | Chamfered Rectangle | CHAMFERED_RECT       |
 | 0x1E  | N-Sided Polygon     | (unhandled)          |
 
-For shape symbols (0x16), the `m_StrPtr` field points to a 0x28
-polygon block whose segment list defines the custom pad outline.
+For shape symbols (0x16), `m_ShapePtr` points to a 0x28 polygon
+block whose segment list defines the custom pad outline. Field order
+in each padstack component is version-dependent:
+
+- V172+: `m_Z2`, then `m_ShapePtr`
+- Pre-V172: `m_ShapePtr`, then `m_Z2` (omitted on the last component)
 
 ## Polygon Shapes (0x28)
 
@@ -473,24 +503,45 @@ An actual footprint on the board.
 - `m_GraphicPtr`: Head of 0x14 graphics linked list
 - `m_FirstPadPtr`: Head of 0x32 placed pad linked list
 - `m_TextPtr`: Head of 0x30 text linked list
+- `m_AssemblyPtr`: Head of assembly drawing linked list
+- `m_AreasPtr`: Head of areas (courtyards, keepouts, etc.) list
 
-Bottom-layer footprints (`m_Layer == 1`) must be flipped. In KiCad,
-call `Flip()` AFTER adding all children (graphics, text, pads) so
-that child layers and positions are mirrored correctly.
+Pads and non-pad children use different coordinate spaces:
+
+- Pads (via 0x32 → 0x0D) are in local footprint space (not yet
+  rotated or flipped). Place them with footprint-relative position
+  and orientation first.
+- Graphics, text, assembly drawings, and areas are already in
+  board-absolute form on their final layers.
+
+Importer order for a placed instance:
+
+1. Set footprint position.
+2. Add pads in local space (`SetFPRelativePosition` /
+   `SetFPRelativeOrientation`).
+3. If `m_Layer == 1` (bottom), `Flip()` the footprint, then
+   `Rotate()` by `m_Rotation`. Top-side footprints only rotate.
+4. Add graphics, text, assembly, and areas as-is (already
+   board-absolute).
+
+Areas imported as footprint zones must still be stored in KiCad as
+footprint-local outlines. Convert board-absolute Allegro geometry
+with the inverted footprint `TRANSFORM_TRS` when building zone
+polygons (and related fills). Board-level zones use the identity
+transform.
 
 ## Pad Placement (0x0D)
 
 The 0x0D block holds per-pad geometry:
 
-- `m_CoordsX`, `m_CoordsY`: Pad position in board coordinates
+- `m_CoordsX`, `m_CoordsY`: Pad position in footprint-local
+  coordinates (unrotated, unflipped)
 - `m_PadStack`: Key to 0x1C padstack
-- `m_Rotation`: Pad rotation in millidegrees, board-absolute
+- `m_Rotation`: Pad rotation in millidegrees, footprint-local
 
-The rotation stored in 0x0D includes the parent footprint's rotation.
-For KiCad, which expects footprint-local pad rotation, subtract the
-footprint's rotation:
-
-    local_rotation = pad_rotation - footprint_rotation
+Use `SetFPRelativePosition` / `SetFPRelativeOrientation` so KiCad
+applies the parent footprint's Flip/Rotate to bring pads into
+board space.
 
 ## Drill Slot Orientation
 
@@ -800,6 +851,9 @@ scanning for board-level text.
 
 Board-level text with ETCH class (0x06) is placed on copper layers.
 The subclass byte indexes the copper layer in stackup order.
+
+Text properties include a reversal flag. Values `REVERSED` (0x01)
+and `REVERSED_3` (0x03) both mean mirrored text in KiCad.
 
 ## Empty Net Names
 

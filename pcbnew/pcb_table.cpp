@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pcb_edit_frame.h>
@@ -31,6 +27,7 @@
 #include <geometry/geometry_utils.h>
 #include <convert_basic_shapes_to_polygon.h>
 #include <pcb_painter.h>    // for PCB_RENDER_SETTINGS
+#include <view/view.h>
 #include <properties/property.h>
 #include <properties/property_mgr.h>
 
@@ -314,8 +311,74 @@ void PCB_TABLE::Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle )
 }
 
 
+void PCB_TABLE::OnFootprintTransformed()
+{
+    for( PCB_TABLECELL* cell : m_cells )
+        cell->OnFootprintTransformed();
+}
+
+
+void PCB_TABLE::OnFootprintRescaled( double aRatioX, double aRatioY, double aLinearFactor, const VECTOR2I& aAnchor,
+                                     const EDA_ANGLE& aParentRotate )
+{
+    for( PCB_TABLECELL* cell : m_cells )
+        cell->OnFootprintRescaled( aRatioX, aRatioY, aLinearFactor, aAnchor, aParentRotate );
+}
+
+
 void PCB_TABLE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 {
+    // FP-child path keeps cells in lib frame, the standalone path below
+    // would corrupt them because FOOTPRINT::Flip zeroes the FP rotation.
+    if( GetParentFootprint() )
+    {
+        for( PCB_TABLECELL* cell : m_cells )
+            cell->Flip( aCentre, aFlipDirection );
+
+        std::vector<PCB_TABLECELL*> oldCells = m_cells;
+
+        if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
+        {
+            int rowOffset = 0;
+
+            for( int row = 0; row < GetRowCount(); ++row )
+            {
+                for( int col = 0; col < GetColCount(); ++col )
+                    m_cells[rowOffset + col] = oldCells[rowOffset + GetColCount() - 1 - col];
+
+                rowOffset += GetColCount();
+            }
+
+            std::map<int, int> newColWidths;
+
+            for( int col = 0; col < GetColCount(); ++col )
+                newColWidths[col] = m_colWidths[GetColCount() - 1 - col];
+
+            m_colWidths = std::move( newColWidths );
+        }
+        else // TOP_BOTTOM
+        {
+            for( int row = 0; row < GetRowCount(); ++row )
+            {
+                for( int col = 0; col < GetColCount(); ++col )
+                {
+                    int oldRow = GetRowCount() - 1 - row;
+                    m_cells[row * GetColCount() + col] = oldCells[oldRow * GetColCount() + col];
+                }
+            }
+
+            std::map<int, int> newRowHeights;
+
+            for( int row = 0; row < GetRowCount(); ++row )
+                newRowHeights[row] = m_rowHeights[GetRowCount() - 1 - row];
+
+            m_rowHeights = std::move( newRowHeights );
+        }
+
+        SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
+        return;
+    }
+
     BOX2I originalBBox = GetBoundingBox();
 
     VECTOR2I targetPos;
@@ -420,6 +483,30 @@ void PCB_TABLE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 }
 
 
+void PCB_TABLE::Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
+{
+    // Mirror is Flip with the layer restored. TOP_BOTTOM needs a 180 deg pre-rotation
+    // because rotate-then-LR-flip equals TB-flip.
+    PCB_LAYER_ID              origLayer = GetLayer();
+    std::vector<PCB_LAYER_ID> origCellLayers;
+
+    origCellLayers.reserve( m_cells.size() );
+
+    for( PCB_TABLECELL* cell : m_cells )
+        origCellLayers.push_back( cell->GetLayer() );
+
+    if( aFlipDirection == FLIP_DIRECTION::TOP_BOTTOM )
+        Rotate( aCentre, ANGLE_180 );
+
+    Flip( aCentre, FLIP_DIRECTION::LEFT_RIGHT );
+
+    SetLayer( origLayer );
+
+    for( size_t i = 0; i < m_cells.size(); ++i )
+        m_cells[i]->SetLayer( origCellLayers[i] );
+}
+
+
 void PCB_TABLE::RunOnChildren( const std::function<void( BOARD_ITEM* )>& aFunction, RECURSE_MODE aMode ) const
 {
     for( PCB_TABLECELL* cell : m_cells )
@@ -440,6 +527,16 @@ const BOX2I PCB_TABLE::GetBoundingBox() const
     bbox.Merge( m_cells[m_cells.size() - 1]->GetBoundingBox() );
 
     return bbox;
+}
+
+
+double PCB_TABLE::ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const
+{
+    // Hide the locked shadow when the table's own layer is not shown
+    if( aLayer == LAYER_LOCKED_ITEM_SHADOW && !aView->IsLayerVisibleCached( m_layer ) )
+        return LOD_HIDE;
+
+    return LOD_SHOW;
 }
 
 

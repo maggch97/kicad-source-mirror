@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef JOB_EXPORT_PCB_DXF_H
@@ -49,6 +49,7 @@ public:
 public:
     bool      m_plotGraphicItemsUsingContours;
     bool      m_polygonMode;
+    bool      m_useKiCadFont;
     DXF_UNITS m_dxfUnits;
 
     GEN_MODE  m_genMode;

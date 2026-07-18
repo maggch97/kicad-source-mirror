@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <algorithm>   // for max
@@ -513,6 +509,10 @@ bool EDA_TEXT::ResolveFont( const std::vector<wxString>* aEmbeddedFonts )
         if( m_render_cache && !m_render_cache->glyphs.empty() )
             m_render_cache->font = m_attributes.m_Font;
 
+        // The bbox cache isn't keyed on the font, so a box measured against the fallback font
+        // before resolution would otherwise survive until the next setter.
+        ClearBoundingBoxCache();
+
         m_unresolvedFontName = wxEmptyString;
         return true;
     }
@@ -575,19 +575,20 @@ void EDA_TEXT::SetTextHeight( int aHeight )
 
 void EDA_TEXT::SetTextPos( const VECTOR2I& aPoint )
 {
-    Offset( VECTOR2I( aPoint.x - m_pos.x, aPoint.y - m_pos.y ) );
+    VECTOR2I current = GetTextPos();
+    Offset( VECTOR2I( aPoint.x - current.x, aPoint.y - current.y ) );
 }
 
 
 void EDA_TEXT::SetTextX( int aX )
 {
-    Offset( VECTOR2I( aX - m_pos.x, 0 ) );
+    Offset( VECTOR2I( aX - GetTextPos().x, 0 ) );
 }
 
 
 void EDA_TEXT::SetTextY( int aY )
 {
-    Offset( VECTOR2I( 0, aY - m_pos.y ) );
+    Offset( VECTOR2I( 0, aY - GetTextPos().y ) );
 }
 
 
@@ -720,6 +721,7 @@ EDA_TEXT::GetRenderCache( const KIFONT::FONT* aFont, const wxString& forResolved
             TEXT_ATTRIBUTES             attrs = GetAttributes();
 
             attrs.m_Angle = resolvedAngle;
+            attrs.m_Size = GetTextSize();
 
             font->GetLinesAsGlyphs( &m_render_cache->glyphs, forResolvedText, GetDrawPos() + aOffset, attrs,
                                     getFontMetrics() );
@@ -1159,6 +1161,8 @@ std::shared_ptr<SHAPE_COMPOUND> EDA_TEXT::GetEffectiveTextShape( bool aTriangula
     wxString                        shownText( GetShownText( true ) );
     VECTOR2I                        drawPos = GetDrawPos();
     TEXT_ATTRIBUTES                 attrs = GetAttributes();
+
+    attrs.m_Size = GetTextSize();
 
     std::vector<std::unique_ptr<KIFONT::GLYPH>>* cache = nullptr;
 

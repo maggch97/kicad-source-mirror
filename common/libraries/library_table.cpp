@@ -14,8 +14,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <boost/lexical_cast.hpp>
@@ -290,8 +290,25 @@ std::optional<const LIBRARY_TABLE_ROW*> LIBRARY_TABLE::Row( const wxString& aNic
 }
 
 
+bool LIBRARY_TABLE::IsReadOnly() const
+{
+    if( m_path.IsEmpty() )
+        return false;
+
+    wxFileName fn( m_path );
+
+    return fn.FileExists() && !fn.IsFileWritable();
+}
+
+
 LIBRARY_RESULT<void> LIBRARY_TABLE::Save()
 {
+    if( IsReadOnly() )
+    {
+        return tl::unexpected( LIBRARY_ERROR(
+                wxString::Format( _( "Library table '%s' is read-only" ), Path() ) ) );
+    }
+
     wxLogTrace( traceLibraries, "Saving %s", Path() );
     wxFileName fn( Path() );
     // This should already be normalized, but just in case...
@@ -299,9 +316,9 @@ LIBRARY_RESULT<void> LIBRARY_TABLE::Save()
 
     // Global user data with no other recovery path: keep a rotating .bak sibling so the
     // user can recover from logical corruption outside our fsync window.
-    wxFFile existing( fn.GetFullPath(), wxT( "rb" ) );
+    wxFFile existing;
 
-    if( existing.IsOpened() )
+    if( fn.FileExists() && existing.Open( fn.GetFullPath(), wxT( "rb" ) ) )
     {
         wxFileOffset rawLen = existing.Length();
 

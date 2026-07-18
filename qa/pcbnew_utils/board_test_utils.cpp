@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <pcbnew_utils/board_test_utils.h>
@@ -202,45 +198,6 @@ BOARD_ITEM& RequireBoardItemWithTypeAndId( const BOARD& aBoard, KICAD_T aItemTyp
 
     return *item;
 }
-
-
-/**
- * A temporary directory that will be deleted when it goes out of scope.
- */
-class TEMPORARY_DIRECTORY
-{
-public:
-    /**
-     * Create a temporary directory with a given prefix and suffix. The directory will be
-     * created in the system temporary directory, and will not be pre-existing.
-     */
-    TEMPORARY_DIRECTORY( const std::string& aNamePrefix, const std::string aSuffix )
-    {
-        int i = 0;
-
-        // Find a unique directory name
-        while( true )
-        {
-            m_path = std::filesystem::temp_directory_path()
-                     / ( aNamePrefix + std::to_string( i ) + aSuffix );
-
-            if( !std::filesystem::exists( m_path ) )
-                break;
-
-            i++;
-        }
-
-        wxASSERT( !std::filesystem::exists( m_path ) );
-        std::filesystem::create_directories( m_path );
-    }
-
-    ~TEMPORARY_DIRECTORY() { std::filesystem::remove_all( m_path ); }
-
-    const std::filesystem::path& GetPath() const { return m_path; }
-
-private:
-    std::filesystem::path m_path;
-};
 
 
 void LoadAndTestBoardFile( const wxString aRelativePath, bool aRoundtrip,
@@ -625,8 +582,14 @@ void CheckFpShape( const PCB_SHAPE* expected, const PCB_SHAPE* shape )
 
         BOOST_CHECK_EQUAL( expected->IsLocked(), shape->IsLocked() );
 
-        BOOST_CHECK_EQUAL( expected->GetStart(), shape->GetStart() );
-        BOOST_CHECK_EQUAL( expected->GetEnd(), shape->GetEnd() );
+        // Polygon start/end is a derived bounding-box cache rather than serialized geometry, and
+        // importers that build the outline directly leave it at the origin.  CheckShapePolySet
+        // below compares the authoritative polygon.
+        if( expected->GetShape() != SHAPE_T::POLY )
+        {
+            BOOST_CHECK_EQUAL( expected->GetStart(), shape->GetStart() );
+            BOOST_CHECK_EQUAL( expected->GetEnd(), shape->GetEnd() );
+        }
 
         if( expected->GetShape() == SHAPE_T::ARC )
         {

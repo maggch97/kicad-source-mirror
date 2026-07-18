@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -200,12 +196,12 @@ BOOST_AUTO_TEST_CASE( HTMLEscape )
  */
 BOOST_AUTO_TEST_CASE( VariantNameSort )
 {
-    std::vector<wxString> variantNames;
+    wxArrayString variantNames;
 
     // Verify default variant name is always sorted to the beginning of the list.
-    variantNames.emplace_back( wxS( "Variant1" ) );
-    variantNames.emplace_back( GetDefaultVariantName() );
-    std::sort( variantNames.begin(), variantNames.end(), SortVariantNames );
+    variantNames.Add( wxS( "Variant1" ) );
+    variantNames.Add( GetDefaultVariantName() );
+    variantNames.Sort( SortVariantNames );
 
     BOOST_CHECK_EQUAL( variantNames[0], GetDefaultVariantName() );
     BOOST_CHECK_EQUAL( variantNames[1], wxS( "Variant1" ) );

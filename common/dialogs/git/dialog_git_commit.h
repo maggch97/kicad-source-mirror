@@ -14,11 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/gpl-3.0.html
- * or you may search the http://www.gnu.org website for the version 3 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef DIALOG_GIT_COMMIT_H
@@ -53,15 +49,23 @@ public:
 
     std::vector<wxString> GetSelectedFiles() const;
 
+    /// When false, OK is allowed with no files selected (e.g. amending only the message).
+    void SetFileSelectionRequired( bool aRequired );
+
     void OnTextChanged( wxCommandEvent& event );
     void OnItemChecked( wxListEvent& event );
     void OnItemUnchecked( wxListEvent& event );
 
 private:
+    /// Enable the OK button only when there is both a message and at least one selected file.
+    void updateOkButton();
+
     wxTextCtrl* m_commitMessageTextCtrl;
     wxTextCtrl* m_authorTextCtrl;
     wxListCtrl* m_listCtrl;
     wxButton* m_okButton;
+
+    bool m_requireFiles = true;
 
     git_repository* m_repo;
     wxString m_defaultAuthorName;

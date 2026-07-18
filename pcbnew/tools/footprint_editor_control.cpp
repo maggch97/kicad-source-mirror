@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #include <advanced_config.h>
@@ -55,6 +51,11 @@
 #include <kiway.h>
 #include <project_pcb.h>
 #include <view/view_controls.h>
+#include <widgets/appearance_controls.h>
+#include <dialogs/dialog_kicad_diff.h>
+#include <diff_merge/fp_lib_differ.h>
+#include <libraries/library_manager.h>
+#include <wx/dirdlg.h>
 
 #include <memory>
 
@@ -202,8 +203,11 @@ void FOOTPRINT_EDITOR_CONTROL::tryToSaveFootprintInLibrary( FOOTPRINT&    aFootp
             LIB_ID fpid = aFootprint.GetFPID();
             fpid.SetLibNickname( aTargetLib.GetLibNickname() );
             aFootprint.SetFPID( fpid );
-            m_frame->SaveFootprint( &aFootprint );
-            m_frame->ClearModify();
+
+            // Clear the modified flag only on a successful save, else the edits are silently
+            // lost (issue #23850).
+            if( m_frame->SaveFootprint( &aFootprint ) )
+                m_frame->ClearModify();
         }
     }
 }
@@ -214,13 +218,18 @@ int FOOTPRINT_EDITOR_CONTROL::NewFootprint( const TOOL_EVENT& aEvent )
     const LIB_ID   selected = m_frame->GetTargetFPID();
     const wxString libraryName = selected.GetUniStringLibNickname();
 
-    if( !m_frame->Clear_Pcb( true ) )
+    if( !m_frame->BeginNewFootprint( libraryName ) )
         return 0;
 
     FOOTPRINT* newFootprint = m_frame->CreateNewFootprint( wxEmptyString, libraryName );
 
     if( !newFootprint )
         return 0;
+
+    // Give the new footprint a resolvable identity so it opens in its own tab instead of
+    // overwriting the active one. The legacy single-board path leaves the nickname empty.
+    if( m_frame->GetTabsPanel() && !libraryName.IsEmpty() )
+        newFootprint->SetFPID( LIB_ID( libraryName, newFootprint->GetFPID().GetLibItemName() ) );
 
     canvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
     m_frame->AddFootprintToBoard( newFootprint );
@@ -539,6 +548,9 @@ int FOOTPRINT_EDITOR_CONTROL::RenameFootprint( const TOOL_EVENT& aEvent )
         }
     }
 
+    if( footprint )
+        m_frame->RenameFootprintTab( fpID, LIB_ID( libraryName, newName ) );
+
     wxDataViewItem treeItem = m_frame->GetLibTreeAdapter()->FindItem( fpID );
 
     if( footprint )
@@ -554,10 +566,15 @@ int FOOTPRINT_EDITOR_CONTROL::RenameFootprint( const TOOL_EVENT& aEvent )
 int FOOTPRINT_EDITOR_CONTROL::DeleteFootprint( const TOOL_EVENT& aEvent )
 {
     FOOTPRINT_EDIT_FRAME* frame = getEditFrame<FOOTPRINT_EDIT_FRAME>();
+    const LIB_ID          fpID = frame->GetTargetFPID();
 
-    if( frame->DeleteFootprintFromLibrary( frame->GetTargetFPID(), true ) )
+    if( frame->DeleteFootprintFromLibrary( fpID, true ) )
     {
-        if( frame->GetTargetFPID() == frame->GetLoadedFPID() )
+        // Close only the deleted footprint's tab, leaving the others open. Without a tab strip, fall
+        // back to clearing the shared board when the deleted footprint is the one on screen.
+        if( frame->GetTabsPanel() )
+            frame->CloseFootprintTab( fpID );
+        else if( fpID == frame->GetLoadedFPID() )
             frame->Clear_Pcb( false );
 
         frame->SyncLibraryTree( true );
@@ -599,6 +616,113 @@ int FOOTPRINT_EDITOR_CONTROL::ExportFootprint( const TOOL_EVENT& aEvent )
 {
     if( FOOTPRINT* fp = m_frame->GetBoard()->GetFirstFootprint() )
         m_frame->ExportFootprint( fp );
+
+    return 0;
+}
+
+
+int FOOTPRINT_EDITOR_CONTROL::CompareLibraryWithFile( const TOOL_EVENT& aEvent )
+{
+    wxCHECK( m_frame, 0 );
+
+    const wxString libNickname = m_frame->GetTargetFPID().GetUniStringLibNickname();
+
+    if( libNickname.IsEmpty() )
+    {
+        m_frame->ShowInfoBarError( _( "Select a library to compare against another." ) );
+        return 0;
+    }
+
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &m_frame->Prj() );
+
+    wxCHECK( adapter, 0 );
+
+    std::optional<LIBRARY_TABLE_ROW*> row = adapter->GetRow( libNickname );
+
+    if( !row )
+    {
+        m_frame->ShowInfoBarError( wxString::Format( _( "Library '%s' is not in the footprint "
+                                                        "library table." ),
+                                                     libNickname ) );
+        return 0;
+    }
+
+    // MakeAbsolute so relative table URIs resolve from the project dir, not
+    // the process cwd.
+    wxFileName currentFn = wxFileName::DirName(
+            LIBRARY_MANAGER::GetFullURI( *row, /*aSubstituted=*/true ) );
+    currentFn.MakeAbsolute();
+    const wxString currentPath = currentFn.GetPath();
+
+    wxDirDialog dlg( m_frame, _( "Choose .pretty Folder to Compare With" ), wxEmptyString,
+                     wxDD_DIR_MUST_EXIST );
+
+    if( dlg.ShowModal() != wxID_OK )
+        return 0;
+
+    wxFileName otherFn = wxFileName::DirName( dlg.GetPath() );
+    otherFn.MakeAbsolute();
+
+    if( otherFn.GetDirs().IsEmpty()
+        || !otherFn.GetDirs().Last().EndsWith( wxS( ".pretty" ) ) )
+    {
+        m_frame->ShowInfoBarError(
+                _( "Select a KiCad footprint library folder (ends with .pretty)." ) );
+        return 0;
+    }
+
+    if( otherFn.SameAs( currentFn ) )
+    {
+        m_frame->ShowInfoBarError(
+                _( "Select a different .pretty folder than the active library." ) );
+        return 0;
+    }
+
+    const wxString otherPath = otherFn.GetPath();
+
+    std::vector<std::unique_ptr<FOOTPRINT>>  beforeStorage;
+    std::vector<std::unique_ptr<FOOTPRINT>>  afterStorage;
+    KICAD_DIFF::FP_LIB_DIFFER::FOOTPRINT_MAP beforeMap;
+    KICAD_DIFF::FP_LIB_DIFFER::FOOTPRINT_MAP afterMap;
+
+    auto load =
+            [&]( const wxString& aPath,
+                 std::vector<std::unique_ptr<FOOTPRINT>>& aOwners,
+                 KICAD_DIFF::FP_LIB_DIFFER::FOOTPRINT_MAP& aMap ) -> bool
+            {
+                try
+                {
+                    auto loaded = KICAD_DIFF::FP_LIB_DIFFER::LoadLibrary( aPath );
+                    aOwners     = std::move( loaded.first );
+                    aMap        = std::move( loaded.second );
+                    return true;
+                }
+                catch( const IO_ERROR& ioe )
+                {
+                    m_frame->ShowInfoBarError(
+                            wxString::Format( _( "Failed to load %s: %s" ), aPath, ioe.What() ) );
+                }
+                catch( const std::exception& e )
+                {
+                    m_frame->ShowInfoBarError(
+                            wxString::Format( _( "Failed to load %s: %s" ), aPath,
+                                              wxString::FromUTF8( e.what() ) ) );
+                }
+
+                return false;
+            };
+
+    if( !load( currentPath, beforeStorage, beforeMap ) )
+        return 0;
+
+    if( !load( otherPath, afterStorage, afterMap ) )
+        return 0;
+
+    KICAD_DIFF::FP_LIB_DIFFER  differ( beforeMap, afterMap, otherPath );
+    KICAD_DIFF::DOCUMENT_DIFF  result = differ.Diff();
+
+    DIALOG_KICAD_DIFF dlgDiff( m_frame, currentPath, otherPath, result );
+    dlgDiff.ShowModal();
 
     return 0;
 }
@@ -975,6 +1099,51 @@ int FOOTPRINT_EDITOR_CONTROL::RepairFootprint( const TOOL_EVENT& aEvent )
 }
 
 
+// The appearance panel also claims Ctrl+Tab for layer-preset cycling, so it wins when focused.
+static bool appearancePanelHasFocus( FOOTPRINT_EDIT_FRAME* aFrame )
+{
+    wxWindow* appearance = aFrame->GetAppearancePanel();
+
+    if( !appearance )
+        return false;
+
+    for( wxWindow* focus = wxWindow::FindFocus(); focus; focus = focus->GetParent() )
+    {
+        if( focus == appearance )
+            return true;
+    }
+
+    return false;
+}
+
+
+int FOOTPRINT_EDITOR_CONTROL::NextTab( const TOOL_EVENT& aEvent )
+{
+    if( appearancePanelHasFocus( m_frame ) )
+        return 0;
+
+    m_frame->AdvanceFootprintTab( true );
+    return 0;
+}
+
+
+int FOOTPRINT_EDITOR_CONTROL::PrevTab( const TOOL_EVENT& aEvent )
+{
+    if( appearancePanelHasFocus( m_frame ) )
+        return 0;
+
+    m_frame->AdvanceFootprintTab( false );
+    return 0;
+}
+
+
+int FOOTPRINT_EDITOR_CONTROL::CloseTab( const TOOL_EVENT& aEvent )
+{
+    m_frame->CloseActiveFootprintTab();
+    return 0;
+}
+
+
 void FOOTPRINT_EDITOR_CONTROL::setTransitions()
 {
     // clang-format off
@@ -995,6 +1164,8 @@ void FOOTPRINT_EDITOR_CONTROL::setTransitions()
 
     Go( &FOOTPRINT_EDITOR_CONTROL::ImportFootprint,      PCB_ACTIONS::importFootprint.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::ExportFootprint,      PCB_ACTIONS::exportFootprint.MakeEvent() );
+    Go( &FOOTPRINT_EDITOR_CONTROL::CompareLibraryWithFile,
+        PCB_ACTIONS::compareFpLibraryWithFile.MakeEvent() );
 
     Go( &FOOTPRINT_EDITOR_CONTROL::OpenWithTextEditor,   ACTIONS::openWithTextEditor.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::OpenDirectory,        ACTIONS::openDirectory.MakeEvent() );
@@ -1005,6 +1176,10 @@ void FOOTPRINT_EDITOR_CONTROL::setTransitions()
 
     Go( &FOOTPRINT_EDITOR_CONTROL::CheckFootprint,       PCB_ACTIONS::checkFootprint.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::RepairFootprint,      PCB_ACTIONS::repairFootprint.MakeEvent() );
+
+    Go( &FOOTPRINT_EDITOR_CONTROL::NextTab,              PCB_ACTIONS::nextFootprintTab.MakeEvent() );
+    Go( &FOOTPRINT_EDITOR_CONTROL::PrevTab,              PCB_ACTIONS::prevFootprintTab.MakeEvent() );
+    Go( &FOOTPRINT_EDITOR_CONTROL::CloseTab,             PCB_ACTIONS::closeFootprintTab.MakeEvent() );
 
     Go( &FOOTPRINT_EDITOR_CONTROL::Properties,           PCB_ACTIONS::footprintProperties.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::DefaultPadProperties, PCB_ACTIONS::defaultPadProperties.MakeEvent() );

@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -50,6 +46,13 @@ public:
     void ShowEditTab();
     void ShowExportTab();
     void ShowHideColumn( int aCol, bool aShow );
+
+    /**
+     * Derive the default BOM output file name from the schematic file name by swapping the
+     * extension to CSV. Returns an empty string when the schematic has no name (unsaved), so
+     * callers can distinguish "use the default" from "no destination is available".
+     */
+    static wxString GetDefaultBomFileName( const wxString& aSchematicFileName );
 
 private:
     void SetupColumnProperties( int aCol );
@@ -162,6 +165,8 @@ private:
     void updateVariantButtonStates();
 
     wxString getSelectedVariant() const;
+
+    wxString resolveVariant() const;
 
 private:
     std::map<wxString, BOM_PRESET>     m_bomPresets;

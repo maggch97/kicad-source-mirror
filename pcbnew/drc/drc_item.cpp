@@ -15,11 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 
@@ -30,6 +26,7 @@
 #include <drc/drc_item.h>
 #include <drc/drc_rule.h>
 #include <board.h>
+#include <pad.h>
 #include <pcb_marker.h>
 #include <i18n_utility.h>
 
@@ -61,9 +58,8 @@ DRC_ITEM DRC_ITEM::itemsNotAllowed( DRCE_ALLOWED_ITEMS,
         _HKI( "Items not allowed" ),
         wxT( "items_not_allowed" ) );
 
-DRC_ITEM DRC_ITEM::textOnEdgeCuts( DRCE_TEXT_ON_EDGECUTS,
-        _HKI( "Text (or dimension) on Edge.Cuts layer" ),
-        wxT( "text_on_edge_cuts" ) );
+DRC_ITEM DRC_ITEM::textOnEdgeCuts( DRCE_TEXT_ON_EDGECUTS, _HKI( "Text or graphic on Edge.Cuts layer" ),
+                                   wxT( "text_on_edge_cuts" ) );
 
 DRC_ITEM DRC_ITEM::clearance( DRCE_CLEARANCE,
         _HKI( "Clearance violation" ),
@@ -302,6 +298,10 @@ DRC_ITEM DRC_ITEM::footprintTHPadhasNoHole( DRCE_PAD_TH_WITH_NO_HOLE,
         _HKI( "Through hole pad has no hole" ),
         wxT( "through_hole_pad_without_hole" ) );
 
+DRC_ITEM DRC_ITEM::footprintScaledWithPads( DRCE_FOOTPRINT_SCALED_WITH_PADS,
+        _HKI( "Footprint with pads is scaled (physical part size unchanged)" ),
+        wxT( "footprint_scaled_with_pads" ) );
+
 DRC_ITEM DRC_ITEM::mirroredTextOnFrontLayer( DRCE_MIRRORED_TEXT_ON_FRONT_LAYER,
         _HKI( "Mirrored text on front layer" ),
         wxT( "mirrored_text_on_front_layer" ) );
@@ -403,6 +403,7 @@ std::vector<std::reference_wrapper<RC_ITEM>> DRC_ITEM::allItemTypes( {
         DRC_ITEM::libFootprintIssues,
         DRC_ITEM::libFootprintMismatch,
         DRC_ITEM::footprintTHPadhasNoHole,
+        DRC_ITEM::footprintScaledWithPads,
         DRC_ITEM::missingTuningProfile,
 
         // DRC_ITEM types with no user-editable severities
@@ -482,6 +483,7 @@ std::shared_ptr<DRC_ITEM> DRC_ITEM::Create( int aErrorCode )
     case DRCE_FOOTPRINT:                return std::make_shared<DRC_ITEM>( footprint );
     case DRCE_FOOTPRINT_TYPE_MISMATCH:  return std::make_shared<DRC_ITEM>( footprintTypeMismatch );
     case DRCE_PAD_TH_WITH_NO_HOLE:      return std::make_shared<DRC_ITEM>( footprintTHPadhasNoHole );
+    case DRCE_FOOTPRINT_SCALED_WITH_PADS: return std::make_shared<DRC_ITEM>( footprintScaledWithPads );
     case DRCE_MIRRORED_TEXT_ON_FRONT_LAYER:        return std::make_shared<DRC_ITEM>( mirroredTextOnFrontLayer );
     case DRCE_NONMIRRORED_TEXT_ON_BACK_LAYER:      return std::make_shared<DRC_ITEM>( nonMirroredTextOnBackLayer );
     case DRCE_MISSING_TUNING_PROFILE:   return std::make_shared<DRC_ITEM>( missingTuningProfile );
@@ -537,6 +539,91 @@ wxString DRC_ITEM::GetViolatingRuleDesc( bool aTranslate ) const
         return wxString::Format( aTranslate ? _( "Rule: %s" ) : wxString( wxT( "Rule: %s" ) ), m_violatingRule->m_Name );
     else
         return aTranslate ? _( "Local override" ) : wxString( wxT( "Local override" ) );
+}
+
+
+void DRC_ITEM::GetViolationLayers( BOARD* aBoard, const std::shared_ptr<RC_ITEM>& aItem, PCB_MARKER* aMarker,
+                                   PCB_LAYER_ID& aPrincipalLayer, LSET& aViolationLayers )
+{
+    auto getActiveLayers = []( BOARD_ITEM* it ) -> LSET
+    {
+        if( it->Type() == PCB_PAD_T )
+        {
+            PAD* pad = static_cast<PAD*>( it );
+            LSET layers;
+
+            for( int layer : it->GetLayerSet() )
+            {
+                if( pad->FlashLayer( layer ) )
+                    layers.set( layer );
+            }
+
+            return layers;
+        }
+        else
+        {
+            return it->GetLayerSet();
+        }
+    };
+
+    aPrincipalLayer = UNDEFINED_LAYER;
+    aViolationLayers = LSET();
+
+    BOARD_ITEM* a = aBoard->ResolveItem( aItem->GetMainItemID(), true );
+    BOARD_ITEM* b = aBoard->ResolveItem( aItem->GetAuxItemID(), true );
+    BOARD_ITEM* c = aBoard->ResolveItem( aItem->GetAuxItem2ID(), true );
+    BOARD_ITEM* d = aBoard->ResolveItem( aItem->GetAuxItem3ID(), true );
+
+    if( aItem->GetErrorCode() == DRCE_MALFORMED_COURTYARD )
+    {
+        if( a && ( a->GetFlags() & MALFORMED_B_COURTYARD ) > 0 && ( a->GetFlags() & MALFORMED_F_COURTYARD ) == 0 )
+        {
+            aPrincipalLayer = B_CrtYd;
+        }
+        else
+        {
+            aPrincipalLayer = F_CrtYd;
+        }
+    }
+    else if( aItem->GetErrorCode() == DRCE_INVALID_OUTLINE || aItem->GetErrorCode() == DRCE_EDGE_CLEARANCE )
+    {
+        aPrincipalLayer = Edge_Cuts;
+    }
+    else
+    {
+        // The marker's layer is set by the test provider
+        if( aMarker )
+        {
+            PCB_LAYER_ID markerLayer = aMarker->GetLayer();
+
+            if( markerLayer > UNDEFINED_LAYER )
+                aPrincipalLayer = markerLayer;
+        }
+
+        // Fall back to intersecting the layer sets of the contributing items
+        if( aPrincipalLayer <= UNDEFINED_LAYER )
+        {
+            if( a || b || c || d )
+                aViolationLayers = LSET::AllLayersMask();
+
+            for( BOARD_ITEM* it : { a, b, c, d } )
+            {
+                if( !it )
+                    continue;
+
+                LSET layersList = getActiveLayers( it );
+                aViolationLayers &= layersList;
+
+                if( aPrincipalLayer <= UNDEFINED_LAYER && layersList.count() )
+                    aPrincipalLayer = layersList.Seq().front();
+            }
+        }
+    }
+
+    if( aViolationLayers.count() )
+        aPrincipalLayer = aViolationLayers.Seq().front();
+    else if( aPrincipalLayer >= 0 )
+        aViolationLayers.set( aPrincipalLayer );
 }
 
 

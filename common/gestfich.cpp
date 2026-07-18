@@ -16,11 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -30,6 +26,7 @@
 
 #include <wx/mimetype.h>
 #include <wx/dir.h>
+#include <wx/stdpaths.h>
 
 #include <pgm_base.h>
 #include <confirm.h>
@@ -47,6 +44,9 @@
 #include <wx/zipstrm.h>
 
 #include <filesystem>
+#include <string>
+#include <system_error>
+#include <unordered_set>
 #include <core/kicad_algo.h>
 
 void QuoteString( wxString& string )
@@ -266,6 +266,41 @@ int ExecuteFile( const wxString& aEditorName, const wxString& aFileName, wxProce
     msg.Printf( _( "Command '%s' could not be found." ), fullEditorName );
     DisplayErrorMessage( nullptr, msg );
     return -1;
+}
+
+
+int ExecuteCommandThroughShell( const wxString& aCommand, wxProcess* aProcess )
+{
+#ifdef __WXMSW__
+    wxExecuteEnv env;
+    wxGetEnvMap( &env.env );
+
+    // Prepend the app bin path so that KiCad's python is used by default
+    wxString binPath = wxFileName( wxStandardPaths::Get().GetExecutablePath() ).GetPath();
+    env.env["PATH"] = binPath + wxS( ';' ) + env.env["PATH"];
+
+    // The array form of wxExecute is unusable with cmd.exe. wx joins the argv elements back into a
+    // single command line, wrapping any element containing spaces in double quotes and escaping
+    // embedded quotes with backslashes. cmd.exe does not understand backslash-escaped quotes and
+    // applies its own quote-stripping rules to the /c argument, which mangles absolute paths that
+    // contain spaces or quotes. Build the command line ourselves and let cmd.exe's /s rule strip
+    // exactly the outer quote pair, passing everything between through verbatim. /d disables any
+    // AutoRun registry commands so job execution is not machine-dependent.
+    wxString shellCmd = wxS( "cmd.exe /d /s /c \"" ) + aCommand + wxS( "\"" );
+
+    return static_cast<int>( wxExecute( shellCmd, wxEXEC_SYNC, aProcess, &env ) );
+#else
+    // Invoke /bin/sh -c so glob expansion, pipes, and other shell features work. The string form of
+    // wxExecute would call execvp() directly, bypassing the shell. Hold the wchar buffers in named
+    // locals so the argv pointers stay valid on wxUSE_UNICODE_UTF8 builds where wc_str() is a temp.
+    wxWCharBuffer shell = wxString( wxS( "/bin/sh" ) ).wc_str();
+    wxWCharBuffer flag = wxString( wxS( "-c" ) ).wc_str();
+    wxWCharBuffer command = aCommand.wc_str();
+
+    const wchar_t* argv[] = { shell.data(), flag.data(), command.data(), nullptr };
+
+    return static_cast<int>( wxExecute( argv, wxEXEC_SYNC, aProcess ) );
+#endif
 }
 
 
@@ -674,4 +709,178 @@ bool AddDirectoryToZip( wxZipOutputStream& aZip, const wxString& aSourceDir, wxS
     }
 
     return true;
+}
+
+
+namespace
+{
+
+std::filesystem::path toFsPath( const wxString& aPath )
+{
+#ifdef __WXMSW__
+    return std::filesystem::path( std::wstring( aPath.wc_str() ) );
+#else
+    return std::filesystem::path( aPath.utf8_string() );
+#endif
+}
+
+
+// Best-effort canonicalisation.  Empty path means "couldn't resolve"
+// (broken symlink, ELOOP, etc.); callers treat that as "skip rather than
+// risk recursing".
+std::filesystem::path canonicalPath( const std::filesystem::path& aPath )
+{
+    std::error_code ec;
+    std::filesystem::path canon = std::filesystem::weakly_canonical( aPath, ec );
+
+    return ec ? std::filesystem::path() : canon;
+}
+
+
+// True if @p aAncestor is equal to or an ancestor of @p aDescendant.  Both
+// must already be canonical so that "/a/b" and "/a/b/c" share a prefix
+// component-wise.
+bool isAncestorOrSame( const std::filesystem::path& aAncestor,
+                       const std::filesystem::path& aDescendant )
+{
+    auto a = aAncestor.begin();
+    auto d = aDescendant.begin();
+
+    for( ; a != aAncestor.end() && d != aDescendant.end(); ++a, ++d )
+    {
+        if( *a != *d )
+            return false;
+    }
+
+    return a == aAncestor.end();
+}
+
+
+// records files dirs or both into aOutput loop-safe via DIR_LOOP_GUARD
+class LOOP_SAFE_COLLECTOR : public wxDirTraverser
+{
+public:
+    LOOP_SAFE_COLLECTOR( wxArrayString& aOutput, const wxString& aRoot, bool aCollectFiles,
+                         bool aCollectDirs ) :
+            m_output( aOutput ),
+            m_guard( aRoot, DIR_LOOP_POLICY::BLOCK_ROOT_ESCAPE ),
+            m_collectFiles( aCollectFiles ),
+            m_collectDirs( aCollectDirs )
+    {
+    }
+
+    wxDirTraverseResult OnFile( const wxString& aFilename ) override
+    {
+        if( m_collectFiles )
+            m_output.Add( aFilename );
+
+        return wxDIR_CONTINUE;
+    }
+
+    wxDirTraverseResult OnDir( const wxString& aDirname ) override
+    {
+        if( !m_guard.ShouldDescend( aDirname ) )
+            return wxDIR_IGNORE;
+
+        if( m_collectDirs )
+            m_output.Add( aDirname );
+
+        return wxDIR_CONTINUE;
+    }
+
+private:
+    wxArrayString& m_output;
+    DIR_LOOP_GUARD m_guard;
+    bool           m_collectFiles;
+    bool           m_collectDirs;
+};
+
+
+void traverseLoopSafe( const wxString& aRoot, wxArrayString& aOutput, bool aCollectFiles,
+                       bool aCollectDirs, const wxString& aFileSpec, int aFlags )
+{
+    wxDir dir( aRoot );
+
+    if( !dir.IsOpened() )
+        return;
+
+    LOOP_SAFE_COLLECTOR collector( aOutput, aRoot, aCollectFiles, aCollectDirs );
+    dir.Traverse( collector, aFileSpec, aFlags );
+}
+
+}  // namespace
+
+
+DIR_LOOP_GUARD::DIR_LOOP_GUARD( const wxString& aRoot, DIR_LOOP_POLICY aPolicy ) :
+        m_root( canonicalPath( toFsPath( aRoot ) ) ),
+        m_policy( aPolicy )
+{
+    m_visited.reserve( 256 );
+
+    if( !m_root.empty() )
+        m_visited.insert( m_root.generic_string() );
+}
+
+
+bool DIR_LOOP_GUARD::ShouldDescend( const wxString& aDir )
+{
+    const std::filesystem::path raw = toFsPath( aDir );
+    std::filesystem::path       key;
+
+    if( m_policy == DIR_LOOP_POLICY::CONFINE_TO_ROOT )
+    {
+        // confine fears any resolution outside the subtree so resolve every candidate
+        // a symlinked ancestor could otherwise smuggle an ordinary looking child out
+        const std::filesystem::path canon = canonicalPath( raw );
+
+        if( canon.empty() )
+            return false;
+
+        if( !m_root.empty() && !isAncestorOrSame( m_root, canon ) )
+            return false;
+
+        key = canon;
+    }
+    else
+    {
+        // escape only fears an upward link a real subdir cant be an ancestor of root
+        // so skip the per-component resolve and canonicalize actual links only
+        std::error_code ec;
+        const bool      isLink = std::filesystem::is_symlink( raw, ec );
+
+        if( isLink && !ec )
+        {
+            const std::filesystem::path canon = canonicalPath( raw );
+
+            if( canon.empty() )
+                return false;
+
+            if( !m_root.empty() && isAncestorOrSame( canon, m_root ) )
+                return false;
+
+            key = canon;
+        }
+        else
+        {
+            key = raw.lexically_normal();
+        }
+    }
+
+    return m_visited.insert( key.generic_string() ).second;
+}
+
+
+void CollectFilesLoopSafe( const wxString& aRoot, wxArrayString& aFiles, const wxString& aFileSpec,
+                           int aFlags )
+{
+    // Force wxDIR_FILES so files are reported and wxDIR_DIRS so Traverse descends
+    // into subdirectories; the collector keeps directories out of the file list
+    // and breaks loops.  aFlags carries the caller's wxDIR_HIDDEN choice.
+    traverseLoopSafe( aRoot, aFiles, true, false, aFileSpec, aFlags | wxDIR_FILES | wxDIR_DIRS );
+}
+
+
+void CollectSubdirsLoopSafe( const wxString& aRoot, wxArrayString& aDirs, int aFlags )
+{
+    traverseLoopSafe( aRoot, aDirs, false, true, wxEmptyString, aFlags | wxDIR_DIRS );
 }

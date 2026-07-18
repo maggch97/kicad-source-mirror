@@ -15,8 +15,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 #pragma once
@@ -24,12 +24,15 @@
 #include <widgets/properties_panel.h>
 #include <set>
 
+class wxButton;
+class wxCommandEvent;
 class SELECTION;
 class SCHEMATIC;
 class SCH_BASE_FRAME;
 class SCH_COMMIT;
 class SCH_EDIT_FRAME;
 class SCH_SHEET;
+class SCH_SYMBOL;
 class PROPERTY_MANAGER;
 class PG_UNIT_EDITOR;
 class PG_CHECKBOX_EDITOR;
@@ -80,6 +83,15 @@ protected:
      */
     EDA_ITEM* getFrontItem();
 
+    /**
+     * Open the symbol properties dialog on its Pin Map page for the single selected symbol
+     * (issue #2282).  Only enabled in the schematic editor.
+     */
+    void onEditPinMap( wxCommandEvent& aEvent );
+
+    /// @return the single selected SCH_SYMBOL with an effective associated footprint, else nullptr.
+    SCH_SYMBOL* getSinglePinMappedSymbol();
+
 protected:
     SCH_BASE_FRAME*     m_frame;
     PROPERTY_MANAGER&   m_propMgr;
@@ -91,5 +103,10 @@ protected:
 
     static std::set<wxString> m_currentSymbolFieldNames;
     static std::set<wxString> m_currentSheetFieldNames;
+
+    /// Distinct pin numbers of the selected pin-mapped symbol, gating the per-pin table rows.
+    static std::set<wxString> m_currentPinMapPinNumbers;
     wxPGChoices               m_nets;
+
+    wxButton* m_editPinMapButton;
 };

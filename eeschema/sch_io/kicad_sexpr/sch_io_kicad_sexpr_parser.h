@@ -17,11 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you may find one here:
- * http://www.gnu.org/licenses/old-licenses/gpl-2.0.html
- * or you may search the http://www.gnu.org website for the version 2 license,
- * or you may write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
 /**
@@ -35,6 +31,7 @@
 #include <progress_reporter.h>
 #include <schematic_lexer.h>
 #include <sch_file_versions.h>
+#include <pin_map.h>
 #include <default_values.h>    // For some default values
 #include <map>
 #include <set>
@@ -246,6 +243,12 @@ private:
     void parseBodyStyles( std::unique_ptr<LIB_SYMBOL>& aSymbol );
     void parsePinNames( std::unique_ptr<LIB_SYMBOL>& aSymbol );
     void parsePinNumbers( std::unique_ptr<LIB_SYMBOL>& aSymbol );
+
+    void    parseAssociatedFootprints( std::unique_ptr<LIB_SYMBOL>& aSymbol );
+    void    parsePinMaps( std::unique_ptr<LIB_SYMBOL>& aSymbol );
+    PIN_MAP parseOnePinMap();
+
+    PIN_MAP_INSTANCE_OVERRIDE parsePinMapOverride();
 
     SCH_FIELD* parseProperty( std::unique_ptr<LIB_SYMBOL>& aSymbol );
 
