@@ -28,10 +28,12 @@
 #include <convert_basic_shapes_to_polygon.h>
 #include <jobs/job_gerber_export_png.h>
 #include <plotters/plotter_png.h>
+#include <geometry/geometry_utils.h>
 #include <geometry/shape_poly_set.h>
 #include <base_units.h>
 #include <trigo.h>
 #include <cmath>
+#include <unordered_map>
 #include <wx/filename.h>
 
 
@@ -113,17 +115,165 @@ namespace
 namespace DEFERRED_VIEWPORT = GERBER_TO_PNG_DEFERRED_VIEWPORT;
 
 /**
+ * Pre-rotated cap vertices for the round-aperture segment (oval/stadium) fast path.
+ *
+ * TransformOvalToPolygon() rebuilds these cap arcs with RotatePoint() trig calls on every
+ * segment even though they only depend on the aperture width.  Cache them once per width;
+ * the per-segment work reduces to an offset, one rotation and one translation, matching
+ * TransformOvalToPolygon()'s output bit for bit.
+ */
+struct OVAL_CAP_TEMPLATE
+{
+    int                   radius = 0;
+    std::vector<VECTOR2I> capTop;   // right cap arc points, before the seg_len offset
+    std::vector<VECTOR2I> capBot;   // left cap arc points
+};
+
+
+/**
+ * Per-render scratch state reused across items to avoid per-item allocations.
+ */
+struct RENDER_CACHE
+{
+    std::unordered_map<int, OVAL_CAP_TEMPLATE> ovalCaps;      // key: aperture width in IU
+    std::vector<VECTOR2I>                      pointScratch;  // oval fast-path point buffer
+    SHAPE_POLY_SET                             polyScratch;   // generated polygon buffer
+};
+
+
+const OVAL_CAP_TEMPLATE& GetOvalCapTemplate( RENDER_CACHE& aCache, int aWidth )
+{
+    auto it = aCache.ovalCaps.find( aWidth );
+
+    if( it != aCache.ovalCaps.end() )
+        return it->second;
+
+    OVAL_CAP_TEMPLATE tmpl;
+    tmpl.radius = aWidth / 2;
+
+    // Same segment count computation as TransformOvalToPolygon()
+    int arcError = static_cast<int>( gerbIUScale.IU_PER_MM * ARC_LOW_DEF_MM );
+    int numSegs = GetArcToSegmentCount( tmpl.radius, arcError, FULL_CIRCLE );
+    numSegs = ( numSegs + 7 ) / 8 * 8;
+
+    EDA_ANGLE delta = ANGLE_360 / numSegs;
+
+    for( EDA_ANGLE angle = delta / 2; angle < ANGLE_180; angle += delta )
+    {
+        VECTOR2I corner( 0, tmpl.radius );
+        RotatePoint( corner, angle );
+        tmpl.capTop.push_back( corner );
+    }
+
+    for( EDA_ANGLE angle = delta / 2; angle < ANGLE_180; angle += delta )
+    {
+        VECTOR2I corner( 0, -tmpl.radius );
+        RotatePoint( corner, angle );
+        tmpl.capBot.push_back( corner );
+    }
+
+    return aCache.ovalCaps.emplace( aWidth, std::move( tmpl ) ).first->second;
+}
+
+
+/**
+ * Build the oval (stadium) polygon for a round-aperture segment.
+ *
+ * Replicates TransformOvalToPolygon( ..., ERROR_INSIDE, 0, true ) exactly, including
+ * SHAPE_LINE_CHAIN::Append()'s consecutive-duplicate suppression and RotatePoint()'s
+ * rounding, but hoists the per-point trig out of the rotate loop and reuses cached caps.
+ */
+void BuildOvalSegmentPoints( const OVAL_CAP_TEMPLATE& aTmpl, const VECTOR2I& aStart,
+                             const VECTOR2I& aEnd, std::vector<VECTOR2I>& aOut )
+{
+    VECTOR2I endp = aEnd - aStart;
+    VECTOR2I startp = aStart;
+
+    // normalize the position in order to have endp.x >= 0
+    if( endp.x < 0 )
+    {
+        endp = aStart - aEnd;
+        startp = aEnd;
+    }
+
+    EDA_ANGLE delta_angle( endp );
+    int       seg_len = endp.EuclideanNorm();
+    int       radius = aTmpl.radius;
+
+    aOut.clear();
+
+    auto append = [&aOut]( const VECTOR2I& pt )
+    {
+        // match SHAPE_LINE_CHAIN::Append()'s duplicate suppression
+        if( aOut.empty() || aOut.back() != pt )
+            aOut.push_back( pt );
+    };
+
+    append( VECTOR2I( seg_len, radius ) );
+
+    for( const VECTOR2I& c : aTmpl.capTop )
+        append( VECTOR2I( c.x + seg_len, c.y ) );
+
+    append( VECTOR2I( seg_len, -radius ) );
+    append( VECTOR2I( 0, -radius ) );
+
+    for( const VECTOR2I& c : aTmpl.capBot )
+        append( c );
+
+    append( VECTOR2I( 0, radius ) );
+
+    // Rotate( -delta_angle ) about the origin, then Move( startp ), with the trig and
+    // angle normalization hoisted out of the loop.  Matches RotatePoint() bit for bit.
+    EDA_ANGLE rot = -delta_angle;
+    rot.Normalize();
+
+    if( rot == ANGLE_0 )
+    {
+        for( VECTOR2I& p : aOut )
+            p += startp;
+    }
+    else if( rot == ANGLE_90 )
+    {
+        for( VECTOR2I& p : aOut )
+            p = VECTOR2I( p.y, -p.x ) + startp;
+    }
+    else if( rot == ANGLE_180 )
+    {
+        for( VECTOR2I& p : aOut )
+            p = VECTOR2I( -p.x, -p.y ) + startp;
+    }
+    else if( rot == ANGLE_270 )
+    {
+        for( VECTOR2I& p : aOut )
+            p = VECTOR2I( -p.y, p.x ) + startp;
+    }
+    else
+    {
+        double sinus = rot.Sin();
+        double cosinus = rot.Cos();
+
+        for( VECTOR2I& p : aOut )
+        {
+            p = VECTOR2I( KiROUND( ( p.y * sinus ) + ( p.x * cosinus ) ),
+                          KiROUND( ( p.y * cosinus ) - ( p.x * sinus ) ) ) + startp;
+        }
+    }
+}
+
+
+/**
  * Convert a single draw item to the polygons consumed by PNG_PLOTTER.
  */
-void BuildRenderPolygons( GERBER_DRAW_ITEM* aItem, std::vector<DEFERRED_VIEWPORT::RENDER_POLYGON>& aPolygons )
+void BuildRenderPolygons( GERBER_DRAW_ITEM* aItem, RENDER_CACHE& aCache,
+                          std::vector<DEFERRED_VIEWPORT::RENDER_POLYGON>& aPolygons )
 {
-    SHAPE_POLY_SET itemPoly;
-    bool           needsFlashOffset = false;
-    bool           alreadyInABCoordinates = false;
+    const SHAPE_POLY_SET* itemPoly = nullptr;
+    bool                  needsFlashOffset = false;
+    bool                  alreadyInABCoordinates = false;
 
     if( aItem->m_ShapeAsPolygon.OutlineCount() > 0 )
     {
-        itemPoly = aItem->m_ShapeAsPolygon;
+        itemPoly = &aItem->m_ShapeAsPolygon;
     }
     else if( aItem->m_ShapeType == GBR_SEGMENT )
     {
@@ -131,23 +281,41 @@ void BuildRenderPolygons( GERBER_DRAW_ITEM* aItem, std::vector<DEFERRED_VIEWPORT
 
         if( dcode && dcode->m_ApertType != APT_RECT )
         {
-            int arcError = static_cast<int>( gerbIUScale.IU_PER_MM * ARC_LOW_DEF_MM );
-            TransformOvalToPolygon( itemPoly, aItem->m_Start, aItem->m_End,
-                                    aItem->m_Size.x, arcError, ERROR_INSIDE, 0, true );
+            const OVAL_CAP_TEMPLATE& tmpl = GetOvalCapTemplate( aCache, aItem->m_Size.x );
+
+            BuildOvalSegmentPoints( tmpl, aItem->m_Start, aItem->m_End, aCache.pointScratch );
+
+            if( aCache.pointScratch.size() >= 3 )
+            {
+                DEFERRED_VIEWPORT::RENDER_POLYGON polygon;
+                polygon.clearPolarity = aItem->GetLayerPolarity();
+                polygon.points.reserve( aCache.pointScratch.size() );
+
+                for( const VECTOR2I& pt : aCache.pointScratch )
+                    polygon.points.push_back( aItem->GetABPosition( pt ) );
+
+                aPolygons.push_back( std::move( polygon ) );
+            }
+
+            return;
         }
         else
         {
-            aItem->ConvertSegmentToPolygon( &itemPoly );
+            aCache.polyScratch.RemoveAllContours();
+            aItem->ConvertSegmentToPolygon( &aCache.polyScratch );
+            itemPoly = &aCache.polyScratch;
         }
     }
     else if( aItem->m_ShapeType == GBR_ARC )
     {
         const int arcError = gerbIUScale.mmToIU( 0.005 );
 
+        aCache.polyScratch.RemoveAllContours();
+
         if( aItem->m_Start == aItem->m_End )
         {
             int radius = KiROUND( aItem->m_Start.Distance( aItem->m_ArcCentre ) );
-            TransformRingToPolygon( itemPoly, aItem->m_ArcCentre, radius, aItem->m_Size.x,
+            TransformRingToPolygon( aCache.polyScratch, aItem->m_ArcCentre, radius, aItem->m_Size.x,
                                     arcError, ERROR_INSIDE );
         }
         else
@@ -163,9 +331,11 @@ void BuildRenderPolygons( GERBER_DRAW_ITEM* aItem, std::vector<DEFERRED_VIEWPORT
             VECTOR2I mid = GetRotated( aItem->m_Start, aItem->m_ArcCentre,
                                        -EDA_ANGLE( ( endAngle - startAngle ) / 2.0, RADIANS_T ) );
 
-            TransformArcToPolygon( itemPoly, aItem->m_Start, mid, aItem->m_End, aItem->m_Size.x,
+            TransformArcToPolygon( aCache.polyScratch, aItem->m_Start, mid, aItem->m_End, aItem->m_Size.x,
                                    arcError, ERROR_INSIDE );
         }
+
+        itemPoly = &aCache.polyScratch;
     }
     else if( aItem->m_Flashed )
     {
@@ -184,29 +354,33 @@ void BuildRenderPolygons( GERBER_DRAW_ITEM* aItem, std::vector<DEFERRED_VIEWPORT
                     if( aItem->m_AbsolutePolygon.OutlineCount() == 0 )
                         aItem->m_AbsolutePolygon = *macro->GetApertureMacroShape( aItem, aItem->m_Start );
 
-                    itemPoly = aItem->m_AbsolutePolygon;
+                    itemPoly = &aItem->m_AbsolutePolygon;
                     alreadyInABCoordinates = true;
                 }
             }
             else
             {
-                dcode->ConvertShapeToPolygon( aItem );
-                itemPoly = dcode->m_Polygon;
+                // The polygon only depends on the aperture definition; build it once per
+                // D-code instead of on every flash.
+                if( dcode->m_Polygon.OutlineCount() == 0 )
+                    dcode->ConvertShapeToPolygon( aItem );
+
+                itemPoly = &dcode->m_Polygon;
                 needsFlashOffset = true;
             }
         }
     }
 
-    if( itemPoly.OutlineCount() == 0 )
+    if( !itemPoly || itemPoly->OutlineCount() == 0 )
         return;
 
     // Flashed shapes from ConvertShapeToPolygon are centered at (0,0).
     // Offset by the item's position before applying the AB transform.
     VECTOR2I offset = needsFlashOffset ? VECTOR2I( aItem->m_Start ) : VECTOR2I( 0, 0 );
 
-    for( int i = 0; i < itemPoly.OutlineCount(); i++ )
+    for( int i = 0; i < itemPoly->OutlineCount(); i++ )
     {
-        const SHAPE_LINE_CHAIN& outline = itemPoly.COutline( i );
+        const SHAPE_LINE_CHAIN& outline = itemPoly->COutline( i );
         DEFERRED_VIEWPORT::RENDER_POLYGON polygon;
         polygon.clearPolarity = aItem->GetLayerPolarity();
         polygon.points.reserve( outline.PointCount() );
@@ -234,15 +408,16 @@ void PlotRenderPolygon( const DEFERRED_VIEWPORT::RENDER_POLYGON& aPolygon, PNG_P
 /**
  * Render a single draw item to the plotter.
  */
-void RenderItem( GERBER_DRAW_ITEM* aItem, PNG_PLOTTER& aPlotter, const KIGFX::COLOR4D& aColor )
+void RenderItem( GERBER_DRAW_ITEM* aItem, PNG_PLOTTER& aPlotter, const KIGFX::COLOR4D& aColor,
+                 RENDER_CACHE& aCache, std::vector<DEFERRED_VIEWPORT::RENDER_POLYGON>& aPolygonBuffer )
 {
-    std::vector<DEFERRED_VIEWPORT::RENDER_POLYGON> polygons;
+    aPolygonBuffer.clear();
 
-    BuildRenderPolygons( aItem, polygons );
+    BuildRenderPolygons( aItem, aCache, aPolygonBuffer );
 
     aPlotter.SetColor( aColor );
 
-    for( const DEFERRED_VIEWPORT::RENDER_POLYGON& polygon : polygons )
+    for( const DEFERRED_VIEWPORT::RENDER_POLYGON& polygon : aPolygonBuffer )
         PlotRenderPolygon( polygon, aPlotter );
 }
 
@@ -334,6 +509,7 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
 
     BOX2I bbox;
     std::vector<DEFERRED_VIEWPORT::RENDER_POLYGON> deferredPolygons;
+    RENDER_CACHE renderCache;
 
     if( aOptions.HasViewportOverride() )
     {
@@ -350,7 +526,7 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
             {
                 size_t firstPolygon = deferredPolygons.size();
 
-                BuildRenderPolygons( item, deferredPolygons );
+                BuildRenderPolygons( item, renderCache, deferredPolygons );
 
                 for( size_t i = firstPolygon; i < deferredPolygons.size(); ++i )
                     DEFERRED_VIEWPORT::MergePolygonBBox( deferredPolygons[i].points, bbox, bboxValid );
@@ -451,17 +627,19 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
     }
     else
     {
+        std::vector<DEFERRED_VIEWPORT::RENDER_POLYGON> polygonBuffer;
+
         for( GERBER_DRAW_ITEM* item : image->GetItems() )
         {
             if( item->GetLayerPolarity() )
             {
                 plotter.SetClearCompositing( transparentBg );
-                RenderItem( item, plotter, aOptions.backgroundColor );
+                RenderItem( item, plotter, aOptions.backgroundColor, renderCache, polygonBuffer );
                 plotter.SetClearCompositing( false );
             }
             else
             {
-                RenderItem( item, plotter, aOptions.foregroundColor );
+                RenderItem( item, plotter, aOptions.foregroundColor, renderCache, polygonBuffer );
             }
         }
     }
