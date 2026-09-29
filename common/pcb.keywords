@@ -22,7 +22,9 @@
 
 add_net
 addsublayer
+affects
 aligned
+all
 allowed
 allow_missing_courtyard
 allow_soldermask_bridges
@@ -33,12 +35,15 @@ angle
 arc
 arc_segments
 area
+arrow
+arrow_open
 arrow1a
 arrow1b
 arrow2a
 arrow2b
 arrow_direction
 arrow_length
+assignment
 at
 attr
 autoplace_cost90
@@ -46,6 +51,7 @@ autoplace_cost180
 aux_axis_origin
 backdrill
 back
+background
 barcode
 best_length_ratio
 best_width_ratio
@@ -60,6 +66,7 @@ bottom
 bottom_left
 bottom_right
 buried
+castellated
 castellated_pads
 cells
 center
@@ -71,6 +78,7 @@ clearance
 clearance_min
 color
 cols
+column
 column_count
 column_widths
 comment
@@ -80,6 +88,7 @@ component_classes
 connect
 connect_pads
 constant
+constraint
 copperpour
 copper_finish
 crossbar
@@ -87,6 +96,17 @@ cross_hatch
 curve_points
 curved_edges
 custom
+default_marks
+drill_chart
+drill_map
+drill_symbol_profile
+filter
+freeze_assignments
+group_by
+guide_cross
+key
+mark
+npth
 outline
 convexhull
 copper_line_width
@@ -95,6 +115,7 @@ counterbore
 countersink
 courtyard_line_width
 creepage
+cursor
 data
 date
 defaults
@@ -113,6 +134,7 @@ djordjevic_sarkar
 dnp
 drawings
 drill
+driving
 duplicate_pad_numbers_are_jumpers
 ecc_level
 edge
@@ -127,11 +149,14 @@ embedded_files
 enabled
 end
 end_angle
+end_shape
 epsilon_r
 exclude_from_pos_files
 exclude_from_bom
+exclude_from_sim
 extension_height
 extension_offset
+extent
 external
 extruded
 fab_layers_line_width
@@ -169,6 +194,7 @@ general
 generator
 generator_version
 generated
+grid_item
 grid_origin
 group
 gr_arc
@@ -199,6 +225,7 @@ hole_to_hole_min
 host
 href
 id
+ij
 image
 inward
 island
@@ -220,6 +247,7 @@ leader
 leader_length
 left
 legacy_teardrops
+length
 lib_id
 linear
 line_spacing
@@ -263,6 +291,7 @@ orientation
 orthogonal
 other_layers_line_width
 other_layers_text_dims
+outline_slots
 outward
 oval
 overall_height
@@ -284,8 +313,10 @@ pad_prop_mechanical
 pad_prop_pressfit
 padstack
 padvia
+plated
 prefer_zone_connections
 private_layers
+custom_property
 property
 page
 paper
@@ -299,6 +330,7 @@ placed
 placement
 plus
 point
+polar
 polygon
 portrait
 post_machining
@@ -323,6 +355,9 @@ rotate
 rotation_angle
 roundrect
 roundrect_rratio
+routing
+row_keys
+row_shapes
 rows
 row_heights
 scale
@@ -338,6 +373,7 @@ silk_text_dims
 sim_electrical_type
 sink
 size
+slots
 smd
 smoothing
 solder_mask_margin
@@ -347,12 +383,15 @@ solder_paste_margin_ratio
 solder_paste_ratio
 solid
 source
+spacing
 span
 spec_frequency
+square
 stackup
 start
 start_angle
 start_end_only
+start_shape
 status
 stroke
 style
@@ -362,6 +401,8 @@ table
 table_cell
 tags
 target
+template
+templates
 text
 title
 title_block
@@ -387,6 +428,7 @@ through_hole_min
 top
 top_left
 top_right
+totals
 trace_width
 tracks
 track_end
@@ -398,6 +440,7 @@ trapezoid
 thru
 thru_hole
 thru_hole_only
+tick_interval
 true
 tstamp
 type

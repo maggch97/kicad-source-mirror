@@ -269,7 +269,7 @@ enum GAL_LAYER_ID: int
     /// Draw via holes (pad holes do not use this layer).
     LAYER_VIA_HOLES          = GAL_LAYER_ID_START + 22,
 
-     /// Layer for DRC markers with #SEVERITY_ERROR.
+     /// Layer for DRC markers with #RPT_SEVERITY_ERROR.
     LAYER_DRC_ERROR          = GAL_LAYER_ID_START + 23,
     LAYER_DRAWINGSHEET       = GAL_LAYER_ID_START + 24, ///< Sheet frame and title block.
     LAYER_GP_OVERLAY         = GAL_LAYER_ID_START + 25, ///< General purpose overlay.
@@ -293,7 +293,7 @@ enum GAL_LAYER_ID: int
     LAYER_PAD_HOLEWALLS      = GAL_LAYER_ID_START + 34,
     LAYER_VIA_HOLEWALLS      = GAL_LAYER_ID_START + 35,
 
-    /// Layer for DRC markers with #SEVERITY_WARNING.
+    /// Layer for DRC markers with #RPT_SEVERITY_WARNING.
     LAYER_DRC_WARNING        = GAL_LAYER_ID_START + 36,
 
     /// Layer for DRC markers which have been individually excluded.
@@ -308,13 +308,22 @@ enum GAL_LAYER_ID: int
     /// Copper graphic shape opacity/visibility (color ignored).
     LAYER_FILLED_SHAPES      = GAL_LAYER_ID_START + 41,
 
-    LAYER_DRC_SHAPES         = GAL_LAYER_ID_START + 42,  ///< Custom shapes for DRC markers.
+//  LAYER_DRC_SHAPES         = GAL_LAYER_ID_START + 42,  ///< Deprecated since 11.0
 //  LAYER_DRC_SHAPE2         = GAL_LAYER_ID_START + 43,  ///< Deprecated since 10.0
 
     LAYER_BOARD_OUTLINE_AREA = GAL_LAYER_ID_START + 44, ///< PCB board outline
 
     /// PCB reference/manual snap points visibility
     LAYER_POINTS             = GAL_LAYER_ID_START + 45,
+
+    /// Shadow layer for items bound to a constraint
+    LAYER_CONSTRAINT_SHADOW  = GAL_LAYER_ID_START + 46,
+
+    /// Routing/placement subgrids (PCB_GRID_ITEM) visibility and color
+    LAYER_SUBGRIDS           = GAL_LAYER_ID_START + 47,
+
+    /// Outline of via stitching generators
+    LAYER_VIA_STITCHING      = GAL_LAYER_ID_START + 48,
 
     // Add layers below this point that do not have visibility controls, so don't need explicit
     // enum values
@@ -326,6 +335,11 @@ enum GAL_LAYER_ID: int
                                    ///< PCBNEW_SETTINGS::m_ShowPageLimits)
 
     LAYER_DRC_HIGHLIGHTED,          ///< Color for highlighted DRC markers.
+
+    // Constraint tints themed and drawn by overlay with no visibility control of their own
+    LAYER_CONSTRAINT_UNDER,         ///< Under-constrained (free DOF remain).
+    LAYER_CONSTRAINT_WELL,          ///< Fully constrained.
+    LAYER_CONSTRAINT_OVER,          ///< Over-constrained / conflicting.
 
     /// Virtual layers for stacking zones and tracks on a given copper layer.
     LAYER_ZONE_START,
@@ -355,6 +369,13 @@ enum GAL_LAYER_ID: int
     LAYER_UI_START,
     LAYER_UI_END = LAYER_UI_START + GAL_UI_LAYER_COUNT,
 
+    /**
+     * Drill symbols, one channel per board layer. Appended at the end because the offsets
+     * from GAL_LAYER_ID_START are stored in visibility settings.
+     */
+    LAYER_DRILL_SYMBOL_START,
+    LAYER_DRILL_SYMBOL_END = LAYER_DRILL_SYMBOL_START + PCB_LAYER_ID_COUNT,
+
     GAL_LAYER_ID_END
 };
 
@@ -367,6 +388,9 @@ enum GAL_LAYER_ID: int
 #define PAD_COPPER_LAYER_FOR( boardLayer ) ( LAYER_PAD_COPPER_START + boardLayer )
 #define VIA_COPPER_LAYER_FOR( boardLayer ) ( LAYER_VIA_COPPER_START + boardLayer )
 #define CLEARANCE_LAYER_FOR( boardLayer ) ( LAYER_CLEARANCE_START + boardLayer )
+#define DRILL_SYMBOL_LAYER_FOR( boardLayer ) ( LAYER_DRILL_SYMBOL_START + boardLayer )
+#define BOARD_LAYER_FOR_DRILL_SYMBOL( galLayer ) \
+    ( (PCB_LAYER_ID) ( ( galLayer ) - LAYER_DRILL_SYMBOL_START ) )
 #define POINT_LAYER_FOR( boardLayer ) ( LAYER_POINT_START + boardLayer )
 
 constexpr int GAL_LAYER_ID_COUNT = GAL_LAYER_ID_END - GAL_LAYER_ID_START;
@@ -562,6 +586,10 @@ enum LAYER_3D_ID : int
         LAYER_3D_USER_DRAWINGS,
         LAYER_3D_USER_ECO1,
         LAYER_3D_USER_ECO2,
+        LAYER_3D_F_FAB,
+        LAYER_3D_B_FAB,
+        LAYER_3D_F_COURTYARD,
+        LAYER_3D_B_COURTYARD,
         LAYER_3D_USER_1,
         LAYER_3D_USER_2,
         LAYER_3D_USER_3,
@@ -712,7 +740,7 @@ inline bool IsNonCopperLayer( int aLayerId )
 
 /**
  * Test whether a layer is a copper layer, optionally including synthetic copper layers such
- * as #LAYER_VIA_THROUGH, #LAYER_PADS_SMD_FR, etc.
+ * as #LAYER_VIA_THROUGH, #LAYER_PADS, etc.
  *
  * @param aLayerId
  * @param aIncludeSyntheticCopperLayers
@@ -891,6 +919,12 @@ inline bool IsViaCopperLayer( int aLayer )
 inline bool IsClearanceLayer( int aLayer )
 {
     return aLayer >= LAYER_CLEARANCE_START && aLayer <= LAYER_CLEARANCE_END;
+}
+
+
+inline bool IsDrillSymbolLayer( int aLayer )
+{
+    return aLayer >= LAYER_DRILL_SYMBOL_START && aLayer < LAYER_DRILL_SYMBOL_END;
 }
 
 

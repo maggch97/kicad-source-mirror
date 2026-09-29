@@ -93,7 +93,7 @@ void SYMBOL_EDIT_FRAME::GetSymbolFromRedoList()
     m_symbol = symbol;
 
     if( m_activeTab )
-        m_activeTab->RefreshFrameOwnedObjects( m_symbol, static_cast<SCH_SCREEN*>( GetScreen() ) );
+        m_activeTab->RefreshFrameOwnedObjects( m_symbol, GetScreen() );
 
     if( undoRedoType == UNDO_REDO::LIB_RENAME )
     {
@@ -104,7 +104,8 @@ void SYMBOL_EDIT_FRAME::GetSymbolFromRedoList()
     }
 
     RebuildSymbolUnitAndBodyStyleLists();
-    UpdateTitle();
+
+    RenameSymbolTab( oldSymbol->GetLibId(), symbol->GetLibId() );
 
     RebuildView();
     OnModify();
@@ -145,7 +146,7 @@ void SYMBOL_EDIT_FRAME::GetSymbolFromUndoList()
     m_symbol = symbol;
 
     if( m_activeTab )
-        m_activeTab->RefreshFrameOwnedObjects( m_symbol, static_cast<SCH_SCREEN*>( GetScreen() ) );
+        m_activeTab->RefreshFrameOwnedObjects( m_symbol, GetScreen() );
 
     if( undoRedoType == UNDO_REDO::LIB_RENAME )
     {
@@ -156,7 +157,8 @@ void SYMBOL_EDIT_FRAME::GetSymbolFromUndoList()
     }
 
     RebuildSymbolUnitAndBodyStyleLists();
-    UpdateTitle();
+
+    RenameSymbolTab( oldSymbol->GetLibId(), symbol->GetLibId() );
 
     RebuildView();
     OnModify();

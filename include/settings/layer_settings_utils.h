@@ -44,15 +44,18 @@ enum class VISIBILITY_LAYER
     FOOTPRINT_TEXT,
     FOOTPRINT_ANCHORS,
     LY_POINTS,              // Do not use POINTS: it collide with a Windows header define
+    VIA_STITCHING,
     RATSNEST,
     DRC_WARNINGS,
     DRC_ERRORS,
     DRC_EXCLUSIONS,
     LOCKED_ITEM_SHADOWS,
     CONFLICT_SHADOWS,
+    CONSTRAINT_SHADOWS,
     BOARD_OUTLINE_AREA,
     DRAWING_SHEET,
-    GRID
+    GRID,
+    SUBGRIDS
 };
 
 /**

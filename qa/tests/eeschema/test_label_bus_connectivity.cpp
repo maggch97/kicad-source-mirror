@@ -29,13 +29,18 @@
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
+#include <advanced_config.h>
 #include <connection_graph.h>
+#include <connectivity/conn_facade.h>
+#include <sch_commit.h>
 #include <schematic.h>
 #include <sch_label.h>
 #include <sch_line.h>
 #include <sch_screen.h>
 #include <sch_sheet.h>
+#include <sch_sheet_pin.h>
 #include <settings/settings_manager.h>
+#include <tool/tool_manager.h>
 
 
 BOOST_AUTO_TEST_SUITE( LabelBusConnectivity )
@@ -98,14 +103,22 @@ BOOST_FIXTURE_TEST_CASE( LabelNetToBusConnectivity, LABEL_BUS_CONNECTIVITY_FIXTU
     BOOST_CHECK( busConn->IsBus() );
     BOOST_CHECK( busConn->Members().empty() );
 
-    // Now change the label text to a bus name
+    TOOL_MANAGER manager;
+    manager.SetEnvironment( m_schematic.get(), nullptr, nullptr, nullptr, nullptr );
+    SCH_COMMIT commit( &manager );
+    commit.Modify( label, m_screen );
     label->SetText( wxT( "test[0..7]" ) );
+    commit.Push( "Change label to a bus", SKIP_UNDO );
 
-    // Mark items dirty and recalculate connectivity (simulating incremental update)
-    label->SetConnectivityDirty( true );
-    busWire->SetConnectivityDirty( true );
-
-    m_schematic->ConnectionGraph()->Recalculate( sheets, false );
+    // The push updates only the active engine, and the new engine publishes through the facade
+    if( ADVANCED_CFG::GetCfg().m_ConnectivityEngine )
+    {
+        const auto view = m_schematic->Connectivity().Connection( busWire->m_Uuid, path.Path() );
+        BOOST_REQUIRE( view );
+        BOOST_CHECK( view->IsBus() );
+        BOOST_CHECK_EQUAL( view->Members().leaves.size(), 8 );
+        return;
+    }
 
     // Verify: bus wire should now have members from the bus label
     busConn = busWire->Connection( &path );
@@ -155,6 +168,73 @@ BOOST_FIXTURE_TEST_CASE( BusLabelFullRecalculation, LABEL_BUS_CONNECTIVITY_FIXTU
     {
         BOOST_CHECK_EQUAL( busConn->Members().size(), 4 );
     }
+}
+
+
+/**
+ * Test that a hierarchical sheet pin with bus syntax keeps its bus connection after a move.
+ *
+ * Issue #25103: an unconditional rebuild left the moved pin's connectivity flag dirty, so
+ * SCH_PAINTER ignored the resolved connection and dropped the bus colour.
+ */
+BOOST_FIXTURE_TEST_CASE( SheetPinBusConnectionSurvivesMove, LABEL_BUS_CONNECTIVITY_FIXTURE )
+{
+    const wxString busName( wxT( "bus{A B}" ) );
+    const int      sheetLeft = 10000000;
+
+    SCH_SCREEN* childScreen = new SCH_SCREEN( m_schematic.get() );
+    SCH_SHEET*  childSheet = new SCH_SHEET( m_schematic.get(), VECTOR2I( sheetLeft, 0 ),
+                                            VECTOR2I( 20000000, 20000000 ) );
+
+    childScreen->SetFileName( wxT( "child.kicad_sch" ) );
+    childSheet->SetScreen( childScreen );
+    childSheet->SetName( wxT( "child" ) );
+    childSheet->SetFileName( wxT( "child.kicad_sch" ) );
+    m_screen->Append( childSheet );
+
+    childScreen->Append( new SCH_HIERLABEL( VECTOR2I( 0, 0 ), busName ) );
+
+    // The pin rides the sheet's left edge, so its x has to track the sheet origin
+    SCH_SHEET_PIN* pin = new SCH_SHEET_PIN( childSheet, VECTOR2I( sheetLeft, 5000000 ), busName );
+    childSheet->AddPin( pin );
+
+    SCH_LINE* busWire = new SCH_LINE( VECTOR2I( 5000000, 5000000 ), LAYER_BUS );
+    busWire->SetEndPoint( pin->GetTextPos() );
+    m_screen->Append( busWire );
+
+    m_schematic->RefreshHierarchy();
+
+    SCH_SHEET_LIST sheets = m_schematic->Hierarchy();
+    m_schematic->ConnectionGraph()->Recalculate( sheets, true );
+
+    SCH_SHEET_PATH  rootPath = sheets[0];
+    SCH_CONNECTION* pinConn = pin->Connection( &rootPath );
+
+    BOOST_REQUIRE_MESSAGE( pinConn != nullptr, "Sheet pin has no connection before the move" );
+    BOOST_REQUIRE_MESSAGE( pinConn->IsBus(), "Sheet pin is not a bus before the move" );
+
+    // Simulate dragging the pin along the sheet edge with its bus wire attached
+    const VECTOR2I newPos( sheetLeft, 8000000 );
+
+    pin->SetPosition( newPos );
+    busWire->SetEndPoint( pin->GetTextPos() );
+    pin->SetConnectivityDirty( true );
+    busWire->SetConnectivityDirty( true );
+
+    // A schematic this small is a minor graph, so SCHEMATIC::RecalculateConnections() rebuilds
+    // unconditionally after the move
+    BOOST_REQUIRE( m_schematic->ConnectionGraph()->IsMinor() );
+    m_schematic->ConnectionGraph()->Recalculate( sheets, true );
+
+    // SCH_PAINTER ignores the resolved connection while this flag is set, which is what drops
+    // the bus colour
+    BOOST_CHECK_MESSAGE( !pin->IsConnectivityDirty(),
+                         "Sheet pin connectivity still dirty after recalculation" );
+
+    pinConn = pin->Connection( &rootPath );
+
+    BOOST_REQUIRE_MESSAGE( pinConn != nullptr, "Sheet pin lost its connection after the move" );
+    BOOST_CHECK_MESSAGE( pinConn->IsBus(), "Sheet pin lost its bus connection after the move" );
 }
 
 

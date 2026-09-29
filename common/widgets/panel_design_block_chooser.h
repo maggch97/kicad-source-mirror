@@ -40,7 +40,8 @@ public:
      *
      * @param aFrame  the parent frame (usually a SCH_EDIT_FRAME or PCB_EDIT_FRAME)
      * @param aParent the parent design block pane
-     * @param aAcceptHandler a handler to be called on double-click of a footprint
+     * @param aHistoryList is list of previously chosen design block library IDs.
+     * @param aSelectHandler a handler to be called on double-click of a footprint
      * @param aContextMenuTool the tool that will be used to provide an appropriate context menu
      *                         for the design block actions available in that frame
      */
@@ -124,7 +125,8 @@ protected:
     EDA_DRAW_FRAME*       m_frame;
     std::function<void()> m_selectHandler;
 
-    std::vector<LIB_ID>   m_historyList;
+    std::vector<LIB_ID>&  m_historyList;
+    LIB_ID                m_preselect;
 };
 
 #endif /* PANEL_DESIGN_BLOCK_CHOOSER_H */

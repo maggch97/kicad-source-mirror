@@ -41,9 +41,14 @@
 #include <scoped_set_reset.h>
 #include <core/mirror.h>
 #include <string_utils.h>
+#include <api/api_enums.h>
+#include <api/api_utils.h>
+#include <api/board/board_types.pb.h>
+#include <google/protobuf/any.pb.h>
 
 #include <board.h>
 #include <board_design_settings.h>
+#include <length_delay_calculation/length_delay_calculation.h>
 #include <drc/drc_engine.h>
 #include <pcb_track.h>
 #include <pcb_shape.h>
@@ -1150,14 +1155,41 @@ bool PCB_TUNING_PATTERN::resetToBaseline( GENERATOR_TOOL* aTool, int aPNSLayer, 
         }
     }
 
-    PNS::LINE newLine( *pnsLine, newLineChain );
+    // Because PNS_LINE doesn't yet support multiple widths, we need to keep track
+    // of these separately for the scenario where someone drew a tuning pattern on a track
+    // and then changed the width of either the tuning pattern or the rest of the line so
+    // that they no longer match.
+    {
+        SHAPE_LINE_CHAIN pre, mid, post;
+        newLineChain.Split( m_origin, m_end, pre, mid, post );
 
-    branch->Add( newLine, false );
+        auto addPart = [&]( const SHAPE_LINE_CHAIN& part, int partWidth )
+        {
+            if( part.SegmentCount() == 0 )
+                return;
+
+            PNS::LINE line( *pnsLine, part );
+
+            if( partWidth > 0 )
+                line.SetWidth( partWidth );
+
+            branch->Add( line, false );
+        };
+
+        m_assembledLineWidth = pnsLine->Width();
+
+        addPart( pre, m_assembledLineWidth );
+        // m_trackWidth is the width of the generator itself, which starts out assuming the width
+        // of whatever line we're tuning, but after that may be independently changed
+        addPart( mid, m_trackWidth > 0 ? m_trackWidth : m_assembledLineWidth );
+        addPart( post, m_assembledLineWidth );
+    }
+
     router->CommitRouting( branch );
 
-    int clearance = router->GetRuleResolver()->Clearance( &newLine, nullptr );
+    int clearance = router->GetRuleResolver()->Clearance( &pnsLine.value(), nullptr );
 
-    iface->DisplayItem( &newLine, clearance, true, PNS_COLLISION );
+    iface->DisplayItem( &pnsLine.value(), clearance, true, PNS_COLLISION );
 
     return true;
 }
@@ -1168,12 +1200,41 @@ bool PCB_TUNING_PATTERN::Update( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_COM
     if( !( GetFlags() & IN_EDIT ) )
         return false;
 
+    if( m_settings.m_isTimeDomain && !IsNew() )
+    {
+        TUNING_PROFILE_GEOMETRY_CONTEXT ctx;
+        ctx.NetClass = m_settings.m_netClass;
+        ctx.Layer = GetLayer();
+        ctx.Width = m_trackWidth;
+        ctx.IsDiffPairCoupled = m_tuningMode != SINGLE;
+        ctx.DiffPairCouplingGap = m_diffPairGap;
+
+        // Without a delay model the placer targets the baseline length and strips the meanders
+        if( !aBoard->GetLengthCalculation()->CanCalculateLengthForDelay( ctx ) )
+            return false;
+    }
+
     UNLOCKER raiiUnlocker( this ); // Unlock the pattern for editing
 
     KIGFX::VIEW*     view = aTool->GetManager()->GetView();
     PNS::ROUTER*     router = aTool->Router();
     PNS_KICAD_IFACE* iface = aTool->GetInterface();
     PCB_LAYER_ID     pcblayer = GetLayer();
+    SHAPE_LINE_CHAIN bounds = getOutline();
+    int              epsilon = aBoard->GetDesignSettings().GetDRCEpsilon();
+
+    auto withinBounds = [bounds, epsilon]( BOARD_ITEM* aItem )
+    {
+        if( PCB_TRACK* track = dynamic_cast<PCB_TRACK*>( aItem ) )
+        {
+            if( bounds.PointInside( track->GetStart(), epsilon ) && bounds.PointInside( track->GetEnd(), epsilon ) )
+            {
+                return true;
+            }
+        }
+
+        return false;
+    };
 
     auto hideRemovedItems = [&]( bool aHide )
     {
@@ -1183,7 +1244,7 @@ bool PCB_TUNING_PATTERN::Update( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_COM
             {
                 for( BOARD_ITEM* item : pnsCommit.removedItems )
                 {
-                    if( view )
+                    if( view && withinBounds( item ) )
                         view->Hide( item, aHide, aHide );
                 }
             }
@@ -1257,15 +1318,21 @@ bool PCB_TUNING_PATTERN::Update( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_COM
 
     router->Move( m_end, nullptr );
 
-    if( PNS::DP_MEANDER_PLACER* dpPlacer = dynamic_cast<PNS::DP_MEANDER_PLACER*>( placer ) )
+    // Only take the width from the PNS's assembled line if we don't already have an inherent
+    // width property set, otherwise width can get reset if the tuning pattern is on a line
+    // that has a different width
+    if( m_trackWidth == 0 )
     {
-        m_trackWidth = dpPlacer->GetOriginPair().Width();
-        m_diffPairGap = dpPlacer->GetOriginPair().Gap();
-    }
-    else
-    {
-        m_trackWidth = startItem->Width();
-        m_diffPairGap = router->Sizes().DiffPairGap();
+        if( PNS::DP_MEANDER_PLACER* dpPlacer = dynamic_cast<PNS::DP_MEANDER_PLACER*>( placer ) )
+        {
+        m_trackWidth = dpPlacer->GetOriginPair().Dimensions().Width();
+        m_diffPairGap = dpPlacer->GetOriginPair().Dimensions().Gap();
+        }
+        else
+        {
+            m_trackWidth = startItem->Width();
+            m_diffPairGap = router->Sizes().DiffPairGap();
+        }
     }
 
     m_settings = placer->MeanderSettings();
@@ -1273,34 +1340,14 @@ bool PCB_TUNING_PATTERN::Update( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD_COM
     m_tuningStatus = placer->TuningStatus();
     m_tuningLength = placer->TuningLengthResult();
 
-    wxString statusMessage;
-
-    switch( m_tuningStatus )
-    {
-    case PNS::MEANDER_PLACER_BASE::TOO_LONG:  statusMessage = _( "too long" );  break;
-    case PNS::MEANDER_PLACER_BASE::TOO_SHORT: statusMessage = _( "too short" ); break;
-    case PNS::MEANDER_PLACER_BASE::TUNED:     statusMessage = _( "tuned" );     break;
-    default:                                  statusMessage = _( "unknown" );   break;
-    }
-
-    wxString  result;
-    EDA_UNITS userUnits = EDA_UNITS::MM;
-
-    if( aTool->GetManager()->GetSettings() )
-        userUnits = static_cast<EDA_UNITS>( aTool->GetManager()->GetSettings()->m_System.units );
-
-    if( m_settings.m_isTimeDomain )
-    {
-        result = EDA_UNIT_UTILS::UI::MessageTextFromValue( pcbIUScale, EDA_UNITS::PS,
-                                                           (double) m_tuningLength );
-    }
-    else
-    {
-        result = EDA_UNIT_UTILS::UI::MessageTextFromValue( pcbIUScale, userUnits,
-                                                           (double) m_tuningLength );
-    }
-
-    m_tuningInfo.Printf( wxS( "%s (%s)" ), result, statusMessage );
+    // Take the display units from the board, which tracks the frame's user units; time-domain
+    // tuning always displays in picoseconds.
+    EDA_UNITS units = m_settings.m_isTimeDomain ? EDA_UNITS::PS
+                                                : ( aBoard ? aBoard->GetUserUnits() : EDA_UNITS::MM );
+    m_tuningInfo.Printf( wxS( "%s (%s)" ),
+                         EDA_UNIT_UTILS::UI::MessageTextFromValue( pcbIUScale, units,
+                                                                   (double) m_tuningLength ),
+                         StatusMessage( m_tuningStatus ) );
 
     return true;
 }
@@ -1310,7 +1357,6 @@ void PCB_TUNING_PATTERN::EditFinish( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD
 {
     if( !( GetFlags() & IN_EDIT ) )
         return;
-
     ClearFlags( IN_EDIT ); // Clear the editing flag
 
     KIGFX::VIEW*      view = aTool->GetManager()->GetView();
@@ -1330,6 +1376,21 @@ void PCB_TUNING_PATTERN::EditFinish( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD
         router->StopRouting();
     }
 
+    PNS::NODE* world = router->GetWorld();
+
+    auto withinBounds = [bounds, epsilon]( BOARD_ITEM* aItem )
+    {
+        if( PCB_TRACK* track = dynamic_cast<PCB_TRACK*>( aItem ) )
+        {
+            if( bounds.PointInside( track->GetStart(), epsilon ) && bounds.PointInside( track->GetEnd(), epsilon ) )
+            {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
     const std::vector<GENERATOR_PNS_CHANGES>& pnsCommits = aTool->GetRouterChanges();
 
     for( const GENERATOR_PNS_CHANGES& pnsCommit : pnsCommits )
@@ -1343,6 +1404,10 @@ void PCB_TUNING_PATTERN::EditFinish( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD
 
         for( BOARD_ITEM* item : routerRemovedItems )
         {
+            // Only remove items that were originally on the board before the generator ran
+            if( aTool->ItemCreatedBySession( item ) )
+                continue;
+
             if( view )
                 view->Hide( item, false );
 
@@ -1351,16 +1416,30 @@ void PCB_TUNING_PATTERN::EditFinish( GENERATOR_TOOL* aTool, BOARD* aBoard, BOARD
 
         for( BOARD_ITEM* item : routerAddedItems )
         {
-            aCommit->Add( item );
+            // This avoids adding transient items such as the baseline
+            if( world->FindItemByParent( item ) == nullptr )
+                continue;
 
-            if( PCB_TRACK* track = dynamic_cast<PCB_TRACK*>( item ) )
+            // The router added items will include a reconstruction of the original line
+            // without the tuning pattern.  Because we don't currently have the infrastructure
+            // to manage a PNS_LINE with different widths along the way, changing the width
+            // of an existing tuning pattern (e.g. with the properties panel) will reset the
+            // widths of the entire line, even when the segments outside the tuning pattern were
+            // not selected.  In order to prevent widths from changing outside the selection,
+            // we need to special-case this here and restore the original width.
+            if( !withinBounds( item ) )
             {
-                if( bounds.PointInside( track->GetStart(), epsilon )
-                    && bounds.PointInside( track->GetEnd(), epsilon ) )
+                if( PCB_TRACK* newTrack = dynamic_cast<PCB_TRACK*>( item ) )
                 {
-                    AddItem( item );
+                    if( m_assembledLineWidth != newTrack->GetWidth() )
+                        newTrack->SetWidth( m_assembledLineWidth );
                 }
             }
+
+            aCommit->Add( item );
+
+            if( withinBounds( item ) )
+                AddItem( item );
         }
     }
 }
@@ -1824,25 +1903,268 @@ void PCB_TUNING_PATTERN::SetProperties( const STRING_ANY_MAP& aProps )
     if( auto baseLineCoupled = aProps.get_opt<SHAPE_LINE_CHAIN>( "base_line_coupled" ) )
         m_baseLineCoupled = *baseLineCoupled;
 
-    // Reconstruct m_tuningInfo from loaded length and status
-    if( m_tuningLength != 0 )
+    rebuildTuningInfo();
+}
+
+
+wxString PCB_TUNING_PATTERN::StatusMessage( PNS::MEANDER_PLACER_BASE::TUNING_STATUS aStatus )
+{
+    switch( aStatus )
     {
-        wxString statusMessage;
-
-        switch( m_tuningStatus )
-        {
-        case PNS::MEANDER_PLACER_BASE::TOO_LONG:  statusMessage = _( "too long" );  break;
-        case PNS::MEANDER_PLACER_BASE::TOO_SHORT: statusMessage = _( "too short" ); break;
-        case PNS::MEANDER_PLACER_BASE::TUNED:     statusMessage = _( "tuned" );     break;
-        default:                                  statusMessage = _( "unknown" );   break;
-        }
-
-        EDA_UNITS units = m_settings.m_isTimeDomain ? EDA_UNITS::PS : EDA_UNITS::MM;
-        wxString  lengthStr = EDA_UNIT_UTILS::UI::MessageTextFromValue( pcbIUScale, units,
-                                                                        (double) m_tuningLength );
-
-        m_tuningInfo.Printf( wxS( "%s (%s)" ), lengthStr, statusMessage );
+    case PNS::MEANDER_PLACER_BASE::TOO_LONG:  return _( "too long" );
+    case PNS::MEANDER_PLACER_BASE::TOO_SHORT: return _( "too short" );
+    case PNS::MEANDER_PLACER_BASE::TUNED:     return _( "tuned" );
+    default:                                  return _( "unknown" );
     }
+}
+
+
+void PCB_TUNING_PATTERN::rebuildTuningInfo()
+{
+    if( m_tuningLength == 0 )
+        return;
+
+    EDA_UNITS units = m_settings.m_isTimeDomain ? EDA_UNITS::PS : EDA_UNITS::MM;
+
+    m_tuningInfo.Printf( wxS( "%s (%s)" ),
+                         EDA_UNIT_UTILS::UI::MessageTextFromValue( pcbIUScale, units,
+                                                                   static_cast<double>( m_tuningLength ) ),
+                         StatusMessage( m_tuningStatus ) );
+}
+
+
+void PCB_TUNING_PATTERN::Serialize( google::protobuf::Any& aContainer ) const
+{
+    using namespace kiapi::board::types;
+    using namespace kiapi::common::types;
+
+    TuningPattern pattern;
+
+    pattern.mutable_id()->set_value( m_Uuid.AsStdString() );
+    pattern.set_layer( ToProtoEnum<PCB_LAYER_ID, BoardLayer>( GetLayer() ) );
+    kiapi::common::PackVector2( *pattern.mutable_origin(), GetPosition() );
+    kiapi::common::PackVector2( *pattern.mutable_end(), m_end );
+    pattern.set_mode( ToProtoEnum<LENGTH_TUNING_MODE, TuningPatternMode>( m_tuningMode ) );
+
+    TuningPatternSettings* settings = pattern.mutable_settings();
+    settings->set_initial_side( ToProtoEnum<PNS::MEANDER_SIDE, TuningPatternMeanderSide>( m_settings.m_initialSide ) );
+    settings->set_corner_style( ToProtoEnum<PNS::MEANDER_STYLE, TuningPatternCornerStyle>( m_settings.m_cornerStyle ) );
+    settings->set_corner_radius_percent( m_settings.m_cornerRadiusPercentage );
+    settings->set_single_sided( m_settings.m_singleSided );
+    settings->mutable_max_amplitude()->set_value_nm( pcbIUScale.IUToNm( m_settings.m_maxAmplitude ) );
+    settings->mutable_min_amplitude()->set_value_nm( pcbIUScale.IUToNm( m_settings.m_minAmplitude ) );
+    settings->mutable_min_spacing()->set_value_nm( pcbIUScale.IUToNm( m_settings.m_spacing ) );
+
+    pattern.set_target_mode( m_settings.m_isTimeDomain ? TuningPatternTargetMode::TPTM_TIME_DOMAIN
+                                                       : TuningPatternTargetMode::TPTM_LENGTH );
+
+    pattern.set_override_custom_rules( m_settings.m_overrideCustomRules );
+
+    if( m_tuningMode == LENGTH_TUNING_MODE::DIFF_PAIR_SKEW )
+    {
+        if( m_settings.m_isTimeDomain )
+        {
+            TimeRange* range = pattern.mutable_target_skew_delay();
+
+            if( m_settings.m_targetSkewDelay.HasMin() )
+                range->set_min_as( m_settings.m_targetSkewDelay.Min() );
+
+            if( m_settings.m_targetSkewDelay.HasOpt() )
+                range->set_opt_as( m_settings.m_targetSkewDelay.Opt() );
+
+            if( m_settings.m_targetSkewDelay.HasMax() )
+                range->set_max_as( m_settings.m_targetSkewDelay.Max() );
+        }
+        else
+        {
+            kiapi::common::types::MinOptMax* range = pattern.mutable_target_skew();
+
+            if( m_settings.m_targetSkew.HasMin() )
+                range->set_min( m_settings.m_targetSkew.Min() );
+
+            if( m_settings.m_targetSkew.HasOpt() )
+                range->set_opt( m_settings.m_targetSkew.Opt() );
+
+            if( m_settings.m_targetSkew.HasMax() )
+                range->set_max( m_settings.m_targetSkew.Max() );
+        }
+    }
+    else if( m_settings.m_isTimeDomain )
+    {
+        TimeRange* range = pattern.mutable_target_delay();
+
+        if( m_settings.m_targetLengthDelay.HasMin() )
+            range->set_min_as( m_settings.m_targetLengthDelay.Min() );
+
+        if( m_settings.m_targetLengthDelay.HasOpt() )
+            range->set_opt_as( m_settings.m_targetLengthDelay.Opt() );
+
+        if( m_settings.m_targetLengthDelay.HasMax() )
+            range->set_max_as( m_settings.m_targetLengthDelay.Max() );
+    }
+    else
+    {
+        kiapi::common::types::MinOptMax* range = pattern.mutable_target_length();
+
+        if( m_settings.m_targetLength.HasMin() )
+            range->set_min( m_settings.m_targetLength.Min() );
+
+        if( m_settings.m_targetLength.HasOpt() )
+            range->set_opt( m_settings.m_targetLength.Opt() );
+
+        if( m_settings.m_targetLength.HasMax() )
+            range->set_max( m_settings.m_targetLength.Max() );
+    }
+
+    TuningPatternState* state = pattern.mutable_state();
+    state->set_status( ToProtoEnum<PNS::MEANDER_PLACER_BASE::TUNING_STATUS, TuningPatternStatus>( m_tuningStatus ) );
+
+    if( m_tuningLength != 0 )
+        state->set_tuning_value( m_tuningLength );
+
+    pattern.set_locked( IsLocked() ? LockedState::LS_LOCKED : LockedState::LS_UNLOCKED );
+
+    if( const BOARD* board = GetBoard() )
+        pattern.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
+
+    for( EDA_ITEM* member : GetItems() )
+        pattern.add_members()->set_value( member->m_Uuid.AsStdString() );
+
+    kiapi::common::PackCustomProperties( pattern.mutable_custom_properties(), *this );
+    aContainer.PackFrom( pattern );
+}
+
+
+bool PCB_TUNING_PATTERN::Deserialize( const google::protobuf::Any& aContainer )
+{
+    using namespace kiapi::board::types;
+    using namespace kiapi::common::types;
+
+    TuningPattern pattern;
+
+    if( !aContainer.UnpackTo( &pattern ) )
+        return false;
+
+    BOARD* board = GetBoard();
+
+    if( !board )
+        return false;
+
+    SetUuidDirect( ::KIID( pattern.id().value() ) );
+    SetLayer( FromProtoEnum<PCB_LAYER_ID>( pattern.layer() ) );
+    SetPosition( kiapi::common::UnpackVector2( pattern.origin() ) );
+    m_end = kiapi::common::UnpackVector2( pattern.end() );
+    m_tuningMode = FromProtoEnum<LENGTH_TUNING_MODE>( pattern.mode() );
+
+    const TuningPatternSettings& settings = pattern.settings();
+    m_settings.m_initialSide = FromProtoEnum<PNS::MEANDER_SIDE>( settings.initial_side() );
+    m_settings.m_cornerStyle = FromProtoEnum<PNS::MEANDER_STYLE>( settings.corner_style() );
+    m_settings.m_cornerRadiusPercentage = settings.corner_radius_percent();
+    m_settings.m_singleSided = settings.single_sided();
+    m_settings.m_maxAmplitude = pcbIUScale.NmToIU( settings.max_amplitude().value_nm() );
+    m_settings.m_minAmplitude = pcbIUScale.NmToIU( settings.min_amplitude().value_nm() );
+    m_settings.m_spacing = pcbIUScale.NmToIU( settings.min_spacing().value_nm() );
+    m_settings.m_overrideCustomRules = pattern.override_custom_rules();
+
+    switch( pattern.target_case() )
+    {
+    case TuningPattern::kTargetLength:
+    {
+        const kiapi::common::types::MinOptMax& range = pattern.target_length();
+
+        m_settings.m_isTimeDomain = false;
+
+        if( range.has_opt() )
+            m_settings.SetTargetLength( range.opt() );
+
+        if( range.has_min() )
+            m_settings.m_targetLength.SetMin( range.min() );
+
+        if( range.has_max() )
+            m_settings.m_targetLength.SetMax( range.max() );
+
+        break;
+    }
+
+    case TuningPattern::kTargetDelay:
+    {
+        const TimeRange& range = pattern.target_delay();
+
+        m_settings.m_isTimeDomain = true;
+
+        if( range.has_opt_as() )
+            m_settings.SetTargetLengthDelay( range.opt_as() );
+
+        if( range.has_min_as() )
+            m_settings.m_targetLengthDelay.SetMin( range.min_as() );
+
+        if( range.has_max_as() )
+            m_settings.m_targetLengthDelay.SetMax( range.max_as() );
+
+        break;
+    }
+
+    case TuningPattern::kTargetSkew:
+    {
+        const kiapi::common::types::MinOptMax& range = pattern.target_skew();
+
+        m_settings.m_isTimeDomain = false;
+
+        if( range.has_opt() )
+            m_settings.SetTargetSkew( range.opt() );
+
+        if( range.has_min() )
+            m_settings.m_targetSkew.SetMin( range.min() );
+
+        if( range.has_max() )
+            m_settings.m_targetSkew.SetMax( range.max() );
+
+        break;
+    }
+
+    case TuningPattern::kTargetSkewDelay:
+    {
+        const TimeRange& range = pattern.target_skew_delay();
+
+        m_settings.m_isTimeDomain = true;
+
+        if( range.has_opt_as() )
+            m_settings.SetTargetSkewDelay( range.opt_as() );
+
+        if( range.has_min_as() )
+            m_settings.m_targetSkewDelay.SetMin( range.min_as() );
+
+        if( range.has_max_as() )
+            m_settings.m_targetSkewDelay.SetMax( range.max_as() );
+
+        break;
+    }
+
+    case TuningPattern::TARGET_NOT_SET: break;
+    }
+
+    if( pattern.has_state() )
+    {
+        const TuningPatternState& state = pattern.state();
+        m_tuningStatus = FromProtoEnum<PNS::MEANDER_PLACER_BASE::TUNING_STATUS>( state.status() );
+        m_tuningLength = state.tuning_value();
+    }
+
+    SetLocked( pattern.locked() == LockedState::LS_LOCKED );
+    kiapi::common::UnpackCustomProperties( pattern.custom_properties(), *this );
+
+    m_items.clear();
+    m_deserializedItems.clear();
+
+    for( const kiapi::common::types::KIID& memberId : pattern.members() )
+    {
+        if( EDA_ITEM* item = board->ResolveItem( ::KIID( memberId.value() ), true ) )
+            m_deserializedItems.insert( item );
+    }
+
+    rebuildTuningInfo();
+
+    return true;
 }
 
 
@@ -2074,8 +2396,8 @@ std::vector<EDA_ITEM*> PCB_TUNING_PATTERN::GetPreviewItems( GENERATOR_TOOL* aToo
         EDA_DATA_TYPE unitType = m_settings.m_isTimeDomain ? EDA_DATA_TYPE::TIME : EDA_DATA_TYPE::DISTANCE;
         double netVal = m_settings.m_isTimeDomain ? static_cast<double>( placer->TuningDelayResult() )
                                                   : static_cast<double>( placer->TuningLengthResult() );
-        wxString netStr = wxString::Format( _( "Net: %s" ),
-                            aFrame->MessageTextFromValue( netVal, true, unitType ) );
+        wxString      netStr = wxString::Format( m_tuningMode == DIFF_PAIR_SKEW ? _( "Skew: %s" ) : _( "Net: %s" ),
+                                                 aFrame->MessageTextFromValue( netVal, true, unitType ) );
 
         // Chain total from board state (GetTrackLength for every net) plus live tuning delta.
         wxString sigStr;
@@ -2426,7 +2748,7 @@ int DRAWING_TOOL::PlaceTuningPattern( const TOOL_EVENT& aEvent )
 
     m_toolMgr->RunAction( ACTIONS::selectionClear );
 
-    m_frame->PushTool( aEvent );
+    SCOPED_TOOL_PUSHER raii( m_frame, aEvent );
     Activate();
 
     BOARD*                       board = m_frame->GetBoard();
@@ -2457,25 +2779,26 @@ int DRAWING_TOOL::PlaceTuningPattern( const TOOL_EVENT& aEvent )
     m_preview.Clear();
     m_view->Add( &m_preview );
 
-    auto applyCommonSettings = [&]( PCB_TUNING_PATTERN* aPattern )
-    {
-        const auto origTargetLength = aPattern->GetSettings().m_targetLength;
-        const auto origTargetLengthDelay = aPattern->GetSettings().m_targetLengthDelay;
-        const auto origTargetSignalLength = aPattern->GetSettings().m_targetSignalLength;
-        const auto origTargetSignalLengthDelay = aPattern->GetSettings().m_targetSignalLengthDelay;
-        const auto origTargetSkew = aPattern->GetSettings().m_targetSkew;
-        const bool origIsTimeDomain = aPattern->GetSettings().m_isTimeDomain;
+    auto applyCommonSettings =
+            [&]( PCB_TUNING_PATTERN* aPattern )
+            {
+                const auto origTargetLength = aPattern->GetSettings().m_targetLength;
+                const auto origTargetLengthDelay = aPattern->GetSettings().m_targetLengthDelay;
+                const auto origTargetSignalLength = aPattern->GetSettings().m_targetSignalLength;
+                const auto origTargetSignalLengthDelay = aPattern->GetSettings().m_targetSignalLengthDelay;
+                const auto origTargetSkew = aPattern->GetSettings().m_targetSkew;
+                const bool origIsTimeDomain = aPattern->GetSettings().m_isTimeDomain;
 
-        aPattern->GetSettings() = meanderSettings;
+                aPattern->GetSettings() = meanderSettings;
 
-        // Always preserve DRC-evaluated targets
-        aPattern->GetSettings().m_targetLength = origTargetLength;
-        aPattern->GetSettings().m_targetLengthDelay = origTargetLengthDelay;
-        aPattern->GetSettings().m_targetSignalLength = origTargetSignalLength;
-        aPattern->GetSettings().m_targetSignalLengthDelay = origTargetSignalLengthDelay;
-        aPattern->GetSettings().m_targetSkew = origTargetSkew;
-        aPattern->GetSettings().m_isTimeDomain = origIsTimeDomain;
-    };
+                // Always preserve DRC-evaluated targets
+                aPattern->GetSettings().m_targetLength = origTargetLength;
+                aPattern->GetSettings().m_targetLengthDelay = origTargetLengthDelay;
+                aPattern->GetSettings().m_targetSignalLength = origTargetSignalLength;
+                aPattern->GetSettings().m_targetSignalLengthDelay = origTargetSignalLengthDelay;
+                aPattern->GetSettings().m_targetSkew = origTargetSkew;
+                aPattern->GetSettings().m_isTimeDomain = origIsTimeDomain;
+            };
 
     auto updateHoverStatus =
             [&]()
@@ -2551,7 +2874,7 @@ int DRAWING_TOOL::PlaceTuningPattern( const TOOL_EVENT& aEvent )
                 break;
             }
         }
-        else if( evt->IsMotion() )
+        else if( evt->IsMotion() || evt->IsAction( &ACTIONS::refreshPreview ) )
         {
             if( !m_tuningPattern )
             {
@@ -2613,7 +2936,7 @@ int DRAWING_TOOL::PlaceTuningPattern( const TOOL_EVENT& aEvent )
                 updateTuningPattern();
             }
         }
-        else if( evt->IsClick( BUT_LEFT ) )
+        else if( evt->IsClick( BUT_LEFT ) || evt->IsAction( &ACTIONS::cursorClick ) )
         {
             if( m_pickerItem && !m_tuningPattern )
             {
@@ -2621,16 +2944,14 @@ int DRAWING_TOOL::PlaceTuningPattern( const TOOL_EVENT& aEvent )
 
                 if( dynamic_cast<PCB_TUNING_PATTERN*>( m_pickerItem->GetParentGroup() ) )
                 {
-                    m_frame->ShowInfoBarWarning( _( "Unable to tune segments inside other "
-                                                    "tuning patterns." ) );
+                    m_frame->ShowInfoBarWarning( _( "Unable to tune segments inside other tuning patterns." ) );
                 }
                 else
                 {
                     m_preview.FreeItems();
 
                     m_frame->SetActiveLayer( m_pickerItem->GetLayer() );
-                    m_tuningPattern = PCB_TUNING_PATTERN::CreateNew( generatorTool, m_frame,
-                                                                     m_pickerItem, mode );
+                    m_tuningPattern = PCB_TUNING_PATTERN::CreateNew( generatorTool, m_frame, m_pickerItem, mode );
 
                     m_tuningPattern->GetSettings().m_signalExtraLength = 0;
                     m_tuningPattern->GetSettings().m_signalExtraDelay = 0;
@@ -2643,8 +2964,8 @@ int DRAWING_TOOL::PlaceTuningPattern( const TOOL_EVENT& aEvent )
 
                     // With an artificially-large clearance this can't *not* collide, but the
                     // if stmt keeps Coverity happy....
-                    if( m_pickerItem->GetEffectiveShape()->Collide( cursorPos, dummyClearance,
-                                                                    &dummyDist, &closestPt ) )
+                    if( m_pickerItem->GetEffectiveShape()->Collide( cursorPos, dummyClearance, &dummyDist,
+                                                                    &closestPt ) )
                     {
                         m_tuningPattern->SetPosition( closestPt );
                         m_tuningPattern->SetEnd( closestPt );
@@ -2770,7 +3091,6 @@ int DRAWING_TOOL::PlaceTuningPattern( const TOOL_EVENT& aEvent )
     if( m_tuningPattern )
         selectionTool->AddItemToSel( m_tuningPattern );
 
-    m_frame->PopTool( aEvent );
     return 0;
 }
 
@@ -2806,71 +3126,67 @@ static struct PCB_TUNING_PATTERN_DESC
                 layerEnum.Map( layer, LSET::Name( layer ) );
         }
 
-        auto layer = new PROPERTY_ENUM<PCB_TUNING_PATTERN, PCB_LAYER_ID>(
-                _HKI( "Layer" ), &PCB_TUNING_PATTERN::SetLayer, &PCB_TUNING_PATTERN::GetLayer );
-        layer->SetChoices( layerEnum.Choices() );
-        propMgr.ReplaceProperty( TYPE_HASH( BOARD_ITEM ), _HKI( "Layer" ), layer );
+        propMgr.ReplaceProperty( TYPE_HASH( BOARD_ITEM ), _HKI( "Layer" ),
+                    new PROPERTY_ENUM<PCB_TUNING_PATTERN, PCB_LAYER_ID>( _HKI( "Layer" ),
+                                &PCB_TUNING_PATTERN::SetLayer, &PCB_TUNING_PATTERN::GetLayer ) )
+                            .SetChoices( layerEnum.Choices() );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, int>( _HKI( "Width" ),
-                                     &PCB_TUNING_PATTERN::SetWidth, &PCB_TUNING_PATTERN::GetWidth,
-                                     PROPERTY_DISPLAY::PT_SIZE ) );
+                    &PCB_TUNING_PATTERN::SetWidth, &PCB_TUNING_PATTERN::GetWidth, PROPERTY_DISPLAY::PT_SIZE ) );
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_TUNING_PATTERN, int>( _HKI( "Net" ),
-                                     &PCB_TUNING_PATTERN::SetNetCode, &PCB_TUNING_PATTERN::GetNetCode, PT_NET ) );
+                    &PCB_TUNING_PATTERN::SetNetCode, &PCB_TUNING_PATTERN::GetNetCode, PT_NET ) );
 
         const wxString groupTechLayers = _HKI( "Technical Layers" );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, bool>( _HKI( "Soldermask" ),
-                                     &PCB_TUNING_PATTERN::SetHasSolderMask, &PCB_TUNING_PATTERN::HasSolderMask ),
-                             groupTechLayers );
+                    &PCB_TUNING_PATTERN::SetHasSolderMask, &PCB_TUNING_PATTERN::HasSolderMask ),
+                    groupTechLayers );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, std::optional<int>>( _HKI( "Soldermask Margin Override" ),
-                                     &PCB_TUNING_PATTERN::SetLocalSolderMaskMargin,
-                                     &PCB_TUNING_PATTERN::GetLocalSolderMaskMargin,
-                                     PROPERTY_DISPLAY::PT_SIZE ),
-                             groupTechLayers );
+                    &PCB_TUNING_PATTERN::SetLocalSolderMaskMargin, &PCB_TUNING_PATTERN::GetLocalSolderMaskMargin,
+                    PROPERTY_DISPLAY::PT_SIZE ),
+                    groupTechLayers );
 
         const wxString groupTab = _HKI( "Pattern Properties" );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, int>( _HKI( "End X" ),
-                                     &PCB_TUNING_PATTERN::SetEndX, &PCB_TUNING_PATTERN::GetEndX,
-                                     PROPERTY_DISPLAY::PT_SIZE, ORIGIN_TRANSFORMS::ABS_X_COORD ),
-                             groupTab );
+                    &PCB_TUNING_PATTERN::SetEndX, &PCB_TUNING_PATTERN::GetEndX, PROPERTY_DISPLAY::PT_SIZE,
+                    ORIGIN_TRANSFORMS::ABS_X_COORD ),
+                    groupTab );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, int>( _HKI( "End Y" ),
-                                     &PCB_TUNING_PATTERN::SetEndY, &PCB_TUNING_PATTERN::GetEndY,
-                                     PROPERTY_DISPLAY::PT_SIZE, ORIGIN_TRANSFORMS::ABS_Y_COORD ),
-                             groupTab );
+                    &PCB_TUNING_PATTERN::SetEndY, &PCB_TUNING_PATTERN::GetEndY, PROPERTY_DISPLAY::PT_SIZE,
+                    ORIGIN_TRANSFORMS::ABS_Y_COORD ),
+                    groupTab );
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_TUNING_PATTERN, LENGTH_TUNING_MODE>( _HKI( "Tuning Mode" ),
-                                     NO_SETTER( PCB_TUNING_PATTERN, LENGTH_TUNING_MODE ),
-                                     &PCB_TUNING_PATTERN::GetTuningMode ),
-                             groupTab );
+                    NO_SETTER( PCB_TUNING_PATTERN, LENGTH_TUNING_MODE ), &PCB_TUNING_PATTERN::GetTuningMode ),
+                    groupTab );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, int>( _HKI( "Min Amplitude" ),
-                                     &PCB_TUNING_PATTERN::SetMinAmplitude, &PCB_TUNING_PATTERN::GetMinAmplitude,
-                                     PROPERTY_DISPLAY::PT_SIZE, ORIGIN_TRANSFORMS::ABS_X_COORD ),
-                             groupTab );
+                    &PCB_TUNING_PATTERN::SetMinAmplitude, &PCB_TUNING_PATTERN::GetMinAmplitude,
+                    PROPERTY_DISPLAY::PT_SIZE, ORIGIN_TRANSFORMS::ABS_X_COORD ),
+                    groupTab );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, int>( _HKI( "Max Amplitude" ),
-                                     &PCB_TUNING_PATTERN::SetMaxAmplitude, &PCB_TUNING_PATTERN::GetMaxAmplitude,
-                                     PROPERTY_DISPLAY::PT_SIZE, ORIGIN_TRANSFORMS::ABS_X_COORD ),
-                             groupTab );
+                    &PCB_TUNING_PATTERN::SetMaxAmplitude, &PCB_TUNING_PATTERN::GetMaxAmplitude,
+                    PROPERTY_DISPLAY::PT_SIZE, ORIGIN_TRANSFORMS::ABS_X_COORD ),
+                    groupTab );
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_TUNING_PATTERN, PNS::MEANDER_SIDE>( _HKI( "Initial Side" ),
-                                     &PCB_TUNING_PATTERN::SetInitialSide, &PCB_TUNING_PATTERN::GetInitialSide ),
-                             groupTab );
+                    &PCB_TUNING_PATTERN::SetInitialSide, &PCB_TUNING_PATTERN::GetInitialSide ),
+                    groupTab );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, int>( _HKI( "Min Spacing" ),
-                                     &PCB_TUNING_PATTERN::SetSpacing, &PCB_TUNING_PATTERN::GetSpacing,
-                                     PROPERTY_DISPLAY::PT_SIZE, ORIGIN_TRANSFORMS::ABS_X_COORD ),
-                             groupTab );
+                    &PCB_TUNING_PATTERN::SetSpacing, &PCB_TUNING_PATTERN::GetSpacing, PROPERTY_DISPLAY::PT_SIZE,
+                    ORIGIN_TRANSFORMS::ABS_X_COORD ),
+                    groupTab );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, int>( _HKI( "Corner Radius %" ),
-                                     &PCB_TUNING_PATTERN::SetCornerRadiusPercentage,
-                                     &PCB_TUNING_PATTERN::GetCornerRadiusPercentage,
-                                     PROPERTY_DISPLAY::PT_DEFAULT, ORIGIN_TRANSFORMS::NOT_A_COORD ),
-                             groupTab );
+                    &PCB_TUNING_PATTERN::SetCornerRadiusPercentage, &PCB_TUNING_PATTERN::GetCornerRadiusPercentage,
+                    PROPERTY_DISPLAY::PT_DEFAULT, ORIGIN_TRANSFORMS::NOT_A_COORD ),
+                    groupTab );
 
         auto isSkew =
                 []( INSPECTABLE* aItem ) -> bool
@@ -2881,70 +3197,74 @@ static struct PCB_TUNING_PATTERN_DESC
                     return false;
                 };
 
-        auto isTimeDomain = []( INSPECTABLE* aItem ) -> bool
-        {
-            if( PCB_TUNING_PATTERN* pattern = dynamic_cast<PCB_TUNING_PATTERN*>( aItem ) )
-                return pattern->GetSettings().m_isTimeDomain;
+        auto isTimeDomain =
+                []( INSPECTABLE* aItem ) -> bool
+                {
+                    if( PCB_TUNING_PATTERN* pattern = dynamic_cast<PCB_TUNING_PATTERN*>( aItem ) )
+                        return pattern->GetSettings().m_isTimeDomain;
 
-            return false;
-        };
+                    return false;
+                };
 
-        auto isLengthIsSpaceDomain = [&]( INSPECTABLE* aItem ) -> bool
-        {
-            return !isSkew( aItem ) && !isTimeDomain( aItem );
-        };
+        auto isLengthIsSpaceDomain =
+                [&]( INSPECTABLE* aItem ) -> bool
+                {
+                    return !isSkew( aItem ) && !isTimeDomain( aItem );
+                };
 
-        auto isLengthIsTimeDomain = [&]( INSPECTABLE* aItem ) -> bool
-        {
-            return !isSkew( aItem ) && isTimeDomain( aItem );
-        };
+        auto isLengthIsTimeDomain =
+                [&]( INSPECTABLE* aItem ) -> bool
+                {
+                    return !isSkew( aItem ) && isTimeDomain( aItem );
+                };
 
-        auto isSkewIsSpaceDomain = [&]( INSPECTABLE* aItem ) -> bool
-        {
-            return isSkew( aItem ) && !isTimeDomain( aItem );
-        };
+        auto isSkewIsSpaceDomain =
+                [&]( INSPECTABLE* aItem ) -> bool
+                {
+                    return isSkew( aItem ) && !isTimeDomain( aItem );
+                };
 
-        auto isSkewIsTimeDomain = [&]( INSPECTABLE* aItem ) -> bool
-        {
-            return isSkew( aItem ) && isTimeDomain( aItem );
-        };
+        auto isSkewIsTimeDomain =
+                [&]( INSPECTABLE* aItem ) -> bool
+                {
+                    return isSkew( aItem ) && isTimeDomain( aItem );
+                };
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, std::optional<int>>( _HKI( "Target Length" ),
-                                     &PCB_TUNING_PATTERN::SetTargetLength, &PCB_TUNING_PATTERN::GetTargetLength,
-                                     PROPERTY_DISPLAY::PT_SIZE, ORIGIN_TRANSFORMS::ABS_X_COORD ),
-                             groupTab )
+                    &PCB_TUNING_PATTERN::SetTargetLength, &PCB_TUNING_PATTERN::GetTargetLength,
+                    PROPERTY_DISPLAY::PT_SIZE, ORIGIN_TRANSFORMS::ABS_X_COORD ),
+                    groupTab )
                 .SetAvailableFunc( isLengthIsSpaceDomain );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, std::optional<int>>( _HKI( "Target Delay" ),
-                                     &PCB_TUNING_PATTERN::SetTargetDelay, &PCB_TUNING_PATTERN::GetTargetDelay,
-                                     PROPERTY_DISPLAY::PT_TIME, ORIGIN_TRANSFORMS::NOT_A_COORD ),
-                             groupTab )
+                    &PCB_TUNING_PATTERN::SetTargetDelay, &PCB_TUNING_PATTERN::GetTargetDelay,
+                    PROPERTY_DISPLAY::PT_TIME, ORIGIN_TRANSFORMS::NOT_A_COORD ),
+                    groupTab )
                 .SetAvailableFunc( isLengthIsTimeDomain );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, int>( _HKI( "Target Skew" ),
-                                     &PCB_TUNING_PATTERN::SetTargetSkew, &PCB_TUNING_PATTERN::GetTargetSkew,
-                                     PROPERTY_DISPLAY::PT_SIZE, ORIGIN_TRANSFORMS::ABS_X_COORD ),
-                             groupTab )
+                    &PCB_TUNING_PATTERN::SetTargetSkew, &PCB_TUNING_PATTERN::GetTargetSkew,
+                    PROPERTY_DISPLAY::PT_SIZE, ORIGIN_TRANSFORMS::ABS_X_COORD ),
+                    groupTab )
                 .SetAvailableFunc( isSkewIsSpaceDomain );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, int>( _HKI( "Target Skew Delay" ),
-                                     &PCB_TUNING_PATTERN::SetTargetSkewDelay, &PCB_TUNING_PATTERN::GetTargetSkewDelay,
-                                     PROPERTY_DISPLAY::PT_TIME, ORIGIN_TRANSFORMS::NOT_A_COORD ),
-                             groupTab )
+                    &PCB_TUNING_PATTERN::SetTargetSkewDelay, &PCB_TUNING_PATTERN::GetTargetSkewDelay,
+                    PROPERTY_DISPLAY::PT_TIME, ORIGIN_TRANSFORMS::NOT_A_COORD ),
+                    groupTab )
                 .SetAvailableFunc( isSkewIsTimeDomain );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, bool>( _HKI( "Override Custom Rules" ),
-                                     &PCB_TUNING_PATTERN::SetOverrideCustomRules,
-                                     &PCB_TUNING_PATTERN::GetOverrideCustomRules ),
-                             groupTab );
+                    &PCB_TUNING_PATTERN::SetOverrideCustomRules, &PCB_TUNING_PATTERN::GetOverrideCustomRules ),
+                    groupTab );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, bool>( _HKI( "Single-sided" ),
-                                     &PCB_TUNING_PATTERN::SetSingleSided, &PCB_TUNING_PATTERN::IsSingleSided ),
-                             groupTab );
+                    &PCB_TUNING_PATTERN::SetSingleSided, &PCB_TUNING_PATTERN::IsSingleSided ),
+                    groupTab );
 
         propMgr.AddProperty( new PROPERTY<PCB_TUNING_PATTERN, bool>( _HKI( "Rounded" ),
-                                     &PCB_TUNING_PATTERN::SetRounded, &PCB_TUNING_PATTERN::IsRounded ),
-                             groupTab );
+                    &PCB_TUNING_PATTERN::SetRounded, &PCB_TUNING_PATTERN::IsRounded ),
+                    groupTab );
     }
 } _PCB_TUNING_PATTERN_DESC;
 

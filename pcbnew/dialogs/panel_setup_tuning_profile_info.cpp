@@ -36,7 +36,9 @@ PANEL_SETUP_TUNING_PROFILE_INFO::PANEL_SETUP_TUNING_PROFILE_INFO( wxWindow*     
         PANEL_SETUP_TUNING_PROFILE_INFO_BASE( aParentWindow, wxID_ANY, wxPoint( -1000, -1000 ) ),
         m_parentPanel( parentPanel ),
         m_viaPropagationUnits( parentPanel->m_frame, m_viaPropagationSpeedLabel, m_viaPropagationSpeed,
-                               m_viaPropSpeedUnits )
+                               m_viaPropSpeedUnits ),
+        m_netchainBridgePropagationUnits( parentPanel->m_frame, m_netChainBridgePropagationSpeedLabel,
+                                          m_netChainBridgePropagationSpeed, m_netChainBridgePropSpeedUnits )
 {
     Freeze();
     initPanel();
@@ -47,9 +49,15 @@ PANEL_SETUP_TUNING_PROFILE_INFO::PANEL_SETUP_TUNING_PROFILE_INFO( wxWindow*     
 void PANEL_SETUP_TUNING_PROFILE_INFO::initPanel()
 {
     if( EDA_UNIT_UTILS::IsImperialUnit( m_parentPanel->m_unitsProvider->GetUserUnits() ) )
+    {
         m_viaPropagationUnits.SetUnits( EDA_UNITS::PS_PER_INCH );
+        m_netchainBridgePropagationUnits.SetUnits( EDA_UNITS::PS_PER_INCH );
+    }
     else
+    {
         m_viaPropagationUnits.SetUnits( EDA_UNITS::PS_PER_CM );
+        m_netchainBridgePropagationUnits.SetUnits( EDA_UNITS::PS_PER_CM );
+    }
 
     m_viaPropagationUnits.SetDataType( EDA_DATA_TYPE::LENGTH_DELAY );
 
@@ -62,6 +70,7 @@ void PANEL_SETUP_TUNING_PROFILE_INFO::initPanel()
     m_frequencyUnits->SetMinSize( wxSize( x, -1 ) );
 
     m_viaPropagationUnits.SetValue( 0 );
+    m_netchainBridgePropagationUnits.SetValue( 0 );
 
     m_addTrackPropogationLayer->SetBitmap( KiBitmapBundle( BITMAPS::small_plus ) );
     m_deleteTrackPropogationLayer->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
@@ -158,12 +167,14 @@ void PANEL_SETUP_TUNING_PROFILE_INFO::LoadProfile( const TUNING_PROFILE& aProfil
     BOARD* board = m_parentPanel->m_board;
 
     m_name->SetValue( aProfile.m_ProfileName );
+    m_lastSyncedName = aProfile.m_ProfileName;
     m_type->SetSelection( static_cast<int>( aProfile.m_Type ) );
     onChangeProfileType( aProfile.m_Type );
     m_targetImpedance->SetValue( wxString::FromDouble( aProfile.m_TargetImpedance ) );
     m_enableDelayTuning->SetValue( aProfile.m_EnableTimeDomainTuning );
     m_modelSolderMask->SetValue( aProfile.m_ModelSolderMask );
     m_viaPropagationUnits.SetValue( aProfile.m_ViaPropagationDelay );
+    m_netchainBridgePropagationUnits.SetValue( aProfile.m_NetChainBridgePropagationDelay );
 
     double frequency = aProfile.m_Frequency;
 
@@ -238,6 +249,7 @@ TUNING_PROFILE PANEL_SETUP_TUNING_PROFILE_INFO::GetProfile() const
     profile.m_EnableTimeDomainTuning = m_enableDelayTuning->GetValue();
     profile.m_ModelSolderMask = m_modelSolderMask->GetValue();
     profile.m_ViaPropagationDelay = m_viaPropagationUnits.GetIntValue();
+    profile.m_NetChainBridgePropagationDelay = m_netchainBridgePropagationUnits.GetIntValue();
 
     double targetImpedance = 0.0;
 
@@ -908,6 +920,21 @@ bool PANEL_SETUP_TUNING_PROFILE_INFO::ValidateProfile( const size_t aPageIndex )
         const wxString msg = _( "Tuning profile must have a name" );
         PAGED_DIALOG::GetDialog( m_parentPanel )->SetError( msg, this, m_name );
         return false;
+    }
+
+    for( size_t i = 0; i < m_parentPanel->m_tuningProfiles->GetPageCount(); ++i )
+    {
+        const auto* otherProfile =
+                static_cast<PANEL_SETUP_TUNING_PROFILE_INFO*>( m_parentPanel->m_tuningProfiles->GetPage( i ) );
+
+        if( otherProfile != this && otherProfile->GetProfileName() == m_name->GetValue() )
+        {
+            m_parentPanel->m_tuningProfiles->SetSelection( aPageIndex );
+
+            const wxString msg = _( "Tuning profile name already in use" );
+            PAGED_DIALOG::GetDialog( m_parentPanel )->SetError( msg, this, m_name );
+            return false;
+        }
     }
 
     std::set<wxString> layerNames;

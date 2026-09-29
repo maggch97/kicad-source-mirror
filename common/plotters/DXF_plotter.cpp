@@ -21,14 +21,14 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include <ranges>
+#include <cstring>
 #include <plotters/plotter_dxf.h>
 #include <macros.h>
 #include <string_utils.h>
 #include <convert_basic_shapes_to_polygon.h>
 #include <geometry/shape_rect.h>
 #include <trigo.h>
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <algorithm>
 
 /**
@@ -313,7 +313,8 @@ static const struct
     { "GRAYFOUR",          254 }
 };
 
-// Array of predefined DXF color values, each entry containing blue, green, red components and a corresponding color number.
+// Array of predefined DXF color values, each entry containing blue, green, red components and a corresponding
+// color number.
 static const struct
 {
     int         blue;
@@ -573,6 +574,7 @@ static const struct
     { 204,  204,  204,  DXF_COLOR_T::GRAYFOUR,          }
 };
 
+
 static const char* getDXFLineType( LINE_STYLE aType )
 {
     switch( aType )
@@ -593,6 +595,7 @@ static const char* getDXFLineType( LINE_STYLE aType )
         return "CONTINUOUS";
     }
 }
+
 
 int DXF_PLOTTER::FindNearestLegacyColor( int aR, int aG, int aB )
 {
@@ -617,33 +620,9 @@ int DXF_PLOTTER::FindNearestLegacyColor( int aR, int aG, int aB )
 }
 
 
-/**
- * @brief Retrieves the current layer name or layer color name for DXF plotting.
- *
- * This function returns the appropriate layer name or layer color name depending on the specified
- * DXF_LAYER_OUTPUT_MODE. DXF files do not use RGB definitions for colors, so this function converts
- * the color to the nearest legacy color name acceptable in DXF files.
- *
- * @param mode The mode determining whether to return the layer name or layer color name.
- * @param layerId Optional parameter specifying the layer ID to use. If not provided, the current layer ID is used.
- * @return The layer name or color name as a wxString.
- *
- * The function operates in two main modes:
- * 1. Layer_Name or Current_Layer_Name: Returns the name of the specified layer or the current layer.
- *    - Searches through the `m_layersToExport` list to find the matching layer ID.
- *    - If the layer ID is found, returns the corresponding layer name.
- *    - If not found, defaults to "BLACK".
- *
- * 2. Layer_Color_Name or Current_Layer_Color_Name: Returns the color name of the specified layer or the current layer.
- *    - Retrieves the color of the layer from the render settings.
- *    - Finds the nearest legacy color that matches the layer's color.
- *    - Returns the name of the nearest legacy color.
- *
- * If the mode is unknown, returns "Unknown Mode".
- */
-wxString DXF_PLOTTER::GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE aMode, std::optional<PCB_LAYER_ID> alayerId )
+wxString DXF_PLOTTER::GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE aMode, std::optional<PCB_LAYER_ID> aLayerId )
 {
-    PCB_LAYER_ID actualLayerId = ( alayerId.has_value() ) ? alayerId.value() : m_layer;
+    PCB_LAYER_ID actualLayerId = ( aLayerId.has_value() ) ? aLayerId.value() : m_layer;
 
     switch( aMode )
     {
@@ -1002,7 +981,8 @@ bool DXF_PLOTTER::StartPlot( const wxString& aPageNumber )
         if( !m_layersToExport.empty() )
         {
             layerName = GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE::Layer_Name, m_layersToExport.at( i ).first );
-            wxString colorName = GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE::Layer_Color_Name, m_layersToExport.at( i ).first );
+            wxString colorName = GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE::Layer_Color_Name,
+                                                      m_layersToExport.at( i ).first );
 
             auto it = std::find_if( std::begin( acad_dxf_color_names ), std::end( acad_dxf_color_names ),
                                       [colorName](const auto& layer)
@@ -1469,8 +1449,7 @@ void DXF_PLOTTER::Circle( const VECTOR2I& centre, int diameter, FILL_T fill, int
 }
 
 
-void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFill, int aWidth,
-                            void* aData )
+void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFill, int aWidth, void* aData )
 {
     if( aCornerList.size() <= 1 )
         return;
@@ -1478,7 +1457,7 @@ void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFi
     unsigned last = aCornerList.size() - 1;
 
     // Plot outlines with lines (thickness = 0) to define the polygon
-    if( aWidth <= 0 || aFill == FILL_T::NO_FILL  )
+    if( aWidth <= 0  )
     {
         MoveTo( aCornerList[0] );
 
@@ -1493,12 +1472,23 @@ void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFi
         }
 
         PenFinish();
+
+        return;
+    }
+    // If the polygon outline has thickness, and is not filled (i.e. is a polyline) plot outlines
+    // with thick segments
+    else if( aFill == FILL_T::NO_FILL )
+    {
+        MoveTo( aCornerList[0] );
+
+        for( unsigned ii = 1; ii < aCornerList.size(); ii++ )
+            ThickSegment( aCornerList[ii-1], aCornerList[ii], aWidth, aData );
+
         return;
     }
 
     // The polygon outline has thickness, and is filled
-    // Build and plot the polygon which contains the initial
-    // polygon and its thick outline
+    // Build and plot the polygon which contains the initial polygon and its thick outline
     SHAPE_POLY_SET  bufferOutline;
     SHAPE_POLY_SET  bufferPolybase;
 
@@ -1515,8 +1505,7 @@ void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFi
     for( const VECTOR2I& corner : aCornerList )
         bufferPolybase.Append( corner );
 
-    // Merge polygons to build the polygon which contains the initial
-    // polygon and its thick outline
+    // Merge polygons to build the polygon which contains the initial polygon and its thick outline
 
     // create the outline which contains thick outline:
     bufferPolybase.BooleanAdd( bufferOutline );
@@ -1554,73 +1543,16 @@ void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFi
 }
 
 
-std::vector<VECTOR2I> arcPts( const VECTOR2D& aCenter, const EDA_ANGLE& aStartAngle,
-                              const EDA_ANGLE& aAngle, double aRadius )
-{
-    std::vector<VECTOR2I> pts;
-
-    /*
-     * Arcs are not so easily approximated by beziers (in the general case), so we approximate
-     * them in the old way
-     */
-    EDA_ANGLE       startAngle = -aStartAngle;
-    EDA_ANGLE       endAngle = startAngle - aAngle;
-    VECTOR2I        start;
-    VECTOR2I        end;
-    const EDA_ANGLE delta( 5, DEGREES_T );   // increment to draw circles
-
-    if( startAngle > endAngle )
-        std::swap( startAngle, endAngle );
-
-    // Usual trig arc plotting routine...
-    start.x = KiROUND( aCenter.x + aRadius * ( -startAngle ).Cos() );
-    start.y = KiROUND( aCenter.y + aRadius * ( -startAngle ).Sin() );
-    pts.emplace_back( start );
-
-    for( EDA_ANGLE ii = startAngle + delta; ii < endAngle; ii += delta )
-    {
-        end.x = KiROUND( aCenter.x + aRadius * ( -ii ).Cos() );
-        end.y = KiROUND( aCenter.y + aRadius * ( -ii ).Sin() );
-        pts.emplace_back( end );
-    }
-
-    end.x = KiROUND( aCenter.x + aRadius * ( -endAngle ).Cos() );
-    end.y = KiROUND( aCenter.y + aRadius * ( -endAngle ).Sin() );
-    pts.emplace_back( end );
-
-    return pts;
-}
-
-
 void DXF_PLOTTER::PlotPoly( const SHAPE_LINE_CHAIN& aLineChain, FILL_T aFill, int aWidth, void* aData )
 {
-    std::set<size_t>      handledArcs;
+    if( aLineChain.PointCount() == 0 )
+        return;
+
     std::vector<VECTOR2I> cornerList;
+    cornerList.reserve( aLineChain.PointCount() );
 
-    for( int ii = 0; ii < aLineChain.SegmentCount(); ++ii )
-    {
-        if( aLineChain.IsArcSegment( ii ) )
-        {
-            size_t arcIndex = aLineChain.ArcIndex( ii );
-
-            if( !handledArcs.contains( arcIndex ) )
-            {
-                handledArcs.insert( arcIndex );
-                const SHAPE_ARC& arc( aLineChain.Arc( arcIndex ) );
-                std::vector<VECTOR2I> pts = arcPts( arc.GetCenter(), arc.GetStartAngle(),
-                                                    arc.GetCentralAngle(), arc.GetRadius() );
-
-                for( const VECTOR2I& pt : std::ranges::reverse_view( pts ) )
-                    cornerList.emplace_back( pt );
-            }
-        }
-        else
-        {
-            const SEG& seg( aLineChain.Segment( ii ) );
-            cornerList.emplace_back( seg.A );
-            cornerList.emplace_back( seg.B );
-        }
-    }
+    for( int ii = 0; ii < aLineChain.PointCount(); ++ii )
+        cornerList.emplace_back( aLineChain.CPoint( ii ) );
 
     if( aLineChain.IsClosed() && cornerList.front() != cornerList.back() )
         cornerList.emplace_back( aLineChain.CPoint( 0 ) );
@@ -1634,17 +1566,14 @@ void DXF_PLOTTER::PenTo( const VECTOR2I& pos, char plume )
     wxASSERT( m_outputFile );
 
     if( plume == 'Z' )
-    {
         return;
-    }
 
     VECTOR2D pos_dev = userToDeviceCoordinates( pos );
     VECTOR2D pen_lastpos_dev = userToDeviceCoordinates( m_penLastpos );
 
     if( m_penLastpos != pos && plume == 'D' )
     {
-        wxASSERT( m_currentLineType >= LINE_STYLE::FIRST_TYPE
-                  && m_currentLineType <= LINE_STYLE::LAST_TYPE );
+        wxASSERT( m_currentLineType >= LINE_STYLE::FIRST_TYPE && m_currentLineType <= LINE_STYLE::LAST_TYPE );
 
         // DXF LINE
         wxString    cLayerName = GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE::Current_Layer_Name );
@@ -1675,8 +1604,7 @@ void DXF_PLOTTER::PenTo( const VECTOR2I& pos, char plume )
 
 void DXF_PLOTTER::SetDash( int aLineWidth, LINE_STYLE aLineStyle )
 {
-    wxASSERT( aLineStyle >= LINE_STYLE::FIRST_TYPE
-                && aLineStyle <= LINE_STYLE::LAST_TYPE );
+    wxASSERT( aLineStyle >= LINE_STYLE::FIRST_TYPE && aLineStyle <= LINE_STYLE::LAST_TYPE );
 
     m_currentLineType = aLineStyle;
 }
@@ -1727,8 +1655,7 @@ void DXF_PLOTTER::ThickSegment( const VECTOR2I& aStart, const VECTOR2I& aEnd, in
     {
         std::vector<VECTOR2I> cornerList;
         SHAPE_POLY_SET outlineBuffer;
-        TransformOvalToPolygon( outlineBuffer, aStart, aEnd, aWidth, GetPlotterArcHighDef(),
-                                ERROR_INSIDE );
+        TransformOvalToPolygon( outlineBuffer, aStart, aEnd, aWidth, GetPlotterArcHighDef(), ERROR_INSIDE );
         const SHAPE_LINE_CHAIN& path = outlineBuffer.COutline( 0 );
 
         cornerList.reserve( path.PointCount() );
@@ -1750,8 +1677,8 @@ void DXF_PLOTTER::ThickSegment( const VECTOR2I& aStart, const VECTOR2I& aEnd, in
 }
 
 
-void DXF_PLOTTER::ThickArc( const VECTOR2D& centre, const EDA_ANGLE& aStartAngle,
-                            const EDA_ANGLE& aAngle, double aRadius, int aWidth, void* aData )
+void DXF_PLOTTER::ThickArc( const VECTOR2D& centre, const EDA_ANGLE& aStartAngle, const EDA_ANGLE& aAngle,
+                            double aRadius, int aWidth, void* aData )
 {
     const PLOT_PARAMS* cfg = static_cast<const PLOT_PARAMS*>( aData );
 
@@ -1838,8 +1765,7 @@ void DXF_PLOTTER::ThickPoly( const SHAPE_POLY_SET& aPoly, int aWidth, void* aDat
 }
 
 
-void DXF_PLOTTER::FlashPadOval( const VECTOR2I& aPos, const VECTOR2I& aSize,
-                                const EDA_ANGLE& aOrient, void* aData )
+void DXF_PLOTTER::FlashPadOval( const VECTOR2I& aPos, const VECTOR2I& aSize, const EDA_ANGLE& aOrient, void* aData )
 {
     wxASSERT( m_outputFile );
 
@@ -1865,8 +1791,8 @@ void DXF_PLOTTER::FlashPadCircle( const VECTOR2I& pos, int diametre, void* aData
 }
 
 
-void DXF_PLOTTER::FlashPadRect( const VECTOR2I& aPos, const VECTOR2I& aPadSize,
-                                const EDA_ANGLE& aOrient, void* aData )
+void DXF_PLOTTER::FlashPadRect( const VECTOR2I& aPos, const VECTOR2I& aPadSize, const EDA_ANGLE& aOrient,
+                                void* aData )
 {
     wxASSERT( m_outputFile );
 
@@ -1924,12 +1850,12 @@ void DXF_PLOTTER::FlashPadRect( const VECTOR2I& aPos, const VECTOR2I& aPadSize,
 }
 
 
-void DXF_PLOTTER::FlashPadRoundRect( const VECTOR2I& aPadPos, const VECTOR2I& aSize,
-                                     int aCornerRadius, const EDA_ANGLE& aOrient, void* aData )
+void DXF_PLOTTER::FlashPadRoundRect( const VECTOR2I& aPadPos, const VECTOR2I& aSize, int aCornerRadius,
+                                     const EDA_ANGLE& aOrient, void* aData )
 {
     SHAPE_POLY_SET outline;
-    TransformRoundChamferedRectToPolygon( outline, aPadPos, aSize, aOrient, aCornerRadius, 0.0, 0,
-                                          0, GetPlotterArcHighDef(), ERROR_INSIDE );
+    TransformRoundChamferedRectToPolygon( outline, aPadPos, aSize, aOrient, aCornerRadius, 0.0, 0, 0,
+                                          GetPlotterArcHighDef(), ERROR_INSIDE );
 
     // TransformRoundRectToPolygon creates only one convex polygon
     SHAPE_LINE_CHAIN& poly = outline.Outline( 0 );
@@ -1943,9 +1869,8 @@ void DXF_PLOTTER::FlashPadRoundRect( const VECTOR2I& aPadPos, const VECTOR2I& aS
 }
 
 
-void DXF_PLOTTER::FlashPadCustom( const VECTOR2I& aPadPos, const VECTOR2I& aSize,
-                                  const EDA_ANGLE& aOrient, SHAPE_POLY_SET* aPolygons,
-                                  void* aData )
+void DXF_PLOTTER::FlashPadCustom( const VECTOR2I& aPadPos, const VECTOR2I& aSize, const EDA_ANGLE& aOrient,
+                                  SHAPE_POLY_SET* aPolygons, void* aData )
 {
     for( int cnt = 0; cnt < aPolygons->OutlineCount(); ++cnt )
     {
@@ -1961,8 +1886,8 @@ void DXF_PLOTTER::FlashPadCustom( const VECTOR2I& aPadPos, const VECTOR2I& aSize
 }
 
 
-void DXF_PLOTTER::FlashPadTrapez( const VECTOR2I& aPadPos, const VECTOR2I* aCorners,
-                                  const EDA_ANGLE& aPadOrient, void* aData )
+void DXF_PLOTTER::FlashPadTrapez( const VECTOR2I& aPadPos, const VECTOR2I* aCorners, const EDA_ANGLE& aPadOrient,
+                                  void* aData )
 {
     wxASSERT( m_outputFile );
     VECTOR2I coord[4]; /* coord actual corners of a trapezoidal trace */
@@ -2224,7 +2149,7 @@ void DXF_PLOTTER::plotOneLineOfText( const VECTOR2I& aPos, const COLOR4D& aColor
                 " 11\n{}\n 21\n{}\n 31\n0\n"
                 "100\nAcDbText\n"
                 " 73\n{}\n",
-                aAttributes.m_Angle.AsDegrees(),
+                aAttributes.m_Angle.GetAngle().AsDegrees(),
                 formatCoord( fabs( size_dev.x / size_dev.y ) ),
                 aAttributes.m_Italic ? DXF_OBLIQUE_ANGLE : 0,
                 textStyle,

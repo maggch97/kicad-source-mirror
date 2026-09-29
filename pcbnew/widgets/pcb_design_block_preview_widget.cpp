@@ -57,11 +57,6 @@ PCB_DESIGN_BLOCK_PREVIEW_WIDGET::PCB_DESIGN_BLOCK_PREVIEW_WIDGET( wxWindow* aPar
     m_preview->SetStealsFocus( false );
     m_preview->ShowScrollbars( wxSHOW_SB_NEVER, wxSHOW_SB_NEVER );
     m_preview->GetGAL()->SetAxesEnabled( false );
-
-    // Do not display the grid: the look is not good for a small canvas area.
-    // But mainly, due to some strange bug I (JPC) was unable to fix, the grid creates
-    // strange artifacts on Windows when Pcb is run from KiCad manager (but not in
-    // stand alone...).
     m_preview->GetGAL()->SetGridVisibility( true );
 
     // Early initialization of the canvas background color,
@@ -186,7 +181,11 @@ void PCB_DESIGN_BLOCK_PREVIEW_WIDGET::DisplayDesignBlock( DESIGN_BLOCK* aDesignB
 
             pi->SetProgressReporter( &progressReporter );
 
-            m_previewItem = pi->LoadBoard( aDesignBlock->GetBoardFile(), nullptr );
+            m_previewItem = pi->LoadBoard( aDesignBlock->GetBoardFile(), nullptr ).release();
+        }
+        catch( const IO_CANCELLED& )
+        {
+            // A user-cancelled load is not an error; the preview simply stays empty.
         }
         catch( const IO_ERROR& ioe )
         {
@@ -195,12 +194,8 @@ void PCB_DESIGN_BLOCK_PREVIEW_WIDGET::DisplayDesignBlock( DESIGN_BLOCK* aDesignB
             // cost us much.
             try
             {
-                if( ioe.Problem() != wxT( "CANCEL" ) )
-                {
-                    wxString msg =
-                            wxString::Format( _( "Error loading board file:\n%s" ), aDesignBlock->GetBoardFile() );
-                    DisplayErrorMessage( this, msg, ioe.What() );
-                }
+                wxString msg = wxString::Format( _( "Error loading board file:\n%s" ), aDesignBlock->GetBoardFile() );
+                DisplayErrorMessage( this, msg, ioe.What() );
             }
             catch( ... )
             {
@@ -219,6 +214,11 @@ void PCB_DESIGN_BLOCK_PREVIEW_WIDGET::DisplayDesignBlock( DESIGN_BLOCK* aDesignB
 
             for( BOARD_ITEM* item : m_previewItem->GetItemSet() )
             {
+                // Geometry-free items (constraints) are never rendered; adding them stamps
+                // their view data on an empty layer set with no benefit.
+                if( item->Type() == PCB_CONSTRAINT_T )
+                    continue;
+
                 view->Add( item );
 
                 if( item->Type() == PCB_FIELD_T )

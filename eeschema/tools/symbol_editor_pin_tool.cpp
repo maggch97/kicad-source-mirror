@@ -18,6 +18,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <tool/tool_manager.h>
+#include <tools/sch_selection_tool.h>
 #include "symbol_editor_pin_tool.h"
 
 #include <sch_commit.h>
@@ -92,7 +94,7 @@ bool SYMBOL_EDITOR_PIN_TOOL::Init()
             {
                 SYMBOL_EDIT_FRAME* editor = static_cast<SYMBOL_EDIT_FRAME*>( m_frame );
 
-                return editor && editor->IsSymbolEditable() && !editor->IsSymbolAlias();
+                return editor && editor->IsSymbolGraphicallyEditable();
             };
 
     static const std::vector<KICAD_T> pinTypes = { SCH_PIN_T };
@@ -110,6 +112,89 @@ bool SYMBOL_EDITOR_PIN_TOOL::Init()
 }
 
 
+int SYMBOL_EDITOR_PIN_TOOL::SynchronizeOtherUnits( LIB_SYMBOL* aSymbol, SCH_PIN* aPin,
+                                                   const SCH_PIN& aOriginalPin )
+{
+    // A pin can have a unit id = 0 (common to all units) to unit count, so we need a buffer
+    // size = GetUnitCount()+1 to store a value in a vector when using the unit id as index.
+    std::vector<bool> got_unit( aSymbol->GetUnitCount() + 1 );
+
+    auto markUnit =
+            [&got_unit]( int aUnit )
+            {
+                if( aUnit >= 0 && static_cast<size_t>( aUnit ) < got_unit.size() )
+                    got_unit[static_cast<size_t>( aUnit )] = true;
+            };
+
+    auto unitDone =
+            [&got_unit]( int aUnit )
+            {
+                return aUnit >= 0 && static_cast<size_t>( aUnit ) < got_unit.size()
+                       && got_unit[static_cast<size_t>( aUnit )];
+            };
+
+    markUnit( aPin->GetUnit() );
+
+    int removed = 0;
+
+    for( SCH_PIN* other : aSymbol->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES ) )
+    {
+        if( other == aPin )
+            continue;
+
+        /// Only change one pin per unit to allow stacking pins
+        /// If you change all units on the position, then pins are not
+        /// uniquely editable
+        if( unitDone( other->GetUnit() ) )
+            continue;
+
+        if( other->GetPosition() != aOriginalPin.GetPosition()
+            || other->GetOrientation() != aOriginalPin.GetOrientation()
+            || other->GetType() != aOriginalPin.GetType()
+            || other->IsVisible() != aOriginalPin.IsVisible()
+            || other->GetName() != aOriginalPin.GetName() )
+        {
+            continue;
+        }
+
+        if( other->GetBodyStyle() == aPin->GetBodyStyle() )
+        {
+            other->ChangeLength( aPin->GetLength() );
+
+            // Must be done after ChangeLength(), which can alter the position
+            other->SetPosition( aPin->GetPosition() );
+
+            other->SetShape( aPin->GetShape() );
+        }
+
+        other->SetOrientation( aPin->GetOrientation() );
+        other->SetType( aPin->GetType() );
+        other->SetVisible( aPin->IsVisible() );
+        other->SetName( aPin->GetName() );
+        other->SetNameTextSize( aPin->GetNameTextSize() );
+        other->SetNumberTextSize( aPin->GetNumberTextSize() );
+
+        markUnit( other->GetUnit() );
+
+        // Unit or body style 0 means aPin applies to all of them, making the matching pin
+        // redundant.  Delete last, because RemoveDrawItem() frees the pin.
+        bool coversBodyStyles = aPin->GetBodyStyle() == 0
+                                && ( aPin->GetUnit() == 0 || other->GetUnit() == aPin->GetUnit() );
+        bool coversUnits = aPin->GetUnit() == 0
+                           && ( aPin->GetBodyStyle() == 0
+                                || other->GetBodyStyle() == aPin->GetBodyStyle() );
+
+        if( coversBodyStyles || coversUnits )
+        {
+            aSymbol->RemoveDrawItem( other );
+            removed++;
+        }
+    }
+
+    return removed;
+}
+
+
 bool SYMBOL_EDITOR_PIN_TOOL::EditPinProperties( SCH_PIN* aPin, bool aFocusPinNumber )
 {
     SCH_PIN               original_pin( *aPin );
@@ -123,67 +208,21 @@ bool SYMBOL_EDITOR_PIN_TOOL::EditPinProperties( SCH_PIN* aPin, bool aFocusPinNum
     if( dlg.ShowModal() == wxID_CANCEL )
         return false;
 
+    int removedPins = 0;
+
     if( !aPin->IsNew() && m_frame->SynchronizePins() && parentSymbol )
-    {
-        // a pin can have a unit id = 0 (common to all units) to unit count
-        // So we need a buffer size = GetUnitCount()+1 to store a value in a vector
-        // when using the unit id of a pin as index
-        std::vector<bool> got_unit( parentSymbol->GetUnitCount() + 1 );
-
-        got_unit[static_cast<size_t>(aPin->GetUnit())] = true;
-
-        for( SCH_PIN* other : parentSymbol->GetPins() )
-        {
-            if( other == aPin )
-                continue;
-
-            /// Only change one pin per unit to allow stacking pins
-            /// If you change all units on the position, then pins are not
-            /// uniquely editable
-            if( got_unit[static_cast<size_t>( other->GetUnit() )] )
-                continue;
-
-            if( other->GetPosition() == original_pin.GetPosition()
-                && other->GetOrientation() == original_pin.GetOrientation()
-                && other->GetType() == original_pin.GetType()
-                && other->IsVisible() == original_pin.IsVisible()
-                && other->GetName() == original_pin.GetName() )
-            {
-                if( aPin->GetBodyStyle() == 0 )
-                {
-                    if( !aPin->GetUnit() || other->GetUnit() == aPin->GetUnit() )
-                        parentSymbol->RemoveDrawItem( other );
-                }
-
-                if( other->GetBodyStyle() == aPin->GetBodyStyle() )
-                {
-                    other->ChangeLength( aPin->GetLength() );
-
-                    // Must be done after ChangeLenght(), which can alter the position
-                    other->SetPosition( aPin->GetPosition() );
-
-                    other->SetShape( aPin->GetShape() );
-                }
-
-                if( aPin->GetUnit() == 0 )
-                {
-                    if( !aPin->GetBodyStyle() || other->GetBodyStyle() == aPin->GetBodyStyle() )
-                        parentSymbol->RemoveDrawItem( other );
-                }
-
-                other->SetOrientation( aPin->GetOrientation() );
-                other->SetType( aPin->GetType() );
-                other->SetVisible( aPin->IsVisible() );
-                other->SetName( aPin->GetName() );
-                other->SetNameTextSize( aPin->GetNameTextSize() );
-                other->SetNumberTextSize( aPin->GetNumberTextSize() );
-
-                got_unit[static_cast<size_t>( other->GetUnit() )] = true;
-            }
-        }
-    }
+        removedPins = SynchronizeOtherUnits( parentSymbol, aPin, original_pin );
 
     commit.Push( _( "Edit Pin Properties" ) );
+
+    // RemoveDrawItem() leaves the freed pins in the view, where hit testing would hand them to
+    // the next edit.  RebuildView() empties the selection container without clearing SELECTED,
+    // so drop the selection through the tool.
+    if( removedPins > 0 )
+    {
+        m_toolMgr->RunAction( ACTIONS::selectionClear );
+        m_frame->RebuildView();
+    }
 
     std::vector<MSG_PANEL_ITEM> items;
     aPin->GetMsgPanelInfo( m_frame, items );
@@ -209,7 +248,7 @@ bool SYMBOL_EDITOR_PIN_TOOL::PlacePin( SCH_COMMIT* aCommit, SCH_PIN* aPin )
     LIB_SYMBOL* symbol = m_frame->GetCurSymbol();
     bool        ask_for_pin = true;   // Test for another pin in same position in other units
 
-    std::vector<SCH_PIN*> pins = symbol->GetPins();
+    std::vector<SCH_PIN*> pins = symbol->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES );
 
     for( SCH_PIN* test : pins )
     {
@@ -377,7 +416,7 @@ int SYMBOL_EDITOR_PIN_TOOL::PushPinProperties( const TOOL_EVENT& aEvent )
 
     saveCopyInUndoList( symbol, UNDO_REDO::LIBEDIT );
 
-    for( SCH_PIN* pin : symbol->GetPins() )
+    for( SCH_PIN* pin : symbol->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES ) )
     {
         if( pin == sourcePin )
             continue;

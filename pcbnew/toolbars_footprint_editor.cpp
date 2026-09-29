@@ -35,6 +35,11 @@
 #include <wx/choice.h>
 #include <wx/wupdlock.h>
 #include <advanced_config.h>
+#include <api/api_plugin_manager.h>
+#include <api/api_utils.h>
+#include <pgm_base.h>
+#include <settings/common_settings.h>
+#include <wx/log.h>
 
 #include <toolbars_footprint_editor.h>
 
@@ -75,7 +80,8 @@ std::optional<TOOLBAR_CONFIGURATION> FOOTPRINT_EDIT_TOOLBAR_SETTINGS::DefaultToo
               .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Line modes" ) )
                             .AddAction( PCB_ACTIONS::lineModeFree )
                             .AddAction( PCB_ACTIONS::lineMode90 )
-                            .AddAction( PCB_ACTIONS::lineMode45 ) );
+                            .AddAction( PCB_ACTIONS::lineMode45 ) )
+              .AppendAction( PCB_ACTIONS::toggleAutoConstraints );
 
         config.AppendSeparator()
               .AppendAction( PCB_ACTIONS::padDisplayMode )
@@ -104,7 +110,11 @@ std::optional<TOOLBAR_CONFIGURATION> FOOTPRINT_EDIT_TOOLBAR_SETTINGS::DefaultToo
         config.AppendSeparator()
               .AppendAction( PCB_ACTIONS::drawLine )
               .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Arc" ) )
-                            .AddAction( PCB_ACTIONS::drawArc )
+                            .AddAction( PCB_ACTIONS::drawArcCenter )
+                            .AddAction( PCB_ACTIONS::drawArcStartEndMid )
+                            .AddAction( PCB_ACTIONS::drawArcStartEndCenter )
+                            .AddAction( PCB_ACTIONS::drawArcTangent )
+                            .AddAction( PCB_ACTIONS::drawArcStartDirEnd )
                             .AddAction( PCB_ACTIONS::drawEllipseArc )
                             .AddContextMenu(
                                     []( TOOL_MANAGER* aToolMgr )
@@ -120,6 +130,25 @@ std::optional<TOOLBAR_CONFIGURATION> FOOTPRINT_EDIT_TOOLBAR_SETTINGS::DefaultToo
               .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Circle" ) )
                             .AddAction( PCB_ACTIONS::drawCircle )
                             .AddAction( PCB_ACTIONS::drawEllipse ) )
+              .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Constraints" ) )
+                            .AddAction( PCB_ACTIONS::addConstraintCoincident )
+                            .AddAction( PCB_ACTIONS::addConstraintPointOnLine )
+                            .AddAction( PCB_ACTIONS::addConstraintMidpoint )
+                            .AddAction( PCB_ACTIONS::addConstraintSymmetric )
+                            .AddAction( PCB_ACTIONS::addConstraintFixedPosition )
+                            .AddAction( PCB_ACTIONS::addConstraintParallel )
+                            .AddAction( PCB_ACTIONS::addConstraintPerpendicular )
+                            .AddAction( PCB_ACTIONS::addConstraintCollinear )
+                            .AddAction( PCB_ACTIONS::addConstraintHorizontal )
+                            .AddAction( PCB_ACTIONS::addConstraintVertical )
+                            .AddAction( PCB_ACTIONS::addConstraintTangent )
+                            .AddAction( PCB_ACTIONS::addConstraintEqualLength )
+                            .AddAction( PCB_ACTIONS::addConstraintEqualRadius )
+                            .AddAction( PCB_ACTIONS::addConstraintConcentric )
+                            .AddAction( PCB_ACTIONS::addConstraintFixedLength )
+                            .AddAction( PCB_ACTIONS::addConstraintFixedRadius )
+                            .AddAction( PCB_ACTIONS::addConstraintArcAngle )
+                            .AddAction( PCB_ACTIONS::addConstraintAngular ) )
               .AppendAction( PCB_ACTIONS::drawPolygon )
               .AppendAction( PCB_ACTIONS::drawBezier )
               .AppendAction( PCB_ACTIONS::placeReferenceImage )
@@ -189,6 +218,9 @@ std::optional<TOOLBAR_CONFIGURATION> FOOTPRINT_EDIT_TOOLBAR_SETTINGS::DefaultToo
 
         config.AppendSeparator()
               .AppendControl( ACTION_TOOLBAR_CONTROLS::layerSelector );
+
+        config.AppendSeparator()
+              .AppendControl( ACTION_TOOLBAR_CONTROLS::ipcScripting );
         break;
     }
 
@@ -207,4 +239,36 @@ void FOOTPRINT_EDIT_FRAME::ReCreateLayerBox( bool aForceResizeToolbar )
 
     if( aForceResizeToolbar )
         UpdateToolbarControlSizes();
+}
+
+void FOOTPRINT_EDIT_FRAME::configureToolbars()
+{
+    PCB_BASE_EDIT_FRAME::configureToolbars();
+
+    // IPC/Scripting plugin control
+    // TODO (ISM): Clean this up to make IPC actions just normal tool actions to get rid of this
+    // entire control
+    auto pluginControlFactory =
+            [this]( ACTION_TOOLBAR* aToolbar )
+            {
+                bool haveApiPlugins = Pgm().GetCommonSettings()->m_Api.enable_server
+                                        && !Pgm().GetPluginManager().GetActionsForScope( PluginActionScope() ).empty();
+
+                if( haveApiPlugins )
+                {
+                    aToolbar->AddScaledSeparator( aToolbar->GetParent() );
+                    AddApiPluginTools( aToolbar );
+                }
+            };
+
+    RegisterCustomToolbarControlFactory( ACTION_TOOLBAR_CONTROLS::ipcScripting, pluginControlFactory );
+}
+
+
+void FOOTPRINT_EDIT_FRAME::onPluginAvailabilityChanged( wxCommandEvent& aEvt )
+{
+    wxLogTrace( traceApi, "Footprint editor frame: EDA_EVT_PLUGIN_AVAILABILITY_CHANGED" );
+    RecreateToolbars();
+    ReCreateMenuBar();
+    aEvt.Skip();
 }

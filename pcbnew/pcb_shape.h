@@ -60,7 +60,7 @@ public:
 
     bool IsConnected() const override;
 
-    wxString GetFriendlyName() const override { return getFriendlyName(); }
+    wxString GetFriendlyName() const override { return getFriendlyName( FRAME_PCB_EDITOR ); }
 
     bool IsType( const std::vector<KICAD_T>& aScanTypes ) const override;
 
@@ -110,6 +110,12 @@ public:
         syncLibCoords();
     }
 
+    void SetArcAngle( const EDA_ANGLE& aAngle ) override
+    {
+        EDA_SHAPE::SetArcAngle( aAngle );
+        syncLibCoords();
+    }
+
     /**
      * @return a list of connection points (may be empty): points where this shape can form
      * electrical connections to other shapes that are natural "start/end" points.
@@ -141,14 +147,15 @@ public:
      * Make a set of SHAPE objects representing the PCB_SHAPE.  Caller owns the objects.
      */
     std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
-                                              FLASHING aFlash = FLASHING::DEFAULT ) const override;
+                                              FLASHING aFlash = FLASHING::DEFAULT,
+                                              DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const override;
 
     bool IsProxyItem() const override { return m_proxyItem; }
     void SetIsProxyItem( bool aIsProxy = true ) override;
 
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
-    const BOX2I GetBoundingBox() const override { return getBoundingBox(); }
+    const BOX2I GetBoundingBox() const override;
 
     bool HitTest( const VECTOR2I& aPosition, int aAccuracy = 0 ) const override
     {
@@ -203,7 +210,7 @@ public:
         m_libShape = aShape;
     }
 
-    void SetArcGeometry( const VECTOR2I& aStart, const VECTOR2I& aMid, const VECTOR2I& aEnd );
+    void SetArcGeometry( const VECTOR2I& aStart, const VECTOR2I& aMid, const VECTOR2I& aEnd ) override;
 
     void SetBezierC1( const VECTOR2I& aPt ) override;
     void SetBezierC2( const VECTOR2I& aPt ) override;
@@ -278,10 +285,13 @@ public:
 
     void UpdateHatching() const override;
 
+    double GetCoverageArea( int aTextMargin ) const override;
+
     /**
      * Convert the shape to a closed polygon.  Circles and arcs are approximated by segments.
      *
      * @param aBuffer is a buffer to store the polygon.
+     * @param aLayer is the layer the polygon exists on.
      * @param aClearance is the clearance around the pad.
      * @param aError is the maximum deviation from a true arc.
      * @param aErrorLoc whether any approximation error should be placed inside or outside
@@ -297,6 +307,7 @@ public:
      * fills and details (if any) will be included.
      *
      * @param aBuffer a buffer to store the polygon.
+     * @param aLayer is the layer the polygon exists on.
      * @param aClearance the clearance around the pad.
      * @param aError the maximum deviation from true circle.
      * @param aErrorLoc should the approximation error be placed outside or inside the polygon?
@@ -317,7 +328,6 @@ public:
 
     std::vector<int> ViewGetLayers() const override;
 
-    ///< @copydoc VIEW_ITEM::ViewGetLOD
     double ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const override;
 
     double Similarity( const BOARD_ITEM& aBoardItem ) const override;

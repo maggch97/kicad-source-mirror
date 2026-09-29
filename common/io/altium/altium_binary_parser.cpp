@@ -54,9 +54,7 @@ ALTIUM_COMPOUND_FILE::ALTIUM_COMPOUND_FILE( const wxString& aFilePath )
     FILE* fp = wxFopen( aFilePath, "rb" );
 
     if( fp == nullptr )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Cannot open file '%s'." ), aFilePath ) );
-    }
+        THROW_IO_ERRORF( _( "Cannot open file '%s'." ), aFilePath );
 
     fseek( fp, 0, SEEK_END );
     long len = ftell( fp );
@@ -201,7 +199,7 @@ ALTIUM_COMPOUND_FILE::GetLibSymbols( const CFB::COMPOUND_FILE_ENTRY* aStart ) co
     m_reader->EnumFiles( root, 1, [&]( const CFB::COMPOUND_FILE_ENTRY* tentry,
                                        const CFB::utf16string&, int ) -> int
     {
-        wxString dirName = UTF16ToWstring( tentry->name, tentry->nameLen );
+        wxString dirName = UTF16ToWstring( tentry->name, tentry->nameLen / 2 - 1 );
 
         if( m_reader->IsStream( tentry ) )
             return 0;
@@ -210,7 +208,7 @@ ALTIUM_COMPOUND_FILE::GetLibSymbols( const CFB::COMPOUND_FILE_ENTRY* aStart ) co
                     [&]( const CFB::COMPOUND_FILE_ENTRY* entry,
                          const CFB::utf16string&, int ) -> int
                     {
-                        std::wstring fileName = UTF16ToWstring( entry->name, entry->nameLen );
+                        std::wstring fileName = UTF16ToWstring( entry->name, entry->nameLen / 2 - 1 );
 
                         if( m_reader->IsStream( entry ) && fileName == L"Data" )
                             folders[dirName].m_symbol = entry;
@@ -252,7 +250,7 @@ ALTIUM_COMPOUND_FILE::EnumDir( const std::wstring& aDir ) const
                 if( m_reader->IsStream( tentry ) )
                     return 0;
 
-                std::wstring dirName = UTF16ToWstring( tentry->name, tentry->nameLen );
+                std::wstring dirName = UTF16ToWstring( tentry->name, tentry->nameLen / 2 - 1 );
 
                 if( dirName != aDir )
                     return 0;
@@ -265,7 +263,7 @@ ALTIUM_COMPOUND_FILE::EnumDir( const std::wstring& aDir ) const
                             if( m_reader->IsStream( entry ) )
                             {
                                 std::wstring fileName =
-                                        UTF16ToWstring( entry->name, entry->nameLen );
+                                        UTF16ToWstring( entry->name, entry->nameLen / 2 - 1 );
 
                                 files[fileName] = entry;
                             }
@@ -452,7 +450,7 @@ std::map<wxString, wxString> ALTIUM_BINARY_PARSER::ReadProperties(
 
     if( recordIt == kv.end() || recordIt->second != wxT( "4" ) )
     {
-        for( const wxString& key : { wxT( "DESIGNATOR" ), wxT( "NAME" ), wxT( "TEXT" ) } )
+        for( const wxString key : { wxT( "DESIGNATOR" ), wxT( "NAME" ), wxT( "TEXT" ) } )
         {
             auto valueIt = kv.find( key );
 

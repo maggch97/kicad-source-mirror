@@ -85,6 +85,7 @@
 #include <core/base64.h>
 #include <eda_shape.h>
 #include <string_utils.h>
+#include <text_eval/text_eval_wrapper.h>
 #include <font/font.h>
 #include <macros.h>
 #include <trigo.h>
@@ -203,6 +204,28 @@ void SVG_PLOTTER::SetSvgCoordinatesFormat( unsigned aPrecision )
 }
 
 
+void SVG_PLOTTER::SetPlotBBox( const BOX2I& aBBoxIU )
+{
+    m_plotBBoxIU = aBBoxIU;
+}
+
+
+VECTOR2D SVG_PLOTTER::userToDeviceCoordinates( const VECTOR2I& aCoordinate )
+{
+    VECTOR2D pos = PLOTTER::userToDeviceCoordinates( aCoordinate );
+
+    if( m_plotMirror )
+    {
+        if( m_mirrorIsHorizontal )
+            pos.x -= m_paperSize.x * m_iuPerDeviceUnit;
+        else
+            pos.y -= m_paperSize.y * m_iuPerDeviceUnit;
+    }
+
+    return pos;
+}
+
+
 void SVG_PLOTTER::setFillMode( FILL_T fill )
 {
     if( m_fillMode != fill )
@@ -253,8 +276,9 @@ void SVG_PLOTTER::setSVGPlotStyle( int aLineWidth, bool aIsGroup, const std::str
         // So we use only 4 digits in mantissa for stroke-width.
         // TODO: perhaps used only 3 or 4 digits in mantissa for all values in mm, because some
         // issues were previously reported reported when using nm as integer units
-        fmt::print( m_outputFile, "\nstroke:#{:06X}; stroke-width:{:.{}f}; stroke-opacity:1; \n",
-                    m_pen_rgb_color, pen_w, m_precision );
+        fmt::print( m_outputFile,
+                    "\nstroke:#{:06X}; stroke-width:{:.{}f}; stroke-opacity:{:.{}f}; \n",
+                    m_pen_rgb_color, pen_w, m_precision, m_brush_alpha, m_precision );
         fmt::print( m_outputFile, "stroke-linecap:round; stroke-linejoin:round;" );
 
         //set any extra attributes for non-solid lines
@@ -288,7 +312,9 @@ void SVG_PLOTTER::setSVGPlotStyle( int aLineWidth, bool aIsGroup, const std::str
         case LINE_STYLE::DEFAULT:
         case LINE_STYLE::SOLID:
         default:
-            //do nothing
+            // Explicitly reset the dash pattern: stroke-dasharray is inherited in SVG, so
+            // inline path styles inside a dashed group would otherwise pick it up.
+            fmt::print( m_outputFile, "stroke-dasharray:none;" );
             break;
         }
     }
@@ -336,28 +362,6 @@ void SVG_PLOTTER::StartBlock( void* aData )
 
 void SVG_PLOTTER::EndBlock( void* aData )
 {
-}
-
-
-void SVG_PLOTTER::StartLayer( const wxString& aLayerName )
-{
-    // Close any pending graphics context group
-    if( m_graphics_changed )
-        setSVGPlotStyle( GetCurrentLineWidth() );
-
-    // Start a new named layer group with inkscape-compatible layer attributes
-    fmt::print( m_outputFile, "<g id=\"{}\" inkscape:label=\"{}\" inkscape:groupmode=\"layer\">\n",
-                TO_UTF8( aLayerName ), TO_UTF8( aLayerName ) );
-}
-
-
-void SVG_PLOTTER::EndLayer()
-{
-    // Close any pending graphics context group first
-    fmt::print( m_outputFile, "</g>\n" );
-    // Then close the layer group
-    fmt::print( m_outputFile, "</g>\n" );
-    m_graphics_changed = true; // Force new graphics context on next draw
 }
 
 
@@ -788,15 +792,39 @@ bool SVG_PLOTTER::StartPlot( const wxString& aPageNumber )
     // Write header.
     fmt::print( m_outputFile, "{}", header );
 
-    // Write viewport pos and size
-    VECTOR2D origin;    // TODO set to actual value
+    // Write viewport pos and size.  The SVG width/height and viewBox are in mm (device
+    // units). When a plot bounding box was supplied, the viewBox is that box
+    // transformed by the viewport, so the content keeps its origin at the SVG
+    // origin even when it extends to negative coordinates. Otherwise the page
+    // size is used and the origin is the viewbox (which is also the page) corner.
+    VECTOR2D viewBoxOrigin( 0, 0 );
+    VECTOR2D viewboxSize( m_paperSize.x * m_iuPerDeviceUnit, m_paperSize.y * m_iuPerDeviceUnit );
+
+    if( m_plotBBoxIU )
+    {
+        double deviceScale = m_plotScale * m_iuPerDeviceUnit;
+
+        viewBoxOrigin.x = ( m_plotBBoxIU->GetLeft() - m_plotOffset.x ) * deviceScale;
+        viewBoxOrigin.y = ( m_plotBBoxIU->GetTop() - m_plotOffset.y ) * deviceScale;
+        viewboxSize.x   = static_cast<double>( m_plotBBoxIU->GetWidth() ) * deviceScale;
+        viewboxSize.y   = static_cast<double>( m_plotBBoxIU->GetHeight() ) * deviceScale;
+    }
+
+    // When mirroring, the viewbox also needs to be mirrored, so that the same content is
+    // still visible in it.
+    if( m_plotMirror )
+    {
+        if( m_mirrorIsHorizontal )
+            viewBoxOrigin.x = -viewBoxOrigin.x - viewboxSize.x;
+        else
+            viewBoxOrigin.y = -viewBoxOrigin.y - viewboxSize.y;
+    }
+
     fmt::print( m_outputFile,
                 "  width=\"{:.{}f}mm\" height=\"{:.{}f}mm\" viewBox=\"{:.{}f} {:.{}f} {:.{}f} {:.{}f}\">\n",
-                (double) m_paperSize.x / m_IUsPerDecimil * 2.54 / 1000, m_precision,
-                (double) m_paperSize.y / m_IUsPerDecimil * 2.54 / 1000, m_precision,
-                origin.x, m_precision, origin.y, m_precision,
-                m_paperSize.x * m_iuPerDeviceUnit, m_precision,
-                m_paperSize.y * m_iuPerDeviceUnit, m_precision );
+                viewboxSize.x, m_precision, viewboxSize.y, m_precision,
+                viewBoxOrigin.x, m_precision, viewBoxOrigin.y, m_precision,
+                viewboxSize.x, m_precision, viewboxSize.y, m_precision );
 
     // Write title
     wxString date = GetISO8601CurrentDateTime();
@@ -857,6 +885,14 @@ void SVG_PLOTTER::Text( const VECTOR2I&        aPos,
     SetColor( aColor );
     SetCurrentLineWidth( aWidth );
 
+    wxString text( aText );
+
+    if( text.Contains( wxS( "@{" ) ) )
+    {
+        EXPRESSION_EVALUATOR evaluator;
+        text = evaluator.Evaluate( text );
+    }
+
     if( m_graphics_changed )
         setSVGPlotStyle( GetCurrentLineWidth() );
 
@@ -887,7 +923,7 @@ void SVG_PLOTTER::Text( const VECTOR2I&        aPos,
 
     // aSize.x or aSize.y is < 0 for mirrored texts.
     // The actual text size value is the absolute value
-    text_size.x = std::abs( GRTextWidth( aText, aFont, aSize, GetCurrentLineWidth(), aBold, aItalic,
+    text_size.x = std::abs( GRTextWidth( text, aFont, aSize, GetCurrentLineWidth(), aBold, aItalic,
                                          aFontMetrics ) );
     text_size.y = std::abs( aSize.x * 4/3 ); // Hershey font height to em size conversion
     VECTOR2D anchor_pos_dev = userToDeviceCoordinates( aPos );
@@ -929,7 +965,7 @@ void SVG_PLOTTER::Text( const VECTOR2I&        aPos,
                     sz_dev.y,
                     m_precision,
                     hjust,
-                    TO_UTF8( XmlEsc( aText ) ) );
+                    TO_UTF8( XmlEsc( text ) ) );
 
         if( !aOrient.IsZero() )
             fmt::print( m_outputFile, "</g>\n" );
@@ -940,9 +976,9 @@ void SVG_PLOTTER::Text( const VECTOR2I&        aPos,
     {
         fmt::print( m_outputFile,
                     "<g class=\"stroked-text\"><desc>{}</desc>\n",
-                    TO_UTF8( XmlEsc( aText ) ) );
+                    TO_UTF8( XmlEsc( text ) ) );
 
-        PLOTTER::Text( aPos, aColor, aText, aOrient, aSize, aH_justify, aV_justify, GetCurrentLineWidth(),
+        PLOTTER::Text( aPos, aColor, text, aOrient, aSize, aH_justify, aV_justify, GetCurrentLineWidth(),
                        aItalic, aBold, aMultilineAllowed, aFont, aFontMetrics );
 
         fmt::print( m_outputFile, "</g>" );
@@ -963,7 +999,7 @@ void SVG_PLOTTER::PlotText( const VECTOR2I&        aPos,
     if( aAttributes.m_Mirrored )
         size.x = -size.x;
 
-    SVG_PLOTTER::Text( aPos, aColor, aText, aAttributes.m_Angle, size, aAttributes.m_Halign,
+    SVG_PLOTTER::Text( aPos, aColor, aText, aAttributes.m_Angle.GetAngle(), size, aAttributes.m_Halign,
                        aAttributes.m_Valign, aAttributes.m_StrokeWidth, aAttributes.m_Italic,
                        aAttributes.m_Bold, aAttributes.m_Multiline, aFont, aFontMetrics, aData );
 }

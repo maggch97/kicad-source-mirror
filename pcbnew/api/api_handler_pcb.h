@@ -24,7 +24,10 @@
 #include <api/api_handler_board.h>
 #include <api/pcb_context.h>
 #include <api/board/board_jobs.pb.h>
+#include <api/common/commands/cross_probe_commands.pb.h>
 #include <api/common/commands/project_commands.pb.h>
+#include <api/common/commands/variant_commands.pb.h>
+#include <api/common/commands/library_commands.pb.h>
 #include <properties/property_mgr.h>
 
 using namespace kiapi::board::jobs;
@@ -73,6 +76,15 @@ private:
     HANDLER_RESULT<CustomRulesResponse> handleSetCustomDesignRules(
             const HANDLER_CONTEXT<SetCustomDesignRules>& aCtx );
 
+    HANDLER_RESULT<common::types::EmbeddedFiles> handleGetEmbeddedFiles(
+            const HANDLER_CONTEXT<GetEmbeddedFiles>& aCtx );
+
+    HANDLER_RESULT<google::protobuf::Empty> handleAddEmbeddedFiles(
+            const HANDLER_CONTEXT<AddEmbeddedFiles>& aCtx );
+
+    HANDLER_RESULT<google::protobuf::Empty> handleSetEmbeddedFiles(
+            const HANDLER_CONTEXT<SetEmbeddedFiles>& aCtx );
+
     HANDLER_RESULT<types::Vector2> handleGetBoardOrigin(
             const HANDLER_CONTEXT<GetBoardOrigin>& aCtx );
 
@@ -80,6 +92,9 @@ private:
 
     HANDLER_RESULT<BoardLayerNameResponse> handleGetBoardLayerName(
             const HANDLER_CONTEXT<GetBoardLayerName>& aCtx );
+
+    HANDLER_RESULT<BoardLayerResponse> handleGetBoardLayerByName(
+            const HANDLER_CONTEXT<GetBoardLayerByName>& aCtx );
 
     HANDLER_RESULT<NetsResponse> handleGetNets( const HANDLER_CONTEXT<GetNets>& aCtx );
 
@@ -106,11 +121,29 @@ private:
     HANDLER_RESULT<Empty> handleSetBoardEditorAppearanceSettings(
             const HANDLER_CONTEXT<SetBoardEditorAppearanceSettings>& aCtx );
 
+    HANDLER_RESULT<BoardPlotSettingsResponse>
+    handleGetBoardPlotSettings( const HANDLER_CONTEXT<GetBoardPlotSettings>& aCtx );
+
+    HANDLER_RESULT<Empty> handleSetBoardPlotSettings( const HANDLER_CONTEXT<SetBoardPlotSettings>& aCtx );
+
     HANDLER_RESULT<InjectDrcErrorResponse> handleInjectDrcError(
             const HANDLER_CONTEXT<InjectDrcError>& aCtx );
 
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExport3D(
             const HANDLER_CONTEXT<RunBoardJobExport3D>& aCtx );
+
+    HANDLER_RESULT<commands::VariantsResponse> handleGetVariants( const HANDLER_CONTEXT<commands::GetVariants>& aCtx );
+    HANDLER_RESULT<Empty> handleAddVariant( const HANDLER_CONTEXT<commands::AddVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleDeleteVariant( const HANDLER_CONTEXT<commands::DeleteVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleRenameVariant( const HANDLER_CONTEXT<commands::RenameVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleCopyVariant( const HANDLER_CONTEXT<commands::CopyVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleSetVariantDescription( const HANDLER_CONTEXT<commands::SetVariantDescription>& aCtx );
+    HANDLER_RESULT<Empty> handleSetCurrentVariant( const HANDLER_CONTEXT<commands::SetCurrentVariant>& aCtx );
+    HANDLER_RESULT<commands::CurrentVariantResponse>
+    handleGetCurrentVariant( const HANDLER_CONTEXT<commands::GetCurrentVariant>& aCtx );
+
+    HANDLER_RESULT<kiapi::common::commands::PlaceFromLibraryResponse> handlePlaceFootprintFromLibrary(
+            const HANDLER_CONTEXT<kiapi::board::commands::PlaceFootprintFromLibrary>& aCtx );
 
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportRender(
             const HANDLER_CONTEXT<RunBoardJobExportRender>& aCtx );
@@ -126,6 +159,9 @@ private:
 
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportPs(
             const HANDLER_CONTEXT<RunBoardJobExportPs>& aCtx );
+
+    HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportPng(
+            const HANDLER_CONTEXT<RunBoardJobExportPng>& aCtx );
 
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportGerbers(
             const HANDLER_CONTEXT<RunBoardJobExportGerbers>& aCtx );
@@ -148,8 +184,20 @@ private:
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportODB(
             const HANDLER_CONTEXT<RunBoardJobExportODB>& aCtx );
 
+    HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportIdf(
+            const HANDLER_CONTEXT<RunBoardJobExportIdf>& aCtx );
+
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportStats(
             const HANDLER_CONTEXT<RunBoardJobExportStats>& aCtx );
+
+    HANDLER_RESULT<commands::CrossProbeAnnounceResponse> handleCrossProbeAnnounce(
+            const HANDLER_CONTEXT<commands::CrossProbeAnnounce>& aCtx );
+
+    HANDLER_RESULT<commands::SyncSelectionResponse> handleSyncSelection(
+            const HANDLER_CONTEXT<commands::SyncSelection>& aCtx );
+
+    HANDLER_RESULT<commands::HighlightNetsResponse> handleHighlightNets(
+            const HANDLER_CONTEXT<commands::HighlightNets>& aCtx );
 
 protected:
     kiapi::common::types::DocumentType thisDocumentType() const override
@@ -159,17 +207,22 @@ protected:
 
     tl::expected<bool, ApiResponseStatus> validateDocumentInternal( const DocumentSpecifier& aDocument ) const override;
 
-    std::optional<TITLE_BLOCK*> getTitleBlock() override;
+    std::optional<TITLE_BLOCK*> getTitleBlock( const DocumentSpecifier& aDocument ) override;
 
-    std::optional<PAGE_INFO> getPageSettings() override;
+    std::optional<PAGE_INFO> getPageSettings( const DocumentSpecifier& aDocument ) override;
 
-    bool setPageSettings( const PAGE_INFO& aPageInfo ) override;
+    bool setPageSettings( const DocumentSpecifier& aDocument, const PAGE_INFO& aPageInfo ) override;
 
     wxString getDrawingSheetFileName() override;
 
     void setDrawingSheetFileName( const wxString& aFileName ) override;
 
     void onModified() override;
+
+    void onNetSettingsChanged() override;
+
+    HANDLER_RESULT<commands::GetDocumentModifiedStateResponse>
+    handleGetDocumentModifiedState( const HANDLER_CONTEXT<commands::GetDocumentModifiedState>& aCtx ) override;
 
 private:
     PCB_CONTEXT* pcbContext() const { return static_cast<PCB_CONTEXT*>( context() ); }

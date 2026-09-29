@@ -49,6 +49,9 @@
 #include <trace_helpers.h>
 #include <wildcards_and_files_ext.h>
 #include <confirm.h>
+#if defined( KICAD_NATIVE_MODEL_PREVIEW ) && defined( __WINDOWS__ )
+#include <model_preview_manager.h>
+#endif
 
 #include <git/git_backend.h>
 #include <git/libgit_backend.h>
@@ -278,6 +281,9 @@ bool PGM_KICAD::OnPgmInit()
         m_api_server = std::make_unique<KICAD_API_SERVER>();
         m_api_common_handler = std::make_unique<API_HANDLER_COMMON>();
         m_api_server->RegisterHandler( m_api_common_handler.get() );
+        m_api_libraries_handler = std::make_unique<API_HANDLER_LIBRARIES>(
+                LIBRARY_TABLE_TYPE::DESIGN_BLOCK );
+        m_api_server->RegisterHandler( m_api_libraries_handler.get() );
     }
 
     if( appType == FRAME_MERGETOOL )
@@ -440,17 +446,15 @@ bool PGM_KICAD::OnPgmInit()
         // event loop is up before ShowModal spins its nested loop. The
         // wxWeakRef guards against the frame being destroyed (window-manager
         // close, fatal init) before the callback fires.
-        wxWeakRef<MERGETOOL_FRAME> f( mergetoolFrame );
+        wxWeakRef<MERGETOOL_FRAME> mergeToolFrameRef( mergetoolFrame );
 
         mergetoolFrame->CallAfter(
-                [f]() mutable
+                [mergeToolFrameRef]() mutable
                 {
-                    MERGETOOL_FRAME* frame = f.get();
-
-                    if( !frame || frame->IsBeingDeleted() )
+                    if( !mergeToolFrameRef || mergeToolFrameRef->IsBeingDeleted() )
                         return;
 
-                    int exitCode = frame->RunMerge();
+                    int exitCode = mergeToolFrameRef->RunMerge();
 
                     // Propagate the merge JOB's exit code to the kicad
                     // process exit status so `git mergetool` sees a non-zero
@@ -458,13 +462,17 @@ bool PGM_KICAD::OnPgmInit()
                     if( wxEventLoopBase* loop = wxTheApp->GetMainLoop() )
                         loop->ScheduleExit( exitCode );
 
-                    frame->Close( true );
+                    mergeToolFrameRef->Close( true );
                 } );
     }
     else
     {
         frame->Show( true );
         frame->Raise();
+
+#if defined( KICAD_NATIVE_MODEL_PREVIEW ) && defined( __WINDOWS__ )
+        frame->CallAfter( [frame] { MaybeShowModelPreviewSetupPrompt( frame ); } );
+#endif
     }
 
     if( m_api_server )
@@ -501,9 +509,7 @@ void PGM_KICAD::OnPgmExit()
         m_settings_manager->Save();
     }
 
-    // Destroy everything in PGM_KICAD,
-    // especially wxSingleInstanceCheckerImpl earlier than wxApp and earlier
-    // than static destruction would.
+    // Destroy PGM_KICAD earlier than wxApp and static destruction would
     Destroy();
     GetGitBackend()->Shutdown();
     delete GetGitBackend();
@@ -681,8 +687,7 @@ struct APP_KICAD : public wxApp
             }
         }
 
-        aEvent.Skip();
-        return false;
+        return wxApp::ProcessEvent( aEvent );
     }
 
     /**
@@ -729,4 +734,3 @@ PROJECT& Prj()
 {
     return Kiway.Prj();
 }
-

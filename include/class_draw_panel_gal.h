@@ -32,6 +32,7 @@
 #include <widgets/msgpanel.h>
 #include <memory>
 #include <mutex>
+#include <chrono>
 
 #include <gal/cursors.h>
 
@@ -40,6 +41,14 @@ class EDA_DRAW_FRAME;
 class TOOL_DISPATCHER;
 class PROF_COUNTER;
 class wxImage;
+
+namespace KIPLATFORM
+{
+namespace UI
+{
+class TOUCHPAD_GESTURE_HANDLER;
+}
+}
 
 namespace KIGFX
 {
@@ -79,7 +88,12 @@ public:
      * If \p aParentWindow is not an EDA frame, a search through all the parents
      * of the parent window will be done to find the frame.
      *
-     * @param aParentWindow is the window immediately containing this panel
+     * @param aParentWindow is the window immediately containing this panel.
+     * @param aWindowId is the ID for this draw panel.
+     * @param aPosition is the position of the panel.
+     * @param aSize is the size of the panel.
+     * @param aOptions are the display options for the panel.
+     * @param aGalType is the type of graphics abstraction layer (GAL) for the panel.
      */
     EDA_DRAW_PANEL_GAL( wxWindow* aParentWindow, wxWindowID aWindowId,
                         const wxPoint& aPosition, const wxSize& aSize,
@@ -100,11 +114,28 @@ public:
     }
 
     /**
+     * Convert a stored canvas type setting into a backend that can actually be used.
+     *
+     * A settings file may have been written by hand or by another version of KiCad, so a value
+     * outside the supported range is bad data rather than a programming error.  It resolves to
+     * the accelerated canvas, as does the retired wxDC canvas (#GAL_TYPE_NONE).
+     *
+     * @param aStoredCanvasType is the raw COMMON_SETTINGS graphics.canvas_type value.
+     * @return a GAL type that #SwitchBackend() implements.
+     */
+    static GAL_TYPE ResolveStoredCanvasType( int aStoredCanvasType );
+
+    /**
      * Switch method of rendering graphics.
      *
      * @param aGalType is a type of rendering engine that you want to use.
      */
     virtual bool SwitchBackend( GAL_TYPE aGalType );
+
+    /**
+     * Apply the current native touchpad gesture preference to the active backend window.
+     */
+    void UpdateTouchpadGestureHandler();
 
     /**
      * Return the type of backend currently used by GAL canvas.
@@ -119,16 +150,16 @@ public:
     KIGFX::GAL* GetGAL() const { return m_gal; }
 
     /**
-     * Return a pointer to the #VIEW instance used in the panel.
+     * Return a pointer to the #KIGFX::VIEW instance used in the panel.
      *
-     * @return The instance of #VIEW.
+     * @return The instance of #KIGFX::VIEW.
      */
     virtual KIGFX::VIEW* GetView() const { return m_view; }
 
     /**
-     * Return a pointer to the #VIEW_CONTROLS instance used in the panel.
+     * Return a pointer to the #KIGFX::VIEW_CONTROLS instance used in the panel.
      *
-     * @return The instance of #VIEW_CONTROLS.
+     * @return The instance of #KIGFX::VIEW_CONTROLS.
      */
     KIGFX::VIEW_CONTROLS* GetViewControls() const
     {
@@ -143,7 +174,6 @@ public:
      */
     bool GetScreenshot( wxImage& aDstImage );
 
-    /// @copydoc wxWindow::Refresh()
     virtual void Refresh( bool aEraseBackground = true, const wxRect* aRect = nullptr ) override;
 
     /**
@@ -157,10 +187,30 @@ public:
     void RequestRefresh();
 
     /**
+     * Tell the backend which areas of this panel are covered by an overlaid infobar.
+     *
+     * Must be called whenever an infobar is shown, hidden or moved.
+     */
+    void UpdateOverlayExclusions();
+
+    /**
+     * Resize the GAL to the current client size of this panel.
+     *
+     * This must be used in preference to calling GAL::ResizeScreen() directly: it holds the
+     * GL context lock while the compositor buffers are reallocated, clamps degenerate sizes
+     * and invalidates the view.
+     *
+     * @param aForce reallocates even when the client size is unchanged, which is required
+     *               after a display scale factor change because the buffers are sized in
+     *               native pixels rather than client units.
+     */
+    void ResizeGal( bool aForce = false );
+
+    /**
      * Set a dispatcher that processes events and forwards them to tools.
      *
-     * #DRAW_PANEL_GAL does not take over the ownership. Passing NULL disconnects all event
-     * handlers from the #DRAW_PANEL_GAL and parent frame.
+     * #EDA_DRAW_PANEL_GAL does not take over the ownership. Passing NULL disconnects all event
+     * handlers from the #EDA_DRAW_PANEL_GAL and parent frame.
      *
      * @param aEventDispatcher is the object that will be used for dispatching events.
      */
@@ -267,6 +317,12 @@ public:
 
     std::unique_ptr<PROF_COUNTER> m_PaintEventCounter;
 
+    /**
+     * Hook for subclasses to push per-frame grid sources onto the GAL.
+     * Called from DoRePaint just before GAL::DrawGrid.
+     */
+    virtual void prepareGridSources() {}
+
 protected:
     virtual void onPaint( wxPaintEvent& WXUNUSED( aEvent ) );
     void onSize( wxSizeEvent& aEvent );
@@ -278,12 +334,27 @@ protected:
 
     bool recoverFromGalError( const std::exception& aErr );
 
+    /**
+     * Replace a GAL whose context was destroyed by a GPU reset.
+     *
+     * @return true if the GAL was replaced, so the current repaint must stop.
+     */
+    bool handleContextLoss();
+
+    /**
+     * Show a recovery message once the current event finishes.
+     *
+     * Recovery runs inside a repaint, where a modal dialog would stop every canvas from painting
+     * until it was closed.
+     */
+    void showMessageLater( const wxString& aTitle, const wxString& aDetail, bool aError );
+
     wxWindow*                m_parent;           ///< Pointer to the parent window
     EDA_DRAW_FRAME*          m_edaFrame;         ///< Parent EDA_DRAW_FRAME (if available)
 
-    wxLongLong               m_lastRepaintStart; ///< Timestamp of the last repaint start
-    wxLongLong               m_lastRepaintEnd;   ///< Timestamp of the last repaint end
-    wxTimer                  m_refreshTimer;     ///< Timer to prevent too-frequent refreshing
+    std::chrono::steady_clock::time_point m_lastRepaintStart; ///< Timestamp of the last repaint start
+    std::chrono::steady_clock::time_point m_lastRepaintEnd;   ///< Timestamp of the last repaint end
+    wxTimer                               m_refreshTimer;     ///< Timer to prevent too-frequent refreshing
 
     std::mutex               m_refreshMutex;     ///< Blocks multiple calls to the draw
 
@@ -325,6 +396,15 @@ protected:
     /// Set after an OpenGL recovery attempt to prevent infinite retry loops
     bool                     m_glRecoveryAttempted;
 
+    /// Consecutive frames dropped because the GL context could not be made current
+    int                      m_contextBindFailures;
+
+    /// The GAL was rebuilt after a GPU reset and has not completed a frame yet
+    bool                     m_rebuiltAfterReset;
+
+    /// Set when a size change could not be applied because the GL context was unavailable
+    bool                     m_pendingResize;
+
     /// Flag to indicate whether the panel should take focus at certain times (when moused over,
     /// and on various mouse/key events)
     bool                     m_stealsFocus;
@@ -333,6 +413,8 @@ protected:
 
     /// Optional overlay for drawing transient debug objects
     std::shared_ptr<KIGFX::VIEW_OVERLAY> m_debugOverlay;
+
+    std::unique_ptr<KIPLATFORM::UI::TOUCHPAD_GESTURE_HANDLER> m_touchpadGestureHandler;
 };
 
 #endif

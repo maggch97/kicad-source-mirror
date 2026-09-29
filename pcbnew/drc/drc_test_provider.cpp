@@ -231,8 +231,10 @@ int DRC_TEST_PROVIDER::forEachGeometryItem( const std::vector<KICAD_T>& aTypes, 
 
                 n++;
             }
-            else if( item->Type() == PCB_TABLE_T )
+            else if( BaseType( item->Type() ) == PCB_TABLE_T )
             {
+                // A drill chart is a table for clearance purposes, so a PCB_TABLE_T mask
+                // has to reach one or its artwork escapes DRC entirely
                 if( typeMask[ PCB_TABLE_T ] )
                 {
                     if( !aFunc( item ) )
@@ -396,6 +398,26 @@ wxString DRC_TEST_PROVIDER::formatMsg( const wxString& aFormatString, const wxSt
 
     return wxString::Format( aFormatString, aSource, std::move( constraint_str ), std::move( actual_str ) );
 }
+
+
+wxString DRC_TEST_PROVIDER::formatMsg( const wxString& aFormatString, const wxString& aSource,
+                                       double aConstraint, double aActual, const wxString& aAdditionalParam,
+                                       EDA_DATA_TYPE aType )
+{
+    wxString constraint_str = MessageTextFromValue( aConstraint, true, aType );
+    wxString actual_str = MessageTextFromValue( aActual, true, aType );
+
+    if( constraint_str == actual_str )
+    {
+        // Use more precise formatting if the message-text strings were equal.
+        constraint_str = StringFromValue( aConstraint, true, aType );
+        actual_str = StringFromValue( aActual, true, aType );
+    }
+
+    return wxString::Format( aFormatString, aSource, std::move( constraint_str ), std::move( actual_str ),
+                             aAdditionalParam );
+}
+
 
 wxString DRC_TEST_PROVIDER::formatMsg( const wxString& aFormatString, const wxString& aSource,
                                        const EDA_ANGLE& aConstraint, const EDA_ANGLE& aActual )

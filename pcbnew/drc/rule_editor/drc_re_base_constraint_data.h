@@ -107,6 +107,14 @@ public:
 
     void SetWasEdited( bool aEdited ) { m_wasEdited = aEdited; }
 
+    int GetOriginalEntryCount() const { return m_originalEntryCount; }
+
+    void SetOriginalEntryCount( int aCount ) { m_originalEntryCount = aCount; }
+
+    int GetSourceRule() const { return m_sourceRule; }
+
+    void SetSourceRule( int aIndex ) { m_sourceRule = aIndex; }
+
     SEVERITY GetSeverity() const { return m_severity; }
 
     void SetSeverity( SEVERITY aSeverity ) { m_severity = aSeverity; }
@@ -123,6 +131,7 @@ public:
         m_generatedRule = source.m_generatedRule;
         m_originalRuleText = source.m_originalRuleText;
         m_wasEdited = source.m_wasEdited;
+        m_originalEntryCount = source.m_originalEntryCount;
         m_severity = source.m_severity;
         m_ruleCondition = source.m_ruleCondition;
     }
@@ -254,6 +263,8 @@ private:
     wxString m_generatedRule;
     wxString m_originalRuleText;
     bool     m_wasEdited = false;
+    int                       m_originalEntryCount = 1;
+    int      m_sourceRule = -1; ///< Not copied, since a duplicate is a new rule
     SEVERITY m_severity = RPT_SEVERITY_UNDEFINED;
 };
 

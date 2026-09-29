@@ -21,6 +21,7 @@
 #include "generator_tool.h"
 
 #include <collectors.h>
+#include <generators/pcb_via_stack.h>
 #include <tool/tool_manager.h>
 #include <tools/pcb_selection_tool.h>
 #include <tools/pcb_actions.h>
@@ -32,7 +33,7 @@
 
 
 GENERATOR_TOOL::GENERATOR_TOOL() :
-        GENERATOR_TOOL_PNS_PROXY( "pcbnew.Generators" ),
+        GENERATOR_TOOL_PNS_PROXY( GENERATOR_TOOL_NAME ),
         m_mgrDialog( nullptr )
 {
     m_boardItemListener = PROPERTY_MANAGER::Instance().RegisterListener(
@@ -198,6 +199,72 @@ int GENERATOR_TOOL::RegenerateAllOfType( const TOOL_EVENT& aEvent )
 }
 
 
+int GENERATOR_TOOL::MakeViaStackFromSelection( const TOOL_EVENT& aEvent )
+{
+    PCB_SELECTION_TOOL* selTool = m_toolMgr->GetTool<PCB_SELECTION_TOOL>();
+
+    PCB_SELECTION sel = selTool->RequestSelection(
+            []( const VECTOR2I&, GENERAL_COLLECTOR& aCollector, PCB_SELECTION_TOOL* )
+            {
+                // Iterate from the back so we don't have to worry about removals.
+                for( int i = aCollector.GetCount() - 1; i >= 0; --i )
+                {
+                    BOARD_ITEM* item = aCollector[i];
+
+                    if( item->Type() != PCB_VIA_T && item->Type() != PCB_TRACE_T )
+                        aCollector.Remove( item );
+                }
+            } );
+
+    std::vector<BOARD_ITEM*> items;
+
+    for( EDA_ITEM* item : sel )
+    {
+        if( item->IsBOARD_ITEM() )
+            items.push_back( static_cast<BOARD_ITEM*>( item ) );
+    }
+
+    std::vector<BOARD_ITEM*> members;
+    wxString                 error;
+    PCB_VIA_STACK*           stack = PCB_VIA_STACK::CreateFromItems( items, board(), &members, &error );
+
+    if( !stack )
+    {
+        if( error.IsEmpty() )
+        {
+            error = _( "A microvia stack needs two or more microvias on the same net, each spanning "
+                       "one layer step, with no gap between them." );
+        }
+
+        frame()->ShowInfoBarWarning( error );
+        return 0;
+    }
+
+    m_toolMgr->RunAction( ACTIONS::selectionClear );
+
+    BOARD_COMMIT commit( this );
+
+    commit.Add( stack );
+
+    for( BOARD_ITEM* item : members )
+    {
+        if( EDA_GROUP* existingGroup = item->GetParentGroup() )
+            commit.Modify( existingGroup->AsEdaItem(), nullptr, RECURSE_MODE::NO_RECURSE );
+
+        commit.Modify( item );
+        stack->AddItem( item );
+    }
+
+    commit.Push( _( "Create Microvia Stack" ) );
+
+    selTool->AddItemToSel( stack );
+    m_toolMgr->PostEvent( EVENTS::SelectedItemsModified );
+    frame()->RefreshCanvas();
+
+    return 0;
+}
+
+
 int GENERATOR_TOOL::RegenerateSelected( const TOOL_EVENT& aEvent )
 {
     BOARD_COMMIT commit( this );
@@ -313,4 +380,6 @@ void GENERATOR_TOOL::setTransitions()
     Go( &GENERATOR_TOOL::GenEditAction,         PCB_ACTIONS::genFinishEdit.MakeEvent() );
     Go( &GENERATOR_TOOL::GenEditAction,         PCB_ACTIONS::genCancelEdit.MakeEvent() );
     Go( &GENERATOR_TOOL::GenEditAction,         PCB_ACTIONS::genRemove.MakeEvent() );
+
+    Go( &GENERATOR_TOOL::MakeViaStackFromSelection, PCB_ACTIONS::makeViaStack.MakeEvent() );
 }

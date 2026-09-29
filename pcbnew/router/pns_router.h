@@ -136,6 +136,25 @@ enum DRAG_MODE
                                      long long& aExtraLength, long long& aExtraDelay ) const = 0;
 
     virtual long long GetNetBoardLength( NET_HANDLE aNet ) const { return 0; }
+
+    /**
+     * Remove from @a aItems every item the board already joins to one of @a aJoined through
+     * objects the router does not model, such as zones.
+     */
+    virtual void RemoveBoardConnected( const std::vector<const ITEM*>& aJoined, std::set<ITEM*>& aItems ) const {}
+
+    /**
+     * Return the layer span a via placed with @a aSizes occupies.  A through via always spans
+     * the whole board; the layer pair only selects the span of blind, buried and micro vias.
+     */
+    PNS_LAYER_RANGE GetViaLayerRange( const SIZES_SETTINGS& aSizes ) const
+    {
+        if( aSizes.ViaType() == VIATYPE::THROUGH )
+            return PNS_LAYER_RANGE( GetPNSLayerFromBoardLayer( F_Cu ),
+                                    GetPNSLayerFromBoardLayer( B_Cu ) );
+
+        return PNS_LAYER_RANGE( aSizes.GetLayerTop(), aSizes.GetLayerBottom() );
+    }
 };
 
 class ROUTER
@@ -180,6 +199,7 @@ public:
     void GetUpdatedItems( std::vector<PNS::ITEM*>& aRemoved, std::vector<PNS::ITEM*>& aAdded,
                           std::vector<PNS::ITEM*>& aHeads );
 
+    void AbortPlacement();
     void StopRouting();
     void ClearViewDecorations();
 

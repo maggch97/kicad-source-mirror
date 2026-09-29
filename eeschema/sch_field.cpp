@@ -18,6 +18,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <sch_render_settings.h>
+#include <scintilla_tricks.h>
+#include <netclass.h>
 #include <wx/log.h>
 #include <wx/menu.h>
 
@@ -39,6 +42,7 @@
 #include <properties/property.h>
 #include <properties/property_mgr.h>
 #include <google/protobuf/any.pb.h>
+#include <api/api_utils.h>
 #include <api/schematic/schematic_types.pb.h>
 
 static const std::vector<KICAD_T> labelTypes = { SCH_LABEL_LOCATE_ANY_T };
@@ -49,9 +53,9 @@ static const std::vector<KICAD_T> labelTypes = { SCH_LABEL_LOCATE_ANY_T };
  *
  * The directive-label net class field used to be saved as `_( "Net Class" )` which embedded the
  * UI-language translation into the .kicad_sch file. Files written by a non-English UI lost the
- * canonical token when re-opened in another language, so the rule resolver could no longer locate
- * the field. We now save the canonical name, but we still need to recognise the translated form
- * when migrating older / cross-locale files.
+ * untranslated "Netclass" token when re-opened in another language, so the rule resolver could no
+ * longer locate the field. We now save the untranslated name, but we still need to recognise the
+ * translated form when migrating older / cross-locale files.
  */
 static const std::vector<wxString>& GetKnownNetclassFieldTranslations()
 {
@@ -72,7 +76,7 @@ static const std::vector<wxString>& GetKnownNetclassFieldTranslations()
             wxString::FromUTF8( "नेट क्लास" ),            // hi
             wxString::FromUTF8( "Hálózatosztály" ),    // hu
             wxString::FromUTF8( "Kelas Net" ),         // id
-            wxString::FromUTF8( "Netclass" ),          // it, ro (same as canonical)
+            wxString::FromUTF8( "Netclass" ),          // it, ro (same as untranslated)
             wxString::FromUTF8( "ネットクラス" ),          // ja
             wxString::FromUTF8( "ქსელის კლასი" ),      // ka
             wxString::FromUTF8( "네트 클래스" ),           // ko
@@ -139,9 +143,9 @@ SCH_FIELD::SCH_FIELD( SCH_ITEM* aParent, FIELD_T aFieldId, const wxString& aName
     if( !aName.IsEmpty() )
         SetName( aName );
     else
-        SetName( GetDefaultFieldName( aFieldId, DO_TRANSLATE ) );
+        SetName( GetDefaultFieldName( aFieldId, TRANSLATED ) );
 
-    setId( aFieldId ); // will also set the layer
+    setId( aFieldId ); // will also set the layer; call only AFTER SetName()
     SetVisible( true );
 
     if( aParent && aParent->Schematic() )
@@ -156,10 +160,13 @@ SCH_FIELD::SCH_FIELD( SCH_ITEM* aParent, FIELD_T aFieldId, const wxString& aName
             m_ordinal = static_cast<SCH_SYMBOL*>( aParent )->GetNextFieldOrdinal();
         else if( aParent->Type() == LIB_SYMBOL_T )
             m_ordinal = static_cast<LIB_SYMBOL*>( aParent )->GetNextFieldOrdinal();
-        else if( aParent->Type() == SCH_SHEET_T )
-            m_ordinal = static_cast<SCH_SHEET*>( aParent )->GetNextFieldOrdinal();
         else if( SCH_LABEL_BASE* label = dynamic_cast<SCH_LABEL_BASE*>( aParent ) )
             m_ordinal = label->GetNextFieldOrdinal();
+    }
+    else if( aFieldId == FIELD_T::SHEET_USER && aParent )
+    {
+        if( aParent->Type() == SCH_SHEET_T )
+            m_ordinal = static_cast<SCH_SHEET*>( aParent )->GetNextFieldOrdinal();
     }
 }
 
@@ -177,9 +184,9 @@ SCH_FIELD::SCH_FIELD( const SCH_FIELD& aField ) :
         EDA_TEXT( aField )
 {
     m_private = aField.m_private;
-    setId( aField.m_id ); // will also set the layer
-    m_ordinal = aField.m_ordinal;
     m_name = aField.m_name;
+    setId( aField.m_id ); // will also set the layer; call only AFTER setting m_name
+    m_ordinal = aField.m_ordinal;
     m_showName = aField.m_showName;
     m_allowAutoPlace = aField.m_allowAutoPlace;
     m_isGeneratedField = aField.m_isGeneratedField;
@@ -191,20 +198,46 @@ SCH_FIELD::SCH_FIELD( const SCH_FIELD& aField ) :
 }
 
 
-void SCH_FIELD::Serialize( google::protobuf::Any& aContainer ) const
+void SCH_FIELD::Serialize( kiapi::schematic::types::SchematicField& field, const EDA_IU_SCALE& aScale ) const
 {
-    kiapi::schematic::types::SchematicField field;
-
     field.set_name( GetName( false ).ToUTF8() );
     field.set_visible( IsVisible() );
     field.set_show_name( IsNameShown() );
     field.set_allow_auto_place( CanAutoplace() );
+    field.set_is_private( IsPrivate() );
 
-    google::protobuf::Any any;
-    EDA_TEXT::Serialize( any, schIUScale );
-    any.UnpackTo( field.mutable_text() );
+    EDA_TEXT::Serialize( *field.mutable_text(), aScale );
 
+    // Override the position from the above for symbols so that they are in the right reference frame
+    if( m_parent && m_parent->Type() == SCH_SYMBOL_T )
+        kiapi::common::PackVector2( *field.mutable_text()->mutable_position(), GetPosition(), aScale );
+
+    kiapi::common::PackCustomProperties( field.mutable_custom_properties(), *this );
+}
+
+
+void SCH_FIELD::Serialize( google::protobuf::Any& aContainer ) const
+{
+    kiapi::schematic::types::SchematicField field;
+    Serialize( field, schIUScale );
     aContainer.PackFrom( field );
+}
+
+
+bool SCH_FIELD::Deserialize( const kiapi::schematic::types::SchematicField& field, const EDA_IU_SCALE& aScale )
+{
+    SetName( wxString::FromUTF8( field.name() ) );
+    SetVisible( field.visible() );
+    SetNameShown( field.show_name() );
+    SetCanAutoplace( field.allow_auto_place() );
+    SetPrivate( field.is_private() );
+
+    bool result = EDA_TEXT::Deserialize( field.text(), aScale );
+
+    if( m_parent && m_parent->Type() == SCH_SYMBOL_T )
+        SetPosition( kiapi::common::UnpackVector2( field.text().position(), aScale ) );
+
+    return result;
 }
 
 
@@ -215,14 +248,7 @@ bool SCH_FIELD::Deserialize( const google::protobuf::Any& aContainer )
     if( !aContainer.UnpackTo( &field ) )
         return false;
 
-    SetName( wxString::FromUTF8( field.name() ) );
-    SetVisible( field.visible() );
-    SetNameShown( field.show_name() );
-    SetCanAutoplace( field.allow_auto_place() );
-
-    google::protobuf::Any any;
-    any.PackFrom( field.text() );
-    return EDA_TEXT::Deserialize( any, schIUScale );
+    return Deserialize( field, schIUScale );
 }
 
 
@@ -231,15 +257,16 @@ SCH_FIELD& SCH_FIELD::operator=( const SCH_FIELD& aField )
     EDA_TEXT::operator=( aField );
 
     m_private = aField.m_private;
-    setId( aField.m_id ); // will also set the layer
-    m_ordinal = aField.m_ordinal;
     m_name = aField.m_name;
+    setId( aField.m_id ); // will also set the layer; call only AFTER setting m_name
+    m_ordinal = aField.m_ordinal;
     m_showName = aField.m_showName;
     m_allowAutoPlace = aField.m_allowAutoPlace;
     m_isGeneratedField = aField.m_isGeneratedField;
     m_lastResolvedColor = aField.m_lastResolvedColor;
 
     m_renderCache.reset();
+    invalidateConnectivity();
 
     return *this;
 }
@@ -270,44 +297,53 @@ wxString SCH_FIELD::GetShownName() const
 }
 
 
-wxString SCH_FIELD::GetShownText( const SCH_SHEET_PATH* aPath, bool aAllowExtraText, int aDepth,
-                                  const wxString& aVariantName ) const
+wxString SCH_FIELD::GetShownText( const SCH_SHEET_PATH* aPath, RESOLUTION_CONTEXT aContext,
+                                  const wxString& aVariantName, int aDepth ) const
 {
+    bool     hasTextVars = HasTextVars();
     wxString text = getUnescapedText( aPath, aVariantName );
 
-    if( IsNameShown() && aAllowExtraText )
+    if( !aVariantName.IsEmpty() )
+        hasTextVars = text.Contains( wxT( "${" ) ) || text.Contains( wxT( "@{" ) );
+
+    if( IsNameShown() && aContext == FOR_CANVAS )
         text = GetShownName() << wxS( ": " ) << text;
 
-    if( HasTextVars() )
-        text = ResolveText( text, aPath, aDepth );
+    if( hasTextVars && aContext != RAW_VALUE )
+    {
+        text = ResolveText( text, aPath, aDepth, aVariantName );
+        FinalizeTextVarExpansion( text, aContext );
+    }
 
-    if( m_id == FIELD_T::SHEET_FILENAME && aAllowExtraText && !IsNameShown() )
+    if( m_id == FIELD_T::SHEET_FILENAME && aContext == FOR_CANVAS && !IsNameShown() )
         text = _( "File:" ) + wxS( " " ) + text;
-
-    // Convert escape markers back to literals for final display
-    text.Replace( wxT( "<<<ESC_DOLLAR:" ), wxT( "${" ) );
-    text.Replace( wxT( "<<<ESC_AT:" ), wxT( "@{" ) );
 
     return text;
 }
 
 
-wxString SCH_FIELD::GetShownText( bool aAllowExtraText, int aDepth ) const
+wxString SCH_FIELD::GetShownText( RESOLUTION_CONTEXT aContext, int aDepth ) const
 {
     if( SCHEMATIC* schematic = Schematic() )
     {
         const SCH_SHEET_PATH& currentSheet = schematic->CurrentSheet();
         wxString variantName = schematic->GetCurrentVariant();
 
-        wxLogTrace( traceSchFieldRendering,
-                    "GetShownText (no path arg): field=%s, current sheet path='%s', variant='%s', size=%zu, empty=%d",
-                    GetName(), currentSheet.Path().AsString(), variantName, currentSheet.size(),
-                    currentSheet.empty() ? 1 : 0 );
-        return GetShownText( &currentSheet, aAllowExtraText, aDepth, variantName );
+        // Path() builds a KIID_PATH, so keep it off the render path unless the trace is on
+        if( wxLog::IsAllowedTraceMask( traceSchFieldRendering ) )
+        {
+            wxLogTrace( traceSchFieldRendering,
+                        "GetShownText (no path arg): field=%s, current sheet path='%s', variant='%s', "
+                        "size=%zu, empty=%d",
+                        GetName(), currentSheet.Path().AsString(), variantName, currentSheet.size(),
+                        currentSheet.empty() ? 1 : 0 );
+        }
+
+        return GetShownText( &currentSheet, aContext, variantName, aDepth );
     }
     else
     {
-        return GetShownText( nullptr, aAllowExtraText, aDepth );
+        return GetShownText( nullptr, aContext, wxEmptyString, aDepth );
     }
 }
 
@@ -457,7 +493,7 @@ SCH_LAYER_ID SCH_FIELD::GetDefaultLayer() const
 {
     if( m_parent && m_parent->Type() == SCH_LABEL_T )
     {
-        if( GetCanonicalName() == wxT( "Netclass" ) || GetCanonicalName() == wxT( "Component Class" ) )
+        if( GetUntranslatedName() == wxT( "Netclass" ) || GetUntranslatedName() == wxT( "Component Class" ) )
         {
             return LAYER_NETCLASS_REFS;
         }
@@ -553,23 +589,12 @@ bool SCH_FIELD::IsHorizJustifyFlipped() const
 
 void SCH_FIELD::SetEffectiveHorizJustify( GR_TEXT_H_ALIGN_T aJustify )
 {
-    GR_TEXT_H_ALIGN_T actualJustify;
+    // The justification must be stored before asking whether it is flipped, as a center
+    // justification has no side to report.
+    SetHorizJustify( aJustify );
 
-    switch( aJustify )
-    {
-    case GR_TEXT_H_ALIGN_LEFT:
-        actualJustify = IsHorizJustifyFlipped() ? GR_TEXT_H_ALIGN_RIGHT : GR_TEXT_H_ALIGN_LEFT;
-        break;
-
-    case GR_TEXT_H_ALIGN_RIGHT:
-        actualJustify = IsHorizJustifyFlipped() ? GR_TEXT_H_ALIGN_LEFT : GR_TEXT_H_ALIGN_RIGHT;
-        break;
-
-    default:
-        actualJustify = aJustify;
-    }
-
-    SetHorizJustify( actualJustify );
+    if( IsHorizJustifyFlipped() )
+        SetHorizJustify( MapHorizJustify( -aJustify ) );
 }
 
 
@@ -611,23 +636,10 @@ bool SCH_FIELD::IsVertJustifyFlipped() const
 
 void SCH_FIELD::SetEffectiveVertJustify( GR_TEXT_V_ALIGN_T aJustify )
 {
-    GR_TEXT_V_ALIGN_T actualJustify;
+    SetVertJustify( aJustify );
 
-    switch( aJustify )
-    {
-    case GR_TEXT_V_ALIGN_TOP:
-        actualJustify = IsVertJustifyFlipped() ? GR_TEXT_V_ALIGN_BOTTOM : GR_TEXT_V_ALIGN_TOP;
-        break;
-
-    case GR_TEXT_V_ALIGN_BOTTOM:
-        actualJustify = IsVertJustifyFlipped() ? GR_TEXT_V_ALIGN_TOP : GR_TEXT_V_ALIGN_BOTTOM;
-        break;
-
-    default:
-        actualJustify = aJustify;
-    }
-
-    SetVertJustify( actualJustify );
+    if( IsVertJustifyFlipped() )
+        SetVertJustify( MapVertJustify( -aJustify ) );
 }
 
 
@@ -855,12 +867,21 @@ bool SCH_FIELD::IsLocked() const
             return true;
     }
 
+    if( const SCH_LABEL_BASE* parentLabel = dynamic_cast<const SCH_LABEL_BASE*>( m_parent ) )
+    {
+        if( parentLabel->IsLocked() )
+            return true;
+    }
+
     return SCH_ITEM::IsLocked();
 }
 
 
 bool SCH_FIELD::Replace( const EDA_SEARCH_DATA& aSearchData, void* aAuxData )
 {
+    if( m_isGeneratedField )
+        return false;
+
     bool replaceReferences = false;
 
     try
@@ -1006,16 +1027,12 @@ void SCH_FIELD::CalcEdit( const VECTOR2I& aPosition )
 
 wxString SCH_FIELD::GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const
 {
-    wxString content = aFull ? GetShownText( false ) : KIUI::EllipsizeMenuText( GetText() );
+    wxString content = aFull ? GetShownText( FOR_GUI ) : KIUI::EllipsizeMenuText( GetText() );
 
     if( content.IsEmpty() )
-    {
         return wxString::Format( _( "Field %s (empty)" ), UnescapeString( GetName() ) );
-    }
     else
-    {
         return wxString::Format( _( "Field %s '%s'" ), UnescapeString( GetName() ), content );
-    }
 }
 
 
@@ -1063,10 +1080,7 @@ bool SCH_FIELD::HasHypertext() const
     if( m_id == FIELD_T::INTERSHEET_REFS )
         return true;
 
-    if( m_name == SIM_LIBRARY::LIBRARY_FIELD )
-        return true;
-
-    return IsURL( GetShownText( false ) );
+    return IsURL( GetShownText( FOR_GUI ) );
 }
 
 
@@ -1102,9 +1116,9 @@ void SCH_FIELD::DoHypertextAction( EDA_DRAW_FRAME* aFrame, const VECTOR2I& aMous
         else if( sel == 999 )
             href = SCH_NAVIGATE_TOOL::g_BackLink;
     }
-    else if( IsURL( GetShownText( false ) ) || m_name == SIM_LIBRARY::LIBRARY_FIELD )
+    else if( IsURL( GetShownText( FOR_GUI ) ) || m_name == SIM_LIBRARY::LIBRARY_FIELD )
     {
-        href = GetShownText( false );
+        href = GetShownText( FOR_GUI );
     }
 
     if( !href.IsEmpty() )
@@ -1117,11 +1131,16 @@ void SCH_FIELD::DoHypertextAction( EDA_DRAW_FRAME* aFrame, const VECTOR2I& aMous
 
 void SCH_FIELD::SetName( const wxString& aName )
 {
+    const bool generated = ::IsGeneratedField( aName );
+    const bool changed = m_name != aName || ( generated && EDA_TEXT::GetText() != aName );
     m_name = aName;
-    m_isGeneratedField = ::IsGeneratedField( aName );
+    m_isGeneratedField = generated;
 
     if( m_isGeneratedField )
         EDA_TEXT::SetText( aName );
+
+    if( changed )
+        invalidateConnectivity();
 }
 
 
@@ -1132,10 +1151,12 @@ void SCH_FIELD::SetText( const wxString& aText )
         return;
 
     // Mandatory fields should not have leading or trailing whitespace.
-    if( IsMandatory() )
-        EDA_TEXT::SetText( aText.Strip( wxString::both ) );
-    else
-        EDA_TEXT::SetText( aText );
+    const wxString text = IsMandatory() ? aText.Strip( wxString::both ) : aText;
+    const bool changed = EDA_TEXT::GetText() != text;
+    EDA_TEXT::SetText( text );
+
+    if( changed )
+        invalidateConnectivity();
 }
 
 
@@ -1146,66 +1167,69 @@ void SCH_FIELD::SetText( const wxString& aText, const SCH_SHEET_PATH* aPath, con
     if( m_isGeneratedField )
         return;
 
-    wxString tmp = aText;
+    const wxString text = IsMandatory() ? aText.Strip( wxString::both ) : aText;
 
-    if( IsMandatory() )
-        tmp = aText.Strip( wxString::both ) ;
+    // Going through the parent symbol or sheet can handle setting values on variants, but it can't
+    // handle setting values on fields which haven't yet been added to the parent.
+    if( !aVariantName.IsEmpty() )
+    {
+        switch( m_parent->Type() )
+        {
+        case SCH_SYMBOL_T:
+        {
+            SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( m_parent );
+            wxCHECK( symbol, /* void */ );
+            symbol->SetFieldText( GetName( false ), text, aPath, aVariantName );
+            return;
+        }
 
-    switch( m_parent->Type() )
-    {
-    case SCH_SYMBOL_T:
-    {
-        SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( m_parent );
-        wxCHECK( symbol, /* void */ );
-        symbol->SetFieldText( GetName(), aText, aPath, aVariantName );
-        break;
+        case SCH_SHEET_T:
+        {
+            SCH_SHEET* sheet = static_cast<SCH_SHEET*>( m_parent );
+            wxCHECK( sheet, /* void */ );
+            sheet->SetFieldText( GetName( false ), text, aPath, aVariantName );
+            return;
+        }
+
+        default:
+            break;
+        }
     }
 
-    case SCH_SHEET_T:
-    {
-        SCH_SHEET* sheet = static_cast<SCH_SHEET*>( m_parent );
-        wxCHECK( sheet, /* void */ );
-        sheet->SetFieldText( GetName(), aText, aPath, aVariantName );
-        break;
-    }
-
-    default:
-        SCH_FIELD::SetText( aText );
-        break;
-    }
+    SCH_FIELD::SetText( text );
 }
 
 
 wxString SCH_FIELD::GetText( const SCH_SHEET_PATH* aPath, const wxString& aVariantName ) const
 {
-    wxString retv;
+    wxCHECK( aPath && m_parent, wxEmptyString );
 
-    wxCHECK( aPath && m_parent, retv );
+    // Going through the parent symbol or sheet can handle setting values on variants, but it can't
+    // handle setting values on fields which haven't yet been added to the parent.
+    if( !aVariantName.IsEmpty() )
+    {
+        switch( m_parent->Type() )
+        {
+        case SCH_SYMBOL_T:
+        {
+            SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( m_parent );
+            wxCHECK( symbol, wxEmptyString );
+            return symbol->GetFieldText( GetName(), aPath, aVariantName );
+        }
 
-    switch( m_parent->Type() )
-    {
-    case SCH_SYMBOL_T:
-    {
-        SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( m_parent );
-        wxCHECK( symbol, retv );
-        retv = symbol->GetFieldText( GetName(), aPath, aVariantName );
-        break;
+        case SCH_SHEET_T:
+        {
+            SCH_SHEET* sheet = static_cast<SCH_SHEET*>( m_parent );
+            wxCHECK( sheet, wxEmptyString );
+            return sheet->GetFieldText( GetName(), aPath, aVariantName );
+        }
+
+        default:
+            break;
+        }
     }
 
-    case SCH_SHEET_T:
-    {
-        SCH_SHEET* sheet = static_cast<SCH_SHEET*>( m_parent );
-        wxCHECK( sheet, retv );
-        retv = sheet->GetFieldText( GetName(), aPath, aVariantName );
-        break;
-    }
-
-    default:
-        retv = GetText();
-        break;
-    }
-
-    return retv;
+    return SCH_FIELD::GetText();
 }
 
 
@@ -1215,26 +1239,26 @@ wxString SCH_FIELD::GetName( bool aUseDefaultName ) const
         return SCH_LABEL_BASE::GetDefaultFieldName( m_name, aUseDefaultName );
 
     if( IsMandatory() )
-        return GetCanonicalFieldName( m_id );
+        return GetDefaultFieldName( m_id, UNTRANSLATED );
     else if( m_name.IsEmpty() && aUseDefaultName )
-        return GetDefaultFieldName( m_id, !DO_TRANSLATE );
+        return GetDefaultFieldName( m_id, UNTRANSLATED );
     else
         return m_name;
 }
 
 
-wxString SCH_FIELD::GetCanonicalName() const
+wxString SCH_FIELD::GetUntranslatedName() const
 {
     if( m_parent && m_parent->IsType( labelTypes ) )
     {
-        // These should be stored in canonical format, but recover translated forms written by
+        // These should be stored untranslated, but recover translated forms written by
         // older versions or by cross-language collaboration via Git.
         if( IsNetclassLabelFieldName( m_name ) )
             return wxT( "Netclass" );
     }
 
     if( IsMandatory() )
-        return GetCanonicalFieldName( m_id );
+        return GetDefaultFieldName( m_id, UNTRANSLATED );
 
     return m_name;
 }
@@ -1259,7 +1283,7 @@ BITMAPS SCH_FIELD::GetMenuImage() const
 
 bool SCH_FIELD::HitTest( const VECTOR2I& aPosition, int aAccuracy ) const
 {
-    if( GetShownText( true ).IsEmpty() )
+    if( GetShownText( FOR_CANVAS ).IsEmpty() )
         return false;
 
     BOX2I rect = GetBoundingBox();
@@ -1286,7 +1310,7 @@ bool SCH_FIELD::HitTest( const VECTOR2I& aPosition, int aAccuracy ) const
 
 bool SCH_FIELD::HitTest( const BOX2I& aRect, bool aContained, int aAccuracy ) const
 {
-    if( GetShownText( true ).IsEmpty() )
+    if( GetShownText( FOR_CANVAS ).IsEmpty() )
         return false;
 
     if( m_flags & ( STRUCT_DELETED | SKIP_STRUCT ) )
@@ -1311,7 +1335,7 @@ bool SCH_FIELD::HitTest( const BOX2I& aRect, bool aContained, int aAccuracy ) co
 
 bool SCH_FIELD::HitTest( const SHAPE_LINE_CHAIN& aPoly, bool aContained ) const
 {
-    if( GetShownText( true ).IsEmpty() )
+    if( GetShownText( FOR_CANVAS ).IsEmpty() )
         return false;
 
     if( m_flags & ( STRUCT_DELETED | SKIP_STRUCT ) )
@@ -1335,9 +1359,9 @@ void SCH_FIELD::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
     wxString text;
 
     if( Schematic() )
-        text = GetShownText( &Schematic()->CurrentSheet(), true, 0, Schematic()->GetCurrentVariant() );
+        text = GetShownText( &Schematic()->CurrentSheet(), FOR_CANVAS, Schematic()->GetCurrentVariant() );
     else
-        text = GetShownText( true );
+        text = GetShownText( FOR_CANVAS );
 
     if( ( !IsVisible() && !IsForceVisible() ) || text.IsEmpty() || aBackground )
         return;
@@ -1584,7 +1608,7 @@ bool SCH_FIELD::operator==( const SCH_FIELD& aOther ) const
 
 bool SCH_FIELD::HasSameContent( const SCH_FIELD& aOther ) const
 {
-    if( GetCanonicalName() != aOther.GetCanonicalName() )
+    if( GetUntranslatedName() != aOther.GetUntranslatedName() )
         return false;
 
     if( GetPosition() != aOther.GetPosition() )
@@ -1654,22 +1678,15 @@ int SCH_FIELD::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
 {
     wxASSERT( aOther.Type() == SCH_FIELD_T );
 
-    int compareFlags = aCompareFlags;
-
-    // For ERC tests, the field position has no matter, so do not test it
-    if( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::ERC )
-        compareFlags |= SCH_ITEM::COMPARE_FLAGS::SKIP_TST_POS;
-
-    int retv = SCH_ITEM::compare( aOther, compareFlags );
+    int retv = SCH_ITEM::compare( aOther, aCompareFlags );
 
     if( retv )
         return retv;
 
     const SCH_FIELD* tmp = static_cast<const SCH_FIELD*>( &aOther );
 
-    // Equality test will vary depending whether or not the field is mandatory.  Otherwise,
-    // sorting is done by ordinal.
-    if( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::EQUALITY )
+    // If we're not testing the UUID then we're looking for an equivalence test
+    if( !( aCompareFlags & COMPARE_FLAGS::UUID ) )
     {
         // Mandatory fields have fixed ordinals and their names can vary due to translated field
         // names.  Optional fields have fixed names and their ordinals can vary.
@@ -1686,21 +1703,13 @@ int SCH_FIELD::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
                 return retv;
         }
     }
-    else // assume we're sorting
+    else // assume we're sorting for stable file order
     {
         if( m_id != tmp->m_id )
             return (int) m_id - (int) tmp->m_id;
     }
 
-    bool ignoreFieldText = false;
-
-    if( m_id == FIELD_T::REFERENCE && !( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::EQUALITY ) )
-        ignoreFieldText = true;
-
-    if( m_id == FIELD_T::VALUE && ( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::ERC ) )
-        ignoreFieldText = true;
-
-    if( !ignoreFieldText )
+    if( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::FIELD_TEXT )
     {
         retv = GetText().CmpNoCase( tmp->GetText() );
 
@@ -1708,7 +1717,7 @@ int SCH_FIELD::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
             return retv;
     }
 
-    if( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::EQUALITY )
+    if( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::FIELD_POSITIONS )
     {
         if( GetTextPos().x != tmp->GetTextPos().x )
             return GetTextPos().x - tmp->GetTextPos().x;
@@ -1717,14 +1726,12 @@ int SCH_FIELD::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
             return GetTextPos().y - tmp->GetTextPos().y;
     }
 
-    // For ERC tests, the field size has no matter, so do not test it
-    if( !( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::ERC ) )
+    if( aCompareFlags & COMPARE_FLAGS::FIELD_SIZE_AND_STYLE )
     {
-        if( GetTextWidth() != tmp->GetTextWidth() )
-            return GetTextWidth() - tmp->GetTextWidth();
+        retv = GetAttributes().Compare( tmp->GetAttributes() );
 
-        if( GetTextHeight() != tmp->GetTextHeight() )
-            return GetTextHeight() - tmp->GetTextHeight();
+        if( retv )
+            return retv;
     }
 
     return 0;
@@ -1734,13 +1741,16 @@ int SCH_FIELD::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
 wxString SCH_FIELD::getUnescapedText( const SCH_SHEET_PATH* aPath, const wxString& aVariantName ) const
 {
     // This is the default variant field text for all fields except the reference field.
-    wxString retv = EDA_TEXT::GetShownText( false );
+    wxString retv = EDA_TEXT::GetShownText( INTERNAL );
 
     // Special handling for parent object field instance and variant information.
     // Only use the path if it's non-empty; an empty path can't match any instances
     if( m_parent && aPath && !aPath->empty() )
     {
-        wxLogTrace( traceSchFieldRendering, "  Path is valid and non-empty, parent type=%d", m_parent->Type() );
+        const bool trace = wxLog::IsAllowedTraceMask( traceSchFieldRendering );
+
+        if( trace )
+            wxLogTrace( traceSchFieldRendering, "  Path is valid and non-empty, parent type=%d", m_parent->Type() );
 
         switch( m_parent->Type() )
         {
@@ -1749,21 +1759,35 @@ wxString SCH_FIELD::getUnescapedText( const SCH_SHEET_PATH* aPath, const wxStrin
             {
                 if( m_id == FIELD_T::REFERENCE )
                 {
-                    wxLogTrace( traceSchFieldRendering, "  Calling GetRef for symbol %s on path %s",
-                                symbol->m_Uuid.AsString(), aPath->Path().AsString() );
+                    if( trace )
+                    {
+                        wxLogTrace( traceSchFieldRendering, "  Calling GetRef for symbol %s on path %s",
+                                    symbol->m_Uuid.AsString(), aPath->Path().AsString() );
+                    }
 
                     retv = symbol->GetRef( aPath, true );
 
-                    wxLogTrace( traceSchFieldRendering, "  GetRef returned: '%s'", retv );
+                    if( trace )
+                        wxLogTrace( traceSchFieldRendering, "  GetRef returned: '%s'", retv );
                 }
                 else if( !aVariantName.IsEmpty() )
                 {
                     // If the variant is not found, fall back to default variant above.
                     if( std::optional<SCH_SYMBOL_VARIANT> variant = symbol->GetVariant( *aPath, aVariantName ) )
                     {
-                        // If the field name does not exist in the variant, fall back to the default variant above.
+                        // An explicit override wins; otherwise resolve through the alternate
+                        // library symbol so the canvas matches the fields table and netlist.
                         if( variant->m_Fields.contains( GetName() ) )
+                        {
                             retv = variant->m_Fields[GetName()];
+                        }
+                        else if( LIB_SYMBOL* altSymbol = symbol->GetVariantLibSymbol( aVariantName, *aPath ) )
+                        {
+                            const SCH_FIELD* altField = altSymbol->GetField( GetName() );
+
+                            if( altField && !altField->GetText().IsEmpty() )
+                                retv = altField->GetText();
+                        }
                     }
                 }
             }
@@ -1771,6 +1795,21 @@ wxString SCH_FIELD::getUnescapedText( const SCH_SHEET_PATH* aPath, const wxStrin
             break;
 
         case SCH_SHEET_T:
+            if( const SCH_SHEET* sheet = static_cast<const SCH_SHEET*>( m_parent ) )
+            {
+                if( !aVariantName.IsEmpty() )
+                {
+                    const SCH_SHEET_INSTANCE* instance = sheet->GetInstance( aPath->Path() );
+
+                    if( instance
+                            && instance->m_Variants.contains( aVariantName )
+                            && instance->m_Variants.at( aVariantName ).m_Fields.contains( GetName() ) )
+                    {
+                        return instance->m_Variants.at( aVariantName ).m_Fields.at( GetName() );
+                    }
+                }
+            }
+
             break;
 
         default:
@@ -1817,25 +1856,28 @@ static struct SCH_FIELD_DESC
         // Lock state is inherited from parent symbol (no independent locking of child items)
         propMgr.Mask( TYPE_HASH( SCH_FIELD ), TYPE_HASH( SCH_ITEM ), _HKI( "Locked" ) );
 
+        // Library fields are written at symbol scope rather than inside a unit body, so a
+        // per-unit or per-body-style assignment is silently dropped by the next save
+        propMgr.Mask( TYPE_HASH( SCH_FIELD ), TYPE_HASH( SCH_ITEM ), _HKI( "Unit" ) );
+        propMgr.Mask( TYPE_HASH( SCH_FIELD ), TYPE_HASH( SCH_ITEM ), _HKI( "Body Style" ) );
+
         const wxString textProps = _HKI( "Text Properties" );
 
-        auto horiz = new PROPERTY_ENUM<SCH_FIELD, GR_TEXT_H_ALIGN_T>( _HKI( "Horizontal Justification" ),
-                                                                      &SCH_FIELD::SetEffectiveHorizJustify,
-                                                                      &SCH_FIELD::GetEffectiveHorizJustify );
+        propMgr.ReplaceProperty( TYPE_HASH( EDA_TEXT ), _HKI( "Horizontal Justification" ),
+                    new PROPERTY_ENUM<SCH_FIELD, GR_TEXT_H_ALIGN_T>( _HKI( "Horizontal Justification" ),
+                                &SCH_FIELD::SetEffectiveHorizJustify, &SCH_FIELD::GetEffectiveHorizJustify ),
+                                textProps );
 
-        propMgr.ReplaceProperty( TYPE_HASH( EDA_TEXT ), _HKI( "Horizontal Justification" ), horiz, textProps );
+        propMgr.ReplaceProperty( TYPE_HASH( EDA_TEXT ), _HKI( "Vertical Justification" ),
+                    new PROPERTY_ENUM<SCH_FIELD, GR_TEXT_V_ALIGN_T>( _HKI( "Vertical Justification" ),
+                                &SCH_FIELD::SetEffectiveVertJustify, &SCH_FIELD::GetEffectiveVertJustify ),
+                                textProps );
 
-        auto vert = new PROPERTY_ENUM<SCH_FIELD, GR_TEXT_V_ALIGN_T>( _HKI( "Vertical Justification" ),
-                                                                     &SCH_FIELD::SetEffectiveVertJustify,
-                                                                     &SCH_FIELD::GetEffectiveVertJustify );
+        propMgr.AddProperty( new PROPERTY<SCH_FIELD, bool>( _HKI( "Show Field Name" ),
+                    &SCH_FIELD::SetNameShown, &SCH_FIELD::IsNameShown ) );
 
-        propMgr.ReplaceProperty( TYPE_HASH( EDA_TEXT ), _HKI( "Vertical Justification" ), vert, textProps );
-
-        propMgr.AddProperty( new PROPERTY<SCH_FIELD, bool>( _HKI( "Show Field Name" ), &SCH_FIELD::SetNameShown,
-                                                            &SCH_FIELD::IsNameShown ) );
-
-        propMgr.AddProperty( new PROPERTY<SCH_FIELD, bool>( _HKI( "Allow Autoplacement" ), &SCH_FIELD::SetCanAutoplace,
-                                                            &SCH_FIELD::CanAutoplace ) );
+        propMgr.AddProperty( new PROPERTY<SCH_FIELD, bool>( _HKI( "Allow Autoplacement" ),
+                    &SCH_FIELD::SetCanAutoplace, &SCH_FIELD::CanAutoplace ) );
 
         propMgr.Mask( TYPE_HASH( SCH_FIELD ), TYPE_HASH( EDA_TEXT ), _HKI( "Hyperlink" ) );
         propMgr.Mask( TYPE_HASH( SCH_FIELD ), TYPE_HASH( EDA_TEXT ), _HKI( "Thickness" ) );
@@ -1844,34 +1886,30 @@ static struct SCH_FIELD_DESC
         propMgr.Mask( TYPE_HASH( SCH_FIELD ), TYPE_HASH( EDA_TEXT ), _HKI( "Height" ) );
 
 
-        propMgr.AddProperty( new PROPERTY<SCH_FIELD, int>( _HKI( "Text Size" ), &SCH_FIELD::SetSchTextSize,
-                                                           &SCH_FIELD::GetSchTextSize, PROPERTY_DISPLAY::PT_SIZE ),
-                             _HKI( "Text Properties" ) );
+        propMgr.AddProperty( new PROPERTY<SCH_FIELD, int>( _HKI( "Text Size" ),
+                    &SCH_FIELD::SetSchTextSize, &SCH_FIELD::GetSchTextSize, PROPERTY_DISPLAY::PT_SIZE ),
+                    _HKI( "Text Properties" ) );
 
         propMgr.Mask( TYPE_HASH( SCH_FIELD ), TYPE_HASH( EDA_TEXT ), _HKI( "Orientation" ) );
 
-        auto isNotGeneratedField = []( INSPECTABLE* aItem ) -> bool
-        {
-            if( SCH_FIELD* field = dynamic_cast<SCH_FIELD*>( aItem ) )
-                return !field->IsGeneratedField();
-
-            return true;
-        };
-
         propMgr.OverrideWriteability( TYPE_HASH( SCH_FIELD ), TYPE_HASH( EDA_TEXT ), _HKI( "Text" ),
-                                      isNotGeneratedField );
+                                      []( INSPECTABLE* aItem ) -> bool
+                                      {
+                                          if( SCH_FIELD* field = dynamic_cast<SCH_FIELD*>( aItem ) )
+                                              return !field->IsGeneratedField();
 
+                                          return true;
+                                      } );
 
-        auto isNonMandatoryField = []( INSPECTABLE* aItem ) -> bool
-        {
-            if( SCH_FIELD* field = dynamic_cast<SCH_FIELD*>( aItem ) )
-                return !field->IsMandatory();
-
-            return false;
-        };
 
         propMgr.OverrideAvailability( TYPE_HASH( SCH_FIELD ), TYPE_HASH( SCH_ITEM ), _HKI( "Private" ),
-                                      isNonMandatoryField );
+                                      []( INSPECTABLE* aItem ) -> bool
+                                      {
+                                          if( SCH_FIELD* field = dynamic_cast<SCH_FIELD*>( aItem ) )
+                                              return !field->IsMandatory();
+
+                                          return false;
+                                      } );
     }
 } _SCH_FIELD_DESC;
 

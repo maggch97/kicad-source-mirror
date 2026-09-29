@@ -30,13 +30,32 @@
 #include <geometry/line.h>
 #include <geometry/seg.h>
 #include <geometry/shape_arc.h>
+#include <geometry/shape_ellipse.h>
 #include <geometry/shape_rect.h>
 
 /**
  * A variant type that can hold any of the supported geometry types
  * for intersection calculations.
  */
-using INTERSECTABLE_GEOM = std::variant<LINE, HALF_LINE, SEG, CIRCLE, SHAPE_ARC, BOX2I>;
+using INTERSECTABLE_GEOM = std::variant<LINE, HALF_LINE, SEG, CIRCLE, SHAPE_ARC, SHAPE_ELLIPSE, BOX2I>;
+
+/**
+ * How two geometries meet, beyond where they cross.
+ *
+ * The point list cannot express either case.  A graze gives one point, same as a crossing.  A
+ * shared extent gives none, same as no contact.
+ *
+ * Set only inside the bounded extent of both geometries.  SHAPE_ELLIPSE never sets either.
+ */
+struct INTERSECTION_CONTACT
+{
+    /// Touch at one point, no crossing.
+    bool m_Tangent = false;
+
+    /// Collinear or concentric, more than one point shared.  Arcs are concentric only if the
+    /// carriers they rebuild from their three points match exactly.
+    bool m_Overlapping = false;
+};
 
 /**
  * A visitor that visits INTERSECTABLE_GEOM variant objects with another
@@ -56,6 +75,15 @@ public:
     INTERSECTION_VISITOR( const INTERSECTABLE_GEOM& aOtherGeometry,
                           std::vector<VECTOR2I>&    aIntersections );
 
+    /**
+     * @param aOtherGeometry
+     * @param aIntersections
+     * @param aContact Receives how the geometries meet.  Flags are only set, never cleared, so one
+     *                 contact accumulates across visits.
+     */
+    INTERSECTION_VISITOR( const INTERSECTABLE_GEOM& aOtherGeometry, std::vector<VECTOR2I>& aIntersections,
+                          INTERSECTION_CONTACT& aContact );
+
     /*
      * One of these operator() overloads will be called by std::visit
      * as needed to visit (i.e. intersect) the geometry with the (stored)
@@ -66,9 +94,11 @@ public:
     void operator()( const HALF_LINE& aLine ) const;
     void operator()( const CIRCLE& aCircle ) const;
     void operator()( const SHAPE_ARC& aArc ) const;
+    void operator()( const SHAPE_ELLIPSE& aEllipse ) const;
     void operator()( const BOX2I& aArc ) const;
 
 private:
     const INTERSECTABLE_GEOM& m_otherGeometry;
     std::vector<VECTOR2I>&    m_intersections;
+    INTERSECTION_CONTACT*     m_contact = nullptr;
 };

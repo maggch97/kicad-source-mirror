@@ -83,8 +83,7 @@ int PL_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
     while( TOOL_EVENT* evt = Wait() )
     {
         // on left click, a selection is made, depending on modifiers ALT, SHIFT, CTRL:
-        setModifiersState( evt->Modifier( MD_SHIFT ), evt->Modifier( MD_CTRL ),
-                           evt->Modifier( MD_ALT ) );
+        setModifiersState( evt->Modifier( MD_SHIFT ), evt->Modifier( MD_CTRL ), evt->Modifier( MD_ALT ) );
 
         if( evt->IsMouseDown( BUT_LEFT ) )
         {
@@ -98,7 +97,7 @@ int PL_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
             }
         }
         // Single click? Select single object
-        else if( evt->IsClick( BUT_LEFT ) )
+        else if( evt->IsClick( BUT_LEFT ) || evt->IsAction( &ACTIONS::cursorClick ) )
         {
             // If the timer has stopped, then we have already run the disambiguate routine
             // and we don't want to register an extra click here
@@ -131,8 +130,7 @@ int PL_SELECTION_TOOL::Main( const TOOL_EVENT& aEvent )
                 m_menu->ShowContextMenu( m_selection );
         }
 
-        // double click? Display the properties window
-        else if( evt->IsDblClick( BUT_LEFT ) )
+        else if( evt->IsDblClick( BUT_LEFT ) || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
             // No double-click actions currently defined
         }
@@ -448,6 +446,20 @@ int PL_SELECTION_TOOL::ClearSelection( const TOOL_EVENT& aEvent )
 }
 
 
+int PL_SELECTION_TOOL::SelectAll( const TOOL_EVENT& aEvent )
+{
+    for( DS_DATA_ITEM* dataItem : DS_DATA_MODEL::GetTheInstance().GetItems() )
+    {
+        for( DS_DRAW_ITEM_BASE* item : dataItem->GetDrawItems() )
+            select( item );
+    }
+
+    m_toolMgr->ProcessEvent( EVENTS::SelectedEvent );
+
+    return 0;
+}
+
+
 void PL_SELECTION_TOOL::RebuildSelection()
 {
     m_selection.Clear();
@@ -546,6 +558,8 @@ void PL_SELECTION_TOOL::setTransitions()
 
     Go( &PL_SELECTION_TOOL::Main,                  ACTIONS::selectionActivate.MakeEvent() );
     Go( &PL_SELECTION_TOOL::ClearSelection,        ACTIONS::selectionClear.MakeEvent() );
+    Go( &PL_SELECTION_TOOL::SelectAll, ACTIONS::selectAll.MakeEvent() );
+    Go( &PL_SELECTION_TOOL::ClearSelection, ACTIONS::unselectAll.MakeEvent() );
 
     Go( &PL_SELECTION_TOOL::AddItemToSel,          ACTIONS::selectItem.MakeEvent() );
     Go( &PL_SELECTION_TOOL::AddItemsToSel,         ACTIONS::selectItems.MakeEvent() );

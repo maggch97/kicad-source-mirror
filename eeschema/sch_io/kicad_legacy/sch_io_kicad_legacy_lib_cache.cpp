@@ -74,16 +74,14 @@ void SCH_IO_KICAD_LEGACY_LIB_CACHE::Load()
 {
     if( !m_libFileName.FileExists() )
     {
-        THROW_IO_ERROR( wxString::Format( _( "Library file '%s' not found." ),
-                                          m_libFileName.GetFullPath() ) );
+        THROW_IO_ERRORF( _( "Library file '%s' not found." ), m_libFileName.GetFullPath() );
     }
 
     wxCHECK_RET( m_libFileName.IsAbsolute(),
-                 wxString::Format( "Cannot use relative file paths in legacy plugin to "
-                                   "open library '%s'.", m_libFileName.GetFullPath() ) );
+                 wxString::Format( "Cannot use relative file paths in legacy plugin to open library '%s'.",
+                                   m_libFileName.GetFullPath() ) );
 
-    wxLogTrace( traceSchLegacyPlugin, "Loading legacy symbol file '%s'",
-                m_libFileName.GetFullPath() );
+    wxLogTrace( traceSchLegacyPlugin, "Loading legacy symbol file '%s'", m_libFileName.GetFullPath() );
 
     FILE_LINE_READER reader( m_libFileName.GetFullPath() );
 
@@ -184,10 +182,7 @@ void SCH_IO_KICAD_LEGACY_LIB_CACHE::loadDocs()
         return;
 
     if( !fn.IsFileReadable() )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Insufficient permissions to read library '%s'." ),
-                                          fn.GetFullPath() ) );
-    }
+        THROW_IO_ERRORF( _( "Insufficient permissions to read library '%s'." ), fn.GetFullPath() );
 
     FILE_LINE_READER reader( fn.GetFullPath() );
 
@@ -216,7 +211,7 @@ void SCH_IO_KICAD_LEGACY_LIB_CACHE::loadDocs()
 
         if( it == m_symbols.end() )
         {
-            wxLogWarning( "Symbol '%s' not found in library:\n\n"
+            wxLogTrace( traceSchLegacyPlugin, "Symbol '%s' not found in library:\n\n"
                           "'%s'\n\nat line %d offset %d",
                           aliasName,
                           fn.GetFullPath(),
@@ -671,7 +666,7 @@ void SCH_IO_KICAD_LEGACY_LIB_CACHE::loadField( std::unique_ptr<LIB_SYMBOL>& aSym
         // Fields in RAM must always have names, because we are trying to get
         // less dependent on field ids and more dependent on names.
         // Plus assumptions are made in the field editors.
-        field->SetName( GetCanonicalFieldName( field->GetId() ) );
+        field->SetName( GetDefaultFieldName( field->GetId(), UNTRANSLATED ) );
 
         // Ensure the VALUE field = the symbol name (can be not the case
         // with malformed libraries: edited by hand, or converted from other tools)
@@ -1723,11 +1718,11 @@ void SCH_IO_KICAD_LEGACY_LIB_CACHE::saveField( const SCH_FIELD* aField, int aLeg
                       aField->IsItalic() ? 'I' : 'N',
                       aField->IsBold() ? 'B' : 'N' );
 
-    // Translated names were stored in legacy files, so it's important not to save the
-    // default names as they weren't yet canonical.
+    // Translated names were stored in legacy files, so preserve the stored name instead of
+    // replacing it with the untranslated default name.
     if( !aField->IsMandatory()
             && !aField->GetName().IsEmpty()
-            && aField->GetName() != GetUserFieldName( aLegacyFieldIdx, !DO_TRANSLATE ) )
+            && aField->GetName() != GetUserFieldName( aLegacyFieldIdx, UNTRANSLATED ) )
     {
         aFormatter.Print( 0, " %s", EscapedUTF8( aField->GetName() ).c_str() );
     }
@@ -1939,8 +1934,10 @@ void SCH_IO_KICAD_LEGACY_LIB_CACHE::DeleteSymbol( const wxString& aSymbolName )
     LIB_SYMBOL_MAP::iterator it = m_symbols.find( aSymbolName );
 
     if( it == m_symbols.end() )
-        THROW_IO_ERROR( wxString::Format( _( "library %s does not contain a symbol named %s" ),
-                                          m_libFileName.GetFullName(), aSymbolName ) );
+    {
+        THROW_IO_ERRORF( _( "library %s does not contain a symbol named %s" ),
+                         m_libFileName.GetFullName(), aSymbolName );
+    }
 
     LIB_SYMBOL* symbol = it->second;
 

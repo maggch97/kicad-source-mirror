@@ -23,6 +23,8 @@ package kiapi.board.types;
 
 import "google/protobuf/any.proto";
 import "common/types/base_types.proto";
+import "common/types/embedded_files.proto";
+import "common/types/enums.proto";
 
 enum BoardLayer
 {
@@ -153,6 +155,19 @@ message Track
   kiapi.common.types.LockedState locked = 5;
   BoardLayer                     layer  = 6;
   Net                            net    = 7;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 8;
+
+  // Whether to show this shape on the solder mask layer and how much mask to expose if so.
+  // This field only applies to shapes on outer copper layers and is ignored otherwise.
+  // Since: 10.0.7
+  SolderMaskOverrides solder_mask = 9;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 10;
 }
 
 // Represents an arc track (not a PCB_SHAPE in arc shape)
@@ -168,6 +183,19 @@ message Arc
   kiapi.common.types.LockedState locked = 6;
   BoardLayer                     layer  = 7;
   Net                            net    = 8;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 9;
+
+  // Whether to show this shape on the solder mask layer and how much mask to expose if so.
+  // This field only applies to shapes on outer copper layers and is ignored otherwise.
+  // Since: 10.0.7
+  SolderMaskOverrides solder_mask = 10;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 11;
 }
 
 // What copper layer shape mode the padstack uses
@@ -246,8 +274,14 @@ message ZoneConnectionSettings
 
 message SolderMaskOverrides
 {
-  // Solder mask expansion/contraction
+  // Solder mask expansion/contraction.  Absence of this field means the margin will be taken from this object's
+  // parent or the board design rules.
   kiapi.common.types.Distance solder_mask_margin = 1;
+
+  // When set to true, this shape will also appear on the solder mask layer, meaning the shape will be exposed
+  // copper.  This setting only has meaning for tracks and graphic shapes.  It is ignored for pads and footprints.
+  // Since: 10.0.7
+  bool expose_copper = 2;
 }
 
 message SolderPasteOverrides
@@ -465,6 +499,22 @@ enum ViaType
   VT_BURIED = 5;  // Since V10
 }
 
+// Internal: this enum is not subject to API stability.
+enum ZoneLayerOverride
+{
+  ZLO_UNKNOWN = 0;
+  ZLO_NONE = 1;
+  ZLO_FORCE_FLASHED = 2;
+  ZLO_FORCE_NO_ZONE_CONNECTION = 3;
+}
+
+// Internal: this message is not subject to API stability.
+message ZoneLayerOverrideEntry
+{
+  BoardLayer layer = 1;
+  ZoneLayerOverride override = 2;
+}
+
 // Represents a via
 message Via
 {
@@ -482,6 +532,28 @@ message Via
   Net net = 5;
 
   ViaType type = 6;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 7;
+
+  // Since: 10.0.7
+  PadTeardropSettings teardrop = 8;
+
+  // Layer-specific overrides for zone connection behavior
+  // Unstable: zone layer overrides are a KiCad implementation detail and the contents of this field are not
+  // subject to API stability guarantees.  API clients should not depend on the contents of this field.  It
+  // is exposed here to allow for full round-tripping of objects.
+  // Since: 10.0.7
+  repeated ZoneLayerOverrideEntry zone_layer_overrides = 9;
+
+  // True if this is a "free" via that is not automatically updated by netlist changes
+  // Since: 10.0.7
+  bool is_free = 10;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 11;
 }
 
 message BoardGraphicShape
@@ -491,6 +563,40 @@ message BoardGraphicShape
   Net net = 3;
   kiapi.common.types.KIID  id = 4;
   kiapi.common.types.LockedState locked = 5;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 6;
+
+  // Whether to show this shape on the solder mask layer and how much mask to expose if so.
+  // This field only applies to shapes on outer copper layers and is ignored otherwise.
+  // Since: 10.0.7
+  SolderMaskOverrides solder_mask = 7;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 8;
+
+  // Options that only apply to custom shape (primitive) items within a pad's padstack.
+  // This field must not be set for other board shapes.
+  // Since: 11.0
+  PadCustomShapeOptions pad_custom_shape_options = 9;
+}
+
+// Options for shapes that have a special role in custom-shape pads
+// Since: 11.0
+message PadCustomShapeOptions
+{
+  oneof role
+  {
+    // A rectangle in which the pad number and net name are drawn.  Only valid on rectangle
+    // shapes.  At most one number box is currently supported per pad (the first one found).
+    bool is_number_box = 1;
+
+    // A segment defining a custom thermal spoke template for zone filling.  Only valid on
+    // segment shapes.  Multiple spoke templates may exist per pad.
+    bool is_thermal_spoke_template = 2;
+  }
 }
 
 enum BarcodeKind
@@ -533,6 +639,14 @@ message Barcode
   bool knockout = 12;
   kiapi.common.types.Vector2 knockout_margin = 13;
   kiapi.common.types.LockedState locked = 14;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 15;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 16;
 }
 
 // A board-specific text object, existing on a board layer
@@ -543,6 +657,14 @@ message BoardText
   BoardLayer layer = 3;
   bool knockout = 4;
   kiapi.common.types.LockedState locked = 5;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 6;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 7;
 }
 
 // A board-specific textbox, existing on a board layer
@@ -552,6 +674,17 @@ message BoardTextBox
   kiapi.common.types.TextBox textbox = 2;
   BoardLayer layer = 3;
   kiapi.common.types.LockedState locked = 4;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 5;
+
+  // Since: 10.0.7
+  bool knockout = 6;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 7;
 }
 
 // NOTE: There has been some discussion about what to do with pad attributes and properties.
@@ -573,6 +706,20 @@ enum PadSimElectricalType
     PSET_NONE = 0;
     PSET_SOURCE = 1;
     PSET_SINK = 2;
+}
+
+enum PadFabricationProperty
+{
+  PFP_UNKNOWN = 0;
+  PFP_NONE = 1;
+  PFP_BGA = 2;
+  PFP_FIDUCIAL_GLOBAL = 3;
+  PFP_FIDUCIAL_LOCAL = 4;
+  PFP_TESTPOINT = 5;
+  PFP_HEATSINK = 6;
+  PFP_CASTELLATED = 7;
+  PFP_MECHANICAL = 8;
+  PFP_PRESSFIT = 9;
 }
 
 enum CustomPadShapeZoneFillStrategy
@@ -628,6 +775,27 @@ message Pad
 
   // Since: 11.0.0
   PadSimElectricalType sim_electrical_type = 12;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 13;
+
+  // Since: 10.0.7
+  PadTeardropSettings teardrop = 14;
+
+  // Layer-specific overrides for zone connection behavior
+  // Unstable: zone layer overrides are a KiCad implementation detail and the contents of this field are not
+  // subject to API stability guarantees.  API clients should not depend on the contents of this field.  It
+  // is exposed here to allow for full round-tripping of objects.
+  // Since: 10.0.7
+  repeated ZoneLayerOverrideEntry zone_layer_overrides = 15;
+
+  // Since: 10.0.7
+  PadFabricationProperty fab_property = 16;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 17;
 }
 
 enum ZoneType
@@ -639,13 +807,13 @@ enum ZoneType
   ZT_TEARDROP = 4;
 }
 
-enum TeardropType
+enum ZoneTeardropType
 {
-  TDT_UNKNOWN = 0;
-  TDT_NONE = 1;
-  TDT_UNSPECIFIED = 2;
-  TDT_VIA_PAD = 3;
-  TDT_TRACK_END = 4;
+  ZTDT_UNKNOWN = 0;
+  ZTDT_NONE = 1;
+  ZTDT_UNSPECIFIED = 2;
+  ZTDT_VIA_PAD = 3;
+  ZTDT_TRACK_END = 4;
 }
 
 enum IslandRemovalMode
@@ -708,9 +876,57 @@ message ThievingFillSettings
   kiapi.common.types.Angle orientation = 6;
 }
 
-message TeardropSettings
+message ZoneTeardropSettings
 {
-  TeardropType type = 1;
+  ZoneTeardropType type = 1;
+}
+
+enum PadTeardropMode
+{
+  PTM_UNKNOWN = 0;
+  PTM_DISABLED = 1;
+  PTM_ENABLED = 2;
+}
+
+// Settings for teardrops applied to pads and vias
+// Since: 10.0.7
+message PadTeardropSettings
+{
+  // Whether to enable teardrops
+  PadTeardropMode mode = 1;
+
+  bool curved_edges = 2;
+
+  // True to allow a teardrop to extend over multiple (currently up to two) connected track segments if the first
+  // segment is too short to achieve the best teardrop length.
+  bool allow_multiple_track_segments = 3;
+
+  // True to prefer zone connections instead of teardrops for pads that are also connected to a copper zone.
+  bool prefer_zone_connection = 4;
+
+  // If absent, no maximum length constraint is applied
+  kiapi.common.types.Distance max_length = 5;
+
+  // If absent, no maximum width constraint is applied
+  kiapi.common.types.Distance max_width = 6;
+
+  // Preferred teardrop length as ratio of the pad/via size.
+  double best_length_ratio = 7;
+
+  // Preferred teardrop width as a ratio of the pad/via size.
+  double best_width_ratio = 8;
+
+  // Maximum ratio between the pad/via size and connected track width that will create a teardrop.
+  // 1.0 always creates a teardrop; 0.0 never does.
+  double max_track_width_ratio = 9;
+}
+
+enum ZoneCornerSmoothingMode
+{
+  ZCSM_UNKNOWN = 0;
+  ZCSM_NONE = 1;
+  ZCSM_CHAMFER = 2;
+  ZCSM_FILLET = 3;
 }
 
 message CopperZoneSettings
@@ -731,9 +947,15 @@ message CopperZoneSettings
 
   Net net = 8;
 
-  TeardropSettings teardrop = 9;
+  ZoneTeardropSettings teardrop = 9;
 
   ThievingFillSettings thieving_settings = 10;
+
+  // Since: 10.0.7
+  ZoneCornerSmoothingMode corner_smoothing = 11;
+
+  // Since: 10.0.7
+  kiapi.common.types.Distance corner_radius = 12;
 }
 
 enum PlacementRuleSourceType
@@ -817,6 +1039,14 @@ message Zone
   kiapi.common.types.LockedState locked = 12;
 
   repeated ZoneLayerProperties layer_properties = 13;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 14;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 15;
 }
 
 // An aligned dimension is drawn parallel to the line segment between the start and end points
@@ -965,6 +1195,14 @@ message Dimension
   kiapi.common.types.Distance extension_offset = 21;
   DimensionTextPosition text_position = 22;
   bool keep_text_aligned = 23;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 24;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 25;
 }
 
 message ReferenceImage
@@ -979,6 +1217,73 @@ message ReferenceImage
   bytes image_data = 6;
 
   kiapi.common.types.LockedState locked = 7;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 8;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 9;
+}
+
+message GridItemAffects
+{
+  bool cursor = 1;
+  bool routing = 2;
+  bool placement = 3;
+}
+
+message CartesianGridItemAttributes
+{
+  // Half the width of the grid in x/y axis
+  kiapi.common.types.Vector2 extent = 1;
+
+  // Spacing between snap points on x/y axis
+  kiapi.common.types.Vector2 spacing = 2;
+}
+
+message PolarGridItemAttributes
+{
+  // Radial extent from the center
+  kiapi.common.types.Distance radius_extent = 1;
+
+  // Radial spacing of snap points
+  kiapi.common.types.Distance radius_spacing = 2;
+
+  // Angle covered by the grid
+  kiapi.common.types.Angle phi_extent = 3;
+
+  // Angular spacing between snap points
+  kiapi.common.types.Angle phi_spacing = 4;
+}
+
+// A local grid placed on the board, overriding the background grid inside its coverage.
+// Since: 11.0.0
+message GridItem
+{
+  kiapi.common.types.KIID id = 1;
+
+  // Centre and rotation of the grid
+  kiapi.common.types.Vector2 position = 2;
+  kiapi.common.types.Angle orientation = 3;
+
+  oneof geometry {
+    CartesianGridItemAttributes cartesian = 4;
+    PolarGridItemAttributes polar = 5;
+  }
+
+  uint32 priority = 6;
+
+  // Every Nth line is drawn ephasized; 0 for no major ticks
+  uint32 tick_interval = 7;
+
+  GridItemAffects affects = 8;
+
+  kiapi.common.types.LockedState locked = 9;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 10;
 }
 
 message Group
@@ -986,6 +1291,78 @@ message Group
   kiapi.common.types.KIID id = 1;
   string name = 2;
   repeated kiapi.common.types.KIID items = 3;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 4;
+
+  // Since: 10.0.7
+  kiapi.common.types.LockedState locked = 5;
+
+  // Optional design block identifier used for groups that have design block library links.
+  // Since: 10.0.7
+  kiapi.common.types.LibraryIdentifier lib_id = 6;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 7;
+}
+
+// A geometric constraint between board items (issue #2329).
+enum ConstraintType
+{
+  CT_UNKNOWN = 0;
+  CT_COINCIDENT = 1;
+  CT_HORIZONTAL = 2;
+  CT_VERTICAL = 3;
+  CT_PARALLEL = 4;
+  CT_PERPENDICULAR = 5;
+  CT_COLLINEAR = 6;
+  CT_SYMMETRIC = 7;
+  CT_EQUAL_LENGTH = 8;
+  CT_EQUAL_RADIUS = 9;
+  CT_POINT_ON_LINE = 10;
+  CT_MIDPOINT = 11;
+  CT_FIXED_POSITION = 12;
+  CT_FIXED_LENGTH = 13;
+  CT_CONCENTRIC = 14;
+  CT_FIXED_RADIUS = 15;
+  CT_ANGULAR_DIMENSION = 16;
+  CT_TANGENT = 17;
+  CT_ARC_ANGLE = 18;
+}
+
+enum ConstraintAnchor
+{
+  CA_UNKNOWN = 0;
+  CA_WHOLE = 1;
+  CA_START = 2;
+  CA_END = 3;
+  CA_MID = 4;
+  CA_CENTER = 5;
+  CA_RADIUS = 6;
+  CA_VERTEX = 7;
+}
+
+message ConstraintMember
+{
+  kiapi.common.types.KIID item = 1;
+  ConstraintAnchor anchor = 2;
+
+  // Vertex ordinal; only present when anchor == CA_VERTEX
+  optional int32 index = 3;
+}
+
+message Constraint
+{
+  kiapi.common.types.KIID id = 1;
+  ConstraintType type = 2;
+  repeated ConstraintMember members = 3;
+  optional double value = 4;
+  bool driving = 5;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 6;
 }
 
 message FieldId
@@ -1001,6 +1378,9 @@ message Field
 
   // Since 9.0.1
   bool visible = 4;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 5;
 }
 
 enum FootprintMountingStyle
@@ -1024,6 +1404,26 @@ message FootprintAttributes
 
   // Since: 9.0.7
   bool allow_soldermask_bridges = 9;
+
+  // Since: 11.0.0
+  bool exclude_from_simulation = 10;
+}
+
+// Per-variant overrides for a footprint instance
+// Since: 10.0.7
+message FootprintVariant
+{
+  // Variant name that these overrides apply to.
+  string name = 1;
+
+  bool do_not_populate = 2;
+  bool exclude_from_bill_of_materials = 3;
+  bool exclude_from_position_files = 4;
+
+  bool exclude_from_simulation = 5;
+
+  // Map of field name to override value in this variant
+  map<string, string> fields = 6;
 }
 
 message NetTieDefinition
@@ -1126,4 +1526,482 @@ message FootprintInstance
   // or the empty string if there is no associated symbol
   // Since: 9.0.7
   string symbol_footprint_filters = 16;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  // Since: 10.0.6
+  kiapi.common.types.KIID parent = 17;
+
+  // Since: 10.0.7
+  kiapi.common.types.EmbeddedFiles embedded_files = 18;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 19;
+
+  // Per-variant data for this footprint instance
+  // Since: 10.0.7
+  repeated FootprintVariant variants = 20;
+}
+
+// Since: 10.0.7
+message TableCell
+{
+  BoardTextBox text_box = 1;
+  int32 column_span = 2;
+  int32 row_span = 3;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 4;
+}
+
+// Since: 10.0.7
+enum TableStrokeMode
+{
+  TSM_UNKNOWN = 0;
+  TSM_DISABLED = 1;
+  TSM_ENABLED = 2;
+}
+
+// Since: 10.0.7
+message Table
+{
+  kiapi.common.types.KIID id = 1;
+
+  int32 column_count = 2;
+  repeated int32 column_widths = 3;
+  repeated int32 row_heights = 4;
+
+  BoardLayer layer = 5;
+
+  kiapi.common.types.LockedState locked = 6;
+
+  repeated TableCell cells = 7;
+
+  TableStrokeMode external_border = 8;
+  TableStrokeMode header_separator = 9;
+  kiapi.common.types.StrokeAttributes border_stroke = 10;
+
+  TableStrokeMode row_separators = 11;
+  TableStrokeMode column_separators = 12;
+  kiapi.common.types.StrokeAttributes separators_stroke = 13;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property; changing
+  // it will not change the object's parent
+  kiapi.common.types.KIID parent = 14;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 15;
+}
+
+// Since: 11.0
+enum DrillChartColumnId
+{
+  DCC_UNKNOWN = 0;
+  DCC_SYMBOL = 1;
+  DCC_DRILL_DIAMETER = 2;
+  DCC_SLOT_SIZE = 3;
+  DCC_PLATING = 4;
+  DCC_OPERATION_COUNT = 5;
+  DCC_SITE_COUNT = 6;
+  DCC_LAYER_SPAN = 7;
+  DCC_OPERATION = 8;
+  DCC_PROTECTION = 9;
+  DCC_BACKDRILL_STUB = 10;
+  DCC_ASPECT_RATIO = 11;
+  DCC_DESCRIPTION = 12;
+}
+
+// Since: 11.0
+message DrillChartColumn
+{
+  DrillChartColumnId id = 1;
+  string heading = 2;
+  kiapi.common.types.HorizontalAlignment align = 3;
+  kiapi.common.types.Distance width = 4;
+}
+
+// Since: 11.0
+message DrillChartFilter
+{
+  bool plated = 1;
+  bool non_plated = 2;
+  bool vias = 3;
+  bool slots = 4;
+  bool backdrills = 5;
+  bool castellated = 6;
+}
+
+// Since: 11.0
+message DrillSpan
+{
+  BoardLayer start_layer = 1;
+  BoardLayer end_layer = 2;
+  bool is_backdrill = 3;
+  bool is_non_plated = 4;
+}
+
+// Since: 11.0
+message DrillChart
+{
+  Table table = 1;
+
+  DrillChartFilter filter = 2;
+  repeated DrillChartColumn columns = 3;
+
+  kiapi.common.types.Units units = 4;
+  int32 precision = 5;
+
+  bool show_totals = 6;
+
+  map<int32, int32> row_shapes = 7;
+  int32 symbol_column = 8;
+
+  map<int32, string> row_keys = 9;
+}
+
+// Since: 11.0
+message DrillMap
+{
+  kiapi.common.types.KIID id = 1;
+  BoardLayer layer = 2;
+  kiapi.common.types.Vector2 position = 3;
+  kiapi.common.types.LockedState locked = 4;
+
+  bool all_spans = 5;
+  DrillSpan span = 6;
+
+  bool outline_slots = 7;
+  bool guide_cross = 8;
+  kiapi.common.types.Distance symbol_size = 9;
+}
+
+// Since: 10.0.7
+message ReferencePoint
+{
+  kiapi.common.types.KIID id = 1;
+  BoardLayer layer = 2;
+  kiapi.common.types.Vector2 position = 3;
+  kiapi.common.types.Distance size = 4;
+  kiapi.common.types.LockedState locked = 5;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property;
+  // changing it will not change the object's parent
+  kiapi.common.types.KIID parent = 6;
+
+  // Since: 11.0
+  repeated kiapi.common.types.CustomProperty custom_properties = 7;
+}
+
+// A min/opt/max range of time values, in attoseconds.
+// Since: 11.0
+message TimeRange
+{
+  optional int64 min_as = 1;
+  optional int64 opt_as = 2;
+  optional int64 max_as = 3;
+}
+
+enum TuningPatternMode
+{
+  TPM_UNKNOWN = 0;
+  TPM_SINGLE = 1;
+  TPM_DIFF_PAIR = 2;
+  TPM_DIFF_PAIR_SKEW = 3;
+}
+
+enum TuningPatternMeanderSide
+{
+  TPMS_UNKNOWN = 0;
+  TPMS_DEFAULT = 1;
+  TPMS_LEFT = 2;
+  TPMS_RIGHT = 3;
+}
+
+enum TuningPatternCornerStyle
+{
+  TPCS_UNKNOWN = 0;
+  TPCS_CHAMFERED = 1;
+  TPCS_ROUNDED = 2;
+}
+
+enum TuningPatternStatus
+{
+  TPS_UNKNOWN = 0;
+  TPS_TOO_SHORT = 1;
+  TPS_TOO_LONG = 2;
+  TPS_TUNED = 3;
+}
+
+enum TuningPatternTargetMode
+{
+  TPTM_UNKNOWN = 0;
+  TPTM_LENGTH = 1;
+  TPTM_TIME_DOMAIN = 2;
+}
+
+// Options that control how a tuning pattern generates tracks
+// Since: 11.0
+message TuningPatternSettings
+{
+  // Initial side of the base track to place meanders on
+  TuningPatternMeanderSide initial_side = 1;
+
+  TuningPatternCornerStyle corner_style = 2;
+
+  // Rounding percentage of rounded corners (0 - 100)
+  int32 corner_radius_percent = 3;
+
+  // Only place meanders on one side of the tuned line
+  bool single_sided = 4;
+
+  // Maximum meander amplitude
+  kiapi.common.types.Distance max_amplitude = 5;
+
+  // Minimum meander amplitude
+  kiapi.common.types.Distance min_amplitude = 6;
+
+  // Meandering period/spacing
+  kiapi.common.types.Distance min_spacing = 7;
+}
+
+// The resulting state of generating a tuning pattern.  All fields are read-only.
+// Since: 11.0
+message TuningPatternState
+{
+  TuningPatternStatus status = 1;
+
+  // Length (or delay, when is_time_domain is true) produced by the last tuning operation.
+  // In nanometers or attoseconds depending on is_time_domain of the related TuningPattern.
+  optional int64 tuning_value = 2;
+}
+
+// A tuning pattern is an item generator that generates copper tracks in a serpentine pattern to
+// attempt to meet a target length requirement on a routed track or differential pair (the base
+// track).
+// Since: 11.0
+message TuningPattern
+{
+  kiapi.common.types.KIID id = 1;
+
+  BoardLayer layer = 2;
+
+  // Start point of the tuning pattern
+  kiapi.common.types.Vector2 origin = 3;
+
+  // End point of the tuning pattern
+  kiapi.common.types.Vector2 end = 4;
+
+  // Whether to tune a single track, diff pair length, or diff pair skew
+  TuningPatternMode mode = 5;
+
+  // Settings controlling the tracks that will be generated
+  TuningPatternSettings settings = 6;
+
+  // Whether to tune in the time domain (delay) or the length domain
+  TuningPatternTargetMode target_mode = 7;
+
+  oneof target {
+    // Target length range for the tuned line.  Only meaningful when target_mode is TPTM_LENGTH
+    // and mode is not DIFF_PAIR_SKEW.  Absent fields are unconstrained.
+    kiapi.common.types.MinOptMax target_length = 8;
+
+    // Target propagation delay range for the tuned line, in attoseconds.  Only meaningful
+    // when target_mode is TPTM_TIME_DOMAIN and mode is not DIFF_PAIR_SKEW.  Absent fields are
+    // unconstrained.
+    TimeRange target_delay = 9;
+
+    // Target skew range for diff pair de-skewing.  Only meaningful when target_mode is TPTM_LENGTH
+    // and mode is DIFF_PAIR_SKEW.  Absent fields are unconstrained.
+    kiapi.common.types.MinOptMax target_skew = 10;
+
+    // Target skew delay range for diff pair de-skewing, in attoseconds.  Only meaningful
+    // when mode is DIFF_PAIR_SKEW and target_mode is TPTM_TIME_DOMAIN.  Absent fields are
+    // unconstrained.
+    TimeRange target_skew_delay = 11;
+  }
+
+  // Override length-matching custom design rules with the pattern's target values
+  bool override_custom_rules = 12;
+
+  // The results of the most recent regeneration of the tuning pattern
+  TuningPatternState state = 13;
+
+  kiapi.common.types.LockedState locked = 14;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property;
+  // changing it will not change the object's parent
+  kiapi.common.types.KIID parent = 15;
+
+  // KIIDs of the items generated by this pattern (tracks, vias, arcs)
+  repeated kiapi.common.types.KIID members = 16;
+
+  // Optional custom user properties for this pattern
+  repeated kiapi.common.types.CustomProperty custom_properties = 17;
+}
+
+// A grid cell index (column, row) used by via stitching patterns.  Unitless.
+message GridCell
+{
+  sint32 i = 1;
+  sint32 j = 2;
+}
+
+enum ViaStitchLayout
+{
+  VSL_UNKNOWN = 0;
+
+  // Regular row/column grid
+  VSL_PLAIN = 1;
+
+  // Odd rows shifted by half the pitch
+  VSL_STAGGERED = 2;
+
+  // Tiled Poisson distribution
+  VSL_POISSON = 3;
+}
+
+enum ViaStitchMode
+{
+  VSM_UNKNOWN = 0;
+
+  // Fill the outline with vias in a pattern
+  VSM_STITCH = 1;
+
+  // Place vias to guard a net contained within the outline
+  VSM_GUARD = 2;
+}
+
+message ViaStitchGridSettings
+{
+  // Offset of the placement grid relative to the global origin, in [0, pitch) on each axis.
+  kiapi.common.types.Vector2 origin_offset = 1;
+
+  // Seed for the Poisson tile shift.
+  optional uint32 seed = 2;
+
+  // Grid cells (column, row) explicitly excluded from via placement.
+  // Cell indices are relative to the grid defined by origin_offset and pitch.
+  repeated GridCell excluded_cells = 3;
+}
+
+message ViaStitchGuardSettings
+{
+  // The net whose items are surrounded by guard vias.
+  Net guarded_net = 10;
+}
+
+// A via stitch area is an item generator that fills a region with stitching vias, or places
+// guard vias around a net.
+// Since: 11.0
+message ViaStitchArea
+{
+  kiapi.common.types.KIID id = 1;
+
+  BoardLayer layer = 2;
+
+  // Region to fill with vias.  A single outline with optional holes.
+  kiapi.common.types.PolySet outline = 3;
+
+  // Center-to-center spacing between vias
+  kiapi.common.types.Distance pitch = 4;
+
+  ViaStitchLayout layout = 5;
+
+  ViaStitchMode mode = 6;
+
+  oneof mode_specific_settings {
+    // Settings used when mode is VSM_STITCH
+    ViaStitchGridSettings grid_settings = 7;
+
+    ViaStitchGuardSettings guard_settings = 8;
+  }
+
+  // Net assigned to the stitching vias.
+  Net net = 9;
+
+  // Absolute board positions explicitly excluded from via placement.  Used by the POISSON
+  // layout and GUARD mode, where vias are not placed on a grid.
+  repeated kiapi.common.types.Vector2 excluded_positions = 12;
+
+  // The via definition used for each generated via.  Its padstack, layer span, teardrop
+  // settings and net are inherited by generated vias.
+  Via via_template = 13;
+
+  kiapi.common.types.LockedState locked = 14;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property;
+  // changing it will not change the object's parent
+  kiapi.common.types.KIID parent = 15;
+
+  // KIIDs of the vias generated by this pattern
+  repeated kiapi.common.types.KIID members = 16;
+
+  // Optional custom user properties for this stitch area
+  repeated kiapi.common.types.CustomProperty custom_properties = 17;
+}
+
+enum ViaStackStyle
+{
+  VSK_UNKNOWN = 0;
+
+  // Hops are coaxial (all at the same position)
+  VSK_STACKED = 1;
+
+  // Hops are offset horizontally, connected by traces
+  VSK_STAGGERED = 2;
+}
+
+// A via stack is an item generator that creates a stack of microvias (and optional connecting
+// traces) forming a connection across several layers.
+// Since: 11.0
+message ViaStack
+{
+  kiapi.common.types.KIID id = 1;
+
+  // The start (top) layer of the stack.  The stack spans from start_layer to end_layer.
+  BoardLayer start_layer = 2;
+
+  // The end (bottom) layer of the stack
+  BoardLayer end_layer = 3;
+
+  ViaStackStyle style = 4;
+
+  // Center-to-center distance between hops.  Staggered style only.
+  kiapi.common.types.Distance pitch = 5;
+
+  // Whether hops are copper-filled
+  bool filled = 6;
+
+  // Whether the outermost hop is capped
+  bool capped = 7;
+
+  // Via diameter.  When use_netclass is true, this is ignored and the netclass value is used.
+  kiapi.common.types.Distance via_size = 8;
+
+  // Via drill diameter.  When use_netclass is true, this is ignored and the netclass value is used.
+  kiapi.common.types.Distance via_drill = 9;
+
+  // Take via size and drill from the netclass instead of the explicit values
+  bool use_netclass = 10;
+
+  // Name of the preset this stack was placed from, if any
+  optional string preset_name = 11;
+
+  // Hop center positions for a staggered stack.  Empty for a stacked (coaxial) stack.
+  optional kiapi.common.types.PolyLine hops = 12;
+
+  // Net of the stack.  Read-only; the net is inherited from the copper the stack lands on.
+  Net net = 13;
+
+  kiapi.common.types.LockedState locked = 14;
+
+  // The ID of the parent container for this item (if any).  This is a read-only property;
+  // changing it will not change the object's parent
+  kiapi.common.types.KIID parent = 15;
+
+  // KIIDs of the vias and traces generated by this stack
+  repeated kiapi.common.types.KIID members = 16;
+
+  // Optional custom user properties for this via stack generator
+  repeated kiapi.common.types.CustomProperty custom_properties = 17;
 }

@@ -28,6 +28,11 @@
 class LINE_READER;
 class MSG_PANEL_ITEM;
 
+namespace kiapi::board::types
+{
+    class BoardTextBox;
+}
+
 
 class PCB_TEXTBOX : public PCB_SHAPE, public EDA_TEXT
 {
@@ -62,6 +67,9 @@ public:
 
     void Serialize( google::protobuf::Any &aContainer ) const override;
     bool Deserialize( const google::protobuf::Any &aContainer ) override;
+
+    void Serialize( kiapi::board::types::BoardTextBox& aOutput ) const;
+    bool Deserialize( const kiapi::board::types::BoardTextBox& aInput );
 
     wxString GetFriendlyName() const override { return _( "Text Box" ); }
 
@@ -111,14 +119,10 @@ public:
      * Text angle in the parent footprint's lib frame, or absolute when not
      * in a footprint.
      */
-    const EDA_ANGLE& GetLibTextAngle() const { return m_libTextAngle; }
-    void             SetLibTextAngle( const EDA_ANGLE& aAngle )
-    {
-        m_libTextAngle = aAngle;
-        m_libTextAngle.Normalize();
-    }
+    EDA_ANGLE GetLibTextAngle() const { return m_libTextAngle.GetAngle(); }
+    void      SetLibTextAngle( const EDA_ANGLE& aAngle ) { m_libTextAngle = aAngle; }
 
-    wxString GetShownText( bool aAllowExtraText, int aDepth = 0 ) const override;
+    wxString GetShownText( RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const override;
 
     bool Matches( const EDA_SEARCH_DATA& aSearchData, void* aAuxData ) const override;
 
@@ -143,6 +147,8 @@ public:
 
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
+    const BOX2I GetBoundingBox() const override;
+
     bool HitTest( const VECTOR2I& aPosition, int aAccuracy ) const override;
 
     bool HitTest( const BOX2I& aRect, bool aContained, int aAccuracy = 0 ) const override;
@@ -155,24 +161,27 @@ public:
     }
 
     /**
-     * Function TransformTextToPolySet
      * Convert the text to a polygonSet describing the actual character strokes (one per segment).
      * Used in 3D viewer
      * Circles and arcs are approximated by segments
      * @param aBuffer = SHAPE_POLY_SET to store the polygon corners
      * @param aClearance = the clearance around the text
-     * @param aError = the maximum error to allow when approximating curves
+     * @param aMaxError = the maximum error to allow when approximating curves
+     * @param aErrorLoc
      */
     void TransformTextToPolySet( SHAPE_POLY_SET& aBuffer, int aClearance, int aMaxError,
                                  ERROR_LOC aErrorLoc ) const;
+
+    double GetCoverageArea( int aTextMargin ) const override;
 
     void TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance,
                                   int aMaxError, ERROR_LOC aErrorLoc,
                                   bool aIgnoreLineWidth = false ) const override;
 
-    // @copydoc BOARD_ITEM::GetEffectiveShape
+    /// @copydoc BOARD_ITEM::GetEffectiveShape()
     std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
-                                              FLASHING aFlash = FLASHING::DEFAULT ) const override;
+                                              FLASHING aFlash = FLASHING::DEFAULT,
+                                              DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const override;
 
     wxString GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const override;
 
@@ -184,10 +193,10 @@ public:
 
     EDA_ITEM* Clone() const override;
 
-    ///< Tests whether the border is disabled, as configured by the stroke
+    /// Tests whether the border is disabled, as configured by the stroke
     bool IsBorderEnabled() const;
 
-    ///< Disables the border, this is done by changing the stroke internally
+    /// Disables the border, this is done by changing the stroke internally
     void SetBorderEnabled( bool enabled );
 
     void SetBorderWidth( const int aSize );
@@ -213,11 +222,11 @@ protected:
     bool m_borderEnabled; ///< Controls drawing the border (as defined by the stroke members)
 
 private:
-    int       m_marginLeft;
-    int       m_marginTop;
-    int       m_marginRight;
-    int       m_marginBottom;
-    EDA_ANGLE m_libTextAngle; // Text angle in parent footprint's lib frame
+    int             m_marginLeft;
+    int             m_marginTop;
+    int             m_marginRight;
+    int             m_marginBottom;
+    EDA_ORIENTATION m_libTextAngle; // Text angle in parent footprint's lib frame
 };
 
 #endif  // #define PCB_TEXTBOX_H

@@ -22,9 +22,13 @@
 #define CLASS_BOARD_H_
 
 #include <atomic>
+#include <functional>
 #include <board_item_container.h>
 #include <board_stackup_manager/board_stackup.h>
 #include <core/mirror.h>
+#include <drill/drill_chart_model.h>
+#include <drill/drill_symbol_assigner.h>
+#include <drill/drill_symbol_profile.h>
 #include <embedded_files.h>
 #include <convert_shape_list_to_polygon.h> // for OUTLINE_ERROR_HANDLER
 #include <geometry/shape_poly_set.h>
@@ -57,7 +61,9 @@ class FOOTPRINT;
 class FOOTPRINT_COURTYARD_INDEX;
 class ZONE;
 class PCB_TRACK;
+class PCB_VIA;
 class PAD;
+class PCB_DRILL_MAP;
 class PCB_GROUP;
 class PCB_GENERATOR;
 class PCB_MARKER;
@@ -331,6 +337,36 @@ private:
  */
 class BOARD;
 
+/**
+ * What moved, so a drill consumer can decide whether it cares.
+ */
+/**
+ * Everything the renderers need to draw drill symbols, resolved once.
+ *
+ * Immutable once published, so a painting thread can hold it while another rebuilds.
+ */
+struct DRILL_SYMBOL_CACHE
+{
+    std::map<std::string, DRILL_SYMBOL_ASSIGNMENT>  m_ByGroup;
+    std::map<KIID, std::vector<DRILL_SYMBOL_ENTRY>> m_ByItem;
+
+    /**
+     * Counts for the ${DRILL_*} text variables. Cached here rather than recomputed per
+     * token, because text variables resolve on every redraw of every text item.
+     */
+    DRILL_CHART_TOTALS m_Totals;
+
+    /**
+     * Extent of every hole that carries a mark. A drill map is sized from this, and its
+     * ViewBBox is asked for far too often to walk the board each time.
+     */
+    BOX2I m_HoleExtent;
+
+    uint64_t m_Generation = 0;
+    uint64_t m_Profile = 0;
+};
+
+
 class BOARD_LISTENER
 {
 public:
@@ -342,6 +378,7 @@ public:
     virtual void OnBoardNetSettingsChanged( BOARD& aBoard ) { }
     virtual void OnBoardItemChanged( BOARD& aBoard, BOARD_ITEM* aBoardItem ) { }
     virtual void OnBoardItemsChanged( BOARD& aBoard, std::vector<BOARD_ITEM*>& aBoardItems ) { }
+    virtual void OnBoardSelectionChanged( BOARD& aBoard ) { }
     virtual void OnBoardHighlightNetChanged( BOARD& aBoard ) { }
     virtual void OnBoardRatsnestChanged( BOARD& aBoard ) { }
     virtual void OnBoardCompositeUpdate( BOARD& aBoard, std::vector<BOARD_ITEM*>& aAddedItems,
@@ -405,6 +442,12 @@ public:
         return m_boardUse == BOARD_USE::FPHOLDER;
     }
 
+    PCB_LAYER_ID GetLayer() const override
+    {
+        wxFAIL_MSG( wxT( "BOARD::GetLayer() desn't have meaning.  Don't call it." ) );
+        return UNDEFINED_LAYER;
+    }
+
     void SetFileName( const wxString& aFileName ) { m_fileName = aFileName; }
 
     const wxString &GetFileName() const { return m_fileName; }
@@ -431,11 +474,24 @@ public:
      */
     wxString GetUniqueZoneName( const wxString& aBaseName, const ZONE* aExclude = nullptr ) const;
 
+    /**
+     * Return a name based on aBaseName for which aInUse returns false, adding or incrementing a
+     * _<number> suffix as needed. An empty name is returned unchanged.
+     */
+    static wxString MakeUniqueZoneName( const wxString&                               aBaseName,
+                                        const std::function<bool( const wxString& )>& aInUse );
+
     const GENERATORS& Generators() const { return m_generators; }
 
     PCB_BOARD_OUTLINE*       BoardOutline() { return m_boardOutline; }
     const PCB_BOARD_OUTLINE* BoardOutline() const { return m_boardOutline; }
     void                     UpdateBoardOutline();
+
+    /**
+     * Bumped by every UpdateBoardOutline(), so anything deriving geometry from the edge cuts
+     * can tell whether its own copy is still current.
+     */
+    uint64_t GetBoardOutlineGeneration() const { return m_boardOutlineGeneration; }
 
     const MARKERS& Markers() const { return m_markers; }
 
@@ -460,6 +516,10 @@ public:
      */
     const GROUPS& Groups() const { return m_groups; }
 
+    /// Geometric constraints (#2329) owned by this board.  Like groups, these carry no
+    /// geometry of their own and reference other board items by KIID.
+    const CONSTRAINTS& Constraints() const { return m_constraints; }
+
     const std::vector<BOARD_CONNECTED_ITEM*> AllConnectedItems();
 
     const std::map<wxString, wxString>& GetProperties() const { return m_properties; }
@@ -476,6 +536,8 @@ public:
     void AddVariant( const wxString& aVariantName );
     void DeleteVariant( const wxString& aVariantName );
     void RenameVariant( const wxString& aOldName, const wxString& aNewName );
+    void CopyVariant( const wxString& aOldName, const wxString& aNewName,
+                      const wxString& aNewDescription = wxEmptyString );
 
     wxString GetVariantDescription( const wxString& aVariantName ) const;
     void SetVariantDescription( const wxString& aVariantName, const wxString& aDescription );
@@ -520,10 +582,64 @@ public:
     void SetFileFormatVersionAtLoad( int aVersion ) { m_fileFormatVersionAtLoad = aVersion; }
     int GetFileFormatVersionAtLoad() const { return m_fileFormatVersionAtLoad; }
 
+    /**
+     * Bumped whenever anything a drill chart or map reports on has moved.
+     *
+     * Charts record the value their cells were built from, so staleness is a comparison
+     * rather than a guess. Item callbacks alone are not enough. Layer renames, stackup edits,
+     * rule changes and text variables all change what a chart prints without touching a pad
+     * or a via, so those paths call this too.
+     */
+    void BumpDrillModelGeneration();
+
+    uint64_t GetDrillModelGeneration() const { return m_drillModelGeneration; }
+
+    void bumpDrillModelFor( const std::vector<BOARD_ITEM*>& aItems );
+
+    /**
+     * Container-boundary notification, so an item that arrives or leaves without going
+     * through a commit still invalidates the drill caches and the map layer set.
+     */
+    void noteDrillModelChange( BOARD_ITEM* aItem );
+
+    /**
+     * Layers that currently have a drill map on them.
+     *
+     * Pads and vias consult this from ViewGetLayers(), so it has to be cheap and it has to be
+     * refreshed whenever a map is added, removed or moved.
+     */
+    const LSET& DrillSymbolLayers() const { return m_drillSymbolLayers; }
+
+    void RefreshDrillSymbolLayers();
+
+    /**
+     * Resolved drill symbols, by group and by owning item.
+     *
+     * The painter asks per hole while repainting, so recomputing would make a redraw
+     * quadratic in the hole count. Keyed on the drill generation and a profile fingerprint,
+     * which between them cover everything the answer depends on.
+     *
+     * Handed out as a shared immutable snapshot rather than a reference, because painting
+     * runs on several threads and a caller must not be reading a map that a later thread
+     * replaces.
+     */
+    std::shared_ptr<const DRILL_SYMBOL_CACHE> DrillSymbolCache() const;
+
+    /**
+     * Every map on this layer. Renderers need them because a map's span filter decides
+     * which of a hole's operations get a mark, and the UI is not the only way one arrives.
+     */
+    std::vector<const PCB_DRILL_MAP*> DrillMapsOnLayer( PCB_LAYER_ID aLayer ) const;
+
+    /**
+     * Include every displaced copy of a hole-owned drill symbol in its view bounds. Callers
+     * are pad and track ViewBBox(), so this returns immediately when no map exists.
+     */
+    BOX2I ExpandBoundingBoxForDrillSymbols( const BOX2I& aBoundingBox ) const;
+
     void SetGenerator( const wxString& aGenerator ) { m_generator = aGenerator; }
     const wxString& GetGenerator() const { return m_generator; }
 
-    ///< @copydoc BOARD_ITEM_CONTAINER::Add()
     void Add( BOARD_ITEM* aItem, ADD_MODE aMode = ADD_MODE::INSERT,
               bool aSkipConnectivity = false ) override;
 
@@ -577,7 +693,7 @@ public:
      * After loading a file from disk, the footprints do not yet contain the full
      * data for their embedded files, only a reference.  This iterates over all footprints
      * in the board and updates them with the full embedded data.
-    */
+     */
     void FixupEmbeddedData();
 
     void RunOnNestedEmbeddedFiles( const std::function<void( EMBEDDED_FILES* )>& aFunction ) override;
@@ -699,13 +815,17 @@ public:
      * Replace @a aExisting with @a aNew, preserving connectivity and metadata.
      */
     void ExchangeFootprint( FOOTPRINT* aExisting, FOOTPRINT* aNew, BOARD_COMMIT& aCommit,
-                            bool matchPadPositions,
-                            bool deleteExtraTexts = true, bool resetTextLayers = true,
-                            bool resetTextEffects = true, bool resetTextPositions = true,
-                            bool resetTextContent = true, bool resetFabricationAttrs = true,
-                            bool resetClearanceOverrides = true, bool reset3DModels = true,
-                            bool resetTransform = false,
-                            bool* aUpdated = nullptr );
+                            bool aMatchPadPositions,
+                            bool aDeleteExtraTexts = true,
+                            bool aResetTextLayers = true,
+                            bool aResetTextEffects = true,
+                            bool aResetTextPositions = true,
+                            bool aResetTextContent = true,
+                            bool aResetFabricationAttrs = true,
+                            bool aResetClearanceOverrides = true,
+                            bool aReset3DModels = true,
+                            bool aResetTransform = false,
+                            bool* aUpdated = nullptr, bool* aShifted = nullptr );
 
     /**
      * Reset all high light data to the init state
@@ -1101,6 +1221,12 @@ public:
         m_NetInfo.RemoveUnusedNets( aCommit );
     }
 
+    /// Rename nets without changing net codes or connectivity.  @see NETINFO_LIST::RenameNets.
+    bool RenameNets( const std::map<wxString, wxString>& aNewNames, REPORTER& aReporter )
+    {
+        return m_NetInfo.RenameNets( aNewNames, aReporter );
+    }
+
     /**
      * @return iterator to the first element of the NETINFO_ITEMs list.
      */
@@ -1139,6 +1265,7 @@ public:
      * Calculate the bounding box containing all board items (or board edge segments).
      *
      * @param aBoardEdgesOnly is true if we are interested in board edge segments only.
+     * @param aPhysicalLayersOnly is a flag to only compute the bounding box for physical layers.
      * @return the board's bounding box.
      */
     BOX2I ComputeBoundingBox( bool aBoardEdgesOnly = false, bool aPhysicalLayersOnly = false ) const;
@@ -1235,6 +1362,16 @@ public:
      * and add net nets in default netclass (this happens after reading a netlist)
      */
     void SynchronizeNetsAndNetClasses( bool aResetTrackAndViaSizes );
+
+    /**
+     * Expand the project's chain-to-netclass assignments into per-net pattern assignments,
+     * using the chain membership recorded on this board's nets.
+     *
+     * CONNECTION_GRAPH::ApplyNetChainNetclasses() does the same for the schematic.  Each owns its
+     * own half of the derived list, so a board resync in a session with the schematic open leaves
+     * the schematic's assignments intact.
+     */
+    void ApplyNetChainNetclasses();
 
     /**
      * Copy component class / component class generator information from the project settings
@@ -1473,6 +1610,11 @@ public:
     void OnItemsChanged( std::vector<BOARD_ITEM*>& aItems );
 
     /**
+     * Notify the board and its listeners that the editor selection has changed.
+     */
+    void OnBoardSelectionChanged();
+
+    /**
       * Notify the board and its listeners that items on the board have
       * been modified in a composite operations
       */
@@ -1484,6 +1626,11 @@ public:
      * Notify the board and its listeners that the ratsnest has been recomputed.
      */
     void OnRatsnestChanged();
+
+    /**
+     * Notify the board that the listed zones were just refilled. 
+     */
+    void OnZonesFilled( const std::vector<ZONE*>& aZones );
 
     /**
      * Consistency check of internal m_groups structure.
@@ -1515,7 +1662,7 @@ public:
 
     /**
      * Finds all fonts used in the board and embeds them in the file if permissions allow
-    */
+     */
     void EmbedFonts() override;
 
     /**
@@ -1680,11 +1827,13 @@ public:
     SHARDED_CACHE<PTR_PTR_CACHE_KEY, bool>                m_IntersectsFCourtyardCache;
     SHARDED_CACHE<PTR_PTR_CACHE_KEY, bool>                m_IntersectsBCourtyardCache;
     SHARDED_CACHE<PTR_PTR_LAYER_CACHE_KEY, bool>          m_IntersectsAreaCache;
+    SHARDED_CACHE<PTR_PTR_LAYER_CACHE_KEY, bool>          m_IntersectsKeepoutCache;
     SHARDED_CACHE<PTR_PTR_LAYER_CACHE_KEY, bool>          m_EnclosedByAreaCache;
     SHARDED_CACHE<ITEM_SELECTOR_LAYER_CACHE_KEY, bool>    m_IntersectsCourtyardResultCache;
     SHARDED_CACHE<ITEM_SELECTOR_LAYER_CACHE_KEY, bool>    m_IntersectsFCourtyardResultCache;
     SHARDED_CACHE<ITEM_SELECTOR_LAYER_CACHE_KEY, bool>    m_IntersectsBCourtyardResultCache;
     SHARDED_CACHE<ITEM_SELECTOR_LAYER_CACHE_KEY, bool>    m_IntersectsAreaResultCache;
+    SHARDED_CACHE<ITEM_SELECTOR_LAYER_CACHE_KEY, bool>    m_IntersectsKeepoutResultCache;
     SHARDED_CACHE<ITEM_SELECTOR_LAYER_CACHE_KEY, bool>    m_EnclosedByAreaResultCache;
     SHARDED_CACHE<ITEM_FIELD_CACHE_KEY, wxString>         m_ItemFieldCache;
     std::unordered_map< wxString, LSET >                  m_LayerExpressionCache;
@@ -1693,7 +1842,9 @@ public:
     mutable std::unordered_map<const ZONE*, BOX2I>        m_ZoneBBoxCache;
     mutable std::optional<int>                            m_maxClearanceValue;
 
-    mutable std::unordered_map<const BOARD_ITEM*, wxString> m_ItemNetclassCache;
+    // Microvias that land on another microvia, for isStackedVia(). Whole-board relation, so it
+    // is built in one pass rather than per via.
+    mutable std::optional<std::set<const PCB_VIA*>> m_StackedMicroviaCache;
 
     // Zone name lookup cache for DRC rule area functions like enclosedByArea/intersectsArea.
     // Maps zone names to vectors of matching zones to avoid O(n) zone iteration per lookup.
@@ -1715,6 +1866,17 @@ public:
     ZONE*                 m_SolderMaskBridges;  // A container to build bridges on solder mask layers
     std::map<ZONE*, std::map<PCB_LAYER_ID, ISOLATED_ISLANDS>> m_ZoneIsolatedIslandsMap;
 
+    /**
+     * Look up a zone's filled-copper R-tree.  DRC reads this cache from many threads at once, so
+     * never reach for it with operator[], which inserts (and can rehash) on a miss.
+     */
+    DRC_RTREE* GetCopperZoneRTree( ZONE* aZone ) const
+    {
+        auto it = m_CopperZoneRTreeCache.find( aZone );
+
+        return it != m_CopperZoneRTreeCache.end() ? it->second.get() : nullptr;
+    }
+
 private:
     // The default copy constructor & operator= are inadequate,
     // either write one or do not use it at all
@@ -1731,6 +1893,9 @@ private:
 
     // Refresh user layer opposites.
     void recalcOpposites();
+
+    /// Get a simple vector of the board's pointers
+    std::vector<BOARD_ITEM*> collectOwnedItems() const;
 
     friend class PCB_EDIT_FRAME;
 
@@ -1752,6 +1917,7 @@ private:
     FOOTPRINTS          m_footprints;
     TRACKS              m_tracks;
     GROUPS              m_groups;
+    CONSTRAINTS         m_constraints;
     ZONES               m_zones;
     GENERATORS          m_generators;
     PCB_BOARD_OUTLINE*  m_boardOutline;
@@ -1769,6 +1935,18 @@ private:
     HIGH_LIGHT_INFO     m_highLightPrevious;        // a previously stored high light data
 
     int                 m_fileFormatVersionAtLoad;  // the version loaded from the file
+    uint64_t            m_drillModelGeneration;
+    uint64_t            m_boardOutlineGeneration;
+    LSET                m_drillSymbolLayers;
+
+    /**
+     * Offset and symbol reach of every drill map, so a pad or track ViewBBox() does not walk
+     * the drawings list. Kept in step with m_drillSymbolLayers.
+     */
+    std::vector<std::pair<VECTOR2I, int>> m_drillSymbolPlacements;
+
+    mutable std::shared_ptr<const DRILL_SYMBOL_CACHE> m_drillSymbolCache;
+    mutable std::mutex                                m_drillSymbolCacheMutex;
     wxString            m_generator;                // the generator tag from the file
 
     std::map<wxString, wxString>        m_properties;

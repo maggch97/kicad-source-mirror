@@ -21,8 +21,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef SIMULATOR_FRAME_UI_H
-#define SIMULATOR_FRAME_UI_H
+#pragma once
 
 
 #include <sim/simulator_frame_ui_base.h>
@@ -40,8 +39,8 @@ class SPICE_SETTINGS;
 class EESCHEMA_SETTINGS;
 class SPICE_CIRCUIT_MODEL;
 
-class SIM_THREAD_REPORTER;
 class TUNER_SLIDER;
+class STD_BITMAP_BUTTON;
 
 
 /**
@@ -61,8 +60,6 @@ class TUNER_SLIDER;
  * V(OUT) / V(IN)) are stored in vectors of the format "user%d".
  *
  */
-
-
 class SIMULATOR_FRAME_UI : public SIMULATOR_FRAME_UI_BASE
 {
 public:
@@ -108,6 +105,8 @@ public:
 
     /**
      * Get/Set the number of significant digits and the range for formatting a cursor value.
+     *
+     * @param aCursorId is the cursor ID of the format to get.
      * @param aValueCol 0 indicates the X value column; 1 the Y value.
      */
     SPICE_VALUE_FORMAT GetCursorFormat( int aCursorId, int aValueCol ) const
@@ -137,8 +136,9 @@ public:
      * Safely update a field of the associated symbol without dereferencing
      * the symbol.
      *
+     * @param aSheetPath is the instance of the symbol to update
      * @param aSymbol id of the symbol needing updating
-     * @param aId id of the symbol field
+     * @param aRef is the name of the  symbol field
      * @param aValue new value of the symbol field
      */
     void UpdateTunerValue( const SCH_SHEET_PATH& aSheetPath, const KIID& aSymbol,
@@ -179,6 +179,9 @@ public:
 
     bool DarkModePlots() const { return m_darkMode; }
     void ToggleDarkModePlots();
+
+    /// Toggle the current S-parameter tab between Smith chart and amplitude/phase views.
+    void ToggleSmithChart();
 
     void ShowChangedLanguage();
 
@@ -266,8 +269,8 @@ public:
     void OnPlotSettingsChanged();
 
     void OnSimUpdate();
-    void OnSimReport( const wxString& aMsg );
     void OnSimRefresh( bool aFinal );
+    void FlushSimConsole();
 
     void OnModify();
 
@@ -275,8 +278,7 @@ private:
     /**
      * Get the simulator output vector name for a given signal name and type.
      */
-    wxString vectorNameFromSignalName( SIM_PLOT_TAB* aPlotTab, const wxString& aSignalName,
-                                       int* aTraceType );
+    wxString vectorNameFromSignalName( SIM_PLOT_TAB* aPlotTab, const wxString& aSignalName, int* aTraceType );
 
     /**
      * Update a trace in a particular SIM_PLOT_TAB.  If the panel does not contain the given
@@ -285,9 +287,16 @@ private:
      * @param aVectorName is the SPICE vector name, such as "I(Net-C1-Pad1)".
      * @param aTraceType describes the type of plot.
      * @param aPlotTab is the tab that should receive the update.
+     * @param aDataX
+     * @param aClearData
+     * @param aView is the view the trace should be plotted on; if null, the trace's existing
+     *              view is kept (or the tab's default view is used, for a new trace).
      */
     void updateTrace( const wxString& aVectorName, int aTraceType, SIM_PLOT_TAB* aPlotTab,
-                      std::vector<double>* aDataX = nullptr, bool aClearData = false );
+                      std::vector<double>* aDataX = nullptr, bool aClearData = false, SIM_VIEW* aView = nullptr );
+
+    /// Reference impedance of the response port for an S-parameter vector, zero when unresolved.
+    double getSmithPortImpedance( const wxString& aVectorName );
 
     /**
      * A common toggler for the two main wxSplitterWindow s
@@ -324,6 +333,19 @@ private:
     void updatePlotCursors();
 
     /**
+     * Add or remove the Smith-only cursor columns, carrying their shown/hidden state across.
+     */
+    void updateSmithCursorColumns( bool aSmithMode );
+
+    void fillSmithCursorRow( int aRow, CURSOR* aCursor, TRACE* aTrace );
+
+    void setSmithCursorColumnLabels();
+
+    void rememberSmithCursorColumns();
+
+    void applySmithCursorColumns();
+
+    /**
      * Updates m_signalsGrid cursor widget, column rendering and attributes
      *
      * @param t is the type of the enum that holds m_signalsGrid column indexing
@@ -344,6 +366,33 @@ private:
     void rebuildMeasurementsGrid();
 
     void updateMeasurementsFromGrid();
+
+    /**
+     * Grow (but never shrink below \a aMinWidth) a grid column to fit its current contents.
+     *
+     * @param aGrid
+     * @param aCol
+     * @param aMinWidth
+     * @param aExtraPadding additional width to reserve beyond the content, e.g. for a combo
+     *                      box column's dropdown arrow so it doesn't crowd the text.
+     */
+    void autoSizeGridColumn( WX_GRID* aGrid, int aCol, int aMinWidth, int aExtraPadding = 0 );
+
+    /// The Signals grid's "Plot" column choices: "Disabled" plus one entry per current view.
+    wxArrayString getViewChoices( SIM_PLOT_TAB* aPlotTab ) const;
+
+    /// The Signals grid's "Plot" column label for a given view ("Disabled" if null).
+    wxString getViewLabel( SIM_PLOT_TAB* aPlotTab, SIM_VIEW* aView ) const;
+
+    /// The views a trace's Y-axis scale could be linked to: every view except its own (since
+    /// linking to its own view is equivalent to -- and represented by -- "Default").
+    std::vector<SIM_VIEW*> getYScaleTargetViews( SIM_PLOT_TAB* aPlotTab, SIM_VIEW* aOwnView ) const;
+
+    /// The Signals grid's "Y Scale" column choices: "Default" plus one entry per eligible view.
+    wxArrayString getYScaleChoices( SIM_PLOT_TAB* aPlotTab, SIM_VIEW* aOwnView ) const;
+
+    /// The Signals grid's "Y Scale" column label for a trace ("Default" if not explicitly linked).
+    wxString getYScaleLabel( SIM_PLOT_TAB* aPlotTab, TRACE* aTrace ) const;
 
     /**
      * Apply component values specified using tuner sliders to the current netlist.
@@ -403,6 +452,9 @@ private:
     SIMULATOR_FRAME*             m_simulatorFrame;
     SCH_EDIT_FRAME*              m_schematicFrame;
 
+    STD_BITMAP_BUTTON* m_addViewButton = nullptr;
+    STD_BITMAP_BUTTON* m_removeViewButton = nullptr;
+
     std::vector<wxString>        m_signals;
     std::map<int, wxString>      m_userDefinedSignals;
     std::list<TUNER_SLIDER*>     m_tuners;
@@ -413,6 +465,9 @@ private:
         int traceType = SPT_UNKNOWN;
         std::vector<double> xValues;
         std::vector<std::vector<double>> yValues;
+
+        // smith traces carry Re(gamma) in x, different every run, stored per run here
+        std::vector<std::vector<double>> xRuns;
     };
 
     struct MULTI_RUN_STEP
@@ -433,14 +488,17 @@ private:
 
     MULTI_RUN_STATE             m_multiRunState;
 
-    ///< SPICE expressions need quoted versions of the netnames since KiCad allows '-' and '/'
-    ///< in netnames.
+    /// SPICE expressions need quoted versions of the netnames since KiCad allows '-' and '/'
+    /// in netnames.
     std::vector<wxString>        m_netnames;
 
     SPICE_VALUE_FORMAT           m_cursorFormats[3][2];
 
     // Holds cursor formating for m_cursorsGrid, includes m_cursorFormats[3][2], TODO: merge.
     std::vector<std::vector<SPICE_VALUE_FORMAT>> m_cursorFormatsDyn;
+
+    wxString m_smithCursorColumns;
+    std::vector<int> m_smithCursorWidths;
 
     // Variables for temporary storage:
     int                          m_splitterLeftRightSashPosition;
@@ -456,5 +514,3 @@ private:
     // Count all available cursors in m_signalsGrid
     int                          m_customCursorsCnt; // Defaults to 2 + 1
 };
-
-#endif // SIMULATOR_FRAME_UI_H

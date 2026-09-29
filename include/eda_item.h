@@ -24,6 +24,8 @@
 #define EDA_ITEM_H
 
 #include <deque>
+#include <map>
+#include <memory>
 #include <set>
 
 #include <api/serializable.h>
@@ -61,7 +63,7 @@ class EDA_GROUP;
 class MSG_PANEL_ITEM;
 class EMBEDDED_FILES;
 
-namespace google { namespace protobuf { class Any; } }
+namespace google::protobuf { class Any; }
 
 
 /**
@@ -78,10 +80,10 @@ namespace google { namespace protobuf { class Any; } }
  *
  * @param aItem An #EDA_ITEM to examine.
  * @param aTestData is arbitrary data needed by the inspector to determine
- *  if the EDA_ITEM under test meets its match criteria, and is often NULL
+ *  if the #EDA_ITEM under test meets its match criteria, and is often NULL
  *  with the advent of capturing lambdas.
- * @return A #SEARCH_RESULT type #SEARCH_QUIT if the iterator function is to
- *          stop the scan, else #SEARCH_CONTINUE;
+ * @return A #INSPECT_RESULT type #INSPECT_RESULT::QUIT if the iterator function is to
+ *          stop the scan, else #INSPECT_RESULT::CONTINUE.
  */
 typedef std::function< INSPECT_RESULT ( EDA_ITEM* aItem, void* aTestData ) > INSPECTOR_FUNC;
 
@@ -95,7 +97,7 @@ typedef const INSPECTOR_FUNC& INSPECTOR;
 class EDA_ITEM : public KIGFX::VIEW_ITEM, public SERIALIZABLE
 {
 public:
-    virtual ~EDA_ITEM() = default;
+    virtual ~EDA_ITEM();
 
     /**
      * Returns the type of object.
@@ -131,7 +133,11 @@ public:
 
     inline bool IsSelected() const { return m_flags & SELECTED; }
     inline bool IsEntered() const { return m_flags & ENTERED; }
-    inline bool IsBrightened() const { return m_flags & BRIGHTENED; }
+    inline bool IsBrightened() const { return ( m_flags & BRIGHTENED ) || m_netHighlighted; }
+
+    /** Net highlighting must not clear brightening owned by find or picker tools. */
+    bool IsNetHighlighted() const;
+    void SetNetHighlighted( bool aHighlighted );
 
     inline bool IsRollover() const { return m_isRollover; }
     inline VECTOR2I GetRolloverPos() const { return m_rolloverPos; }
@@ -151,7 +157,13 @@ public:
 
     void           SetFlags( EDA_ITEM_FLAGS aMask ) { m_flags |= aMask; }
     void           XorFlags( EDA_ITEM_FLAGS aMask ) { m_flags ^= aMask; }
-    void           ClearFlags( EDA_ITEM_FLAGS aMask = EDA_ITEM_ALL_FLAGS ) { m_flags &= ~aMask; }
+    void ClearFlags( EDA_ITEM_FLAGS aMask = EDA_ITEM_ALL_FLAGS )
+    {
+        m_flags &= ~aMask;
+
+        if( aMask == EDA_ITEM_ALL_FLAGS )
+            m_netHighlighted = false;
+    }
     EDA_ITEM_FLAGS GetFlags() const { return m_flags; }
     bool           HasFlag( EDA_ITEM_FLAGS aFlag ) const { return ( m_flags & aFlag ) == aFlag; }
 
@@ -219,6 +231,60 @@ public:
      */
     void SetForceVisible( bool aEnable ) { m_forceVisible = aEnable; }
     bool IsForceVisible() const { return m_forceVisible; }
+
+    /**
+     * Custom user-defined string key/value properties attached to this item.
+     *
+     * Keys and values are arbitrary strings; their meaning is defined by the user.
+     * The only constraint is that keys may not duplicate a built-in property (or field name,
+     * for items that have fields).
+     */
+    const std::map<wxString, wxString>& GetCustomProperties() const
+    {
+        return m_customProperties;
+    }
+
+    void SetCustomProperties( const std::map<wxString, wxString>& aProps )
+    {
+        m_customProperties.clear();
+
+        for( const auto& [ key, value ] : aProps )
+            SetCustomProperty( key, value );
+    }
+
+    void SetCustomProperty( const wxString& aKey, const wxString& aValue )
+    {
+        for( auto& [ key, value ] : m_customProperties )
+        {
+            if( key.CmpNoCase( aKey ) == 0 )
+            {
+                value = aValue;
+                return;
+            }
+        }
+
+        m_customProperties.emplace( aKey, aValue );
+    }
+
+    bool HasCustomProperties() const { return !m_customProperties.empty(); }
+    void ClearCustomProperties() { m_customProperties.clear(); }
+
+    void RemoveCustomProperty( const wxString& aKey );
+
+    /**
+     * Remove custom properties whose keys collide with an existing field or built-in property
+     * name (matched case-insensitively).  Returns the keys removed, if any.
+     */
+    std::vector<wxString> RemoveConflictingCustomProperties();
+
+    /**
+     * @return true if \a aKey is present and \a aValue was filled
+     */
+    bool GetCustomProperty( const wxString& aKey, wxString& aValue ) const;
+
+    std::vector<PROPERTY_BASE*> GetCustomPropertiesAsInspectables() const;
+
+    std::vector<PROPERTY_BASE*> GetDynamicProperties() const override;
 
     /**
      * Populate \a aList of #MSG_PANEL_ITEM objects with it's internal state for display
@@ -318,14 +384,14 @@ public:
      * Implementations should call inspector->Inspect() on types in aScanTypes, and may use
      * #IterateForward() to do so on lists of such data.
      *
-     * @param inspector An #INSPECTOR instance to use in the inspection.
-     * @param testData Arbitrary data used by the inspector.
+     * @param aInspector An #INSPECTOR instance to use in the inspection.
+     * @param aTestData Arbitrary data used by the inspector.
      * @param aScanTypes Which #KICAD_T types are of interest and the order in which they should
      *                   be processed.
-     * @return #SEARCH_RESULT SEARCH_QUIT if the Iterator is to stop the scan,
-     *         else #SCAN_CONTINUE, and determined by the inspector.
+     * @return #INSPECT_RESULT #INSPECT_RESULT::QUIT if the Iterator is to stop the scan,
+     *         else #INSPECT_RESULT::CONTINUE, and determined by the inspector.
      */
-    virtual INSPECT_RESULT Visit( INSPECTOR inspector, void* testData,
+    virtual INSPECT_RESULT Visit( INSPECTOR aInspector, void* aTestData,
                                   const std::vector<KICAD_T>& aScanTypes );
 
     /**
@@ -382,7 +448,9 @@ public:
      * returns a string to indicate that it was not overridden to provide the object
      * specific text.
      *
-     * @param aLong indicates a long string is acceptable
+     * @param aUnitsProvider is the #UNITS_PROVIDER object to handle item units.
+     * @param aFull is a flag to get the extend (full) description.
+     *
      * @return The menu text string.
      */
     virtual wxString GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const;
@@ -528,13 +596,11 @@ protected:
     EDA_ITEM* findParent( KICAD_T aType ) const;
 
 public:
-    const KIID  m_Uuid;
+    const KIID     m_Uuid;
 
 private:
     /**
      * Run time identification, _keep private_ so it can never be changed after a ctor sets it.
-     *
-     * See comment near SetType() regarding virtual functions.
      */
     KICAD_T        m_structType;
 
@@ -543,9 +609,18 @@ protected:
     EDA_ITEM*      m_parent;        ///< Owner.
     EDA_GROUP*     m_group;         ///< The group this item belongs to, if any.  No ownership implied.
 
-    VECTOR2I m_rolloverPos;
-    bool     m_isRollover;
-    bool     m_forceVisible;
+    VECTOR2I       m_rolloverPos;
+    bool           m_isRollover;
+    bool           m_forceVisible;
+    bool           m_netHighlighted = false;
+
+    std::map<wxString, wxString> m_customProperties;
+
+    /// Per-key cache of dynamic property descriptors for m_customProperties,
+    /// owned by this object. Mirrors the per-object field-property caches used
+    /// by FOOTPRINT / SCH_SYMBOL / SCH_SHEET; entries linger after a key is
+    /// removed but are simply not enumerated.
+    mutable std::map<wxString, std::unique_ptr<PROPERTY_BASE>> m_dynamicCustomPropsCache;
 };
 
 

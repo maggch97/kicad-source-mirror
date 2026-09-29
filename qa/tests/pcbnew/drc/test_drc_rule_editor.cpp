@@ -19,6 +19,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <wx/ffile.h>
+#include <board.h>
 #include <core/typeinfo.h>
 #include <drc/rule_editor/drc_rule_editor_utils.h>
 #include <drc/rule_editor/drc_re_via_style_constraint_data.h>
@@ -39,7 +40,15 @@
 #include <drc/rule_editor/drc_re_panel_matcher.h>
 #include <drc/rule_editor/drc_re_rule_loader.h>
 #include <drc/rule_editor/drc_re_rule_saver.h>
+#include <drc/drc_engine.h>
+#include <drc/drc_rule_condition.h>
+#include <drc/drc_rule_parser.h>
+#include <pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.h>
+#include <pcbnew_utils/board_file_utils.h>
+#include <reporter.h>
 #include <dialogs/rule_editor_dialog_base.h>
+#include <footprint.h>
+#include <pcbnew_utils/board_file_utils.h>
 
 BOOST_AUTO_TEST_SUITE( DRC_RULE_EDITOR )
 
@@ -69,6 +78,30 @@ BOOST_AUTO_TEST_CASE( RoundTripViaStyle )
     BOOST_CHECK_CLOSE( parsed->GetMinViaHoleSize(), original.GetMinViaHoleSize(), 0.0001 );
     BOOST_CHECK_CLOSE( parsed->GetMaxViaHoleSize(), original.GetMaxViaHoleSize(), 0.0001 );
 }
+
+
+BOOST_AUTO_TEST_CASE( ShowMatchesIgnoresPairTokensInStringLiterals )
+{
+    BOARD board;
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetReference( wxT( "B.Width" ) );
+    board.Add( footprint );
+
+    auto rule = std::make_shared<DRC_RULE>( wxT( "String literal" ) );
+    rule->m_Condition = new DRC_RULE_CONDITION( wxT( "A.Reference == 'B.Width'" ) );
+    BOOST_REQUIRE( rule->m_Condition->Compile( nullptr ) );
+
+    DRC_CONSTRAINT constraint( COURTYARD_CLEARANCE_CONSTRAINT );
+    rule->AddConstraint( constraint );
+
+    DRC_ENGINE engine( &board, &board.GetDesignSettings() );
+    std::vector<BOARD_ITEM*> matches = engine.GetItemsMatchingRule( rule, nullptr );
+
+    BOOST_REQUIRE_EQUAL( matches.size(), 1u );
+    BOOST_CHECK_EQUAL( matches.front(), footprint );
+}
+
 
 BOOST_AUTO_TEST_CASE( RoundTripRoutingWidth )
 {
@@ -333,6 +366,121 @@ BOOST_AUTO_TEST_CASE( ValidateViaStyleInvalidNegativeValues )
     BOOST_CHECK( foundNegativeError );
 }
 
+// Deleting one entry of a rule the loader split must not bring it back on save.
+BOOST_AUTO_TEST_CASE( DeletedSplitEntryStaysDeleted )
+{
+    wxString rules = wxS( "(version 1)\n"
+                          "(rule \"Combo\"\n"
+                          "  (condition \"A.NetClass == 'HV'\")\n"
+                          "  (constraint clearance (min 0.5mm))\n"
+                          "  (constraint track_width (opt 0.3mm)))\n" );
+
+    DRC_RULE_LOADER loader;
+
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFromString( rules );
+
+    BOOST_REQUIRE_EQUAL( entries.size(), 2 );
+
+    // The user deletes the sibling that does not hold the original rule text.
+    auto deleted = std::find_if( entries.begin(), entries.end(),
+                                 []( const DRC_RE_LOADED_PANEL_ENTRY& aEntry )
+                                 {
+                                     return aEntry.originalRuleText.IsEmpty();
+                                 } );
+
+    BOOST_REQUIRE( deleted != entries.end() );
+    entries.erase( deleted );
+
+    DRC_RULE_SAVER saver;
+    wxString       saved = saver.GenerateRulesText( entries, nullptr );
+
+    int constraints = 0;
+
+    for( size_t pos = saved.find( wxS( "(constraint" ) ); pos != wxString::npos;
+         pos = saved.find( wxS( "(constraint" ), pos + 1 ) )
+    {
+        constraints++;
+    }
+
+    BOOST_CHECK_EQUAL( constraints, 1 );
+}
+
+
+// Regenerated rules must keep their layers on a board with user layer names
+BOOST_AUTO_TEST_CASE( EditedRulesKeepTheirLayers )
+{
+    const std::string path = KI_TEST::GetPcbnewTestDataDir() + "issue24211/issue24211";
+
+    PCB_IO_KICAD_SEXPR     plugin;
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( path + ".kicad_pcb" );
+
+    BOOST_REQUIRE( board );
+    BOOST_REQUIRE( board->GetLayerName( F_Cu ) == wxS( "top_layer" ) );
+
+    auto layersByRule =
+            []( const wxString& aText )
+            {
+                DRC_RULES_PARSER                       parser( aText, wxS( "issue24211" ) );
+                WX_STRING_REPORTER                     reporter;
+                std::vector<std::shared_ptr<DRC_RULE>> rules;
+
+                parser.Parse( rules, &reporter );
+
+                BOOST_CHECK_MESSAGE( !reporter.HasMessageOfSeverity( RPT_SEVERITY_ERROR ),
+                                     reporter.GetMessages().ToStdString() << aText.ToStdString() );
+
+                std::map<wxString, LSET> layers;
+
+                for( const std::shared_ptr<DRC_RULE>& rule : rules )
+                    layers[rule->m_Name] = rule->m_LayerCondition;
+
+                return layers;
+            };
+
+    wxString original;
+    wxFFile  file( path + ".kicad_dru", "r" );
+
+    BOOST_REQUIRE( file.ReadAll( &original ) );
+
+    DRC_RULE_LOADER                        loader;
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFile( path + ".kicad_dru" );
+
+    BOOST_REQUIRE( !entries.empty() );
+
+    for( DRC_RE_LOADED_PANEL_ENTRY& entry : entries )
+        entry.wasEdited = true;
+
+    DRC_RULE_SAVER saver;
+
+    BOOST_CHECK( layersByRule( saver.GenerateRulesText( entries, board.get() ) ) == layersByRule( original ) );
+
+    // A layer set without source text, as a caller other than the loader builds it
+    entries.resize( 1 );
+    entries[0].layerCondition = LSET( { F_Cu } );
+
+    std::map<wxString, LSET> single = layersByRule( saver.GenerateRulesText( entries, board.get() ) );
+
+    BOOST_CHECK( single[entries[0].ruleName] == LSET( { F_Cu } ) );
+}
+
+
+// A negative optimum is an error, not an absent field.
+BOOST_AUTO_TEST_CASE( ValidateDiffPairRejectsNegativeOptimums )
+{
+    DRC_RE_ROUTING_DIFF_PAIR_CONSTRAINT_DATA negWidth( 0, 0, "NegWidth", -0.2, 0.0, 0.2, 0.02, 0.0 );
+
+    BOOST_CHECK( !negWidth.Validate().isValid );
+
+    DRC_RE_ROUTING_DIFF_PAIR_CONSTRAINT_DATA negGap( 0, 0, "NegGap", 0.2, 0.02, -0.2, 0.0, 0.0 );
+
+    BOOST_CHECK( !negGap.Validate().isValid );
+
+    // Zero still means the field was left empty.
+    DRC_RE_ROUTING_DIFF_PAIR_CONSTRAINT_DATA gapOnly( 0, 0, "GapOnly", 0.0, 0.0, 0.2, 0.02, 0.0 );
+
+    BOOST_CHECK( gapOnly.Validate().isValid );
+}
+
 BOOST_AUTO_TEST_CASE( FactoryOverwrite )
 {
     // Register a parser
@@ -357,6 +505,55 @@ BOOST_AUTO_TEST_CASE( FactoryOverwrite )
     BOOST_REQUIRE_EQUAL( parsedRules.size(), 1 );
     BOOST_CHECK_EQUAL( parsedRules[0]->GetRuleName(), "Test_2" );
 }
+
+// Editing a via style rule must not delete the optimum the panel cannot show.
+BOOST_AUTO_TEST_CASE( EditedViaStyleRuleKeepsOptimums )
+{
+    wxString rules = wxS( "(version 1)\n"
+                          "(rule ViaOpt\n"
+                          "  (constraint via_diameter (min 0.4mm) (opt 0.8mm) (max 1.2mm))\n"
+                          "  (constraint hole_size (min 0.2mm) (opt 0.4mm) (max 0.6mm)))\n" );
+
+    DRC_RULE_LOADER loader;
+
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFromString( rules );
+
+    BOOST_REQUIRE_EQUAL( entries.size(), 1 );
+
+    entries[0].wasEdited = true;
+
+    DRC_RULE_SAVER saver;
+    wxString       saved = saver.GenerateRulesText( entries, nullptr );
+
+    BOOST_CHECK_MESSAGE( saved.find( wxS( "(opt 0.8mm)" ) ) != wxString::npos,
+                         "the via diameter optimum was dropped: " << saved.ToStdString() );
+    BOOST_CHECK_MESSAGE( saved.find( wxS( "(opt 0.4mm)" ) ) != wxString::npos,
+                         "the hole size optimum was dropped: " << saved.ToStdString() );
+
+    auto data = std::dynamic_pointer_cast<DRC_RE_VIA_STYLE_CONSTRAINT_DATA>( entries[0].constraintData );
+
+    BOOST_REQUIRE( data );
+    data->SetMinViaDiameter( 0.9 );
+
+    BOOST_CHECK( data->Validate().isValid );
+
+    saved = saver.GenerateRulesText( entries, nullptr );
+
+    BOOST_CHECK_MESSAGE( saved.find( wxS( "(constraint via_diameter (min 0.9mm) (max 1.2mm))" ) ) != wxString::npos,
+                         "the voided optimum was not dropped from the clause: " << saved.ToStdString() );
+    BOOST_CHECK_MESSAGE( saved.find( wxS( "(opt 0.4mm)" ) ) != wxString::npos,
+                         "the untouched hole size optimum must survive: " << saved.ToStdString() );
+}
+
+
+// A pair with both ends negative is an error, not an empty pair.
+BOOST_AUTO_TEST_CASE( ValidateViaStyleBothNegative )
+{
+    DRC_RE_VIA_STYLE_CONSTRAINT_DATA data( 0, 0, "BothNegative", -0.5, -0.2, 0.2, 0.4 );
+
+    BOOST_CHECK( !data.Validate().isValid );
+}
+
 
 BOOST_AUTO_TEST_CASE( ValidateAbsLengthTwoValid )
 {
@@ -1392,6 +1589,50 @@ BOOST_AUTO_TEST_CASE( RuleLoaderNumericConstraints )
 }
 
 
+// A ratio is stored scaled by 1000, so the editor has to scale it back. The depth beside it is
+// a plain count and must come through untouched.
+BOOST_AUTO_TEST_CASE( RuleLoaderMicroviaRatioRoundTrip )
+{
+    wxString ruleText = "(version 1)\n"
+                        "(rule \"Ratio\"\n"
+                        "    (constraint microvia_aspect_ratio (max 1.0)))\n"
+                        "(rule \"Depth\"\n"
+                        "    (constraint microvia_stack_depth (max 3)))";
+
+    DRC_RULE_LOADER                        loader;
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFromString( ruleText );
+
+    BOOST_REQUIRE_EQUAL( entries.size(), 2 );
+    BOOST_CHECK_EQUAL( entries[0].panelType, MICROVIA_ASPECT_RATIO );
+    BOOST_CHECK_EQUAL( entries[1].panelType, MICROVIA_STACK_DEPTH );
+
+    auto ratio = std::dynamic_pointer_cast<DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA>( entries[0].constraintData );
+    auto depth = std::dynamic_pointer_cast<DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA>( entries[1].constraintData );
+
+    BOOST_REQUIRE( ratio );
+    BOOST_REQUIRE( depth );
+    BOOST_CHECK_CLOSE( ratio->GetNumericInputValue(), 1.0, 0.0001 );
+    BOOST_CHECK_CLOSE( depth->GetNumericInputValue(), 3.0, 0.0001 );
+
+    entries[0].wasEdited = true;
+    entries[1].wasEdited = true;
+
+    DRC_RULE_SAVER                         saver;
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> reloaded =
+            loader.LoadFromString( saver.GenerateRulesText( entries, nullptr ) );
+
+    BOOST_REQUIRE_EQUAL( reloaded.size(), 2 );
+
+    auto ratioAgain = std::dynamic_pointer_cast<DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA>( reloaded[0].constraintData );
+    auto depthAgain = std::dynamic_pointer_cast<DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA>( reloaded[1].constraintData );
+
+    BOOST_REQUIRE( ratioAgain );
+    BOOST_REQUIRE( depthAgain );
+    BOOST_CHECK_CLOSE( ratioAgain->GetNumericInputValue(), 1.0, 0.0001 );
+    BOOST_CHECK_CLOSE( depthAgain->GetNumericInputValue(), 3.0, 0.0001 );
+}
+
+
 // ============================================================================
 // Rule Saver Tests (Phase 3)
 // ============================================================================
@@ -1612,6 +1853,30 @@ BOOST_AUTO_TEST_CASE( RuleSaverLoadSaveRoundTrip )
     BOOST_REQUIRE_EQUAL( reloadedEntries.size(), 1 );
     BOOST_CHECK_EQUAL( reloadedEntries[0].ruleName, "RoundTripTest" );
     BOOST_CHECK_EQUAL( reloadedEntries[0].panelType, entries[0].panelType );
+}
+
+BOOST_AUTO_TEST_CASE( RuleSaverKeepsUneditedFileIntact )
+{
+    // issue16182 comments each rule outside it, and issue20480 has two rules sharing name and condition
+    for( const char* name : { "issue16182.kicad_dru", "issue20480/issue20480.kicad_dru" } )
+    {
+        BOOST_TEST_CONTEXT( name )
+        {
+            wxString path = KI_TEST::GetPcbnewTestDataDir() + name;
+            wxString content;
+            wxFFile  file( path, "r" );
+
+            BOOST_REQUIRE( file.IsOpened() );
+            file.ReadAll( &content );
+
+            DRC_RULE_LOADER                        loader;
+            std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFile( path );
+            DRC_RULE_SAVER                         saver;
+
+            BOOST_REQUIRE( !entries.empty() );
+            BOOST_CHECK_EQUAL( saver.GenerateRulesText( entries, nullptr, loader.GetFileTrivia() ), content );
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE( RuleSaverPreservesQuotedNameWithSpaces )
@@ -2503,6 +2768,208 @@ BOOST_AUTO_TEST_CASE( RuleLoaderPermittedLayersStandardLoadsStructured )
     BOOST_REQUIRE( layerData );
     BOOST_CHECK( layerData->GetTopLayerEnabled() );
     BOOST_CHECK( layerData->GetBottomLayerEnabled() );
+}
+
+
+BOOST_AUTO_TEST_CASE( CustomPropertyHelperMatches )
+{
+    BOARD board;
+
+    FOOTPRINT* vendorFp = new FOOTPRINT( &board );
+    vendorFp->SetReference( wxT( "U1" ) );
+    vendorFp->SetCustomProperty( wxT( "Vendor" ), wxT( "ACME" ) );
+    board.Add( vendorFp );
+
+    FOOTPRINT* otherFp = new FOOTPRINT( &board );
+    otherFp->SetReference( wxT( "U2" ) );
+    board.Add( otherFp );
+
+    auto rule = std::make_shared<DRC_RULE>( wxT( "Custom property" ) );
+    rule->m_Condition = new DRC_RULE_CONDITION( wxT( "A.customProperty('Vendor') == 'ACME'" ) );
+    BOOST_REQUIRE( rule->m_Condition->Compile( nullptr ) );
+
+    DRC_CONSTRAINT constraint( COURTYARD_CLEARANCE_CONSTRAINT );
+    rule->AddConstraint( constraint );
+
+    DRC_ENGINE engine( &board, &board.GetDesignSettings() );
+
+    std::vector<BOARD_ITEM*> matches = engine.GetItemsMatchingRule( rule, nullptr );
+
+    BOOST_REQUIRE_EQUAL( matches.size(), 1u );
+    BOOST_CHECK( matches.front() == vendorFp );
+}
+
+
+BOOST_AUTO_TEST_CASE( HasCustomPropertyHelperMatches )
+{
+    BOARD board;
+
+    FOOTPRINT* vendorFp = new FOOTPRINT( &board );
+    vendorFp->SetReference( wxT( "U1" ) );
+    vendorFp->SetCustomProperty( wxT( "Vendor" ), wxT( "ACME" ) );
+    board.Add( vendorFp );
+
+    FOOTPRINT* otherFp = new FOOTPRINT( &board );
+    otherFp->SetReference( wxT( "U2" ) );
+    board.Add( otherFp );
+
+    auto rule = std::make_shared<DRC_RULE>( wxT( "Has custom property" ) );
+    rule->m_Condition = new DRC_RULE_CONDITION( wxT( "A.hasCustomProperty('Vendor')" ) );
+    BOOST_REQUIRE( rule->m_Condition->Compile( nullptr ) );
+
+    DRC_CONSTRAINT constraint( COURTYARD_CLEARANCE_CONSTRAINT );
+    rule->AddConstraint( constraint );
+
+    DRC_ENGINE engine( &board, &board.GetDesignSettings() );
+
+    std::vector<BOARD_ITEM*> matches = engine.GetItemsMatchingRule( rule, nullptr );
+
+    BOOST_REQUIRE_EQUAL( matches.size(), 1u );
+    BOOST_CHECK( matches.front() == vendorFp );
+}
+
+
+// A time domain length rule loads into the length panel with its values in ps.
+BOOST_AUTO_TEST_CASE( RuleLoaderTimeDomainLengthLoadsStructured )
+{
+    wxString ruleText = "(version 1)\n"
+                        "(rule \"clk_delay\"\n"
+                        "    (constraint length (min 210ps) (max 230ps))\n"
+                        ")";
+
+    DRC_RULE_LOADER                        loader;
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFromString( ruleText );
+
+    BOOST_REQUIRE_EQUAL( entries.size(), 1 );
+    BOOST_CHECK_EQUAL( entries[0].panelType, ABSOLUTE_LENGTH );
+
+    auto data = std::dynamic_pointer_cast<DRC_RE_ABSOLUTE_LENGTH_TWO_CONSTRAINT_DATA>( entries[0].constraintData );
+    BOOST_REQUIRE( data );
+    BOOST_CHECK( data->IsTimeDomain() );
+    BOOST_CHECK_CLOSE( data->GetOptimumLength(), 220.0, 0.0001 );
+    BOOST_CHECK_CLOSE( data->GetTolerance(), 10.0, 0.0001 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RoundTripTimeDomainLength )
+{
+    DRC_RE_ABSOLUTE_LENGTH_TWO_CONSTRAINT_DATA original( 0, 0, 220.0, 10.0, "clk_delay" );
+    original.SetConstraintCode( "length" );
+    original.SetTimeDomain( true );
+
+    RULE_GENERATION_CONTEXT ctx;
+    ctx.ruleName = original.GetRuleName();
+    ctx.constraintCode = original.GetConstraintCode();
+
+    wxString ruleText = original.GenerateRule( ctx );
+
+    BOOST_CHECK( ruleText.Contains( wxS( "210ps" ) ) );
+    BOOST_CHECK( ruleText.Contains( wxS( "220ps" ) ) );
+    BOOST_CHECK( ruleText.Contains( wxS( "230ps" ) ) );
+
+    DRC_RULE_LOADER                        loader;
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFromString( ruleText );
+
+    BOOST_REQUIRE_EQUAL( entries.size(), 1 );
+
+    auto parsed = std::dynamic_pointer_cast<DRC_RE_ABSOLUTE_LENGTH_TWO_CONSTRAINT_DATA>( entries[0].constraintData );
+    BOOST_REQUIRE( parsed );
+    BOOST_CHECK( parsed->IsTimeDomain() );
+    BOOST_CHECK_CLOSE( parsed->GetOptimumLength(), 220.0, 0.0001 );
+    BOOST_CHECK_CLOSE( parsed->GetTolerance(), 10.0, 0.0001 );
+}
+
+
+// A rule with no optimum must keep its min and max through an open and save cycle.
+BOOST_AUTO_TEST_CASE( RoundTripLengthWithoutOpt )
+{
+    wxString ruleText = "(version 1)\n"
+                        "(rule \"len_window\"\n"
+                        "    (constraint length (min 30mm) (max 50mm))\n"
+                        ")";
+
+    DRC_RULE_LOADER                        loader;
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFromString( ruleText );
+
+    BOOST_REQUIRE_EQUAL( entries.size(), 1 );
+    BOOST_CHECK_EQUAL( entries[0].panelType, ABSOLUTE_LENGTH );
+
+    auto data = std::dynamic_pointer_cast<DRC_RE_ABSOLUTE_LENGTH_TWO_CONSTRAINT_DATA>( entries[0].constraintData );
+    BOOST_REQUIRE( data );
+    BOOST_CHECK_CLOSE( data->GetOptimumLength(), 40.0, 0.0001 );
+    BOOST_CHECK_CLOSE( data->GetTolerance(), 10.0, 0.0001 );
+
+    RULE_GENERATION_CONTEXT ctx;
+    ctx.ruleName = entries[0].ruleName;
+    ctx.constraintCode = data->GetConstraintCode();
+
+    wxString saved = data->GenerateRule( ctx );
+
+    BOOST_CHECK( saved.Contains( wxS( "30mm" ) ) );
+    BOOST_CHECK( saved.Contains( wxS( "40mm" ) ) );
+    BOOST_CHECK( saved.Contains( wxS( "50mm" ) ) );
+}
+
+
+// A commented out constraint must not appear in the body as active rule text.
+BOOST_AUTO_TEST_CASE( RuleBodyExcludesCommentLines )
+{
+    wxString ruleText = "(rule \"length_DDR_Byte0\"\n"
+                        "\t# byte lane 0\n"
+                        "\t# (constraint length (min 29.5mm) (max 30.5mm) (opt 30mm))\n"
+                        "(constraint length (min 210ps) (max 230ps) (opt 223ps))\n"
+                        "\t# tightened after bring-up\n"
+                        "\t(condition \"A.NetClass == 'DDR4_BYTE0'\"))";
+
+    wxString body = DRC_RULE_LOADER::ExtractRuleBody( ruleText );
+
+    BOOST_CHECK( body.StartsWith( wxS( "(constraint length (min 210ps)" ) ) );
+    BOOST_CHECK( !body.Contains( wxS( "29.5mm" ) ) );
+    BOOST_CHECK( !body.Contains( wxS( "byte lane" ) ) );
+    BOOST_CHECK( !body.Contains( wxS( "bring-up" ) ) );
+    BOOST_CHECK( body.Contains( wxS( "condition" ) ) );
+
+    wxString comment = DRC_RULE_LOADER::ExtractRuleComment( ruleText );
+
+    BOOST_CHECK( comment.Contains( wxS( "byte lane 0" ) ) );
+    BOOST_CHECK( comment.Contains( wxS( "29.5mm" ) ) );
+    BOOST_CHECK( comment.Contains( wxS( "bring-up" ) ) );
+}
+
+
+// The matched length pair panel still cannot hold time, so a ps skew stays as text.
+BOOST_AUTO_TEST_CASE( RuleLoaderTimeDomainSkewStillFallsBackToCustom )
+{
+    wxString ruleText = "(version 1)\n"
+                        "(rule \"pair_ps\"\n"
+                        "    (constraint length (min 10mm) (opt 11mm) (max 12mm))\n"
+                        "    (constraint skew (max 5ps))\n"
+                        ")";
+
+    DRC_RULE_LOADER                        loader;
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFromString( ruleText );
+
+    BOOST_REQUIRE_EQUAL( entries.size(), 1 );
+    BOOST_CHECK_EQUAL( entries[0].panelType, CUSTOM_RULE );
+
+    auto customData = std::dynamic_pointer_cast<DRC_RE_CUSTOM_RULE_CONSTRAINT_DATA>( entries[0].constraintData );
+    BOOST_REQUIRE( customData );
+    BOOST_CHECK( customData->GetRuleText().Contains( wxS( "5ps" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuleLoaderSpatialLengthStaysStructured )
+{
+    wxString ruleText = "(version 1)\n"
+                        "(rule \"len_mm\"\n"
+                        "    (constraint length (min 30mm) (opt 40mm) (max 50mm))\n"
+                        ")";
+
+    DRC_RULE_LOADER                        loader;
+    std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFromString( ruleText );
+
+    BOOST_REQUIRE_EQUAL( entries.size(), 1 );
+    BOOST_CHECK_EQUAL( entries[0].panelType, ABSOLUTE_LENGTH );
 }
 
 BOOST_AUTO_TEST_SUITE_END()

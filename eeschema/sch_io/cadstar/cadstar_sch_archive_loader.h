@@ -150,6 +150,12 @@ private:
      */
     std::map<SYMDEF_ID, std::unique_ptr<const LIB_SYMBOL>> m_symDefMap;
 
+    /**
+     * Owns every #LIB_SYMBOL the loader allocates while loading a design. The raw pointers held
+     * by m_partMap, m_powerSymLibMap and m_loadedSymbols all alias into this.
+     */
+    std::vector<std::unique_ptr<LIB_SYMBOL>> m_ownedSymbols;
+
     std::vector<LIB_SYMBOL*> m_loadedSymbols; ///< Loaded symbols so far
     std::map<PART_GATE_ID, SYMDEF_ID> m_partSymbolsMap; ///< Map holding the symbols loaded so far
                                                         ///  for a particular PART_ID and GATE_ID
@@ -194,7 +200,7 @@ private:
 
     void loadLibrarySymbolShapeVertices( const std::vector<VERTEX>& aCadstarVertices,
                                          const VECTOR2I& aSymbolOrigin, LIB_SYMBOL* aSymbol,
-                                         int aGateNumber, int aLineThickness );
+                                         int aGateNumber, int aLineThickness, LINE_STYLE aLineStyle );
 
     void applyToLibraryFieldAttribute( const ATTRIBUTE_LOCATION& aCadstarAttrLoc,
                                        const VECTOR2I& aSymbolOrigin, SCH_FIELD* aKiCadField );

@@ -18,6 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <tool/tool_manager.h>
 #include <sch_line_wire_bus_tool.h>
 
 #include <wx/debug.h>
@@ -34,6 +35,8 @@
 #include <layer_ids.h>
 #include <math/vector2d.h>
 #include <advanced_config.h>
+#include <connectivity/conn_bus.h>
+#include <connectivity/conn_facade.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <view/view_controls.h>
 #include <tool/actions.h>
@@ -94,6 +97,81 @@ protected:
     }
 
 private:
+    struct MEMBER
+    {
+        wxString              name;
+        bool                  bus = false;
+        std::vector<wxString> members;
+    };
+
+    static std::vector<MEMBER> memberEntries( const SCH_LINE& aBus )
+    {
+        using SCH_CONNECTIVITY::BUS_SCHEMA;
+        std::vector<MEMBER> result;
+
+        if( ADVANCED_CFG::GetCfg().m_ConnectivityEngine )
+        {
+            SCHEMATIC* schematic = aBus.Schematic();
+
+            if( !schematic )
+                return result;
+
+            const auto connection = schematic->Connectivity().Connection( aBus.m_Uuid,
+                                                                           schematic->CurrentSheet().PathRef() );
+
+            if( !connection || !connection->IsBus() )
+                return result;
+
+            const SCH_CONNECTIVITY::BUS_MEMBERS members = connection->Members();
+
+            if( !members.tree || !members.schema )
+                return result;
+
+            const auto leafName = [&]( const BUS_SCHEMA::NODE& aNode )
+            {
+                const auto& leaves = members.schema->leaves;
+                return aNode.leaf && *aNode.leaf < leaves.size() ? leaves[*aNode.leaf].name : wxString();
+            };
+
+            // Leaf names carry their full group prefix; nested buses take the root group's prefix
+            const bool     namedGroup = members.tree->kind == BUS_SCHEMA::NODE::KIND::GROUP
+                                        && !members.tree->prefix.IsEmpty();
+            const wxString prefix = namedGroup ? members.tree->prefix + wxS( "." ) : wxString();
+
+            for( const BUS_SCHEMA::NODE& node : members.tree->members )
+            {
+                MEMBER& entry = result.emplace_back();
+                entry.bus = node.kind != BUS_SCHEMA::NODE::KIND::NET;
+                entry.name = entry.bus ? prefix + node.text : leafName( node );
+
+                for( const BUS_SCHEMA::NODE& sub : node.members )
+                {
+                    if( wxString name = leafName( sub ); !name.IsEmpty() )
+                        entry.members.push_back( std::move( name ) );
+                }
+            }
+
+            return result;
+        }
+
+        const SCH_CONNECTION* connection = aBus.Connection();
+
+        if( !connection || !connection->IsBus() )
+            return result;
+
+        for( const std::shared_ptr<SCH_CONNECTION>& member : connection->Members() )
+        {
+            MEMBER& entry = result.emplace_back();
+            entry.name = member->FullLocalName();
+            entry.bus = member->Type() == CONNECTION_TYPE::BUS;
+
+            for( const std::shared_ptr<SCH_CONNECTION>& sub : member->Members() )
+                entry.members.push_back( sub->FullLocalName() );
+        }
+
+        return result;
+    }
+
     void update() override
     {
         SCH_LINE* bus = m_busGetter();
@@ -108,9 +186,9 @@ private:
             return;
         }
 
-        SCH_CONNECTION* connection = bus->Connection();
+        const std::vector<MEMBER> members = memberEntries( *bus );
 
-        if( !connection || !connection->IsBus() || connection->Members().empty() )
+        if( members.empty() )
         {
             Append( ID_POPUP_SCH_UNFOLD_BUS, _( "Bus has no members" ), wxEmptyString );
             Enable( ID_POPUP_SCH_UNFOLD_BUS, false );
@@ -127,17 +205,17 @@ private:
 
         std::unordered_map<wxString, ACTION_MENU*> diff_busses{};
 
-        for( const std::shared_ptr<SCH_CONNECTION>& member : connection->Members() )
+        for( const MEMBER& member : members )
         {
             int id = ID_POPUP_SCH_UNFOLD_BUS + ( idx++ );
-            wxString name = member->FullLocalName();
+            wxString name = member.name;
 
-            if( member->Type() == CONNECTION_TYPE::BUS )
+            if( member.bus )
             {
                 ACTION_MENU* submenu = nullptr;
                 // If we are building the menu for suffixed bus vectors, we need to do some more massaging
                 if( ( name.ends_with( '+' ) || name.ends_with( '-' ) || name.ends_with( 'P' ) || name.ends_with( 'N' ) )
-                    && member->Members().size() > 0 )
+                    && !member.members.empty() )
                 {
                     wxString submenu_name = name.substr( 0, name.length() - 1 );
                     auto     bus_submenu = diff_busses.find( submenu_name );
@@ -160,10 +238,10 @@ private:
                     AppendSubMenu( submenu, SCH_CONNECTION::PrintBusForUI( name ), name );
                 }
 
-                for( const std::shared_ptr<SCH_CONNECTION>& sub_member : member->Members() )
+                for( const wxString& subMemberName : member.members )
                 {
                     id = ID_POPUP_SCH_UNFOLD_BUS + ( idx++ );
-                    name = sub_member->FullLocalName();
+                    name = subMemberName;
 
                     if( ( name.ends_with( '+' ) || name.ends_with( '-' ) || name.ends_with( 'P' )
                           || name.ends_with( 'N' ) ) )
@@ -342,7 +420,9 @@ int SCH_LINE_WIRE_BUS_TOOL::DrawSegments( const TOOL_EVENT& aEvent )
     const DRAW_SEGMENT_EVENT_PARAMS* params = aEvent.Parameter<const DRAW_SEGMENT_EVENT_PARAMS*>();
     SCH_COMMIT                       commit( m_toolMgr );
 
-    m_frame->PushTool( aEvent );
+    TOOL_EVENT         originalEvent = aEvent;      // This can change out from under us when the event loop runs
+    SCOPED_TOOL_PUSHER raii( m_frame, aEvent );
+
     m_toolMgr->RunAction( ACTIONS::selectionClear );
 
     if( aEvent.HasPosition() )
@@ -353,11 +433,11 @@ int SCH_LINE_WIRE_BUS_TOOL::DrawSegments( const TOOL_EVENT& aEvent )
         grid.SetSnap( !aEvent.Modifier( MD_SHIFT ) );
         grid.SetUseGrid( getView()->GetGAL()->GetGridSnapping() && !aEvent.DisableGridSnapping() );
 
-        VECTOR2D cursorPos = grid.BestSnapAnchor( aEvent.Position(), gridType, nullptr );
+        VECTOR2D cursorPos = grid.ResolveSnap( aEvent.Position(), gridType, nullptr ).position;
         startSegments( commit, params->layer, cursorPos, params->sourceSegment );
     }
 
-    return doDrawSegments( aEvent, commit, params->layer, params->quitOnDraw );
+    return doDrawSegments( originalEvent, commit, params->layer, params->quitOnDraw );
 }
 
 
@@ -373,7 +453,8 @@ int SCH_LINE_WIRE_BUS_TOOL::UnfoldBus( const TOOL_EVENT& aEvent )
     wxString   net;
     SCH_LINE*  segment = nullptr;
 
-    m_frame->PushTool( aEvent );
+    TOOL_EVENT         originalEvent = aEvent;          // This can change out from under us when the event loop runs
+    SCOPED_TOOL_PUSHER raii( m_frame, originalEvent );
     Activate();
 
     if( netPtr )
@@ -383,10 +464,12 @@ int SCH_LINE_WIRE_BUS_TOOL::UnfoldBus( const TOOL_EVENT& aEvent )
     }
     else
     {
-        const auto busGetter = [this]()
+        const auto busGetter =
+                [this]()
                 {
                     return getBusForUnfolding();
                 };
+
         BUS_UNFOLD_MENU unfoldMenu( busGetter );
         unfoldMenu.SetTool( this );
         unfoldMenu.SetShowTitle();
@@ -421,14 +504,9 @@ int SCH_LINE_WIRE_BUS_TOOL::UnfoldBus( const TOOL_EVENT& aEvent )
 
     // If we have an unfolded wire to draw, then draw it
     if( segment )
-    {
-        return doDrawSegments( aEvent, commit, LAYER_WIRE, false );
-    }
-    else
-    {
-        m_frame->PopTool( aEvent );
-        return 0;
-    }
+        return doDrawSegments( originalEvent, commit, LAYER_WIRE, false );
+
+    return 0;
 }
 
 
@@ -746,7 +824,7 @@ int SCH_LINE_WIRE_BUS_TOOL::doDrawSegments( const TOOL_EVENT& aTool, SCH_COMMIT&
         VECTOR2D eventPosition = evt->HasPosition() ? evt->Position()
                                                     : controls->GetMousePosition();
 
-        VECTOR2I cursorPos = grid.BestSnapAnchor( eventPosition, gridType, segment );
+        VECTOR2I cursorPos = grid.ResolveSnap( eventPosition, gridType, segment ).position;
         controls->ForceCursorPosition( true, cursorPos );
 
         // Need to handle change in H/V mode while drawing
@@ -791,14 +869,10 @@ int SCH_LINE_WIRE_BUS_TOOL::doDrawSegments( const TOOL_EVENT& aTool, SCH_COMMIT&
                 cleanup();
 
                 if( aQuitOnDraw )
-                {
-                    m_frame->PopTool( aTool );
                     break;
-                }
             }
             else
             {
-                m_frame->PopTool( aTool );
                 break;
             }
         }
@@ -813,14 +887,11 @@ int SCH_LINE_WIRE_BUS_TOOL::doDrawSegments( const TOOL_EVENT& aTool, SCH_COMMIT&
 
             if( evt->IsMoveTool() )
             {
-                // leave ourselves on the stack so we come back after the move
-                break;
+                // Make sure we come back after the move tool runs
+                m_frame->PushTool( aTool );
             }
-            else
-            {
-                m_frame->PopTool( aTool );
-                break;
-            }
+
+            break;
         }
         //------------------------------------------------------------------------
         // Handle finish:
@@ -835,17 +906,16 @@ int SCH_LINE_WIRE_BUS_TOOL::doDrawSegments( const TOOL_EVENT& aTool, SCH_COMMIT&
                 aCommit.Push( _( "Draw Wires" ) );
 
                 if( aQuitOnDraw )
-                {
-                    m_frame->PopTool( aTool );
                     break;
-                }
             }
         }
         //------------------------------------------------------------------------
         // Handle click:
         //
         else if( evt->IsClick( BUT_LEFT )
+                || evt->IsAction( &ACTIONS::cursorClick )
                 || ( segment && evt->IsDblClick( BUT_LEFT ) )
+                || ( segment && evt->IsAction( &ACTIONS::cursorDblClick ) )
                 || isSyntheticClick )
         {
             // First click when unfolding places the label and wire-to-bus entry
@@ -876,10 +946,7 @@ int SCH_LINE_WIRE_BUS_TOOL::doDrawSegments( const TOOL_EVENT& aTool, SCH_COMMIT&
                     aCommit.Push( _( "Draw Wires" ) );
 
                     if( aQuitOnDraw )
-                    {
-                        m_frame->PopTool( aTool );
                         break;
-                    }
                 }
                 else
                 {
@@ -906,13 +973,11 @@ int SCH_LINE_WIRE_BUS_TOOL::doDrawSegments( const TOOL_EVENT& aTool, SCH_COMMIT&
                 }
             }
 
-            if( evt->IsDblClick( BUT_LEFT ) && segment )
+            if( segment && (   evt->IsDblClick( BUT_LEFT )
+                            || evt->IsAction( &ACTIONS::cursorDblClick ) ) )
             {
                 if( twoSegments && m_wires.size() >= 2 )
-                {
-                    computeBreakPoint( { m_wires[m_wires.size() - 2], segment }, cursorPos,
-                                       currentMode, posture );
-                }
+                    computeBreakPoint( { m_wires[m_wires.size() - 2], segment }, cursorPos, currentMode, posture );
 
                 finishSegments( aCommit );
                 segment = nullptr;
@@ -920,10 +985,7 @@ int SCH_LINE_WIRE_BUS_TOOL::doDrawSegments( const TOOL_EVENT& aTool, SCH_COMMIT&
                 aCommit.Push( _( "Draw Wires" ) );
 
                 if( aQuitOnDraw )
-                {
-                    m_frame->PopTool( aTool );
                     break;
-                }
             }
         }
         //------------------------------------------------------------------------
@@ -973,14 +1035,9 @@ int SCH_LINE_WIRE_BUS_TOOL::doDrawSegments( const TOOL_EVENT& aTool, SCH_COMMIT&
             {
                 // Coerce the line to vertical/horizontal/45 as necessary
                 if( twoSegments && m_wires.size() >= 2 )
-                {
-                    computeBreakPoint( { m_wires[m_wires.size() - 2], segment }, cursorPos,
-                                       currentMode, posture );
-                }
+                    computeBreakPoint( { m_wires[m_wires.size() - 2], segment }, cursorPos, currentMode, posture );
                 else
-                {
                     segment->SetEndPoint( cursorPos );
-                }
             }
 
             for( SCH_LINE* wire : m_wires )
@@ -1000,11 +1057,8 @@ int SCH_LINE_WIRE_BUS_TOOL::doDrawSegments( const TOOL_EVENT& aTool, SCH_COMMIT&
             if( m_busUnfold.entry )
                 previewItems.push_back( m_busUnfold.entry );
 
-            for( SCH_JUNCTION* jct : JUNCTION_HELPERS::PreviewJunctions( m_frame->GetScreen(),
-                                                                          previewItems ) )
-            {
+            for( SCH_JUNCTION* jct : JUNCTION_HELPERS::PreviewJunctions( m_frame->GetScreen(), previewItems ) )
                 m_view->AddToPreview( jct, true );
-            }
         }
         else if( evt->IsAction( &SCH_ACTIONS::undoLastSegment )
                  || evt->IsAction( &ACTIONS::doDelete )
@@ -1025,14 +1079,9 @@ int SCH_LINE_WIRE_BUS_TOOL::doDrawSegments( const TOOL_EVENT& aTool, SCH_COMMIT&
 
                 // Find new bend point for current mode
                 if( twoSegments && m_wires.size() >= 2 )
-                {
-                    computeBreakPoint( { m_wires[m_wires.size() - 2], segment }, cursorPos,
-                                       currentMode, posture );
-                }
+                    computeBreakPoint( { m_wires[m_wires.size() - 2], segment }, cursorPos, currentMode, posture );
                 else
-                {
                     segment->SetEndPoint( cursorPos );
-                }
 
                 for( SCH_LINE* wire : m_wires )
                 {
@@ -1078,8 +1127,7 @@ int SCH_LINE_WIRE_BUS_TOOL::doDrawSegments( const TOOL_EVENT& aTool, SCH_COMMIT&
             }
             else
             {
-                computeBreakPoint( { m_wires[m_wires.size() - 2], segment }, cursorPos, currentMode,
-                                   posture );
+                computeBreakPoint( { m_wires[m_wires.size() - 2], segment }, cursorPos, currentMode, posture );
 
                 m_toolMgr->PostAction( ACTIONS::refreshPreview );
             }

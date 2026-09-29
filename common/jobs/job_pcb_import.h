@@ -22,6 +22,9 @@
 
 #include <kicommon.h>
 #include <map>
+#include <utility>
+#include <vector>
+
 #include "job.h"
 #include "job_import_utils.h"
 
@@ -60,6 +63,16 @@ public:
     /// e.g. "F.Cu").  Source layers absent from the map keep the importer's automatic best-guess.
     /// An empty map means fully automatic layer mapping.
     std::map<wxString, wxString> m_layerMap;
+
+    std::map<wxString, wxString> m_netNameMap;
+    bool m_probeOnly = false;
+    /// EasyEDA Pro PCB document identifier selected by project-level import.
+    wxString m_importPcbId;
+    /// Avoid promoting an individual board's source settings into shared project settings.
+    bool m_isPartOfMultiBoardProject = false;
+
+    /// PCB document identifier and source name pairs found during a probe.
+    std::vector<std::pair<wxString, wxString>> m_projectBoards;
 };
 
 #endif

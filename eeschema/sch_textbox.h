@@ -28,6 +28,11 @@
 
 class HTML_MESSAGE_BOX;
 
+namespace kiapi::schematic::types
+{
+    class SchematicTextBox;
+}
+
 class SCH_TEXTBOX : public SCH_SHAPE, public EDA_TEXT
 {
 public:
@@ -41,6 +46,11 @@ public:
 
     void Serialize( google::protobuf::Any& aContainer ) const override;
     bool Deserialize( const google::protobuf::Any& aContainer ) override;
+
+    void Serialize( kiapi::schematic::types::SchematicTextBox& aOutput,
+                    const EDA_IU_SCALE& aScale ) const;
+    bool Deserialize( const kiapi::schematic::types::SchematicTextBox& aInput,
+                      const EDA_IU_SCALE& aScale );
 
     static bool ClassOf( const EDA_ITEM* aItem )
     {
@@ -79,16 +89,16 @@ public:
     KIFONT::FONT* GetDrawFont( const RENDER_SETTINGS* aSettings ) const override;
 
     virtual wxString GetShownText( const RENDER_SETTINGS* aSettings, const SCH_SHEET_PATH* aPath,
-                                   bool aAllowExtraText, int aDepth = 0 ) const;
+                                   RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const;
 
-    wxString GetShownText( bool aAllowExtraText, int aDepth = 0 ) const override
+    wxString GetShownText( RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const override
     {
         SCH_SHEET_PATH* sheetPath = nullptr;
 
         if( SCHEMATIC* schematic = Schematic() )
             sheetPath = &schematic->CurrentSheet();
 
-        return GetShownText( nullptr, sheetPath, aAllowExtraText, aDepth );
+        return GetShownText( nullptr, sheetPath, aContext, aDepth );
     }
 
     bool HasHypertext() const override;

@@ -41,12 +41,16 @@ set( QA_COMMON_SRCS
     test_color4d.cpp
     test_commit.cpp
     test_coroutine.cpp
+    test_filter_kruskal.cpp
     test_design_block_io.cpp
+    test_design_block_library_adapter.cpp
     test_desktop_app_id.cpp
     test_dialog_shim.cpp
     test_eda_shape.cpp
     test_eda_text.cpp
     test_editor_tabs_panel.cpp
+    test_edit_relations.cpp
+    test_union_find.cpp
     test_unit_binder.cpp
     test_wx_dataviewctrl.cpp
     test_wx_grid.cpp
@@ -61,6 +65,7 @@ set( QA_COMMON_SRCS
     test_increment.cpp
     test_inplace_function.cpp
     test_item_realignment.cpp
+    test_json_schema_validator.cpp
     test_ki_any.cpp
     test_library_tables.cpp
     test_local_history_autosave_walk.cpp
@@ -69,20 +74,23 @@ set( QA_COMMON_SRCS
     test_markup_parser.cpp
     test_kicad_string.cpp
     test_kicad_stroke_font.cpp
-    test_outline_font.cpp
     test_dxf_plotter.cpp
     test_gerber_plotter.cpp
     test_pdf_unicode_plot.cpp
     test_png_plotter.cpp
+    test_render_utils.cpp
     test_kiid.cpp
     test_layer_ids.cpp
+    test_line_ending.cpp
     test_lib_id.cpp
     test_lib_tree_model_adapter.cpp
     test_layer_range.cpp
     test_lset.cpp
     test_markup_parser.cpp
     test_notifications_manager.cpp
+    test_project_archiver.cpp
     test_property.cpp
+    test_svg_plotter.cpp
     test_property_holder.cpp
     test_reporting.cpp
     test_rc_tree_model.cpp
@@ -90,11 +98,15 @@ set( QA_COMMON_SRCS
     test_reset_print_to_file.cpp
     test_wx_data_view_hyperlink_renderer.cpp
     test_grid_helper.cpp
+    test_priority_thread_pool_task.cpp
+    test_snapping_options.cpp
+    test_string_any_map.cpp
     test_string_utils.cpp
     test_richio.cpp
     test_template_fieldnames.cpp
     test_text_attributes.cpp
     test_tool_dispatcher.cpp
+    test_tool_prime.cpp
     git/test_libgit_backend.cpp
     git/test_git_compare_handler.cpp
     text_eval/test_text_eval_parser.cpp
@@ -106,6 +118,7 @@ set( QA_COMMON_SRCS
     text_eval/test_text_eval_render.cpp
     test_title_block.cpp
     test_track_width_calculations.cpp
+    test_pth_hole_size.cpp
     test_types.cpp
     test_utf8.cpp
     test_wildcards_and_files_ext.cpp
@@ -131,6 +144,7 @@ set( QA_COMMON_SRCS
     io/test_csv.cpp
     io/altium/test_altium_parser.cpp
     io/altium/test_altium_parser_utils.cpp
+    io/altium/test_altium_project_variants.cpp
     io/cadstar/test_cadstar_parts_parser.cpp
 
     io/cadstar/test_cadstar_archive_parser.cpp
@@ -145,6 +159,7 @@ set( QA_COMMON_SRCS
     view/test_zoom_controller.cpp
     view/test_view_null_safety.cpp
 
+    test_netclass.cpp
     test_netname_validator.cpp
 
     # GAL tests
@@ -152,6 +167,7 @@ set( QA_COMMON_SRCS
     test_gal_resize_strategy.cpp
 
     # Preview item / drawing utility tests
+    test_construction_geom.cpp
     test_dashed_line.cpp
 
     # Graphics import tests
@@ -163,8 +179,10 @@ set( QA_COMMON_SRCS
     ${CMAKE_SOURCE_DIR}/kicad/project_template.cpp
 
     # Project file tests
+    test_import_proj_properties.cpp
     test_project_file.cpp
     test_settings_manager.cpp
+    test_nested_settings.cpp
     test_net_settings.cpp
     test_component_class_settings.cpp
     test_project_local_settings.cpp
@@ -176,6 +194,7 @@ set( QA_COMMON_SRCS
     test_secure_token_store.cpp
 
     # Job tests
+    test_job_export_pcb_3d.cpp
     test_job_export_pcb_variants.cpp
     test_job_export_sch_bom.cpp
     test_job_export_sch_plot.cpp
@@ -220,20 +239,14 @@ target_link_libraries( qa_common
     qa_utils
     Boost::headers
     Boost::unit_test_framework
+    Fontconfig::Fontconfig
     ${wxWidgets_LIBRARIES}
     ZLIB::ZLIB
+    ${CMAKE_DL_LIBS}
     )
 
 if( TARGET api_schema_build_copy )
     add_dependencies( qa_common api_schema_build_copy )
-endif()
-
-# The print-to-file reset test reaches into the native GtkPrintSettings on GTK builds.
-# The GTK3 libraries themselves propagate transitively through kiplatform.
-if( KICAD_WX_PORT STREQUAL "gtk" )
-    find_package( PkgConfig REQUIRED )
-    pkg_check_modules( GTK3 REQUIRED gtk+-3.0 )
-    target_include_directories( qa_common SYSTEM PRIVATE ${GTK3_INCLUDE_DIRS} )
 endif()
 
 include_directories(
@@ -242,13 +255,14 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/pcbnew
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/common
+    ${CMAKE_SOURCE_DIR}/common/dialogs
     ${CMAKE_SOURCE_DIR}/common/io/pads
     ${CMAKE_SOURCE_DIR}/qa/mocks/include
     ${INC_AFTER}
 )
 
 set_source_files_properties( test_remote_provider_metadata.cpp test_remote_provider_client.cpp
-        test_translation_format_strings.cpp PROPERTIES
+        test_translation_format_strings.cpp test_json_schema_validator.cpp test_svg_import.cpp PROPERTIES
         COMPILE_DEFINITIONS "QA_SRC_ROOT=(\"${CMAKE_SOURCE_DIR}\")"
         )
 

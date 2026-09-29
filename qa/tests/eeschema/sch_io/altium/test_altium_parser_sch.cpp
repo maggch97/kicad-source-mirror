@@ -19,7 +19,8 @@
 
 /**
  * @file test_altium_parser_sch.cpp
- * Test suite for #ALTIUM_PARSER_SCH
+ *
+ * Test suite for #ALTIUM_COMPOUND_FILE.
  */
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
@@ -403,7 +404,7 @@ BOOST_AUTO_TEST_CASE( BusLabelWrapping )
 
     // A net name with spaces or commas must stay a single bus member, not fan out into
     // several.  The wrapped form must parse back to exactly one member.
-    for( const wxString& name : { wxT( "Net 1" ), wxT( "A,B" ) } )
+    for( const wxString name : { wxT( "Net 1" ), wxT( "A,B" ) } )
     {
         wxString              wrapped = AltiumWrapBusLabel( name );
         std::vector<wxString> members;

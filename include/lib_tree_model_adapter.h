@@ -181,16 +181,17 @@ public:
     void SetPreselectNode( const LIB_ID& aLibId, int aUnit );
 
     /**
-     * Add the given list of symbols by alias. To be called in the setup
-     * phase.
+     * Add the given list of symbols by alias. To be called in the setup phase.
      *
      * @param aNodeName    the parent node the symbols will appear under
      * @param aDesc        the description field of the parent node
      * @param aItemList    list of symbols
+     * @param aPinned
+     * @param aPresorted
      */
     LIB_TREE_NODE_LIBRARY& DoAddLibrary( const wxString& aNodeName, const wxString& aDesc,
                                          const std::vector<LIB_TREE_ITEM*>& aItemList,
-                                         bool pinned, bool presorted );
+                                         bool aPinned, bool aPresorted );
 
     /**
      * Remove one of the system groups from the library.
@@ -337,14 +338,34 @@ public:
 
     void ShowChangedLanguage();
 
+    /**
+     * RAII guard that detaches the GtkTreeView from the model across a tree rebuild so a deferred
+     * frame-clock tick cannot validate rows pointing at nodes the rebuild frees.  It also drops
+     * any queued scroll into those rows.
+     *
+     * Construct before any node is freed.
+     */
+    class ResetTreeView
+    {
+    public:
+        explicit ResetTreeView( LIB_TREE_MODEL_ADAPTER& aAdapter );
+        ~ResetTreeView();
+
+        ResetTreeView( const ResetTreeView& ) = delete;
+        ResetTreeView& operator=( const ResetTreeView& ) = delete;
+
+    private:
+        LIB_TREE_MODEL_ADAPTER& m_adapter;
+    };
+
 protected:
     /**
-     * Convert #SYM_TREE_NODE -> wxDataViewItem.
+     * Convert #LIB_TREE_NODE -> wxDataViewItem.
      */
     static wxDataViewItem ToItem( const LIB_TREE_NODE* aNode );
 
     /**
-     * Convert wxDataViewItem -> #SYM_TREE_NODE.
+     * Convert wxDataViewItem -> #LIB_TREE_NODE.
      */
     static LIB_TREE_NODE* ToNode( wxDataViewItem aItem );
 
@@ -380,13 +401,6 @@ protected:
      */
     wxDataViewItem GetParent( const wxDataViewItem& aItem ) const override;
 
-    unsigned int GetColumnCount() const override { return m_columns.size(); }
-
-    /**
-     * Return the type of data stored in the column as indicated by wxVariant::GetType()
-     */
-    wxString GetColumnType( unsigned int aCol ) const override { return "string"; }
-
     /**
      * Get the value of an item.
      *
@@ -417,35 +431,6 @@ protected:
     virtual PROJECT::LIB_TYPE_T getLibType() = 0;
 
     void resortTree();
-
-    /**
-     * RAII guard that detaches the GtkTreeView from the model across a tree rebuild so a deferred
-     * frame-clock tick cannot validate rows pointing at nodes the rebuild frees.
-     *
-     * Construct before any node is freed.
-     */
-    class ResetTreeView
-    {
-    public:
-        explicit ResetTreeView( LIB_TREE_MODEL_ADAPTER& aAdapter ) :
-                m_adapter( aAdapter )
-        {
-            m_adapter.Freeze();
-            m_adapter.BeforeReset();
-        }
-
-        ~ResetTreeView()
-        {
-            m_adapter.AfterReset();
-            m_adapter.Thaw();
-        }
-
-        ResetTreeView( const ResetTreeView& ) = delete;
-        ResetTreeView& operator=( const ResetTreeView& ) = delete;
-
-    private:
-        LIB_TREE_MODEL_ADAPTER& m_adapter;
-    };
 
 private:
     /**

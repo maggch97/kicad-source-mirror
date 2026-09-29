@@ -39,6 +39,7 @@
 #include <pcb_track.h>
 #include <zone.h>
 #include <string_utils.h>
+#include <algorithm>
 #include <limits>
 #include <pcb_edit_frame.h>
 #include <pcbnew_settings.h>
@@ -106,6 +107,29 @@ void BOARD_NETLIST_UPDATER::ApplyChainAssignments( BOARD* aBoard, const NETLIST&
             }
         }
     }
+}
+
+
+void BOARD_NETLIST_UPDATER::ApplyChainNetclasses( BOARD* aBoard, const NETLIST& aNetlist )
+{
+    const std::shared_ptr<NET_SETTINGS>& netSettings = aBoard->GetDesignSettings().m_NetSettings;
+
+    if( !netSettings )
+        return;
+
+    netSettings->ClearNetChainClasses();
+    netSettings->ClearNetChainNetClasses();
+
+    for( const auto& [chain, className] : aNetlist.GetSignalChainClasses() )
+        netSettings->SetNetChainClass( chain, className );
+
+    for( const auto& [chain, netclass] : aNetlist.GetNetChainNetClasses() )
+        netSettings->SetNetChainNetClass( chain, netclass );
+
+    // Chain membership on the board has just been refreshed from the netlist, so assignments
+    // derived from the previous membership are stale.  The caller's
+    // SynchronizeNetsAndNetClasses() rebuilds them from the maps set above.
+    netSettings->ClearChainPatternAssignments( NET_CHAIN_SOURCE::BOARD );
 }
 
 
@@ -437,8 +461,9 @@ bool BOARD_NETLIST_UPDATER::updateFootprintParameters( FOOTPRINT* aFootprint, CO
     {
         for( const auto& [_, test] : aNetlistComponent->GetVariants() )
         {
-            if( test.m_fields.count( GetCanonicalFieldName( FIELD_T::FOOTPRINT ) )
-                && aFootprint->GetFPIDAsString() == test.m_fields.at( GetCanonicalFieldName( FIELD_T::FOOTPRINT ) ) )
+            if( test.m_fields.count( GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED ) )
+                && aFootprint->GetFPIDAsString()
+                           == test.m_fields.at( GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED ) ) )
             {
                 firstAssociatedVariant = &test;
                 break;
@@ -483,9 +508,9 @@ bool BOARD_NETLIST_UPDATER::updateFootprintParameters( FOOTPRINT* aFootprint, CO
     wxString netlistValue = aNetlistComponent->GetValue();
 
     if( firstAssociatedVariant != nullptr
-        && firstAssociatedVariant->m_fields.count( GetCanonicalFieldName( FIELD_T::VALUE ) ) )
+        && firstAssociatedVariant->m_fields.count( GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED ) ) )
     {
-        netlistValue = firstAssociatedVariant->m_fields.at( GetCanonicalFieldName( FIELD_T::VALUE ) );
+        netlistValue = firstAssociatedVariant->m_fields.at( GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED ) );
     }
 
     if( aFootprint->GetValue() != netlistValue )
@@ -555,9 +580,9 @@ bool BOARD_NETLIST_UPDATER::updateFootprintParameters( FOOTPRINT* aFootprint, CO
 
     // Remove the ref/value/footprint fields that are individually handled
     nlohmann::ordered_map<wxString, wxString> compFields = aNetlistComponent->GetFields();
-    compFields.erase( GetCanonicalFieldName( FIELD_T::REFERENCE ) );
-    compFields.erase( GetCanonicalFieldName( FIELD_T::VALUE ) );
-    compFields.erase( GetCanonicalFieldName( FIELD_T::FOOTPRINT ) );
+    compFields.erase( GetDefaultFieldName( FIELD_T::REFERENCE, UNTRANSLATED ) );
+    compFields.erase( GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED ) );
+    compFields.erase( GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED ) );
 
     // Remove any component class fields - these are not editable in the pcb editor
     compFields.erase( wxT( "Component Class" ) );
@@ -799,6 +824,43 @@ bool BOARD_NETLIST_UPDATER::updateFootprintParameters( FOOTPRINT* aFootprint, CO
         m_reporter->Report( msg, RPT_SEVERITY_ACTION );
     }
 
+    bool netlistExcludeFromSim = aNetlistComponent->GetProperties().count( wxT( "exclude_from_sim" ) ) > 0;
+
+    if( firstAssociatedVariant != nullptr && firstAssociatedVariant->m_hasExcludedFromSim )
+        netlistExcludeFromSim = firstAssociatedVariant->m_excludedFromSim;
+
+    if( m_updateFields
+        && netlistExcludeFromSim != ( ( aFootprint->GetAttributes() & FP_EXCLUDE_FROM_SIM ) > 0 ) )
+    {
+        if( m_isDryRun )
+        {
+            if( netlistExcludeFromSim )
+                msg.Printf( _( "Add %s 'exclude from simulation' attribute." ), aFootprint->GetReference() );
+            else
+                msg.Printf( _( "Remove %s 'exclude from simulation' attribute." ), aFootprint->GetReference() );
+        }
+        else
+        {
+            int attributes = aFootprint->GetAttributes();
+
+            if( netlistExcludeFromSim )
+            {
+                attributes |= FP_EXCLUDE_FROM_SIM;
+                msg.Printf( _( "Added %s 'exclude from simulation' attribute." ), aFootprint->GetReference() );
+            }
+            else
+            {
+                attributes &= ~FP_EXCLUDE_FROM_SIM;
+                msg.Printf( _( "Removed %s 'exclude from simulation' attribute." ), aFootprint->GetReference() );
+            }
+
+            changed = true;
+            aFootprint->SetAttributes( attributes );
+        }
+
+        m_reporter->Report( msg, RPT_SEVERITY_ACTION );
+    }
+
     bool netlistDNP = aNetlistComponent->GetProperties().count( wxT( "dnp" ) ) > 0;
 
     if( firstAssociatedVariant != nullptr && firstAssociatedVariant->m_hasDnp )
@@ -949,12 +1011,20 @@ bool BOARD_NETLIST_UPDATER::updateFootprintGroup( FOOTPRINT* aPcbFootprint,
     if( !m_transferGroups )
         return false;
 
+    KIID       newGroupKIID = aNetlistComponent->GetGroup() ? aNetlistComponent->GetGroup()->uuid : 0;
+    PCB_GROUP* existingGroup = static_cast<PCB_GROUP*>( aPcbFootprint->GetParentGroup() );
+    KIID       existingGroupKIID = existingGroup ? existingGroup->m_Uuid : 0;
+
+    // No changes, nothing to do
+    if( newGroupKIID == existingGroupKIID )
+        return false;
+
     wxString msg;
 
     // Create a copy only if the footprint has not been added during this update
     FOOTPRINT* copy = nullptr;
 
-    if( !m_commit.GetStatus( aPcbFootprint ) )
+    if( !m_isDryRun && !m_commit.GetStatus( aPcbFootprint ) )
     {
         copy = static_cast<FOOTPRINT*>( aPcbFootprint->Clone() );
         copy->SetParentGroup( nullptr );
@@ -962,14 +1032,9 @@ bool BOARD_NETLIST_UPDATER::updateFootprintGroup( FOOTPRINT* aPcbFootprint,
 
     bool changed = false;
 
-    // These hold the info for group and group KIID coming from the netlist
     // newGroup may point to an existing group on the board if we find an
     // incoming group UUID that matches an existing group
     PCB_GROUP* newGroup = nullptr;
-    KIID       newGroupKIID = aNetlistComponent->GetGroup() ? aNetlistComponent->GetGroup()->uuid : 0;
-
-    PCB_GROUP* existingGroup = static_cast<PCB_GROUP*>( aPcbFootprint->GetParentGroup() );
-    KIID       existingGroupKIID = existingGroup ? existingGroup->m_Uuid : 0;
 
     // Find existing group based on matching UUIDs
     auto it = std::find_if( m_board->Groups().begin(), m_board->Groups().end(),
@@ -980,10 +1045,6 @@ bool BOARD_NETLIST_UPDATER::updateFootprintGroup( FOOTPRINT* aPcbFootprint,
     // If we find a group with the same UUID, use it
     if( it != m_board->Groups().end() )
         newGroup = *it;
-
-    // No changes, nothing to do
-    if( newGroupKIID == existingGroupKIID )
-        return changed;
 
     // Remove from existing group
     if( existingGroupKIID != 0 )
@@ -1303,25 +1364,11 @@ bool BOARD_NETLIST_UPDATER::updateComponentUnits( FOOTPRINT* aFootprint, COMPONE
 
     const std::vector<FOOTPRINT::FP_UNIT_INFO>& curUnits = aFootprint->GetUnitInfo();
 
-    auto unitsEqual = []( const std::vector<FOOTPRINT::FP_UNIT_INFO>& a,
-                          const std::vector<FOOTPRINT::FP_UNIT_INFO>& b )
-        {
-            if( a.size() != b.size() )
-                return false;
-
-            for( size_t i = 0; i < a.size(); ++i )
+    if( std::ranges::equal( curUnits, newUnits,
+            []( const auto& a, const auto& b )
             {
-                if( a[i].m_unitName != b[i].m_unitName )
-                    return false;
-
-                if( a[i].m_pins != b[i].m_pins )
-                    return false;
-            }
-
-            return true;
-        };
-
-    if( unitsEqual( curUnits, newUnits ) )
+                return a.m_unitName == b.m_unitName && a.m_pins == b.m_pins;
+            } ) )
         return false;
 
     wxString msg;
@@ -1373,7 +1420,7 @@ void BOARD_NETLIST_UPDATER::applyComponentVariants( COMPONENT* aComponent,
     if( aBaseFpid.empty() )
         return;
 
-    const wxString footprintFieldName = GetCanonicalFieldName( FIELD_T::FOOTPRINT );
+    const wxString footprintFieldName = GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED );
 
     struct VARIANT_INFO
     {
@@ -1578,6 +1625,25 @@ void BOARD_NETLIST_UPDATER::applyComponentVariants( COMPONENT* aComponent,
                 {
                     if( FOOTPRINT_VARIANT* fpVariant = footprint->AddVariant( info.name ) )
                         fpVariant->SetExcludedFromBOM( targetExcludedFromBOM );
+                }
+
+                m_reporter->Report( msg, RPT_SEVERITY_ACTION );
+                changed = true;
+            }
+
+            bool targetExcludedFromSim = variant.m_hasExcludedFromSim ? variant.m_excludedFromSim
+                                                                      : footprint->IsExcludedFromSim();
+            bool currentExcludedFromSim = currentVariant ? currentVariant->GetExcludedFromSim()
+                                                         : footprint->IsExcludedFromSim();
+
+            if( currentExcludedFromSim != targetExcludedFromSim )
+            {
+                printAttributeMessage( targetExcludedFromSim, _( "exclude from simulation" ), info.name );
+
+                if( !m_isDryRun )
+                {
+                    if( FOOTPRINT_VARIANT* fpVariant = footprint->AddVariant( info.name ) )
+                        fpVariant->SetExcludedFromSim( targetExcludedFromSim );
                 }
 
                 m_reporter->Report( msg, RPT_SEVERITY_ACTION );
@@ -2200,7 +2266,7 @@ bool BOARD_NETLIST_UPDATER::UpdateNetlist( NETLIST& aNetlist )
 
         addExpectedFpid( baseFpid );
 
-        const wxString footprintFieldName = GetCanonicalFieldName( FIELD_T::FOOTPRINT );
+        const wxString footprintFieldName = GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED );
 
         for( const auto& [variantName, variant] : component->GetVariants() )
         {
@@ -2584,49 +2650,11 @@ bool BOARD_NETLIST_UPDATER::UpdateNetlist( NETLIST& aNetlist )
             }
         }
 
-        // Net chain class assignments stored in the netlist are mirrored into
-        // the project-level NET_SETTINGS map so the inNetChainClass() rule
-        // function can resolve them at DRC time.  Both the chain->class map and the
-        // chain-derived pattern assignments are rebuilt from scratch on each netlist
-        // update so that removed or renamed chains do not leave stale entries.
-        std::shared_ptr<NET_SETTINGS>& netSettings = m_board->GetDesignSettings().m_NetSettings;
+        ApplyChainNetclasses( m_board, aNetlist );
 
-        if( netSettings )
-        {
-            netSettings->ClearNetChainClasses();
-            netSettings->ClearChainPatternAssignments();
-
-            for( const auto& [chain, className] : aNetlist.GetSignalChainClasses() )
-                netSettings->SetNetChainClass( chain, className );
-
-            // Net chains may specify a netclass that applies to every member net.
-            // Push that assignment into the board's netclass map before resyncing.
-            const std::map<wxString, wxString>& chainClasses = aNetlist.GetNetChainNetClasses();
-
-            for( NETINFO_ITEM* net : m_board->GetNetInfo() )
-            {
-                const wxString& chainName = net->GetNetChain();
-
-                if( chainName.IsEmpty() )
-                    continue;
-
-                auto it = chainClasses.find( chainName );
-
-                if( it == chainClasses.end() || it->second.IsEmpty() )
-                    continue;
-
-                if( netSettings->HasNetclass( it->second ) )
-                    netSettings->SetChainPatternAssignment( net->GetNetname(), it->second );
-            }
-
-            // Always resync after chain cleanup so existing NETINFO_ITEM effective-netclass
-            // pointers pick up cleared/changed chain entries even when chainClasses is empty.
-            m_board->SynchronizeNetsAndNetClasses( true );
-        }
-        else
-        {
-            m_board->SynchronizeNetsAndNetClasses( true );
-        }
+        // Always resync after chain cleanup so existing NETINFO_ITEM effective-netclass
+        // pointers pick up cleared/changed chain entries even when no chain carries a netclass.
+        m_board->SynchronizeNetsAndNetClasses( true );
 
         for( const auto& sig : aNetlist.GetNetChainTerminalPins() )
         {

@@ -20,6 +20,8 @@
 
 #include "dialog_sheet_properties.h"
 
+#include <algorithm>
+
 #include <kiface_base.h>
 #include <wx/string.h>
 #include <wx/log.h>
@@ -125,13 +127,25 @@ bool DIALOG_SHEET_PROPERTIES::TransferDataToWindow()
     if( !wxDialog::TransferDataToWindow() )
         return false;
 
+    SCHEMATIC&     schematic = m_frame->Schematic();
     SCH_SHEET_PATH instance = m_frame->GetCurrentSheet();
-    wxString variantName = m_frame->Schematic().GetCurrentVariant();
+    wxString       variantName = m_frame->Schematic().GetCurrentVariant();
 
-    // Push a copy of each field into m_updateFields
+    std::vector<SCH_FIELD*> orderedFields;
+
     for( SCH_FIELD& field : m_sheet->GetFields() )
+        orderedFields.push_back( &field );
+
+    std::stable_sort( orderedFields.begin(), orderedFields.end(),
+                      []( const SCH_FIELD* lhs, const SCH_FIELD* rhs )
+                      {
+                          return lhs->GetOrdinal() < rhs->GetOrdinal();
+                      } );
+
+    // Push a copy of each field into m_fields
+    for( SCH_FIELD* field : orderedFields )
     {
-        SCH_FIELD field_copy( field );
+        SCH_FIELD field_copy( *field );
 
 #ifdef __WINDOWS__
         // Filenames are stored using unix notation, so convert to Windows notation
@@ -144,7 +158,10 @@ bool DIALOG_SHEET_PROPERTIES::TransferDataToWindow()
 #endif
 
         if( !field_copy.IsMandatory() )
-            field_copy.SetText( m_sheet->GetFieldText( field.GetName(), &instance, variantName ) );
+        {
+            field_copy.SetText( schematic.ConvertKIIDsToRefs( m_sheet->GetFieldText( field->GetName(), &instance,
+                                                                                     variantName ) ) );
+        }
 
         // change offset to be symbol-relative
         field_copy.Offset( -m_sheet->GetPosition() );
@@ -400,12 +417,15 @@ bool DIALOG_SHEET_PROPERTIES::TransferDataFromWindow()
 
     for( SCH_FIELD& field : *m_fields )
     {
-        const wxString& fieldName = field.GetCanonicalName();
+        const wxString& fieldName = field.GetUntranslatedName();
 
         if( field.IsEmpty() )
             continue;
         else if( fieldName.IsEmpty() )
             field.SetName( _( "untitled" ) );
+
+        if( !field.IsMandatory() )
+            field.SetOrdinal( ordinal++, FIELD_T::SHEET_USER );
 
         SCH_FIELD* existingField = m_sheet->GetField( fieldName );
         SCH_FIELD* tmp;
@@ -431,9 +451,6 @@ bool DIALOG_SHEET_PROPERTIES::TransferDataFromWindow()
                 tmp->SetText( variantText, &instance, variantName );
             }
         }
-
-        if( !field.IsMandatory() )
-            field.SetOrdinal( ordinal++ );
     }
 
     for( int ii = (int) m_sheet->GetFields().size() - 1; ii >= 0; ii-- )
@@ -457,6 +474,12 @@ bool DIALOG_SHEET_PROPERTIES::TransferDataFromWindow()
         if( !found )
             m_sheet->GetFields().erase( m_sheet->GetFields().begin() + ii );
     }
+
+    std::stable_sort( m_sheet->GetFields().begin(), m_sheet->GetFields().end(),
+                      []( const SCH_FIELD& lhs, const SCH_FIELD& rhs )
+                      {
+                          return lhs.GetOrdinal() < rhs.GetOrdinal();
+                      } );
 
     m_sheet->SetBorderWidth( m_borderWidth.GetIntValue() );
 
@@ -554,7 +577,7 @@ void DIALOG_SHEET_PROPERTIES::OnAddField( wxCommandEvent& event )
     m_grid->OnAddRow(
             [&]() -> std::pair<int, int>
             {
-                SCH_FIELD newField( m_sheet, FIELD_T::SHEET_USER, GetUserFieldName( m_fields->size(), DO_TRANSLATE ) );
+                SCH_FIELD newField( m_sheet, FIELD_T::SHEET_USER, GetUserFieldName( m_fields->size(), TRANSLATED ) );
 
                 newField.SetTextAngle( m_fields->GetField( FIELD_T::SHEET_NAME )->GetTextAngle() );
                 newField.SetVisible( false );
@@ -563,7 +586,7 @@ void DIALOG_SHEET_PROPERTIES::OnAddField( wxCommandEvent& event )
                 // notify the grid
                 wxGridTableMessage msg( m_fields, wxGRIDTABLE_NOTIFY_ROWS_APPENDED, 1 );
                 m_grid->ProcessTableMessage( msg );
-                return { m_fields->size() - 1, FDC_NAME };
+                return { m_fields->GetNumberRows() - 1, FDC_NAME };
             } );
 }
 
@@ -584,7 +607,8 @@ void DIALOG_SHEET_PROPERTIES::OnDeleteField( wxCommandEvent& event )
             },
             [&]( int row )
             {
-                m_fields->erase( m_fields->begin() + row );
+                if( !m_fields->EraseRow( row ) )
+                    return;
 
                 // notify the grid
                 wxGridTableMessage msg( m_fields, wxGRIDTABLE_NOTIFY_ROWS_DELETED, row, 1 );
@@ -602,7 +626,7 @@ void DIALOG_SHEET_PROPERTIES::OnMoveUp( wxCommandEvent& event )
             },
             [&]( int row )
             {
-                std::swap( *( m_fields->begin() + row ), *( m_fields->begin() + row - 1 ) );
+                m_fields->SwapRows( row, row - 1 );
                 m_grid->ForceRefresh();
             } );
 }
@@ -610,14 +634,14 @@ void DIALOG_SHEET_PROPERTIES::OnMoveUp( wxCommandEvent& event )
 
 void DIALOG_SHEET_PROPERTIES::OnMoveDown( wxCommandEvent& event )
 {
-    m_grid->OnMoveRowUp(
+    m_grid->OnMoveRowDown(
             [&]( int row )
             {
                 return row >= m_fields->GetMandatoryRowCount();
             },
             [&]( int row )
             {
-                std::swap( *( m_fields->begin() + row ), *( m_fields->begin() + row + 1 ) );
+                m_fields->SwapRows( row, row + 1 );
                 m_grid->ForceRefresh();
             } );
 }
@@ -654,7 +678,7 @@ void DIALOG_SHEET_PROPERTIES::OnUpdateUI( wxUpdateUIEvent& event )
 
     m_dummySheet.SetFields( *m_fields );
     m_dummySheetNameField.SetText( sheetName );
-    path += m_dummySheetNameField.GetShownText( false );
+    path += m_dummySheetNameField.GetShownText( FOR_GUI );
 
     editor->DecRef();
 

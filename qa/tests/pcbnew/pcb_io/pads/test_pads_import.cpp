@@ -23,6 +23,7 @@
 
 #include <pcb_io/pads/pcb_io_pads.h>
 #include <pcb_io/pads/pads_parser.h>
+#include <base_units.h>
 #include <layer_ids.h>
 #include <padstack.h>
 #include <board.h>
@@ -84,7 +85,7 @@ static std::unique_ptr<BOARD> LoadAndVerify( const PADS_BOARD_INFO& aBoard )
 
     try
     {
-        board.reset( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+        board = plugin.LoadBoard( filename, nullptr, nullptr );
     }
     catch( const std::exception& e )
     {
@@ -358,7 +359,7 @@ BOOST_AUTO_TEST_CASE( ImportNonCopperTrackSkipped )
 
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/synthetic_noncopper_track.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -384,7 +385,7 @@ BOOST_AUTO_TEST_CASE( ImportTextOnUnmappedLayer )
 
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/synthetic_unmapped_text_layer.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -611,7 +612,7 @@ BOOST_AUTO_TEST_CASE( ImportDegeneratePourSkipped )
     wxString filename = KI_TEST::GetPcbnewTestDataDir()
                         + "plugins/pads/synthetic_degenerate_pour.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -645,7 +646,7 @@ BOOST_AUTO_TEST_CASE( ImportFilledCopperSingleOutline )
     wxString filename = KI_TEST::GetPcbnewTestDataDir()
                         + "plugins/pads/synthetic_filled_copper.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
     BOOST_REQUIRE_EQUAL( board->Zones().size(), 1 );
@@ -671,7 +672,7 @@ BOOST_AUTO_TEST_CASE( Importer_SpecificFixes )
 
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/Importer.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -788,7 +789,7 @@ BOOST_AUTO_TEST_CASE( Peka_ViaImport )
 
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/peka.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -889,7 +890,7 @@ BOOST_AUTO_TEST_CASE( Importer_OvalDrillHits )
 
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/Importer.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -961,7 +962,7 @@ BOOST_AUTO_TEST_CASE( Peka_AlternateDecalDrill )
 
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/peka.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -1022,7 +1023,7 @@ BOOST_AUTO_TEST_CASE( Peka_ZoneFillNoSelfIntersection )
 
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/peka.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -1116,7 +1117,7 @@ BOOST_AUTO_TEST_CASE( ImportMaskPasteLayers )
     wxString filename =
             KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/synthetic_mask_paste.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
     BOOST_REQUIRE_EQUAL( board->Footprints().size(), 5 );
@@ -1211,7 +1212,7 @@ BOOST_AUTO_TEST_CASE( ImportMaskPasteLayersIssue23254 )
     wxString filename =
             KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23254/issue23254.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -1248,7 +1249,7 @@ BOOST_AUTO_TEST_CASE( ImportIssue23352 )
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23352.asc";
 
     std::unique_ptr<BOARD> board;
-    board.reset( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    board = plugin.LoadBoard( filename, nullptr, nullptr );
     BOOST_REQUIRE( board != nullptr );
 
     // Issue 1: Square pads should be imported as RECTANGLE, not CIRCLE.
@@ -1370,7 +1371,7 @@ BOOST_AUTO_TEST_CASE( Issue23393_NetClassImport )
     PCB_IO_PADS plugin;
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23393/demo.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
     BOOST_REQUIRE( board != nullptr );
 
     const BOARD_DESIGN_SETTINGS& bds = board->GetDesignSettings();
@@ -1427,7 +1428,7 @@ BOOST_AUTO_TEST_CASE( Issue23612_RouteArcSpansNeighbours )
     wxString filename = KI_TEST::GetPcbnewTestDataDir()
                         + "plugins/pads/issue23540/test_import.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -1503,7 +1504,7 @@ BOOST_AUTO_TEST_CASE( ImportFingerPadOffsetIssue23425 )
     wxString filename = KI_TEST::GetPcbnewTestDataDir()
                         + "plugins/pads/issue23425/controlCARDDockingStation.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -1572,7 +1573,7 @@ BOOST_AUTO_TEST_CASE( ImportIssue23391 )
 
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23391.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -1678,7 +1679,7 @@ BOOST_AUTO_TEST_CASE( InCircuitTestPointImport )
     wxString filename =
             KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/synthetic_testpoint.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -1776,7 +1777,7 @@ BOOST_AUTO_TEST_CASE( Issue23856_TextAndPadOrientation )
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23856.asc";
 
     std::unique_ptr<BOARD> board;
-    board.reset( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    board = plugin.LoadBoard( filename, nullptr, nullptr );
     BOOST_REQUIRE( board != nullptr );
 
     // Issue 1 + 3: free text with the copyright character must survive import,
@@ -1869,7 +1870,7 @@ BOOST_AUTO_TEST_CASE( Issue23392_ThermalReliefGap )
     PCB_IO_PADS plugin;
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23393/demo.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
     BOOST_REQUIRE( board != nullptr );
 
     auto findFP = [&]( const wxString& aRef ) -> FOOTPRINT*
@@ -1947,7 +1948,7 @@ BOOST_AUTO_TEST_CASE( Issue23241_V5Parts )
     wxString filename =
             KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23241/partsandattr.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -2021,7 +2022,7 @@ BOOST_AUTO_TEST_CASE( Issue23297_RfPadCornerRadius )
 
     wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue23297.asc";
 
-    std::unique_ptr<BOARD> board( plugin.LoadBoard( filename, nullptr, nullptr, nullptr ) );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
 
     BOOST_REQUIRE( board != nullptr );
 
@@ -2075,6 +2076,83 @@ BOOST_AUTO_TEST_CASE( Issue23297_RfPadCornerRadius )
 
     BOOST_CHECK_MESSAGE( checkedRefs == (int) expected.size(),
             "expected R1 and D1 footprints to be imported, found " << checkedRefs );
+}
+
+
+/**
+ * Issue 25274: a part type whose name contains dots (QUARZ_32.768KHZ_12.5PF_1.2X1) must still
+ * be registered so its decal can be resolved.
+ *
+ * The section holds 34 records, and a header read as pin data takes the gate and pin lines
+ * behind it with it.
+ */
+BOOST_AUTO_TEST_CASE( Issue25274_DottedPartTypeName )
+{
+    PADS_IO::PARSER parser;
+
+    parser.Parse( KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue25274.asc" );
+
+    const auto& partTypes = parser.GetPartTypes();
+
+    BOOST_CHECK_EQUAL( partTypes.size(), 34u );
+
+    auto it = partTypes.find( "QUARZ_32.768KHZ_12.5PF_1.2X1" );
+
+    BOOST_REQUIRE_MESSAGE( it != partTypes.end(), "dotted part type name should be registered" );
+    BOOST_CHECK_EQUAL( it->second.decal_name, "QUARZ_1.2X1" );
+
+    // The part type ahead of it in the file owns exactly its own gate, not the swallowed one
+    auto prev = partTypes.find( "LT3481" );
+
+    BOOST_REQUIRE( prev != partTypes.end() );
+    BOOST_CHECK_EQUAL( prev->second.gates.size(), 1u );
+}
+
+
+/**
+ * Issue 25274: X1 reaches its decal indirectly, through a part type whose name carries dots.
+ *
+ * The QUARZ_1.2X1 decal holds 2 closed outlines and 4 terminals at +/-615000, +/-502500 basic
+ * units, which is +/-0.41, +/-0.335 mm at the 1500000 basic units per mm of a metric file.
+ */
+BOOST_AUTO_TEST_CASE( Issue25274_IndirectDecalGeometry )
+{
+    PCB_IO_PADS plugin;
+
+    wxString filename = KI_TEST::GetPcbnewTestDataDir() + "plugins/pads/issue25274.asc";
+
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( filename, nullptr, nullptr );
+
+    BOOST_REQUIRE( board != nullptr );
+
+    FOOTPRINT* quartz = nullptr;
+
+    for( FOOTPRINT* fp : board->Footprints() )
+    {
+        if( fp->GetReference() == wxT( "X1" ) )
+            quartz = fp;
+    }
+
+    BOOST_REQUIRE_MESSAGE( quartz != nullptr, "X1 should be imported" );
+
+    BOOST_CHECK_EQUAL( std::string( quartz->GetFPID().GetLibItemName() ), std::string( "QUARZ_1.2X1" ) );
+    BOOST_REQUIRE_EQUAL( quartz->Pads().size(), 4u );
+    BOOST_CHECK_GE( quartz->GraphicalItems().size(), 2u );
+
+    std::set<VECTOR2I> padOffsets;
+
+    for( PAD* pad : quartz->Pads() )
+        padOffsets.insert( pad->GetPosition() - quartz->GetPosition() );
+
+    BOOST_CHECK_MESSAGE( padOffsets.size() == 4, "pads should sit on 4 distinct positions" );
+
+    const int tolerance = pcbIUScale.mmToIU( 0.01 );
+
+    for( const VECTOR2I& offset : padOffsets )
+    {
+        BOOST_CHECK_SMALL( std::abs( std::abs( offset.x ) - pcbIUScale.mmToIU( 0.41 ) ), tolerance );
+        BOOST_CHECK_SMALL( std::abs( std::abs( offset.y ) - pcbIUScale.mmToIU( 0.335 ) ), tolerance );
+    }
 }
 
 

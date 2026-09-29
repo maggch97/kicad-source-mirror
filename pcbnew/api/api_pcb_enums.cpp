@@ -21,6 +21,7 @@
 #include <import_export.h>
 #include <api/api_enums.h>
 #include <api/board/board.pb.h>
+#include <api/board/board_rules.pb.h>
 #include <api/board/board_types.pb.h>
 #include <api/board/board_commands.pb.h>
 #include <api/board/board_jobs.pb.h>
@@ -29,6 +30,7 @@
 #include <widgets/report_severity.h>
 
 #include <board_stackup_manager/board_stackup.h>
+#include <constraints/pcb_constraint.h>
 #include <drc/drc_item.h>
 #include <padstack.h>
 #include <pcb_dimension.h>
@@ -36,6 +38,7 @@
 #include <jobs/job_export_pcb_3d.h>
 #include <jobs/job_export_pcb_dxf.h>
 #include <jobs/job_export_pcb_drill.h>
+#include <jobs/job_export_pcb_idf.h>
 #include <jobs/job_export_pcb_ipc2581.h>
 #include <jobs/job_export_pcb_odb.h>
 #include <jobs/job_export_pcb_pdf.h>
@@ -43,12 +46,16 @@
 #include <jobs/job_export_pcb_ps.h>
 #include <jobs/job_export_pcb_stats.h>
 #include <jobs/job_export_pcb_svg.h>
+#include <jobs/job_export_pcb_png.h>
 #include <jobs/job_pcb_render.h>
 #include <drc/drc_rule.h>
 #include <plotprint_opts.h>
 #include <zones.h>
 #include <zone_settings.h>
 #include <project/board_project_settings.h>
+#include <generators/pcb_tuning_pattern.h>
+#include <generators/pcb_via_stack.h>
+#include <generators/pcb_via_stitch.h>
 
 // Adding something new here?  Add it to test_api_enums.cpp!
 
@@ -194,6 +201,51 @@ PADSTACK::MODE FromProtoEnum( types::PadStackType aValue )
 
 
 template<>
+PAD_PROP FromProtoEnum( types::PadFabricationProperty aValue )
+{
+    switch( aValue )
+    {
+    case types::PadFabricationProperty::PFP_UNKNOWN:
+    case types::PadFabricationProperty::PFP_NONE:            return PAD_PROP::NONE;
+    case types::PadFabricationProperty::PFP_BGA:             return PAD_PROP::BGA;
+    case types::PadFabricationProperty::PFP_FIDUCIAL_GLOBAL: return PAD_PROP::FIDUCIAL_GLBL;
+    case types::PadFabricationProperty::PFP_FIDUCIAL_LOCAL:  return PAD_PROP::FIDUCIAL_LOCAL;
+    case types::PadFabricationProperty::PFP_TESTPOINT:       return PAD_PROP::TESTPOINT;
+    case types::PadFabricationProperty::PFP_HEATSINK:        return PAD_PROP::HEATSINK;
+    case types::PadFabricationProperty::PFP_CASTELLATED:     return PAD_PROP::CASTELLATED;
+    case types::PadFabricationProperty::PFP_MECHANICAL:      return PAD_PROP::MECHANICAL;
+    case types::PadFabricationProperty::PFP_PRESSFIT:        return PAD_PROP::PRESSFIT;
+
+    default:
+        wxCHECK_MSG( false, PAD_PROP::NONE,
+                     "Unhandled case in FromProtoEnum<types::PadFabricationProperty>" );
+    }
+}
+
+
+template<>
+types::PadFabricationProperty ToProtoEnum( PAD_PROP aValue )
+{
+    switch( aValue )
+    {
+    case PAD_PROP::NONE:           return types::PadFabricationProperty::PFP_NONE;
+    case PAD_PROP::BGA:            return types::PadFabricationProperty::PFP_BGA;
+    case PAD_PROP::FIDUCIAL_GLBL:  return types::PadFabricationProperty::PFP_FIDUCIAL_GLOBAL;
+    case PAD_PROP::FIDUCIAL_LOCAL: return types::PadFabricationProperty::PFP_FIDUCIAL_LOCAL;
+    case PAD_PROP::TESTPOINT:      return types::PadFabricationProperty::PFP_TESTPOINT;
+    case PAD_PROP::HEATSINK:       return types::PadFabricationProperty::PFP_HEATSINK;
+    case PAD_PROP::CASTELLATED:    return types::PadFabricationProperty::PFP_CASTELLATED;
+    case PAD_PROP::MECHANICAL:     return types::PadFabricationProperty::PFP_MECHANICAL;
+    case PAD_PROP::PRESSFIT:       return types::PadFabricationProperty::PFP_PRESSFIT;
+
+    default:
+        wxCHECK_MSG( false, types::PadFabricationProperty::PFP_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<PAD_PROP>" );
+    }
+}
+
+
+template<>
 types::ViaType ToProtoEnum( VIATYPE aValue )
 {
     switch( aValue )
@@ -289,6 +341,8 @@ CustomRuleConstraintType ToProtoEnum( DRC_CONSTRAINT_T aValue )
     case THERMAL_RELIEF_GAP_CONSTRAINT:   return CustomRuleConstraintType::CRCT_THERMAL_RELIEF_GAP;
     case THERMAL_SPOKE_WIDTH_CONSTRAINT:  return CustomRuleConstraintType::CRCT_THERMAL_SPOKE_WIDTH;
     case MIN_RESOLVED_SPOKES_CONSTRAINT:  return CustomRuleConstraintType::CRCT_MIN_RESOLVED_SPOKES;
+    case MICROVIA_STACK_DEPTH_CONSTRAINT: return CustomRuleConstraintType::CRCT_MICROVIA_STACK_DEPTH;
+    case MICROVIA_ASPECT_RATIO_CONSTRAINT: return CustomRuleConstraintType::CRCT_MICROVIA_ASPECT_RATIO;
     case SOLDER_MASK_EXPANSION_CONSTRAINT:return CustomRuleConstraintType::CRCT_SOLDER_MASK_EXPANSION;
     case SOLDER_PASTE_ABS_MARGIN_CONSTRAINT:return CustomRuleConstraintType::CRCT_SOLDER_PASTE_ABS_MARGIN;
     case SOLDER_PASTE_REL_MARGIN_CONSTRAINT:return CustomRuleConstraintType::CRCT_SOLDER_PASTE_REL_MARGIN;
@@ -344,6 +398,8 @@ DRC_CONSTRAINT_T FromProtoEnum( CustomRuleConstraintType aValue )
     case CustomRuleConstraintType::CRCT_THERMAL_RELIEF_GAP:    return THERMAL_RELIEF_GAP_CONSTRAINT;
     case CustomRuleConstraintType::CRCT_THERMAL_SPOKE_WIDTH:   return THERMAL_SPOKE_WIDTH_CONSTRAINT;
     case CustomRuleConstraintType::CRCT_MIN_RESOLVED_SPOKES:   return MIN_RESOLVED_SPOKES_CONSTRAINT;
+    case CustomRuleConstraintType::CRCT_MICROVIA_STACK_DEPTH:  return MICROVIA_STACK_DEPTH_CONSTRAINT;
+    case CustomRuleConstraintType::CRCT_MICROVIA_ASPECT_RATIO: return MICROVIA_ASPECT_RATIO_CONSTRAINT;
     case CustomRuleConstraintType::CRCT_SOLDER_MASK_EXPANSION: return SOLDER_MASK_EXPANSION_CONSTRAINT;
     case CustomRuleConstraintType::CRCT_SOLDER_PASTE_ABS_MARGIN:return SOLDER_PASTE_ABS_MARGIN_CONSTRAINT;
     case CustomRuleConstraintType::CRCT_SOLDER_PASTE_REL_MARGIN:return SOLDER_PASTE_REL_MARGIN_CONSTRAINT;
@@ -577,6 +633,39 @@ ZONE_FILL_MODE FromProtoEnum( types::ZoneFillMode aValue )
 
 
 template<>
+types::ZoneCornerSmoothingMode ToProtoEnum( ZONE_SETTINGS::CORNER_SMOOTHING aValue )
+{
+    switch( aValue )
+    {
+    case ZONE_SETTINGS::CORNER_SMOOTHING::NO_SMOOTHING:    return types::ZoneCornerSmoothingMode::ZCSM_NONE;
+    case ZONE_SETTINGS::CORNER_SMOOTHING::CHAMFER: return types::ZoneCornerSmoothingMode::ZCSM_CHAMFER;
+    case ZONE_SETTINGS::CORNER_SMOOTHING::FILLET:  return types::ZoneCornerSmoothingMode::ZCSM_FILLET;
+
+    default:
+        wxCHECK_MSG( false, types::ZoneCornerSmoothingMode::ZCSM_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<ZONE_SETTINGS::CORNER_SMOOTHING>" );
+    }
+}
+
+
+template<>
+ZONE_SETTINGS::CORNER_SMOOTHING FromProtoEnum( types::ZoneCornerSmoothingMode aValue )
+{
+    switch( aValue )
+    {
+    case types::ZoneCornerSmoothingMode::ZCSM_UNKNOWN:
+    case types::ZoneCornerSmoothingMode::ZCSM_NONE:     return ZONE_SETTINGS::CORNER_SMOOTHING::NO_SMOOTHING;
+    case types::ZoneCornerSmoothingMode::ZCSM_CHAMFER:  return ZONE_SETTINGS::CORNER_SMOOTHING::CHAMFER;
+    case types::ZoneCornerSmoothingMode::ZCSM_FILLET:   return ZONE_SETTINGS::CORNER_SMOOTHING::FILLET;
+
+    default:
+        wxCHECK_MSG( false, ZONE_SETTINGS::CORNER_SMOOTHING::NO_SMOOTHING,
+                     "Unhandled case in FromProtoEnum<ZoneCornerSmoothingMode>" );
+    }
+}
+
+
+template<>
 types::ThievingPattern ToProtoEnum( THIEVING_PATTERN aValue )
 {
     switch( aValue )
@@ -694,36 +783,36 @@ PLACEMENT_SOURCE_T FromProtoEnum( types::PlacementRuleSourceType aValue )
 
 
 template<>
-types::TeardropType ToProtoEnum( TEARDROP_TYPE aValue )
+types::ZoneTeardropType ToProtoEnum( TEARDROP_TYPE aValue )
 {
     switch( aValue )
     {
-    case TEARDROP_TYPE::TD_NONE:        return types::TeardropType::TDT_NONE;
-    case TEARDROP_TYPE::TD_UNSPECIFIED: return types::TeardropType::TDT_UNSPECIFIED;
-    case TEARDROP_TYPE::TD_VIAPAD:      return types::TeardropType::TDT_VIA_PAD;
-    case TEARDROP_TYPE::TD_TRACKEND:    return types::TeardropType::TDT_TRACK_END;
+    case TEARDROP_TYPE::TD_NONE:        return types::ZoneTeardropType::ZTDT_NONE;
+    case TEARDROP_TYPE::TD_UNSPECIFIED: return types::ZoneTeardropType::ZTDT_UNSPECIFIED;
+    case TEARDROP_TYPE::TD_VIAPAD:      return types::ZoneTeardropType::ZTDT_VIA_PAD;
+    case TEARDROP_TYPE::TD_TRACKEND:    return types::ZoneTeardropType::ZTDT_TRACK_END;
 
     default:
-        wxCHECK_MSG( false, types::TeardropType::TDT_UNKNOWN,
+        wxCHECK_MSG( false, types::ZoneTeardropType::ZTDT_UNKNOWN,
                      "Unhandled case in ToProtoEnum<TEARDROP_TYPE>");
     }
 }
 
 
 template<>
-TEARDROP_TYPE FromProtoEnum( types::TeardropType aValue )
+TEARDROP_TYPE FromProtoEnum( types::ZoneTeardropType aValue )
 {
     switch( aValue )
     {
-    case types::TeardropType::TDT_UNKNOWN:
-    case types::TeardropType::TDT_NONE:         return TEARDROP_TYPE::TD_NONE;
-    case types::TeardropType::TDT_UNSPECIFIED:  return TEARDROP_TYPE::TD_UNSPECIFIED;
-    case types::TeardropType::TDT_VIA_PAD:      return TEARDROP_TYPE::TD_VIAPAD;
-    case types::TeardropType::TDT_TRACK_END:    return TEARDROP_TYPE::TD_TRACKEND;
+    case types::ZoneTeardropType::ZTDT_UNKNOWN:
+    case types::ZoneTeardropType::ZTDT_NONE:         return TEARDROP_TYPE::TD_NONE;
+    case types::ZoneTeardropType::ZTDT_UNSPECIFIED:  return TEARDROP_TYPE::TD_UNSPECIFIED;
+    case types::ZoneTeardropType::ZTDT_VIA_PAD:      return TEARDROP_TYPE::TD_VIAPAD;
+    case types::ZoneTeardropType::ZTDT_TRACK_END:    return TEARDROP_TYPE::TD_TRACKEND;
 
     default:
         wxCHECK_MSG( false, TEARDROP_TYPE::TD_NONE,
-                     "Unhandled case in FromProtoEnum<types::ZoneHatchBorderMode>" );
+                     "Unhandled case in FromProtoEnum<types::ZoneTeardropType>" );
     }
 }
 
@@ -1105,6 +1194,68 @@ BOARD_STACKUP_ITEM_TYPE FromProtoEnum( BoardStackupLayerType aValue )
     default:
         wxCHECK_MSG( false, BS_ITEM_TYPE_UNDEFINED,
                      "Unhandled case in FromProtoEnum<BoardStackupLayerType>" );
+    }
+}
+
+
+template<>
+DielectricModel ToProtoEnum( DIELECTRIC_MODEL aValue )
+{
+    switch( aValue )
+    {
+    case DIELECTRIC_MODEL::CONSTANT:          return DielectricModel::DM_CONSTANT;
+    case DIELECTRIC_MODEL::DJORDJEVIC_SARKAR: return DielectricModel::DM_DJORDJEVIC_SARKAR;
+
+    default:
+        wxCHECK_MSG( false, DielectricModel::DM_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<DIELECTRIC_MODEL>" );
+    }
+}
+
+
+template<>
+DIELECTRIC_MODEL FromProtoEnum( DielectricModel aValue )
+{
+    switch( aValue )
+    {
+    case DielectricModel::DM_CONSTANT:          return DIELECTRIC_MODEL::CONSTANT;
+    case DielectricModel::DM_DJORDJEVIC_SARKAR: return DIELECTRIC_MODEL::DJORDJEVIC_SARKAR;
+
+    default:
+        wxCHECK_MSG( false, DIELECTRIC_MODEL::CONSTANT,
+                     "Unhandled case in FromProtoEnum<DielectricModel>" );
+    }
+}
+
+
+template<>
+BoardEdgeConnectorType ToProtoEnum( BS_EDGE_CONNECTOR_CONSTRAINTS aValue )
+{
+    switch( aValue )
+    {
+    case BS_EDGE_CONNECTOR_NONE:     return BoardEdgeConnectorType::BECT_NONE;
+    case BS_EDGE_CONNECTOR_IN_USE:   return BoardEdgeConnectorType::BECT_PLAIN;
+    case BS_EDGE_CONNECTOR_BEVELLED: return BoardEdgeConnectorType::BECT_BEVELED;
+
+    default:
+        wxCHECK_MSG( false, BoardEdgeConnectorType::BECT_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<BS_EDGE_CONNECTOR_CONSTRAINTS>" );
+    }
+}
+
+
+template<>
+BS_EDGE_CONNECTOR_CONSTRAINTS FromProtoEnum( BoardEdgeConnectorType aValue )
+{
+    switch( aValue )
+    {
+    case BoardEdgeConnectorType::BECT_NONE:    return BS_EDGE_CONNECTOR_NONE;
+    case BoardEdgeConnectorType::BECT_PLAIN:   return BS_EDGE_CONNECTOR_IN_USE;
+    case BoardEdgeConnectorType::BECT_BEVELED: return BS_EDGE_CONNECTOR_BEVELLED;
+
+    default:
+        wxCHECK_MSG( false, BS_EDGE_CONNECTOR_NONE,
+                     "Unhandled case in FromProtoEnum<BoardEdgeConnectorType>" );
     }
 }
 
@@ -1505,6 +1656,37 @@ JOB_EXPORT_PCB_PS::GEN_MODE FromProtoEnum( BoardJobPaginationMode aValue )
     case BoardJobPaginationMode::BJPM_EACH_LAYER_OWN_PAGE:
     default:
         return JOB_EXPORT_PCB_PS::GEN_MODE::SINGLE;
+    }
+}
+
+
+template<>
+BoardJobPaginationMode ToProtoEnum( JOB_EXPORT_PCB_PNG::GEN_MODE aValue )
+{
+    switch( aValue )
+    {
+    case JOB_EXPORT_PCB_PNG::GEN_MODE::SINGLE: return BoardJobPaginationMode::BJPM_ALL_LAYERS_ONE_PAGE;
+    case JOB_EXPORT_PCB_PNG::GEN_MODE::MULTI:  return BoardJobPaginationMode::BJPM_EACH_LAYER_OWN_FILE;
+    default:
+        wxCHECK_MSG( false, BoardJobPaginationMode::BJPM_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<JOB_EXPORT_PCB_PNG::GEN_MODE>" );
+    }
+}
+
+
+template<>
+JOB_EXPORT_PCB_PNG::GEN_MODE FromProtoEnum( BoardJobPaginationMode aValue )
+{
+    switch( aValue )
+    {
+    case BoardJobPaginationMode::BJPM_ALL_LAYERS_ONE_PAGE:
+        return JOB_EXPORT_PCB_PNG::GEN_MODE::SINGLE;
+    case BoardJobPaginationMode::BJPM_EACH_LAYER_OWN_FILE:
+        return JOB_EXPORT_PCB_PNG::GEN_MODE::MULTI;
+    case BoardJobPaginationMode::BJPM_UNKNOWN:
+    case BoardJobPaginationMode::BJPM_EACH_LAYER_OWN_PAGE:
+    default:
+        return JOB_EXPORT_PCB_PNG::GEN_MODE::MULTI;
     }
 }
 
@@ -1946,6 +2128,69 @@ JOB_EXPORT_PCB_ODB::ODB_UNITS FromProtoEnum( kiapi::common::types::Units aValue 
 
 
 template<>
+kiapi::common::types::Units ToProtoEnum( IDF_SETTINGS::UNITS aValue )
+{
+    switch( aValue )
+    {
+    case IDF_SETTINGS::UNITS::MILS: return kiapi::common::types::Units::U_MILS;
+    case IDF_SETTINGS::UNITS::MM:   return kiapi::common::types::Units::U_MM;
+    default:
+        wxCHECK_MSG( false, kiapi::common::types::Units::U_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<IDF_SETTINGS::UNITS>" );
+    }
+}
+
+
+template<>
+IDF_SETTINGS::UNITS FromProtoEnum( kiapi::common::types::Units aValue )
+{
+    switch( aValue )
+    {
+    case kiapi::common::types::Units::U_MILS: return IDF_SETTINGS::UNITS::MILS;
+    case kiapi::common::types::Units::U_MM:   return IDF_SETTINGS::UNITS::MM;
+    case kiapi::common::types::Units::U_UNKNOWN:
+    case kiapi::common::types::Units::U_INCH:
+    case kiapi::common::types::Units::U_METERS:
+    case kiapi::common::types::Units::U_TENTHS:
+    default:
+        return IDF_SETTINGS::UNITS::MM;
+    }
+}
+
+
+template<>
+IdfOriginMode ToProtoEnum( IDF_SETTINGS::COORD_ORIGIN aValue )
+{
+    switch( aValue )
+    {
+    case IDF_SETTINGS::COORD_ORIGIN::CENTER: return IdfOriginMode::IOM_BOARD_CENTER;
+    case IDF_SETTINGS::COORD_ORIGIN::GRID:   return IdfOriginMode::IOM_GRID_ORIGIN;
+    case IDF_SETTINGS::COORD_ORIGIN::DRILL:  return IdfOriginMode::IOM_DRILL_ORIGIN;
+    case IDF_SETTINGS::COORD_ORIGIN::USER:   return IdfOriginMode::IOM_USER;
+    default:
+        wxCHECK_MSG( false, IdfOriginMode::IOM_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<IDF_SETTINGS::COORD_ORIGIN>" );
+    }
+}
+
+
+template<>
+IDF_SETTINGS::COORD_ORIGIN FromProtoEnum( IdfOriginMode aValue )
+{
+    switch( aValue )
+    {
+    case IdfOriginMode::IOM_BOARD_CENTER: return IDF_SETTINGS::COORD_ORIGIN::CENTER;
+    case IdfOriginMode::IOM_GRID_ORIGIN:  return IDF_SETTINGS::COORD_ORIGIN::GRID;
+    case IdfOriginMode::IOM_DRILL_ORIGIN: return IDF_SETTINGS::COORD_ORIGIN::DRILL;
+    case IdfOriginMode::IOM_USER:         return IDF_SETTINGS::COORD_ORIGIN::USER;
+    case IdfOriginMode::IOM_UNKNOWN:
+    default:
+        return IDF_SETTINGS::COORD_ORIGIN::CENTER;
+    }
+}
+
+
+template<>
 kiapi::common::types::Units ToProtoEnum( JOB_EXPORT_PCB_STATS::UNITS aValue )
 {
     switch( aValue )
@@ -1980,76 +2225,84 @@ DrcErrorType ToProtoEnum( PCB_DRC_CODE aValue )
 {
     switch( aValue )
     {
-    case DRCE_UNCONNECTED_ITEMS:                return DrcErrorType::DRCET_UNCONNECTED_ITEMS;
-    case DRCE_SHORTING_ITEMS:                   return DrcErrorType::DRCET_SHORTING_ITEMS;
-    case DRCE_ALLOWED_ITEMS:                    return DrcErrorType::DRCET_ALLOWED_ITEMS;
-    case DRCE_TEXT_ON_EDGECUTS:                 return DrcErrorType::DRCET_TEXT_ON_EDGECUTS;
-    case DRCE_CLEARANCE:                        return DrcErrorType::DRCET_CLEARANCE;
-    case DRCE_CREEPAGE:                         return DrcErrorType::DRCET_CREEPAGE;
-    case DRCE_TRACKS_CROSSING:                  return DrcErrorType::DRCET_TRACKS_CROSSING;
-    case DRCE_EDGE_CLEARANCE:                   return DrcErrorType::DRCET_EDGE_CLEARANCE;
-    case DRCE_ZONES_INTERSECT:                  return DrcErrorType::DRCET_ZONES_INTERSECT;
-    case DRCE_ISOLATED_COPPER:                  return DrcErrorType::DRCET_ISOLATED_COPPER;
-    case DRCE_STARVED_THERMAL:                  return DrcErrorType::DRCET_STARVED_THERMAL;
-    case DRCE_DANGLING_VIA:                     return DrcErrorType::DRCET_DANGLING_VIA;
-    case DRCE_DANGLING_TRACK:                   return DrcErrorType::DRCET_DANGLING_TRACK;
-    case DRCE_DRILLED_HOLES_TOO_CLOSE:          return DrcErrorType::DRCET_DRILLED_HOLES_TOO_CLOSE;
-    case DRCE_DRILLED_HOLES_COLOCATED:          return DrcErrorType::DRCET_DRILLED_HOLES_COLOCATED;
-    case DRCE_HOLE_CLEARANCE:                   return DrcErrorType::DRCET_HOLE_CLEARANCE;
-    case DRCE_CONNECTION_WIDTH:                 return DrcErrorType::DRCET_CONNECTION_WIDTH;
-    case DRCE_TRACK_WIDTH:                      return DrcErrorType::DRCET_TRACK_WIDTH;
-    case DRCE_TRACK_ANGLE:                      return DrcErrorType::DRCET_TRACK_ANGLE;
-    case DRCE_TRACK_SEGMENT_LENGTH:             return DrcErrorType::DRCET_TRACK_SEGMENT_LENGTH;
-    case DRCE_ANNULAR_WIDTH:                    return DrcErrorType::DRCET_ANNULAR_WIDTH;
-    case DRCE_DRILL_OUT_OF_RANGE:               return DrcErrorType::DRCET_DRILL_OUT_OF_RANGE;
-    case DRCE_VIA_DIAMETER:                     return DrcErrorType::DRCET_VIA_DIAMETER;
-    case DRCE_PADSTACK:                         return DrcErrorType::DRCET_PADSTACK;
-    case DRCE_PADSTACK_INVALID:                 return DrcErrorType::DRCET_PADSTACK_INVALID;
-    case DRCE_MICROVIA_DRILL_OUT_OF_RANGE:      return DrcErrorType::DRCET_MICROVIA_DRILL_OUT_OF_RANGE;
-    case DRCE_OVERLAPPING_FOOTPRINTS:           return DrcErrorType::DRCET_OVERLAPPING_FOOTPRINTS;
-    case DRCE_MISSING_COURTYARD:                return DrcErrorType::DRCET_MISSING_COURTYARD;
-    case DRCE_MALFORMED_COURTYARD:              return DrcErrorType::DRCET_MALFORMED_COURTYARD;
-    case DRCE_PTH_IN_COURTYARD:                 return DrcErrorType::DRCET_PTH_IN_COURTYARD;
-    case DRCE_NPTH_IN_COURTYARD:                return DrcErrorType::DRCET_NPTH_IN_COURTYARD;
-    case DRCE_DISABLED_LAYER_ITEM:              return DrcErrorType::DRCET_DISABLED_LAYER_ITEM;
-    case DRCE_INVALID_OUTLINE:                  return DrcErrorType::DRCET_INVALID_OUTLINE;
-    case DRCE_MISSING_FOOTPRINT:                return DrcErrorType::DRCET_MISSING_FOOTPRINT;
-    case DRCE_DUPLICATE_FOOTPRINT:              return DrcErrorType::DRCET_DUPLICATE_FOOTPRINT;
-    case DRCE_NET_CONFLICT:                     return DrcErrorType::DRCET_NET_CONFLICT;
-    case DRCE_EXTRA_FOOTPRINT:                  return DrcErrorType::DRCET_EXTRA_FOOTPRINT;
-    case DRCE_SCHEMATIC_PARITY:                 return DrcErrorType::DRCET_SCHEMATIC_PARITY;
-    case DRCE_SCHEMATIC_FIELDS_PARITY:          return DrcErrorType::DRCET_SCHEMATIC_FIELDS_PARITY;
-    case DRCE_FOOTPRINT_FILTERS:                return DrcErrorType::DRCET_FOOTPRINT_FILTERS;
-    case DRCE_LIB_FOOTPRINT_ISSUES:             return DrcErrorType::DRCET_LIB_FOOTPRINT_ISSUES;
-    case DRCE_LIB_FOOTPRINT_MISMATCH:           return DrcErrorType::DRCET_LIB_FOOTPRINT_MISMATCH;
-    case DRCE_UNRESOLVED_VARIABLE:              return DrcErrorType::DRCET_UNRESOLVED_VARIABLE;
-    case DRCE_ASSERTION_FAILURE:                return DrcErrorType::DRCET_ASSERTION_FAILURE;
-    case DRCE_GENERIC_WARNING:                  return DrcErrorType::DRCET_GENERIC_WARNING;
-    case DRCE_GENERIC_ERROR:                    return DrcErrorType::DRCET_GENERIC_ERROR;
-    case DRCE_COPPER_SLIVER:                    return DrcErrorType::DRCET_COPPER_SLIVER;
-    case DRCE_SILK_CLEARANCE:                   return DrcErrorType::DRCET_SILK_CLEARANCE;
-    case DRCE_SILK_MASK_CLEARANCE:              return DrcErrorType::DRCET_SILK_MASK_CLEARANCE;
-    case DRCE_SILK_EDGE_CLEARANCE:              return DrcErrorType::DRCET_SILK_EDGE_CLEARANCE;
-    case DRCE_SOLDERMASK_BRIDGE:                return DrcErrorType::DRCET_SOLDERMASK_BRIDGE;
-    case DRCE_TEXT_HEIGHT:                      return DrcErrorType::DRCET_TEXT_HEIGHT;
-    case DRCE_TEXT_THICKNESS:                   return DrcErrorType::DRCET_TEXT_THICKNESS;
-    case DRCE_LENGTH_OUT_OF_RANGE:              return DrcErrorType::DRCET_LENGTH_OUT_OF_RANGE;
-    case DRCE_SKEW_OUT_OF_RANGE:                return DrcErrorType::DRCET_SKEW_OUT_OF_RANGE;
-    case DRCE_VIA_COUNT_OUT_OF_RANGE:           return DrcErrorType::DRCET_VIA_COUNT_OUT_OF_RANGE;
-    case DRCE_DIFF_PAIR_GAP_OUT_OF_RANGE:       return DrcErrorType::DRCET_DIFF_PAIR_GAP_OUT_OF_RANGE;
-    case DRCE_DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG: return DrcErrorType::DRCET_DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG;
-    case DRCE_FOOTPRINT:                        return DrcErrorType::DRCET_FOOTPRINT;
-    case DRCE_FOOTPRINT_TYPE_MISMATCH:          return DrcErrorType::DRCET_FOOTPRINT_TYPE_MISMATCH;
-    case DRCE_PAD_TH_WITH_NO_HOLE:              return DrcErrorType::DRCET_PAD_TH_WITH_NO_HOLE;
-    case DRCE_MIRRORED_TEXT_ON_FRONT_LAYER:     return DrcErrorType::DRCET_MIRRORED_TEXT_ON_FRONT_LAYER;
-    case DRCE_NONMIRRORED_TEXT_ON_BACK_LAYER:   return DrcErrorType::DRCET_NONMIRRORED_TEXT_ON_BACK_LAYER;
-    case DRCE_MISSING_TUNING_PROFILE:           return DrcErrorType::DRCET_MISSING_TUNING_PROFILE;
-    case DRCE_TUNING_PROFILE_IMPLICIT_RULES:    return DrcErrorType::DRCET_TUNING_PROFILE_IMPLICIT_RULES;
-    case DRCE_TRACK_ON_POST_MACHINED_LAYER:     return DrcErrorType::DRCET_TRACK_ON_POST_MACHINED_LAYER;
-    case DRCE_TRACK_NOT_CENTERED_ON_VIA:        return DrcErrorType::DRCET_TRACK_NOT_CENTERED_ON_VIA;
+    case DRCE_UNCONNECTED_ITEMS:             return DrcErrorType::DRCET_UNCONNECTED_ITEMS;
+    case DRCE_SHORTING_ITEMS:                return DrcErrorType::DRCET_SHORTING_ITEMS;
+    case DRCE_ALLOWED_ITEMS:                 return DrcErrorType::DRCET_ALLOWED_ITEMS;
+    case DRCE_TEXT_ON_EDGECUTS:              return DrcErrorType::DRCET_TEXT_ON_EDGECUTS;
+    case DRCE_CLEARANCE:                     return DrcErrorType::DRCET_CLEARANCE;
+    case DRCE_CREEPAGE:                      return DrcErrorType::DRCET_CREEPAGE;
+    case DRCE_TRACKS_CROSSING:               return DrcErrorType::DRCET_TRACKS_CROSSING;
+    case DRCE_EDGE_CLEARANCE:                return DrcErrorType::DRCET_EDGE_CLEARANCE;
+    case DRCE_ZONES_INTERSECT:               return DrcErrorType::DRCET_ZONES_INTERSECT;
+    case DRCE_ISOLATED_COPPER:               return DrcErrorType::DRCET_ISOLATED_COPPER;
+    case DRCE_STARVED_THERMAL:               return DrcErrorType::DRCET_STARVED_THERMAL;
+    case DRCE_DANGLING_VIA:                  return DrcErrorType::DRCET_DANGLING_VIA;
+    case DRCE_DANGLING_TRACK:                return DrcErrorType::DRCET_DANGLING_TRACK;
+    case DRCE_DRILLED_HOLES_TOO_CLOSE:       return DrcErrorType::DRCET_DRILLED_HOLES_TOO_CLOSE;
+    case DRCE_DRILLED_HOLES_COLOCATED:       return DrcErrorType::DRCET_DRILLED_HOLES_COLOCATED;
+    case DRCE_HOLE_CLEARANCE:                return DrcErrorType::DRCET_HOLE_CLEARANCE;
+    case DRCE_CONNECTION_WIDTH:              return DrcErrorType::DRCET_CONNECTION_WIDTH;
+    case DRCE_TRACK_WIDTH:                   return DrcErrorType::DRCET_TRACK_WIDTH;
+    case DRCE_TRACK_ANGLE:                   return DrcErrorType::DRCET_TRACK_ANGLE;
+    case DRCE_TRACK_SEGMENT_LENGTH:          return DrcErrorType::DRCET_TRACK_SEGMENT_LENGTH;
+    case DRCE_ANNULAR_WIDTH:                 return DrcErrorType::DRCET_ANNULAR_WIDTH;
+    case DRCE_DRILL_OUT_OF_RANGE:            return DrcErrorType::DRCET_DRILL_OUT_OF_RANGE;
+    case DRCE_VIA_DIAMETER:                  return DrcErrorType::DRCET_VIA_DIAMETER;
+    case DRCE_PADSTACK:                      return DrcErrorType::DRCET_PADSTACK;
+    case DRCE_PADSTACK_INVALID:              return DrcErrorType::DRCET_PADSTACK_INVALID;
+    case DRCE_MICROVIA_DRILL_OUT_OF_RANGE:   return DrcErrorType::DRCET_MICROVIA_DRILL_OUT_OF_RANGE;
+    case DRCE_MALFORMED_MICROVIA_STACK_SPAN: return DrcErrorType::DRCET_MALFORMED_MICROVIA_STACK_SPAN;
+    case DRCE_MICROVIA_STACK_NOT_FILLED:     return DrcErrorType::DRCET_MICROVIA_STACK_NOT_FILLED;
+    case DRCE_MICROVIA_STACK_DEPTH:          return DrcErrorType::DRCET_MICROVIA_STACK_DEPTH;
+    case DRCE_MICROVIA_ASPECT_RATIO:         return DrcErrorType::DRCET_MICROVIA_ASPECT_RATIO;
+    case DRCE_MICROVIA_CROSSES_CORE: return DrcErrorType::DRCET_MICROVIA_CROSSES_CORE;
+    case DRCE_OVERLAPPING_FOOTPRINTS:        return DrcErrorType::DRCET_OVERLAPPING_FOOTPRINTS;
+    case DRCE_MISSING_COURTYARD:             return DrcErrorType::DRCET_MISSING_COURTYARD;
+    case DRCE_MALFORMED_COURTYARD:           return DrcErrorType::DRCET_MALFORMED_COURTYARD;
+    case DRCE_PTH_IN_COURTYARD:              return DrcErrorType::DRCET_PTH_IN_COURTYARD;
+    case DRCE_NPTH_IN_COURTYARD:             return DrcErrorType::DRCET_NPTH_IN_COURTYARD;
+    case DRCE_DISABLED_LAYER_ITEM:           return DrcErrorType::DRCET_DISABLED_LAYER_ITEM;
+    case DRCE_INVALID_OUTLINE:               return DrcErrorType::DRCET_INVALID_OUTLINE;
+    case DRCE_MISSING_FOOTPRINT:             return DrcErrorType::DRCET_MISSING_FOOTPRINT;
+    case DRCE_DUPLICATE_FOOTPRINT:           return DrcErrorType::DRCET_DUPLICATE_FOOTPRINT;
+    case DRCE_NET_CONFLICT:                  return DrcErrorType::DRCET_NET_CONFLICT;
+    case DRCE_EXTRA_FOOTPRINT:               return DrcErrorType::DRCET_EXTRA_FOOTPRINT;
+    case DRCE_SCHEMATIC_PARITY:              return DrcErrorType::DRCET_SCHEMATIC_PARITY;
+    case DRCE_SCHEMATIC_FIELDS_PARITY:       return DrcErrorType::DRCET_SCHEMATIC_FIELDS_PARITY;
+    case DRCE_FOOTPRINT_FILTERS:             return DrcErrorType::DRCET_FOOTPRINT_FILTERS;
+    case DRCE_LIB_FOOTPRINT_ISSUES:          return DrcErrorType::DRCET_LIB_FOOTPRINT_ISSUES;
+    case DRCE_LIB_FOOTPRINT_MISMATCH:        return DrcErrorType::DRCET_LIB_FOOTPRINT_MISMATCH;
+    case DRCE_UNRESOLVED_VARIABLE:           return DrcErrorType::DRCET_UNRESOLVED_VARIABLE;
+    case DRCE_ASSERTION_FAILURE:             return DrcErrorType::DRCET_ASSERTION_FAILURE;
+    case DRCE_GENERIC_WARNING:               return DrcErrorType::DRCET_GENERIC_WARNING;
+    case DRCE_GENERIC_ERROR:                 return DrcErrorType::DRCET_GENERIC_ERROR;
+    case DRCE_COPPER_SLIVER:                 return DrcErrorType::DRCET_COPPER_SLIVER;
+    case DRCE_SILK_CLEARANCE:                return DrcErrorType::DRCET_SILK_CLEARANCE;
+    case DRCE_SILK_MASK_CLEARANCE:           return DrcErrorType::DRCET_SILK_MASK_CLEARANCE;
+    case DRCE_SILK_EDGE_CLEARANCE:           return DrcErrorType::DRCET_SILK_EDGE_CLEARANCE;
+    case DRCE_SOLDERMASK_BRIDGE:             return DrcErrorType::DRCET_SOLDERMASK_BRIDGE;
+    case DRCE_TEXT_HEIGHT:                   return DrcErrorType::DRCET_TEXT_HEIGHT;
+    case DRCE_TEXT_THICKNESS:                return DrcErrorType::DRCET_TEXT_THICKNESS;
+    case DRCE_LENGTH_OUT_OF_RANGE:           return DrcErrorType::DRCET_LENGTH_OUT_OF_RANGE;
+    case DRCE_SKEW_OUT_OF_RANGE:             return DrcErrorType::DRCET_SKEW_OUT_OF_RANGE;
+    case DRCE_NET_CHAIN_STUB_TOO_LONG:       return DrcErrorType::DRCET_NET_CHAIN_STUB_TOO_LONG;
+    case DRCE_NET_CHAIN_RETURN_PATH_BREAK:   return DrcErrorType::DRCET_NET_CHAIN_RETURN_PATH_BREAK;
+    case DRCE_NET_CHAIN_TUNING_PROFILES:     return DrcErrorType::DRCET_NET_CHAIN_TUNING_PROFILES;
+    case DRCE_VIA_COUNT_OUT_OF_RANGE:        return DrcErrorType::DRCET_VIA_COUNT_OUT_OF_RANGE;
+    case DRCE_DP_GAP_OUT_OF_RANGE:           return DrcErrorType::DRCET_DIFF_PAIR_GAP_OUT_OF_RANGE;
+    case DRCE_DP_UNCOUPLED_LENGTH_TOO_LONG:  return DrcErrorType::DRCET_DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG;
+    case DRCE_FOOTPRINT:                     return DrcErrorType::DRCET_FOOTPRINT;
+    case DRCE_FOOTPRINT_SCALED_WITH_PADS:    return DrcErrorType::DRCET_FOOTPRINT_SCALED_WITH_PADS;
+    case DRCE_FOOTPRINT_TYPE_MISMATCH:       return DrcErrorType::DRCET_FOOTPRINT_TYPE_MISMATCH;
+    case DRCE_PAD_TH_WITH_NO_HOLE:           return DrcErrorType::DRCET_PAD_TH_WITH_NO_HOLE;
+    case DRCE_MIRRORED_TEXT_ON_FRONT_LAYER:  return DrcErrorType::DRCET_MIRRORED_TEXT_ON_FRONT_LAYER;
+    case DRCE_UNMIRRORED_TEXT_ON_BACK_LAYER: return DrcErrorType::DRCET_NONMIRRORED_TEXT_ON_BACK_LAYER;
+    case DRCE_MISSING_TUNING_PROFILE:        return DrcErrorType::DRCET_MISSING_TUNING_PROFILE;
+    case DRCE_TUNING_PROFILE_IMPLICIT_RULES: return DrcErrorType::DRCET_TUNING_PROFILE_IMPLICIT_RULES;
+    case DRCE_TRACK_ON_POST_MACHINED_LAYER:  return DrcErrorType::DRCET_TRACK_ON_POST_MACHINED_LAYER;
+    case DRCE_TRACK_NOT_CENTERED_ON_VIA:     return DrcErrorType::DRCET_TRACK_NOT_CENTERED_ON_VIA;
     default:
-        wxCHECK_MSG( false, DrcErrorType::DRCET_UNKNOWN,
-                     "Unhandled case in ToProtoEnum<PCB_DRC_CODE>" );
+        return DrcErrorType::DRCET_UNKNOWN;
     }
 }
 
@@ -2059,78 +2312,423 @@ PCB_DRC_CODE FromProtoEnum( DrcErrorType aValue )
 {
     switch( aValue )
     {
-    case DrcErrorType::DRCET_UNCONNECTED_ITEMS:           return DRCE_UNCONNECTED_ITEMS;
-    case DrcErrorType::DRCET_SHORTING_ITEMS:              return DRCE_SHORTING_ITEMS;
-    case DrcErrorType::DRCET_ALLOWED_ITEMS:               return DRCE_ALLOWED_ITEMS;
-    case DrcErrorType::DRCET_TEXT_ON_EDGECUTS:            return DRCE_TEXT_ON_EDGECUTS;
-    case DrcErrorType::DRCET_CLEARANCE:                   return DRCE_CLEARANCE;
-    case DrcErrorType::DRCET_CREEPAGE:                    return DRCE_CREEPAGE;
-    case DrcErrorType::DRCET_TRACKS_CROSSING:             return DRCE_TRACKS_CROSSING;
-    case DrcErrorType::DRCET_EDGE_CLEARANCE:              return DRCE_EDGE_CLEARANCE;
-    case DrcErrorType::DRCET_ZONES_INTERSECT:             return DRCE_ZONES_INTERSECT;
-    case DrcErrorType::DRCET_ISOLATED_COPPER:             return DRCE_ISOLATED_COPPER;
-    case DrcErrorType::DRCET_STARVED_THERMAL:             return DRCE_STARVED_THERMAL;
-    case DrcErrorType::DRCET_DANGLING_VIA:                return DRCE_DANGLING_VIA;
-    case DrcErrorType::DRCET_DANGLING_TRACK:              return DRCE_DANGLING_TRACK;
-    case DrcErrorType::DRCET_DRILLED_HOLES_TOO_CLOSE:     return DRCE_DRILLED_HOLES_TOO_CLOSE;
-    case DrcErrorType::DRCET_DRILLED_HOLES_COLOCATED:     return DRCE_DRILLED_HOLES_COLOCATED;
-    case DrcErrorType::DRCET_HOLE_CLEARANCE:              return DRCE_HOLE_CLEARANCE;
-    case DrcErrorType::DRCET_CONNECTION_WIDTH:            return DRCE_CONNECTION_WIDTH;
-    case DrcErrorType::DRCET_TRACK_WIDTH:                 return DRCE_TRACK_WIDTH;
-    case DrcErrorType::DRCET_TRACK_ANGLE:                 return DRCE_TRACK_ANGLE;
-    case DrcErrorType::DRCET_TRACK_SEGMENT_LENGTH:        return DRCE_TRACK_SEGMENT_LENGTH;
-    case DrcErrorType::DRCET_ANNULAR_WIDTH:               return DRCE_ANNULAR_WIDTH;
-    case DrcErrorType::DRCET_DRILL_OUT_OF_RANGE:          return DRCE_DRILL_OUT_OF_RANGE;
-    case DrcErrorType::DRCET_VIA_DIAMETER:                return DRCE_VIA_DIAMETER;
-    case DrcErrorType::DRCET_PADSTACK:                    return DRCE_PADSTACK;
-    case DrcErrorType::DRCET_PADSTACK_INVALID:            return DRCE_PADSTACK_INVALID;
-    case DrcErrorType::DRCET_MICROVIA_DRILL_OUT_OF_RANGE: return DRCE_MICROVIA_DRILL_OUT_OF_RANGE;
-    case DrcErrorType::DRCET_OVERLAPPING_FOOTPRINTS:      return DRCE_OVERLAPPING_FOOTPRINTS;
-    case DrcErrorType::DRCET_MISSING_COURTYARD:           return DRCE_MISSING_COURTYARD;
-    case DrcErrorType::DRCET_MALFORMED_COURTYARD:         return DRCE_MALFORMED_COURTYARD;
-    case DrcErrorType::DRCET_PTH_IN_COURTYARD:            return DRCE_PTH_IN_COURTYARD;
-    case DrcErrorType::DRCET_NPTH_IN_COURTYARD:           return DRCE_NPTH_IN_COURTYARD;
-    case DrcErrorType::DRCET_DISABLED_LAYER_ITEM:         return DRCE_DISABLED_LAYER_ITEM;
-    case DrcErrorType::DRCET_INVALID_OUTLINE:             return DRCE_INVALID_OUTLINE;
-    case DrcErrorType::DRCET_MISSING_FOOTPRINT:           return DRCE_MISSING_FOOTPRINT;
-    case DrcErrorType::DRCET_DUPLICATE_FOOTPRINT:         return DRCE_DUPLICATE_FOOTPRINT;
-    case DrcErrorType::DRCET_NET_CONFLICT:                return DRCE_NET_CONFLICT;
-    case DrcErrorType::DRCET_EXTRA_FOOTPRINT:             return DRCE_EXTRA_FOOTPRINT;
-    case DrcErrorType::DRCET_SCHEMATIC_PARITY:            return DRCE_SCHEMATIC_PARITY;
-    case DrcErrorType::DRCET_SCHEMATIC_FIELDS_PARITY:     return DRCE_SCHEMATIC_FIELDS_PARITY;
-    case DrcErrorType::DRCET_FOOTPRINT_FILTERS:           return DRCE_FOOTPRINT_FILTERS;
-    case DrcErrorType::DRCET_LIB_FOOTPRINT_ISSUES:        return DRCE_LIB_FOOTPRINT_ISSUES;
-    case DrcErrorType::DRCET_LIB_FOOTPRINT_MISMATCH:      return DRCE_LIB_FOOTPRINT_MISMATCH;
-    case DrcErrorType::DRCET_UNRESOLVED_VARIABLE:         return DRCE_UNRESOLVED_VARIABLE;
-    case DrcErrorType::DRCET_ASSERTION_FAILURE:           return DRCE_ASSERTION_FAILURE;
-    case DrcErrorType::DRCET_GENERIC_WARNING:             return DRCE_GENERIC_WARNING;
-    case DrcErrorType::DRCET_GENERIC_ERROR:               return DRCE_GENERIC_ERROR;
-    case DrcErrorType::DRCET_COPPER_SLIVER:               return DRCE_COPPER_SLIVER;
-    case DrcErrorType::DRCET_SILK_CLEARANCE:              return DRCE_SILK_CLEARANCE;
-    case DrcErrorType::DRCET_SILK_MASK_CLEARANCE:         return DRCE_SILK_MASK_CLEARANCE;
-    case DrcErrorType::DRCET_SILK_EDGE_CLEARANCE:         return DRCE_SILK_EDGE_CLEARANCE;
-    case DrcErrorType::DRCET_SOLDERMASK_BRIDGE:           return DRCE_SOLDERMASK_BRIDGE;
-    case DrcErrorType::DRCET_TEXT_HEIGHT:                 return DRCE_TEXT_HEIGHT;
-    case DrcErrorType::DRCET_TEXT_THICKNESS:              return DRCE_TEXT_THICKNESS;
-    case DrcErrorType::DRCET_LENGTH_OUT_OF_RANGE:         return DRCE_LENGTH_OUT_OF_RANGE;
-    case DrcErrorType::DRCET_SKEW_OUT_OF_RANGE:           return DRCE_SKEW_OUT_OF_RANGE;
-    case DrcErrorType::DRCET_VIA_COUNT_OUT_OF_RANGE:      return DRCE_VIA_COUNT_OUT_OF_RANGE;
-    case DrcErrorType::DRCET_DIFF_PAIR_GAP_OUT_OF_RANGE:  return DRCE_DIFF_PAIR_GAP_OUT_OF_RANGE;
-    case DrcErrorType::DRCET_DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG: return DRCE_DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG;
-    case DrcErrorType::DRCET_FOOTPRINT:                      return DRCE_FOOTPRINT;
-    case DrcErrorType::DRCET_FOOTPRINT_TYPE_MISMATCH:        return DRCE_FOOTPRINT_TYPE_MISMATCH;
-    case DrcErrorType::DRCET_PAD_TH_WITH_NO_HOLE:            return DRCE_PAD_TH_WITH_NO_HOLE;
-    case DrcErrorType::DRCET_MIRRORED_TEXT_ON_FRONT_LAYER:   return DRCE_MIRRORED_TEXT_ON_FRONT_LAYER;
-    case DrcErrorType::DRCET_NONMIRRORED_TEXT_ON_BACK_LAYER: return DRCE_NONMIRRORED_TEXT_ON_BACK_LAYER;
-    case DrcErrorType::DRCET_MISSING_TUNING_PROFILE:         return DRCE_MISSING_TUNING_PROFILE;
-    case DrcErrorType::DRCET_TUNING_PROFILE_IMPLICIT_RULES:  return DRCE_TUNING_PROFILE_IMPLICIT_RULES;
-    case DrcErrorType::DRCET_TRACK_ON_POST_MACHINED_LAYER:   return DRCE_TRACK_ON_POST_MACHINED_LAYER;
-    case DrcErrorType::DRCET_TRACK_NOT_CENTERED_ON_VIA:      return DRCE_TRACK_NOT_CENTERED_ON_VIA;
+    case DrcErrorType::DRCET_UNCONNECTED_ITEMS:                   return DRCE_UNCONNECTED_ITEMS;
+    case DrcErrorType::DRCET_SHORTING_ITEMS:                      return DRCE_SHORTING_ITEMS;
+    case DrcErrorType::DRCET_ALLOWED_ITEMS:                       return DRCE_ALLOWED_ITEMS;
+    case DrcErrorType::DRCET_TEXT_ON_EDGECUTS:                    return DRCE_TEXT_ON_EDGECUTS;
+    case DrcErrorType::DRCET_CLEARANCE:                           return DRCE_CLEARANCE;
+    case DrcErrorType::DRCET_CREEPAGE:                            return DRCE_CREEPAGE;
+    case DrcErrorType::DRCET_TRACKS_CROSSING:                     return DRCE_TRACKS_CROSSING;
+    case DrcErrorType::DRCET_EDGE_CLEARANCE:                      return DRCE_EDGE_CLEARANCE;
+    case DrcErrorType::DRCET_ZONES_INTERSECT:                     return DRCE_ZONES_INTERSECT;
+    case DrcErrorType::DRCET_ISOLATED_COPPER:                     return DRCE_ISOLATED_COPPER;
+    case DrcErrorType::DRCET_STARVED_THERMAL:                     return DRCE_STARVED_THERMAL;
+    case DrcErrorType::DRCET_DANGLING_VIA:                        return DRCE_DANGLING_VIA;
+    case DrcErrorType::DRCET_DANGLING_TRACK:                      return DRCE_DANGLING_TRACK;
+    case DrcErrorType::DRCET_DRILLED_HOLES_TOO_CLOSE:             return DRCE_DRILLED_HOLES_TOO_CLOSE;
+    case DrcErrorType::DRCET_DRILLED_HOLES_COLOCATED:             return DRCE_DRILLED_HOLES_COLOCATED;
+    case DrcErrorType::DRCET_HOLE_CLEARANCE:                      return DRCE_HOLE_CLEARANCE;
+    case DrcErrorType::DRCET_CONNECTION_WIDTH:                    return DRCE_CONNECTION_WIDTH;
+    case DrcErrorType::DRCET_TRACK_WIDTH:                         return DRCE_TRACK_WIDTH;
+    case DrcErrorType::DRCET_TRACK_ANGLE:                         return DRCE_TRACK_ANGLE;
+    case DrcErrorType::DRCET_TRACK_SEGMENT_LENGTH:                return DRCE_TRACK_SEGMENT_LENGTH;
+    case DrcErrorType::DRCET_ANNULAR_WIDTH:                       return DRCE_ANNULAR_WIDTH;
+    case DrcErrorType::DRCET_DRILL_OUT_OF_RANGE:                  return DRCE_DRILL_OUT_OF_RANGE;
+    case DrcErrorType::DRCET_VIA_DIAMETER:                        return DRCE_VIA_DIAMETER;
+    case DrcErrorType::DRCET_PADSTACK:                            return DRCE_PADSTACK;
+    case DrcErrorType::DRCET_PADSTACK_INVALID:                    return DRCE_PADSTACK_INVALID;
+    case DrcErrorType::DRCET_MICROVIA_DRILL_OUT_OF_RANGE:         return DRCE_MICROVIA_DRILL_OUT_OF_RANGE;
+    case DrcErrorType::DRCET_MALFORMED_MICROVIA_STACK_SPAN:       return DRCE_MALFORMED_MICROVIA_STACK_SPAN;
+    case DrcErrorType::DRCET_MICROVIA_STACK_NOT_FILLED:           return DRCE_MICROVIA_STACK_NOT_FILLED;
+    case DrcErrorType::DRCET_MICROVIA_STACK_DEPTH:                return DRCE_MICROVIA_STACK_DEPTH;
+    case DrcErrorType::DRCET_MICROVIA_ASPECT_RATIO:               return DRCE_MICROVIA_ASPECT_RATIO;
+    case DrcErrorType::DRCET_MICROVIA_CROSSES_CORE: return DRCE_MICROVIA_CROSSES_CORE;
+    case DrcErrorType::DRCET_OVERLAPPING_FOOTPRINTS:              return DRCE_OVERLAPPING_FOOTPRINTS;
+    case DrcErrorType::DRCET_MISSING_COURTYARD:                   return DRCE_MISSING_COURTYARD;
+    case DrcErrorType::DRCET_MALFORMED_COURTYARD:                 return DRCE_MALFORMED_COURTYARD;
+    case DrcErrorType::DRCET_PTH_IN_COURTYARD:                    return DRCE_PTH_IN_COURTYARD;
+    case DrcErrorType::DRCET_NPTH_IN_COURTYARD:                   return DRCE_NPTH_IN_COURTYARD;
+    case DrcErrorType::DRCET_DISABLED_LAYER_ITEM:                 return DRCE_DISABLED_LAYER_ITEM;
+    case DrcErrorType::DRCET_INVALID_OUTLINE:                     return DRCE_INVALID_OUTLINE;
+    case DrcErrorType::DRCET_MISSING_FOOTPRINT:                   return DRCE_MISSING_FOOTPRINT;
+    case DrcErrorType::DRCET_DUPLICATE_FOOTPRINT:                 return DRCE_DUPLICATE_FOOTPRINT;
+    case DrcErrorType::DRCET_NET_CONFLICT:                        return DRCE_NET_CONFLICT;
+    case DrcErrorType::DRCET_EXTRA_FOOTPRINT:                     return DRCE_EXTRA_FOOTPRINT;
+    case DrcErrorType::DRCET_SCHEMATIC_PARITY:                    return DRCE_SCHEMATIC_PARITY;
+    case DrcErrorType::DRCET_SCHEMATIC_FIELDS_PARITY:             return DRCE_SCHEMATIC_FIELDS_PARITY;
+    case DrcErrorType::DRCET_FOOTPRINT_FILTERS:                   return DRCE_FOOTPRINT_FILTERS;
+    case DrcErrorType::DRCET_LIB_FOOTPRINT_ISSUES:                return DRCE_LIB_FOOTPRINT_ISSUES;
+    case DrcErrorType::DRCET_LIB_FOOTPRINT_MISMATCH:              return DRCE_LIB_FOOTPRINT_MISMATCH;
+    case DrcErrorType::DRCET_UNRESOLVED_VARIABLE:                 return DRCE_UNRESOLVED_VARIABLE;
+    case DrcErrorType::DRCET_ASSERTION_FAILURE:                   return DRCE_ASSERTION_FAILURE;
+    case DrcErrorType::DRCET_GENERIC_WARNING:                     return DRCE_GENERIC_WARNING;
+    case DrcErrorType::DRCET_GENERIC_ERROR:                       return DRCE_GENERIC_ERROR;
+    case DrcErrorType::DRCET_COPPER_SLIVER:                       return DRCE_COPPER_SLIVER;
+    case DrcErrorType::DRCET_SILK_CLEARANCE:                      return DRCE_SILK_CLEARANCE;
+    case DrcErrorType::DRCET_SILK_MASK_CLEARANCE:                 return DRCE_SILK_MASK_CLEARANCE;
+    case DrcErrorType::DRCET_SILK_EDGE_CLEARANCE:                 return DRCE_SILK_EDGE_CLEARANCE;
+    case DrcErrorType::DRCET_SOLDERMASK_BRIDGE:                   return DRCE_SOLDERMASK_BRIDGE;
+    case DrcErrorType::DRCET_TEXT_HEIGHT:                         return DRCE_TEXT_HEIGHT;
+    case DrcErrorType::DRCET_TEXT_THICKNESS:                      return DRCE_TEXT_THICKNESS;
+    case DrcErrorType::DRCET_LENGTH_OUT_OF_RANGE:                 return DRCE_LENGTH_OUT_OF_RANGE;
+    case DrcErrorType::DRCET_NET_CHAIN_STUB_TOO_LONG:             return DRCE_NET_CHAIN_STUB_TOO_LONG;
+    case DrcErrorType::DRCET_NET_CHAIN_RETURN_PATH_BREAK:         return DRCE_NET_CHAIN_RETURN_PATH_BREAK;
+    case DrcErrorType::DRCET_NET_CHAIN_TUNING_PROFILES:           return DRCE_NET_CHAIN_TUNING_PROFILES;
+    case DrcErrorType::DRCET_SKEW_OUT_OF_RANGE:                   return DRCE_SKEW_OUT_OF_RANGE;
+    case DrcErrorType::DRCET_VIA_COUNT_OUT_OF_RANGE:              return DRCE_VIA_COUNT_OUT_OF_RANGE;
+    case DrcErrorType::DRCET_DIFF_PAIR_GAP_OUT_OF_RANGE:          return DRCE_DP_GAP_OUT_OF_RANGE;
+    case DrcErrorType::DRCET_DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG: return DRCE_DP_UNCOUPLED_LENGTH_TOO_LONG;
+    case DrcErrorType::DRCET_FOOTPRINT_SCALED_WITH_PADS:          return DRCE_FOOTPRINT_SCALED_WITH_PADS;
+    case DrcErrorType::DRCET_FOOTPRINT:                           return DRCE_FOOTPRINT;
+    case DrcErrorType::DRCET_FOOTPRINT_TYPE_MISMATCH:             return DRCE_FOOTPRINT_TYPE_MISMATCH;
+    case DrcErrorType::DRCET_PAD_TH_WITH_NO_HOLE:                 return DRCE_PAD_TH_WITH_NO_HOLE;
+    case DrcErrorType::DRCET_MIRRORED_TEXT_ON_FRONT_LAYER:        return DRCE_MIRRORED_TEXT_ON_FRONT_LAYER;
+    case DrcErrorType::DRCET_NONMIRRORED_TEXT_ON_BACK_LAYER:      return DRCE_UNMIRRORED_TEXT_ON_BACK_LAYER;
+    case DrcErrorType::DRCET_MISSING_TUNING_PROFILE:              return DRCE_MISSING_TUNING_PROFILE;
+    case DrcErrorType::DRCET_TUNING_PROFILE_IMPLICIT_RULES:       return DRCE_TUNING_PROFILE_IMPLICIT_RULES;
+    case DrcErrorType::DRCET_TRACK_ON_POST_MACHINED_LAYER:        return DRCE_TRACK_ON_POST_MACHINED_LAYER;
+    case DrcErrorType::DRCET_TRACK_NOT_CENTERED_ON_VIA:           return DRCE_TRACK_NOT_CENTERED_ON_VIA;
 
     case DrcErrorType::DRCET_UNKNOWN:
     default:
         return static_cast<PCB_DRC_CODE>( 0 );
     }
+}
+
+
+template<>
+types::ConstraintType ToProtoEnum( PCB_CONSTRAINT_TYPE aValue )
+{
+    switch( aValue )
+    {
+    case PCB_CONSTRAINT_TYPE::COINCIDENT:        return types::ConstraintType::CT_COINCIDENT;
+    case PCB_CONSTRAINT_TYPE::HORIZONTAL:        return types::ConstraintType::CT_HORIZONTAL;
+    case PCB_CONSTRAINT_TYPE::VERTICAL:          return types::ConstraintType::CT_VERTICAL;
+    case PCB_CONSTRAINT_TYPE::PARALLEL:          return types::ConstraintType::CT_PARALLEL;
+    case PCB_CONSTRAINT_TYPE::PERPENDICULAR:     return types::ConstraintType::CT_PERPENDICULAR;
+    case PCB_CONSTRAINT_TYPE::COLLINEAR:         return types::ConstraintType::CT_COLLINEAR;
+    case PCB_CONSTRAINT_TYPE::SYMMETRIC:         return types::ConstraintType::CT_SYMMETRIC;
+    case PCB_CONSTRAINT_TYPE::EQUAL_LENGTH:      return types::ConstraintType::CT_EQUAL_LENGTH;
+    case PCB_CONSTRAINT_TYPE::EQUAL_RADIUS:      return types::ConstraintType::CT_EQUAL_RADIUS;
+    case PCB_CONSTRAINT_TYPE::POINT_ON_LINE:     return types::ConstraintType::CT_POINT_ON_LINE;
+    case PCB_CONSTRAINT_TYPE::MIDPOINT:          return types::ConstraintType::CT_MIDPOINT;
+    case PCB_CONSTRAINT_TYPE::FIXED_POSITION:    return types::ConstraintType::CT_FIXED_POSITION;
+    case PCB_CONSTRAINT_TYPE::FIXED_LENGTH:      return types::ConstraintType::CT_FIXED_LENGTH;
+    case PCB_CONSTRAINT_TYPE::CONCENTRIC:        return types::ConstraintType::CT_CONCENTRIC;
+    case PCB_CONSTRAINT_TYPE::FIXED_RADIUS:      return types::ConstraintType::CT_FIXED_RADIUS;
+    case PCB_CONSTRAINT_TYPE::ANGULAR_DIMENSION: return types::ConstraintType::CT_ANGULAR_DIMENSION;
+    case PCB_CONSTRAINT_TYPE::TANGENT:           return types::ConstraintType::CT_TANGENT;
+    case PCB_CONSTRAINT_TYPE::ARC_ANGLE:         return types::ConstraintType::CT_ARC_ANGLE;
+
+    case PCB_CONSTRAINT_TYPE::UNDEFINED:
+    default:
+        wxCHECK_MSG( false, types::ConstraintType::CT_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<PCB_CONSTRAINT_TYPE>" );
+    }
+}
+
+
+template<>
+PCB_CONSTRAINT_TYPE FromProtoEnum( types::ConstraintType aValue )
+{
+    switch( aValue )
+    {
+    case types::ConstraintType::CT_UNKNOWN:           return PCB_CONSTRAINT_TYPE::UNDEFINED;
+    case types::ConstraintType::CT_COINCIDENT:        return PCB_CONSTRAINT_TYPE::COINCIDENT;
+    case types::ConstraintType::CT_HORIZONTAL:        return PCB_CONSTRAINT_TYPE::HORIZONTAL;
+    case types::ConstraintType::CT_VERTICAL:          return PCB_CONSTRAINT_TYPE::VERTICAL;
+    case types::ConstraintType::CT_PARALLEL:          return PCB_CONSTRAINT_TYPE::PARALLEL;
+    case types::ConstraintType::CT_PERPENDICULAR:     return PCB_CONSTRAINT_TYPE::PERPENDICULAR;
+    case types::ConstraintType::CT_COLLINEAR:         return PCB_CONSTRAINT_TYPE::COLLINEAR;
+    case types::ConstraintType::CT_SYMMETRIC:         return PCB_CONSTRAINT_TYPE::SYMMETRIC;
+    case types::ConstraintType::CT_EQUAL_LENGTH:      return PCB_CONSTRAINT_TYPE::EQUAL_LENGTH;
+    case types::ConstraintType::CT_EQUAL_RADIUS:      return PCB_CONSTRAINT_TYPE::EQUAL_RADIUS;
+    case types::ConstraintType::CT_POINT_ON_LINE:     return PCB_CONSTRAINT_TYPE::POINT_ON_LINE;
+    case types::ConstraintType::CT_MIDPOINT:          return PCB_CONSTRAINT_TYPE::MIDPOINT;
+    case types::ConstraintType::CT_FIXED_POSITION:    return PCB_CONSTRAINT_TYPE::FIXED_POSITION;
+    case types::ConstraintType::CT_FIXED_LENGTH:      return PCB_CONSTRAINT_TYPE::FIXED_LENGTH;
+    case types::ConstraintType::CT_CONCENTRIC:        return PCB_CONSTRAINT_TYPE::CONCENTRIC;
+    case types::ConstraintType::CT_FIXED_RADIUS:      return PCB_CONSTRAINT_TYPE::FIXED_RADIUS;
+    case types::ConstraintType::CT_ANGULAR_DIMENSION: return PCB_CONSTRAINT_TYPE::ANGULAR_DIMENSION;
+    case types::ConstraintType::CT_TANGENT:           return PCB_CONSTRAINT_TYPE::TANGENT;
+    case types::ConstraintType::CT_ARC_ANGLE:         return PCB_CONSTRAINT_TYPE::ARC_ANGLE;
+
+    default:
+        wxCHECK_MSG( false, PCB_CONSTRAINT_TYPE::UNDEFINED,
+                     "Unhandled case in FromProtoEnum<types::ConstraintType>" );
+    }
+}
+
+
+template<>
+types::ConstraintAnchor ToProtoEnum( CONSTRAINT_ANCHOR aValue )
+{
+    switch( aValue )
+    {
+    case CONSTRAINT_ANCHOR::WHOLE:  return types::ConstraintAnchor::CA_WHOLE;
+    case CONSTRAINT_ANCHOR::START:  return types::ConstraintAnchor::CA_START;
+    case CONSTRAINT_ANCHOR::END:    return types::ConstraintAnchor::CA_END;
+    case CONSTRAINT_ANCHOR::MID:    return types::ConstraintAnchor::CA_MID;
+    case CONSTRAINT_ANCHOR::CENTER: return types::ConstraintAnchor::CA_CENTER;
+    case CONSTRAINT_ANCHOR::RADIUS: return types::ConstraintAnchor::CA_RADIUS;
+    case CONSTRAINT_ANCHOR::VERTEX: return types::ConstraintAnchor::CA_VERTEX;
+
+    default:
+        wxCHECK_MSG( false, types::ConstraintAnchor::CA_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<CONSTRAINT_ANCHOR>" );
+    }
+}
+
+
+template<>
+CONSTRAINT_ANCHOR FromProtoEnum( types::ConstraintAnchor aValue )
+{
+    switch( aValue )
+    {
+    case types::ConstraintAnchor::CA_UNKNOWN:
+    case types::ConstraintAnchor::CA_WHOLE:  return CONSTRAINT_ANCHOR::WHOLE;
+    case types::ConstraintAnchor::CA_START:  return CONSTRAINT_ANCHOR::START;
+    case types::ConstraintAnchor::CA_END:    return CONSTRAINT_ANCHOR::END;
+    case types::ConstraintAnchor::CA_MID:    return CONSTRAINT_ANCHOR::MID;
+    case types::ConstraintAnchor::CA_CENTER: return CONSTRAINT_ANCHOR::CENTER;
+    case types::ConstraintAnchor::CA_RADIUS: return CONSTRAINT_ANCHOR::RADIUS;
+    case types::ConstraintAnchor::CA_VERTEX: return CONSTRAINT_ANCHOR::VERTEX;
+
+    default:
+        wxCHECK_MSG( false, CONSTRAINT_ANCHOR::WHOLE,
+                     "Unhandled case in FromProtoEnum<types::ConstraintAnchor>" );
+    }
+}
+
+
+template<>
+types::TuningPatternMode ToProtoEnum( LENGTH_TUNING_MODE aValue )
+{
+    switch( aValue )
+    {
+    case LENGTH_TUNING_MODE::SINGLE:         return types::TuningPatternMode::TPM_SINGLE;
+    case LENGTH_TUNING_MODE::DIFF_PAIR:      return types::TuningPatternMode::TPM_DIFF_PAIR;
+    case LENGTH_TUNING_MODE::DIFF_PAIR_SKEW: return types::TuningPatternMode::TPM_DIFF_PAIR_SKEW;
+
+    default:
+        wxCHECK_MSG( false, types::TuningPatternMode::TPM_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<LENGTH_TUNING_MODE>" );
+    }
+}
+
+
+template<>
+LENGTH_TUNING_MODE FromProtoEnum( types::TuningPatternMode aValue )
+{
+    switch( aValue )
+    {
+    case types::TuningPatternMode::TPM_SINGLE:         return LENGTH_TUNING_MODE::SINGLE;
+    case types::TuningPatternMode::TPM_DIFF_PAIR:      return LENGTH_TUNING_MODE::DIFF_PAIR;
+    case types::TuningPatternMode::TPM_DIFF_PAIR_SKEW: return LENGTH_TUNING_MODE::DIFF_PAIR_SKEW;
+
+    default:
+    case types::TuningPatternMode::TPM_UNKNOWN:        return LENGTH_TUNING_MODE::SINGLE;
+    }
+
+    wxCHECK_MSG( false, LENGTH_TUNING_MODE::SINGLE,
+                 "Unhandled case in FromProtoEnum<types::TuningPatternMode>" );
+}
+
+
+
+template<>
+types::TuningPatternMeanderSide ToProtoEnum( PNS::MEANDER_SIDE aValue )
+{
+    switch( aValue )
+    {
+    case PNS::MEANDER_SIDE_DEFAULT: return types::TuningPatternMeanderSide::TPMS_DEFAULT;
+    case PNS::MEANDER_SIDE_LEFT:    return types::TuningPatternMeanderSide::TPMS_LEFT;
+    case PNS::MEANDER_SIDE_RIGHT:   return types::TuningPatternMeanderSide::TPMS_RIGHT;
+
+    default:
+        wxCHECK_MSG( false, types::TuningPatternMeanderSide::TPMS_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<PNS::MEANDER_SIDE>" );
+    }
+}
+
+
+template<>
+PNS::MEANDER_SIDE FromProtoEnum( types::TuningPatternMeanderSide aValue )
+{
+    switch( aValue )
+    {
+    case types::TuningPatternMeanderSide::TPMS_DEFAULT: return PNS::MEANDER_SIDE_DEFAULT;
+    case types::TuningPatternMeanderSide::TPMS_LEFT:    return PNS::MEANDER_SIDE_LEFT;
+    case types::TuningPatternMeanderSide::TPMS_RIGHT:   return PNS::MEANDER_SIDE_RIGHT;
+
+    default:
+    case types::TuningPatternMeanderSide::TPMS_UNKNOWN: return PNS::MEANDER_SIDE_DEFAULT;
+    }
+
+    wxCHECK_MSG( false, PNS::MEANDER_SIDE_DEFAULT,
+                 "Unhandled case in FromProtoEnum<types::TuningPatternMeanderSide>" );
+}
+
+template<>
+types::TuningPatternCornerStyle ToProtoEnum( PNS::MEANDER_STYLE aValue )
+{
+    switch( aValue )
+    {
+    case PNS::MEANDER_STYLE_CHAMFER: return types::TuningPatternCornerStyle::TPCS_CHAMFERED;
+    case PNS::MEANDER_STYLE_ROUND:   return types::TuningPatternCornerStyle::TPCS_ROUNDED;
+
+    default:
+        wxCHECK_MSG( false, types::TuningPatternCornerStyle::TPCS_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<PNS::MEANDER_STYLE>" );
+    }
+}
+
+
+template<>
+PNS::MEANDER_STYLE FromProtoEnum( types::TuningPatternCornerStyle aValue )
+{
+    switch( aValue )
+    {
+    case types::TuningPatternCornerStyle::TPCS_CHAMFERED: return PNS::MEANDER_STYLE_CHAMFER;
+    case types::TuningPatternCornerStyle::TPCS_ROUNDED:   return PNS::MEANDER_STYLE_ROUND;
+
+    default:
+    case types::TuningPatternCornerStyle::TPCS_UNKNOWN:   return PNS::MEANDER_STYLE_CHAMFER;
+    }
+
+    wxCHECK_MSG( false, PNS::MEANDER_STYLE_CHAMFER,
+                 "Unhandled case in FromProtoEnum<types::TuningPatternCornerStyle>" );
+}
+
+template<>
+types::TuningPatternStatus ToProtoEnum( PNS::MEANDER_PLACER_BASE::TUNING_STATUS aValue )
+{
+    switch( aValue )
+    {
+    case PNS::MEANDER_PLACER_BASE::TOO_SHORT: return types::TuningPatternStatus::TPS_TOO_SHORT;
+    case PNS::MEANDER_PLACER_BASE::TOO_LONG:  return types::TuningPatternStatus::TPS_TOO_LONG;
+    case PNS::MEANDER_PLACER_BASE::TUNED:     return types::TuningPatternStatus::TPS_TUNED;
+
+    default:
+        wxCHECK_MSG( false, types::TuningPatternStatus::TPS_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<TUNING_STATUS>" );
+    }
+}
+
+
+template<>
+PNS::MEANDER_PLACER_BASE::TUNING_STATUS FromProtoEnum( types::TuningPatternStatus aValue )
+{
+    switch( aValue )
+    {
+    case types::TuningPatternStatus::TPS_TOO_SHORT: return PNS::MEANDER_PLACER_BASE::TOO_SHORT;
+    case types::TuningPatternStatus::TPS_TOO_LONG:  return PNS::MEANDER_PLACER_BASE::TOO_LONG;
+    case types::TuningPatternStatus::TPS_TUNED:     return PNS::MEANDER_PLACER_BASE::TUNED;
+
+    default:
+    case types::TuningPatternStatus::TPS_UNKNOWN:   return PNS::MEANDER_PLACER_BASE::TUNED;
+    }
+
+    wxCHECK_MSG( false, PNS::MEANDER_PLACER_BASE::TUNED,
+                 "Unhandled case in FromProtoEnum<types::TuningPatternStatus>" );
+}
+
+
+template<>
+types::ViaStitchLayout ToProtoEnum( PCB_VIA_STITCH_LAYOUT aValue )
+{
+    switch( aValue )
+    {
+    case PCB_VIA_STITCH_LAYOUT::PLAIN:     return types::ViaStitchLayout::VSL_PLAIN;
+    case PCB_VIA_STITCH_LAYOUT::STAGGERED: return types::ViaStitchLayout::VSL_STAGGERED;
+    case PCB_VIA_STITCH_LAYOUT::POISSON:   return types::ViaStitchLayout::VSL_POISSON;
+
+    default:
+        wxCHECK_MSG( false, types::ViaStitchLayout::VSL_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<PCB_VIA_STITCH_LAYOUT>" );
+    }
+}
+
+
+template<>
+PCB_VIA_STITCH_LAYOUT FromProtoEnum( types::ViaStitchLayout aValue )
+{
+    switch( aValue )
+    {
+    case types::ViaStitchLayout::VSL_PLAIN:     return PCB_VIA_STITCH_LAYOUT::PLAIN;
+    case types::ViaStitchLayout::VSL_STAGGERED: return PCB_VIA_STITCH_LAYOUT::STAGGERED;
+    case types::ViaStitchLayout::VSL_POISSON:   return PCB_VIA_STITCH_LAYOUT::POISSON;
+
+    default:
+    case types::ViaStitchLayout::VSL_UNKNOWN:   return PCB_VIA_STITCH_LAYOUT::PLAIN;
+    }
+
+    wxCHECK_MSG( false, PCB_VIA_STITCH_LAYOUT::PLAIN,
+                 "Unhandled case in FromProtoEnum<types::ViaStitchLayout>" );
+}
+
+
+template<>
+types::ViaStitchMode ToProtoEnum( PCB_VIA_STITCH_MODE aValue )
+{
+    switch( aValue )
+    {
+    case PCB_VIA_STITCH_MODE::STITCH: return types::ViaStitchMode::VSM_STITCH;
+    case PCB_VIA_STITCH_MODE::GUARD:  return types::ViaStitchMode::VSM_GUARD;
+
+    default:
+        wxCHECK_MSG( false, types::ViaStitchMode::VSM_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<PCB_VIA_STITCH_MODE>" );
+    }
+}
+
+
+template<>
+PCB_VIA_STITCH_MODE FromProtoEnum( types::ViaStitchMode aValue )
+{
+    switch( aValue )
+    {
+    case types::ViaStitchMode::VSM_STITCH: return PCB_VIA_STITCH_MODE::STITCH;
+    case types::ViaStitchMode::VSM_GUARD:  return PCB_VIA_STITCH_MODE::GUARD;
+
+    default:
+    case types::ViaStitchMode::VSM_UNKNOWN: return PCB_VIA_STITCH_MODE::STITCH;
+    }
+
+    wxCHECK_MSG( false, PCB_VIA_STITCH_MODE::STITCH,
+                 "Unhandled case in FromProtoEnum<types::ViaStitchMode>" );
+}
+
+
+template<>
+types::ViaStackStyle ToProtoEnum( VIA_STACK_STYLE aValue )
+{
+    switch( aValue )
+    {
+    case VIA_STACK_STYLE::STACKED:   return types::ViaStackStyle::VSK_STACKED;
+    case VIA_STACK_STYLE::STAGGERED: return types::ViaStackStyle::VSK_STAGGERED;
+
+    default:
+        wxCHECK_MSG( false, types::ViaStackStyle::VSK_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<VIA_STACK_STYLE>" );
+    }
+}
+
+
+template<>
+VIA_STACK_STYLE FromProtoEnum( types::ViaStackStyle aValue )
+{
+    switch( aValue )
+    {
+    case types::ViaStackStyle::VSK_STACKED:   return VIA_STACK_STYLE::STACKED;
+    case types::ViaStackStyle::VSK_STAGGERED: return VIA_STACK_STYLE::STAGGERED;
+
+    default:
+    case types::ViaStackStyle::VSK_UNKNOWN:   return VIA_STACK_STYLE::STACKED;
+    }
+
+    wxCHECK_MSG( false, VIA_STACK_STYLE::STACKED,
+                 "Unhandled case in FromProtoEnum<types::ViaStackStyle>" );
 }
 
 

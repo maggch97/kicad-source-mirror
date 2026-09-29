@@ -187,6 +187,9 @@ public:
      */
     bool IsFreePad() const;
 
+    void SetPadstackMode( PADSTACK::MODE aMode ) { m_padStack.SetMode( aMode ); }
+    PADSTACK::MODE GetPadstackMode() const { return m_padStack.Mode(); }
+
     /**
      * Set the new shape of this pad.
      */
@@ -239,6 +242,7 @@ public:
     /**
      * Set the shape of the anchor pad for custom shaped pads.
      *
+     * @param aLayer is the layer ID of the pad.
      * @param aShape is the shape of the anchor pad shape( currently, only #PAD_SHAPE::RECTANGLE or
      *               #PAD_SHAPE::CIRCLE.
      */
@@ -261,6 +265,7 @@ public:
         p.y = y;
         SetPosition( p );
     }
+
     void SetX( int x )
     {
         VECTOR2I p = GetPosition();
@@ -617,18 +622,21 @@ public:
      */
     int GetOwnClearance( PCB_LAYER_ID aLayer, wxString* aSource = nullptr ) const override;
 
+    double GetCoverageArea( int aTextMargin ) const override;
+
     /**
      * Convert the pad shape to a closed polygon. Circles and arcs are approximated by segments.
      *
      * @param aBuffer a buffer to store the polygon.
+     * @param aLayer is the layer ID of the pad.
      * @param aClearance the clearance around the pad.
      * @param aMaxError maximum error from true when converting arcs.
      * @param aErrorLoc should the approximation error be placed outside or inside the polygon?
-     * @param ignoreLineWidth used for edge cuts where the line width is only for visualization.
+     * @param aIgnoreLineWidth used for edge cuts where the line width is only for visualization.
      */
     void TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance,
                                   int aMaxError, ERROR_LOC aErrorLoc = ERROR_INSIDE,
-                                  bool ignoreLineWidth = false ) const override;
+                                  bool aIgnoreLineWidth = false ) const override;
 
     /**
      * Build the corner list of the polygonal drill shape in the board coordinate system.
@@ -655,10 +663,13 @@ public:
      * @param aFlash optional parameter allowing a caller to force the pad to be flashed (or not
      *               flashed) on the current layer (default is to honour the pad's setting and
      *               the current connections for the given layer).
+    * @param aUsage optional parameter specifying the query type.  This can, for instance, allow
+     *              backdrilling, countersinking, etc. to affect the shape used for resolving the
+     *              physical_clearance.
      */
-    virtual std::shared_ptr<SHAPE>
-    GetEffectiveShape( PCB_LAYER_ID aLayer,
-                       FLASHING flashPTHPads = FLASHING::DEFAULT ) const override;
+    std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
+                                              FLASHING aFlash = FLASHING::DEFAULT,
+                                              DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const override;
 
     const std::shared_ptr<SHAPE_POLY_SET>& GetEffectivePolygon( PCB_LAYER_ID aLayer,
                                                                 ERROR_LOC aErrorLoc = ERROR_INSIDE ) const;
@@ -666,7 +677,8 @@ public:
     /**
      * Return a SHAPE_SEGMENT object representing the pad's hole.
      */
-    std::shared_ptr<SHAPE_SEGMENT> GetEffectiveHoleShape() const override;
+    std::shared_ptr<SHAPE_SEGMENT> GetEffectiveHoleShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
+                                                          DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const override;
 
     /**
      * Return the radius of a minimum sized circle which fully encloses this pad.
@@ -771,12 +783,11 @@ public:
         m_padStack.ThermalGap() = aOverride;
     }
 
+    void SetRoundRectCornerRadius( PCB_LAYER_ID aLayer, double aRadius );
+
     /**
-     * Has meaning only for rounded rectangle pads.
-     *
      * @return The radius of the rounded corners for this pad.
      */
-    void SetRoundRectCornerRadius( PCB_LAYER_ID aLayer, double aRadius );
     int GetRoundRectCornerRadius( PCB_LAYER_ID aLayer ) const;
 
     VECTOR2I ShapePos( PCB_LAYER_ID aLayer ) const;
@@ -830,6 +841,7 @@ public:
      *
      * Set the position of the chamfers for orientation 0.
      *
+     * @param aLayer is the layer ID of the PAD to chamfer.
      * @param aPositions a bit-set of #RECT_CHAMFER_POSITIONS.
      */
     void SetChamferPositions( PCB_LAYER_ID aLayer, int aPositions )
@@ -1103,8 +1115,8 @@ private:
     wxString          m_pinFunction;        // Pin name in schematic
     wxString          m_pinType;            // Pin electrical type in schematic
 
-    VECTOR2I  m_libPos;         // Pad position in parent footprint's library frame
-    EDA_ANGLE m_libOrientation; // Pad orientation in parent footprint's library frame
+    VECTOR2I          m_libPos;             // Pad position in parent footprint's library frame
+    EDA_ORIENTATION   m_libOrientation;     // Pad orientation in parent footprint's library frame
 
     PADSTACK          m_padStack;
 

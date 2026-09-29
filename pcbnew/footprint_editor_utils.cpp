@@ -55,10 +55,7 @@ void FOOTPRINT_EDIT_FRAME::LoadFootprintFromLibrary( LIB_ID aFPID )
 {
     bool is_last_fp_from_brd = IsCurrentFPFromBoard();
 
-    // The legacy path wipes the shared board; the tab path leaves other tabs untouched.
-    const bool useTabs = ( m_tabsPanel != nullptr ) && aFPID.IsValid();
-
-    if( useTabs )
+    if( aFPID.IsValid() )
     {
         const wxString key = aFPID.GetLibNickname().wx_str() + wxT( ':' ) + aFPID.GetLibItemName().wx_str();
 
@@ -83,42 +80,26 @@ void FOOTPRINT_EDIT_FRAME::LoadFootprintFromLibrary( LIB_ID aFPID )
     if( !footprint )
         return;
 
-    if( useTabs )
+    // A board-sourced or new footprint occupies the frame-owned board with no backing tab.
+    // Switching to the library footprint's tab frees that board, so prompt to save those edits
+    // first, the same way the legacy single-board path did. A tab-owned board survives the
+    // switch untouched and needs no prompt.
+    if( !activeBoardOwnedByTab() && IsContentModified() )
     {
-        // A board-sourced or new footprint occupies the frame-owned board with no backing tab.
-        // Switching to the library footprint's tab frees that board, so prompt to save those edits
-        // first, the same way the legacy single-board path does. A tab-owned board survives the
-        // switch untouched and needs no prompt.
-        if( !activeBoardOwnedByTab() && IsContentModified() )
-        {
-            if( !HandleUnsavedChanges(
-                        this, _( "The current footprint has been modified.  Save changes?" ),
-                        [&]() -> bool
-                        {
-                            return SaveFootprint( GetBoard()->Footprints().front() );
-                        } ) )
-            {
-                // AddFootprintToBoard would have taken ownership; on cancel we still own the clone.
-                delete footprint;
-                return;
-            }
-        }
-
-        GetCanvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
-        AddFootprintToBoard( footprint );
-    }
-    else
-    {
-        if( !Clear_Pcb( true ) )
+        if( !::HandleUnsavedChanges( this, _( "The current footprint has been modified.  Save changes?" ),
+                                     [&]() -> bool
+                                     {
+                                         return SaveFootprint( GetBoard()->Footprints().front() );
+                                     } ) )
         {
             // AddFootprintToBoard would have taken ownership; on cancel we still own the clone.
             delete footprint;
             return;
         }
-
-        GetCanvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
-        AddFootprintToBoard( footprint );
     }
+
+    GetCanvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
+    AddFootprintToBoard( footprint );
 
     footprint->ClearFlags();
 
@@ -158,17 +139,23 @@ void FOOTPRINT_EDIT_FRAME::LoadFootprintFromLibrary( LIB_ID aFPID )
 bool FOOTPRINT_EDIT_FRAME::BeginNewFootprint( const wxString& aLibrary )
 {
     // No tab strip or target library to key a tab on, so use the legacy single-board clear.
-    if( !m_tabsPanel || aLibrary.IsEmpty() )
-        return Clear_Pcb( true );
+    if( aLibrary.IsEmpty() )
+    {
+        if( !HandleUnsavedChanges( false ) )
+            return false;
+
+        Clear_Pcb();
+        return true;
+    }
 
     // The new footprint opens in its own tab. Only a dirty tab-less frame board needs saving.
     if( !activeBoardOwnedByTab() && IsContentModified() )
     {
-        if( !HandleUnsavedChanges( this, _( "The current footprint has been modified.  Save changes?" ),
-                                   [&]() -> bool
-                                   {
-                                       return SaveFootprint( GetBoard()->Footprints().front() );
-                                   } ) )
+        if( !::HandleUnsavedChanges( this, _( "The current footprint has been modified.  Save changes?" ),
+                                     [&]() -> bool
+                                     {
+                                         return SaveFootprint( GetBoard()->Footprints().front() );
+                                     } ) )
         {
             return false;
         }
@@ -235,8 +222,6 @@ public:
 
         m_nickname = aFootprint->GetFPID().GetLibNickname().wx_str();
         m_fpname = aFootprint->GetFPID().GetLibItemName().wx_str();
-        m_pad_count = aFootprint->GetPadCount( DO_NOT_INCLUDE_NPTH );
-        m_unique_pad_count = aFootprint->GetUniquePadCount( DO_NOT_INCLUDE_NPTH );
         m_keywords = aFootprint->GetKeywords();
         m_doc = aFootprint->GetLibDescription();
         m_loaded = true;
@@ -244,8 +229,7 @@ public:
 };
 
 
-void FOOTPRINT_EDIT_FRAME::UpdateLibraryTree( const wxDataViewItem& aTreeItem,
-                                              FOOTPRINT* aFootprint )
+void FOOTPRINT_EDIT_FRAME::UpdateLibraryTree( const wxDataViewItem& aTreeItem, FOOTPRINT* aFootprint )
 {
     wxCHECK( aFootprint, /* void */ );
 
@@ -273,7 +257,8 @@ void FOOTPRINT_EDIT_FRAME::editFootprintProperties( FOOTPRINT* aFootprint )
     // Update library tree and title in case of a name change
     wxDataViewItem treeItem = m_adapter->FindItem( oldFPID );
     UpdateLibraryTree( treeItem, aFootprint );
-    UpdateTitle();
+
+    RenameFootprintTab( oldFPID, aFootprint->GetFPID() );
 
     UpdateMsgPanel();
     UpdateUserInterface();
@@ -311,6 +296,7 @@ void FOOTPRINT_EDIT_FRAME::OnEditItemRequest( BOARD_ITEM* aItem )
         break;
 
     case PCB_TABLE_T:
+    case PCB_DRILL_CHART_T:
     {
         DIALOG_TABLE_PROPERTIES dlg( this, static_cast<PCB_TABLE*>( aItem ) );
 
@@ -425,16 +411,14 @@ void FOOTPRINT_EDIT_FRAME::SetActiveLayer( PCB_LAYER_ID aLayer )
 
 bool FOOTPRINT_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, int aCtl )
 {
-    if( !Clear_Pcb( true ) )
-        return false;                  // this command is aborted
-
     GetCanvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
-    ImportFootprint( aFileSet[ 0 ] );
+
+    if( !ImportFootprint( aFileSet[ 0 ] ) )
+        return false;
 
     if( GetBoard()->GetFirstFootprint() )
         GetBoard()->GetFirstFootprint()->ClearFlags();
 
-    GetScreen()->SetContentModified( false );
     Zoom_Automatique( false );
     GetCanvas()->Refresh();
 
@@ -490,6 +474,19 @@ void FOOTPRINT_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
         }
 
         break;
+
+    case MAIL_FP_EDIT_LIBID:
+    {
+        LIB_ID fpId;
+
+        if( fpId.Parse( wxString::FromUTF8( payload ) ) == -1 && fpId.IsValid() )
+        {
+            LoadFootprintFromLibrary( fpId );
+            Raise();
+        }
+
+        break;
+    }
 
     case MAIL_RELOAD_LIB:
         SyncLibraryTree( true );

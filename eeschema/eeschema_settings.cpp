@@ -29,6 +29,7 @@
 #include <settings/common_settings.h>
 #include <settings/json_settings_internals.h>
 #include <settings/parameters.h>
+#include <settings/snap_settings_params.h>
 #include <settings/color_settings.h>
 #include <settings/settings_manager.h>
 #include <settings/aui_settings.h>
@@ -39,7 +40,7 @@
 using namespace T_BOMCFG_T;     // for the BOM_CFG_PARSER parser and its keywords
 
 /// Update the schema version whenever a migration is required.
-const int eeschemaSchemaVersion = 3;
+const int eeschemaSchemaVersion = 4;
 
 
 /// Default value for bom.plugins
@@ -376,15 +377,14 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
     m_params.emplace_back( new PARAM<int>( "drawing.default_text_size",
             &m_Drawing.default_text_size, DEFAULT_TEXT_SIZE ) );
 
-    m_params.emplace_back( new PARAM<wxString>( "drawing.field_names",
-            &m_Drawing.field_names, "" ) );
-
     m_params.emplace_back( new PARAM<int>( "drawing.line_mode",
             &m_Drawing.line_mode, LINE_MODE::LINE_MODE_90 ) );
 
     m_params.emplace_back( new PARAM<int>( "editing.arc_edit_mode",
             reinterpret_cast<int*>( &m_Drawing.arc_edit_mode ),
             static_cast<int>( ARC_EDIT_MODE::KEEP_CENTER_ADJUST_ANGLE_RADIUS ) ) );
+
+    AddSnapInferenceParams( m_params, m_SnapInference );
 
     m_params.emplace_back( new PARAM<bool>( "drawing.auto_start_wires",
             &m_Drawing.auto_start_wires, true ) );
@@ -402,10 +402,10 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
             &m_Drawing.new_power_symbols, POWER_SYMBOLS::DEFAULT, POWER_SYMBOLS::DEFAULT, POWER_SYMBOLS::LOCAL ) );
 
     m_params.emplace_back( new PARAM<int>( "drawing.junction_size_choice",
-            &m_Drawing.junction_size_choice, 3 ) );
+            &m_Drawing.junction_size_choice, 3, 0, 5 ) );
 
     m_params.emplace_back( new PARAM<int>( "drawing.hop_over_size_choice",
-            &m_Drawing.hop_over_size_choice, 0 ) );
+            &m_Drawing.hop_over_size_choice, 0, 0, 5 ) );
 
     m_params.emplace_back( new PARAM<bool>( "find_replace.search_all_fields",
             &m_FindReplaceExtra.search_all_fields, false ) );
@@ -439,6 +439,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
 
     m_params.emplace_back( new PARAM<bool>( "selection.fill_shapes",
             &m_Selection.fill_shapes, false ) );
+
+    m_params.emplace_back( new PARAM<bool>( "selection.select_pin_selects_symbol",
+            &m_Selection.select_pin_selects_symbol, false ) );
 
     m_params.emplace_back( new PARAM<bool>( "selection.highlight_netclass_colors",
             &m_Selection.highlight_netclass_colors, false ) );
@@ -548,9 +551,6 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
     m_params.emplace_back( new PARAM_MAP<int>( "field_editor.field_widths",
             &m_FieldEditorPanel.field_widths, {} ) );
 
-    m_params.emplace_back( new PARAM<wxString>( "field_editor.export_filename",
-            &m_FieldEditorPanel.export_filename, wxT( "" ) ) );
-
     m_params.emplace_back( new PARAM<int>( "field_editor.selection_mode",
             &m_FieldEditorPanel.selection_mode, 0 ) );
 
@@ -582,6 +582,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
 
     m_params.emplace_back( new PARAM<bool>( "simulator.white_background",
             &m_Simulator.view.white_background, false ) );
+
+    m_params.emplace_back(
+            new PARAM<wxString>( "simulator.smith_cursor_columns", &m_Simulator.view.smith_cursor_columns, "" ) );
 
     m_params.emplace_back( new PARAM_ENUM<SIM_MOUSE_WHEEL_ACTION>( "simulator.mouse_wheel_actions.vertical_unmodified",
             &m_Simulator.preferences.mouse_wheel_actions.vertical_unmodified,
@@ -678,11 +681,43 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
             } );
 
     registerMigration( 2, 3,
-           [&]() -> bool
-           {
+            [&]() -> bool
+            {
                 // This is actually a migration for APP_SETTINGS_BASE::m_LibTree
                 return migrateLibTreeWidth();
-           } );
+            } );
+
+    registerMigration( 3, 4,
+            [&]() -> bool
+            {
+                return migrateFieldNameTemplates();
+            } );
+}
+
+
+bool EESCHEMA_SETTINGS::migrateFieldNameTemplates()
+{
+    if( std::optional<wxString> fieldNames = Get<wxString>( "drawing.field_names" ) )
+    {
+        if( PGM_BASE* pgm = PgmOrNull() )
+        {
+            COMMON_SETTINGS* commonSettings = pgm->GetCommonSettings();
+            TEMPLATES&       templates = commonSettings->m_FieldNameTemplates;
+
+            if( templates.GetTemplateFieldNames( TEMPLATES::SCOPE::GLOBAL ).empty()
+                && !fieldNames->IsEmpty() )
+            {
+                templates.AddTemplateFieldNames( *fieldNames, TEMPLATES::SCOPE::GLOBAL );
+                pgm->GetSettingsManager().SyncGlobalFieldNameTemplatesToProjects();
+                pgm->GetSettingsManager().Save( commonSettings );
+            }
+        }
+    }
+
+    if( Contains( "drawing.field_names" ) )
+        At( "drawing" ).erase( "field_names" );
+
+    return true;
 }
 
 
@@ -723,7 +758,10 @@ bool EESCHEMA_SETTINGS::MigrateFromLegacy( wxConfigBase* aCfg )
     ret &= fromLegacy<int>(  aCfg, "RepeatStepX",              "drawing.default_repeat_offset_x" );
     ret &= fromLegacy<int>(  aCfg, "RepeatStepY",              "drawing.default_repeat_offset_y" );
     ret &= fromLegacy<int>(  aCfg, "DefaultWireWidth",         "drawing.default_wire_thickness" );
+
     ret &= fromLegacyString( aCfg, "FieldNames",               "drawing.field_names" );
+    migrateFieldNameTemplates();
+
     ret &= fromLegacy<bool>( aCfg, "HorizVertLinesOnly",       "drawing.line_mode" );
     ret &= fromLegacy<int>(  aCfg, "RepeatLabelIncrement",     "drawing.repeat_label_increment" );
 

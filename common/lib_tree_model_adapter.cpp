@@ -175,6 +175,25 @@ LIB_TREE_MODEL_ADAPTER::~LIB_TREE_MODEL_ADAPTER()
 {}
 
 
+LIB_TREE_MODEL_ADAPTER::ResetTreeView::ResetTreeView( LIB_TREE_MODEL_ADAPTER& aAdapter ) :
+        m_adapter( aAdapter )
+{
+    // A queued GtkTreeView scroll holds a row reference into the nodes the caller is about to
+    // free, so drop it while those rows are still valid (#24433, #24757)
+    KIPLATFORM::UI::CancelPendingScroll( m_adapter.m_widget );
+
+    m_adapter.Freeze();
+    m_adapter.BeforeReset();
+}
+
+
+LIB_TREE_MODEL_ADAPTER::ResetTreeView::~ResetTreeView()
+{
+    m_adapter.AfterReset();
+    m_adapter.Thaw();
+}
+
+
 TOOL_DISPATCHER* LIB_TREE_MODEL_ADAPTER::GetToolDispatcher() const
 {
     return m_parent->GetToolDispatcher();
@@ -339,7 +358,12 @@ void LIB_TREE_MODEL_ADAPTER::UpdateSearchString( const wxString& aSearch, bool a
         // the search box.
         constexpr int MAX_TERMS = 100;
 
-        wxStringTokenizer                                  tokenizer( aSearch, " \t\r\n", wxTOKEN_STRTOK );
+        wxString search( aSearch );
+
+        if( search.StartsWith( "::" ) )
+            search = search.Mid( 2 );
+
+        wxStringTokenizer                                  tokenizer( search, " \t\r\n", wxTOKEN_STRTOK );
         std::vector<std::unique_ptr<EDA_COMBINED_MATCHER>> termMatchers;
 
         while( tokenizer.HasMoreTokens() && termMatchers.size() < MAX_TERMS )

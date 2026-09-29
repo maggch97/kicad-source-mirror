@@ -2495,7 +2495,7 @@ XNODE* CADSTAR_ARCHIVE_PARSER::LoadArchiveFile( const wxString& aFileName,
     FILE* fp = wxFopen( aFileName, wxT( "rt" ) );
 
     if( !fp )
-        THROW_IO_ERROR( wxString::Format( _( "Cannot open file '%s'" ), aFileName ) );
+        THROW_IO_ERRORF( _( "Cannot open file '%s'" ), aFileName );
 
     fseek( fp, 0L, SEEK_END );
     long fileSize = ftell( fp );
@@ -2503,10 +2503,11 @@ XNODE* CADSTAR_ARCHIVE_PARSER::LoadArchiveFile( const wxString& aFileName,
 
     DSNLEXER lexer( emptyKeywords, 0, nullptr,  fp, aFileName );
 
-    auto currentProgress =  [&]() -> double
-                            {
-                                return static_cast<double>( ftell( fp ) ) / fileSize;
-                            };
+    auto currentProgress =
+            [&]() -> double
+            {
+                return static_cast<double>( ftell( fp ) ) / fileSize;
+            };
 
     double previousReportedProgress = -1.0;
 
@@ -2518,7 +2519,7 @@ XNODE* CADSTAR_ARCHIVE_PARSER::LoadArchiveFile( const wxString& aFileName,
             {
                 delete rootNode;
 
-                THROW_IO_ERROR( _( "File import canceled by user." ) );
+                THROW_IO_CANCELLED();
             }
 
             aProgressReporter->SetCurrentProgress( currentProgress() );
@@ -2707,12 +2708,12 @@ std::vector<CADSTAR_ARCHIVE_PARSER::POINT> CADSTAR_ARCHIVE_PARSER::ParseAllChild
         }
     }
 
-    if( aExpectedNumPoints != UNDEFINED_VALUE
-            && retVal.size() != static_cast<size_t>( aExpectedNumPoints ) )
+    if( aExpectedNumPoints != UNDEFINED_VALUE && retVal.size() != static_cast<size_t>( aExpectedNumPoints ) )
     {
-        THROW_IO_ERROR( wxString::Format(
-                _( "Unexpected number of points in '%s'. Found %d but expected %d." ),
-                aNode->GetName(), retVal.size(), aExpectedNumPoints ) );
+        THROW_IO_ERRORF( _( "Unexpected number of points in '%s'. Found %d but expected %d." ),
+                         aNode->GetName(),
+                         retVal.size(),
+                         aExpectedNumPoints );
     }
 
     return retVal;
@@ -2866,7 +2867,6 @@ void CADSTAR_ARCHIVE_PARSER::checkPoint()
         m_progressReporter->AdvanceProgress();
 
         if( !m_progressReporter->KeepRefreshing() )
-            THROW_IO_ERROR( _( "File import canceled by user." ) );
+            THROW_IO_CANCELLED();
     }
 }
-

@@ -21,6 +21,7 @@
 #define IMPORT_PROJ_PROPERTIES_H
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,11 +39,23 @@
  */
 namespace IMPORT_PROJ_PROPS
 {
-inline constexpr char FP_CACHE_NICKNAME[] = "import_fp_cache_nickname";
-inline constexpr char SOURCE_FP_LIBS[]    = "import_source_fp_libs";
+inline constexpr char FP_CACHE_NICKNAME[]  = "import_fp_cache_nickname";
+inline constexpr char SOURCE_FP_LIBS[]     = "import_source_fp_libs";
+inline constexpr char SYM_CACHE_NICKNAME[] = "import_sym_cache_nickname";
+inline constexpr char SOURCE_SYM_LIBS[]    = "import_source_sym_libs";
+inline constexpr char NET_NAME_MAP[]       = "import_net_name_map";
 
 /// Separator joining a list value within a single property.
 inline constexpr char LIST_SEPARATOR = '\x1f';
+
+/// Library-table row option key marking a row as a generated import cache.
+inline constexpr char MANAGED_CACHE_KEY[] = "kicad_import_cache";
+
+/// Options string identifying a library-table row as a generated import cache.
+inline wxString ManagedCacheOption()
+{
+    return wxString( MANAGED_CACHE_KEY ) + wxS( "=1" );
+}
 
 /// Encode library nicknames into a single list-property value.
 inline wxString JoinList( const wxArrayString& aItems )
@@ -64,6 +77,41 @@ inline std::vector<wxString> SplitList( const wxString& aValue )
     return out;
 }
 
+/// Leading field marking a value as an encoded net-name map, so a design that maps no nets is
+/// still distinguishable from an import that never ran.
+inline constexpr char NET_NAME_MAP_TAG[] = "netmap";
+
+/// Encode source-to-imported net names as a single property value.
+inline wxString JoinNetNameMap( const std::map<wxString, wxString>& aNames )
+{
+    wxArrayString fields;
+    fields.Add( NET_NAME_MAP_TAG );
+
+    for( const auto& [source, target] : aNames )
+    {
+        fields.Add( source );
+        fields.Add( target );
+    }
+
+    return JoinList( fields );
+}
+
+/// Decode a net-name map property value, or nothing when the value is not one.
+inline std::optional<std::map<wxString, wxString>> SplitNetNameMap( const wxString& aValue )
+{
+    wxArrayString fields = wxSplit( aValue, LIST_SEPARATOR, '\0' );
+
+    if( fields.IsEmpty() || fields[0] != NET_NAME_MAP_TAG || fields.GetCount() % 2 == 0 )
+        return std::nullopt;
+
+    std::map<wxString, wxString> names;
+
+    for( size_t i = 1; i < fields.GetCount(); i += 2 )
+        names.emplace( fields[i], fields[i + 1] );
+
+    return names;
+}
+
 /// Read the footprint-import coordination properties out of a properties map.
 inline void ReadFootprintProps( const std::map<std::string, UTF8>* aProps, wxString& aCacheNickname,
                                 std::vector<wxString>& aSourceFpLibs )
@@ -78,10 +126,30 @@ inline void ReadFootprintProps( const std::map<std::string, UTF8>* aProps, wxStr
         aSourceFpLibs = SplitList( it->second.wx_str() );
 }
 
+/// Read the symbol-import coordination properties out of a properties map.
+inline void ReadSymbolProps( const std::map<std::string, UTF8>* aProps, wxString& aCacheNickname,
+                             std::vector<wxString>& aSourceSymLibs )
+{
+    if( !aProps )
+        return;
+
+    if( auto it = aProps->find( SYM_CACHE_NICKNAME ); it != aProps->end() )
+        aCacheNickname = it->second.wx_str();
+
+    if( auto it = aProps->find( SOURCE_SYM_LIBS ); it != aProps->end() )
+        aSourceSymLibs = SplitList( it->second.wx_str() );
+}
+
 /// Derive the generated footprint-cache nickname from a project or file stem.
 inline wxString MakeCacheNickname( const wxString& aStem )
 {
     return LIB_ID::FixIllegalChars( aStem + wxS( "-import-fps" ), true ).wx_str();
+}
+
+/// Derive the generated symbol-cache nickname from a project or file stem.
+inline wxString MakeSymbolCacheNickname( const wxString& aStem )
+{
+    return LIB_ID::FixIllegalChars( aStem + wxS( "-import-syms" ), true ).wx_str();
 }
 }
 

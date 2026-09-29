@@ -43,7 +43,8 @@ void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT&        aTool,
     using namespace std::placeholders;
     std::unique_ptr<BOARD_ITEM> newItem;
 
-    frame()->PushTool( aTool );
+    TOOL_EVENT         originalEvent = aTool;          // This can change out from under us when the event loop runs
+    SCOPED_TOOL_PUSHER raii( frame(), originalEvent );
 
     BOARD_COMMIT commit( frame() );
 
@@ -107,8 +108,10 @@ void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT&        aTool,
 
                     // footprints have more drawable parts
                     if( FOOTPRINT* fp = dynamic_cast<FOOTPRINT*>( newItem.get() ) )
+                    {
                         fp->RunOnChildren( std::bind( &KIGFX::VIEW_GROUP::Add, &preview, _1 ),
                                            RECURSE_MODE::NO_RECURSE );
+                    }
                 }
             };
 
@@ -137,13 +140,9 @@ void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT&        aTool,
         VECTOR2I cursorPos = controls()->GetMousePosition();
 
         if( !evt->IsActivate() && !evt->IsCancelInteractive() )
-        {
-            cursorPos = grid.BestSnapAnchor( cursorPos, nullptr );
-        }
+            cursorPos = grid.ResolveSnap( cursorPos, nullptr ).position;
         else
-        {
             grid.FullReset();
-        }
 
         aPlacer->m_modifiers = evt->Modifier();
 
@@ -164,7 +163,6 @@ void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT&        aTool,
             if( aOptions & IPO_SINGLE_CLICK )
             {
                 cleanup();
-                frame()->PopTool( aTool );
                 break;
             }
             else if( newItem )
@@ -173,7 +171,6 @@ void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT&        aTool,
             }
             else
             {
-                frame()->PopTool( aTool );
                 break;
             }
         }
@@ -185,19 +182,19 @@ void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT&        aTool,
             if( evt->IsPointEditor() )
             {
                 // don't exit (the point editor runs in the background)
+                continue;
             }
-            else if( evt->IsMoveTool() )
+
+            if( evt->IsMoveTool() )
             {
-                // leave ourselves on the stack so we come back after the move
-                break;
+                // Make sure we come back after the move tool is done
+                frame()->PushTool( originalEvent );
             }
-            else
-            {
-                frame()->PopTool( aTool );
-                break;
-            }
+
+            break;
         }
-        else if( evt->IsClick( BUT_LEFT ) || evt->IsDblClick( BUT_LEFT ) )
+        else if( evt->IsClick( BUT_LEFT ) || evt->IsDblClick( BUT_LEFT )
+                    || evt->IsAction( &ACTIONS::cursorClick ) || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
             if( !newItem )
             {
@@ -286,7 +283,8 @@ void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT&        aTool,
                 evt->SetPassEvent();
             }
         }
-        else if( newItem && evt->IsMotion() )
+        else if( newItem && (   evt->IsMotion()
+                             || evt->IsAction( &ACTIONS::refreshPreview ) ) )
         {
             // track the cursor
             newItem->SetPosition( cursorPos );
@@ -384,6 +382,15 @@ LEADER_MODE PCB_TOOL_BASE::GetAngleSnapMode() const
         return GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" )->m_AngleSnapMode;
     else
         return GetAppSettings<FOOTPRINT_EDITOR_SETTINGS>( "fpedit" )->m_AngleSnapMode;
+}
+
+
+bool PCB_TOOL_BASE::GetAutoConstraints() const
+{
+    if( frame<PCB_BASE_FRAME>()->IsType( FRAME_PCB_EDITOR ) )
+        return GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" )->m_AutoConstraints;
+    else
+        return GetAppSettings<FOOTPRINT_EDITOR_SETTINGS>( "fpedit" )->m_AutoConstraints;
 }
 
 

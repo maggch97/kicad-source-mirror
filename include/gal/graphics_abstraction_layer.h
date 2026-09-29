@@ -28,6 +28,8 @@
 #include <limits>
 
 #include <math/matrix3x3.h>
+#include <math/box2.h>
+#include <geometry/grid_geometry.h>
 
 #include <gal/gal.h>
 #include <gal/color4d.h>
@@ -45,6 +47,65 @@ class BITMAP_BASE;
 
 namespace KIGFX
 {
+
+/**
+ * Multiply aPitch by aTick until it exceeds aThreshold, so a sub-threshold grid
+ * still shows every Nth line.  aTick <= 1 is clamped to 2.
+ *
+ * @return the sparsified pitch.
+ */
+inline double AutoSparsePitch( double aPitch, unsigned aTick, double aThreshold )
+{
+    const unsigned mult = ( aTick > 1 ) ? aTick : 2u;
+
+    while( aPitch > 0.0 && aPitch <= aThreshold )
+        aPitch *= mult;
+
+    return aPitch;
+}
+
+
+/**
+ * Render-time projection of a grid: GRID_GEOMETRY (kind/origin/pitch/orientation/extent)
+ * plus rendering and interaction flags.  SetGridSources keeps the list in precedence
+ * order, so consumers may simply take the first source that applies.
+ */
+struct GRID_SOURCE : public GRID_GEOMETRY
+{
+    bool unbounded = false;   ///< No extent; visible range derived from screen corners.
+                              ///< Used by the synthesised display grid.
+    bool axesEnabled = false; ///< Skip grid lines coincident with the world axes
+                              ///< (only meaningful for unbounded cartesian).
+    bool snapCursor = false;  ///< Participate in the cursor snap (GAL::GetGridPoint).
+    bool highlighted = false; ///< Render with edit-mode emphasis (selected grid).
+
+    unsigned tick = 0;        ///< Major-tick interval (0 = inherit default).
+
+    COLOR4D    color;
+    GRID_STYLE style = GRID_STYLE::LINES;
+};
+
+
+/// Opacity of the background wash laid over a selected grid item's area, to fade the
+/// grids showing through it.
+constexpr double GRID_DIM_ALPHA = 0.4;
+
+/// How far the hairline round a grid's coverage sits below its own colour.
+constexpr double GRID_EDGE_DARKEN = 0.75;
+
+/// How far the grid being edited is lifted above its own colour.
+constexpr double GRID_SELECTED_BRIGHTEN = 0.5;
+
+
+/// State of a canvas' rendering context after a GPU reset
+enum class GAL_CONTEXT_LOSS
+{
+    NONE,         ///< Context is usable
+    RECOVERABLE,  ///< Context was lost; rebuild the canvas
+    REPEATED      ///< Contexts keep being lost; stop using this backend
+};
+
+
 /**
  * Abstract interface for drawing on a 2D-surface.
  *
@@ -319,8 +380,6 @@ public:
 
     /**
      * Clear the screen.
-     *
-     * @param aColor is the color used for clearing.
      */
     virtual void ClearScreen() {};
 
@@ -677,6 +736,8 @@ public:
      */
     void SetWorldUnitLength( double aWorldUnitLength ) { m_worldUnitLength = aWorldUnitLength; }
 
+    double GetWorldUnitLength() const { return m_worldUnitLength; }
+
     void SetScreenSize( const VECTOR2I& aSize ) { m_screenSize = aSize; }
 
     /**
@@ -908,10 +969,11 @@ public:
 
         // If we cannot display the grid density, scale down by a tick size and
         // try again.  Eventually, we get some representation of the grid
-        while( std::min( gridScreenSize.x, gridScreenSize.y ) <= gridThreshold )
-        {
-            gridScreenSize = gridScreenSize * static_cast<double>( m_gridTick );
-        }
+        const double minSize = std::min( gridScreenSize.x, gridScreenSize.y );
+        const double sparsed = AutoSparsePitch( minSize, m_gridTick, gridThreshold );
+
+        if( minSize > 0.0 && sparsed != minSize )
+            gridScreenSize *= sparsed / minSize;
 
         return gridScreenSize;
     }
@@ -964,7 +1026,22 @@ public:
         return m_gridLineWidth;
     }
 
-    ///< Draw the grid
+    /**
+     * Set the grid-source list rendered alongside the display grid.
+     *
+     * The list is sorted by GRID_GEOMETRY::TakesPrecedenceOver, so every consumer can take
+     * the first source that applies rather than re-deriving the overlap rules.  The sort
+     * is stable, leaving exact ties in the caller's original order.
+     */
+    void SetGridSources( std::vector<GRID_SOURCE> aSources );
+
+    const std::vector<GRID_SOURCE>& GetGridSources() const { return m_gridSources; }
+
+    GRID_STYLE     GetGridStyle() const { return m_gridStyle; }
+    int            GetCoarseGrid() const { return m_gridTick; }
+    const COLOR4D& GetGridColor() const { return m_gridColor; }
+
+    /// Draw the grid
     virtual void DrawGrid() {};
 
     /**
@@ -1000,8 +1077,9 @@ public:
     /**
      * Set the cursor in the native panel.
      *
-     * @param aCursor is the cursor to use in the native panel
-     * @return true if the cursor was updated, false if the cursor given was already set
+     * @param aCursor is the cursor to use in the native panell
+     * @param aHiDPI is used to determine if high DPI cursors should be used.
+     * @return true if the cursor was updated, false if the cursor given was already set.
      */
     virtual bool SetNativeCursorStyle( KICURSOR aCursor, bool aHiDPI );
 
@@ -1053,6 +1131,39 @@ public:
         return false;
     }
 
+    /**
+     * Check whether the locked context is actually the current one.
+     *
+     * A canvas whose native window is already gone cannot be made current.  GL commands issued
+     * while this is false land in whichever sibling context is still bound.
+     *
+     * @return True if GL commands may be issued.
+     */
+    virtual bool IsContextValid() const
+    {
+        return true;
+    }
+
+    /**
+     * Check whether a GPU reset destroyed this canvas' rendering context.
+     *
+     * A lost canvas cannot draw or update cached items until its owner rebuilds it.
+     */
+    virtual GAL_CONTEXT_LOSS GetContextLoss() const
+    {
+        return GAL_CONTEXT_LOSS::NONE;
+    }
+
+    /**
+     * Check whether the driver has finished the reset that destroyed this canvas' context.
+     *
+     * Rebuilding before then can fail or hang in the driver.
+     */
+    virtual bool IsResetSettled()
+    {
+        return true;
+    }
+
 
     /// Use GAL_CONTEXT_LOCKER RAII object unless you know what you're doing.
     virtual void LockContext( int aClientCookie ) {}
@@ -1099,6 +1210,12 @@ protected:
      * @return the minimum spacing to use for drawing the grid
      */
     double computeMinGridSpacing() const;
+
+    /**
+     * @return the visible screen area expressed in aSrc's frame (relative to its
+     *         origin and counter-rotated by its orientation).
+     */
+    BOX2D gridScreenBBox( const GRID_SOURCE& aSrc ) const;
 
     /// Possible depth range
     static const int MIN_DEPTH;
@@ -1191,6 +1308,8 @@ protected:
     int                  m_gridMinSpacing;     ///< Minimum screen size of the grid (pixels)
                                                ///< below which the grid is not drawn
 
+    std::vector<GRID_SOURCE> m_gridSources;    ///< Sources overlayed on the display grid.
+
     // Cursor settings
     bool                 m_isCursorEnabled;    ///< Is the cursor enabled?
     bool                 m_forceDisplayCursor; ///< Always show cursor
@@ -1238,15 +1357,27 @@ class GAL_UPDATE_CONTEXT : public GAL_CONTEXT_LOCKER
 {
 public:
     GAL_UPDATE_CONTEXT( GAL* aGal ) :
-            GAL_CONTEXT_LOCKER( aGal )
+            GAL_CONTEXT_LOCKER( aGal ),
+            m_updating( aGal->IsContextValid() )
     {
-        m_gal->beginUpdate();
+        if( m_updating )
+            m_gal->beginUpdate();
     }
 
     ~GAL_UPDATE_CONTEXT()
     {
-        m_gal->endUpdate();
+        if( m_updating )
+            m_gal->endUpdate();
     }
+
+    /// @return False if the context could not be made current, so cached items must not be touched.
+    bool IsUpdating() const
+    {
+        return m_updating;
+    }
+
+private:
+    bool m_updating;
 };
 
 
@@ -1254,15 +1385,27 @@ class GAL_DRAWING_CONTEXT : public GAL_CONTEXT_LOCKER
 {
 public:
     GAL_DRAWING_CONTEXT( GAL* aGal ) :
-            GAL_CONTEXT_LOCKER( aGal )
+            GAL_CONTEXT_LOCKER( aGal ),
+            m_drawing( aGal->IsContextValid() )
     {
-        m_gal->BeginDrawing();
+        if( m_drawing )
+            m_gal->BeginDrawing();
     }
 
     ~GAL_DRAWING_CONTEXT() noexcept( false )
     {
-        m_gal->EndDrawing();
+        if( m_drawing )
+            m_gal->EndDrawing();
     }
+
+    /// @return False if the context could not be made current, so no drawing was started.
+    bool IsDrawing() const
+    {
+        return m_drawing;
+    }
+
+private:
+    bool m_drawing;
 };
 
 

@@ -18,8 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef INFOBAR_H_
-#define INFOBAR_H_
+#pragma once
 
 #include <functional>
 #include <optional>
@@ -30,9 +29,9 @@
 #include <wx/sizer.h>
 #include <reporter.h>
 #include <widgets/wx_infobar_message_type.h>
+#include <wx/hyperlink.h>
 
 
-class wxAuiManager;
 class wxHyperlinkCtrl;
 
 
@@ -52,7 +51,7 @@ wxDECLARE_EVENT( KIEVT_DISMISS_INFOBAR, wxCommandEvent );
  *     * Remove all user-provided buttons at once
  *     * Allow automatically hiding the infobar after a time period
  *     * Show/hide using events
- *     * Place it inside an AUI manager
+ *     * Overlay it on a drawing canvas
  *
  * This inherits from the generic infobar because the native infobar
  * on GTK doesn't include the icon on the left and it looks worse.
@@ -77,13 +76,17 @@ class WX_INFOBAR : public wxInfoBarGeneric
 {
 public:
     /**
-     * Construct an infobar that can exist inside an AUI managed frame.
+     * Construct an infobar.
+     *
+     * In overlay mode the infobar is drawn on top of its parent and does not take space from
+     * it, so a drawing canvas parent keeps its size and does not have to repaint.  Otherwise
+     * the infobar is laid out by the parent's sizer.
      *
      * @param aParent is the parent
-     * @param aMgr is the AUI manager that this infobar is added to
      * @param aWinId is the ID for this infobar object
+     * @param aOverlay is true to overlay the parent instead of being laid out by its sizer
      */
-    WX_INFOBAR( wxWindow* aParent, wxAuiManager* aMgr = nullptr, wxWindowID aWinid = wxID_ANY );
+    WX_INFOBAR( wxWindow* aParent, wxWindowID aWinId = wxID_ANY, bool aOverlay = false );
 
     ~WX_INFOBAR();
 
@@ -119,12 +122,12 @@ public:
     void AddButton( wxButton* aButton );
 
     /**
-     * Add an already created hypertext link to the infobar.
-     * New buttons are added in the right-most position.
+     * Add a hypertext link to the infobar.  Link is added in the right-most position.
      *
-     * @param aHypertextButton is the button to add
+     * @param aLinkText is the text to show
+     * @param aFn is the function to execute if the link is clicked
      */
-    void AddButton( wxHyperlinkCtrl* aHypertextButton );
+    void AddLink( const wxString& aLinkText, const std::function<void( wxHyperlinkEvent& )>& aFn );
 
     /**
      * Add a button with the provided ID and text.
@@ -158,9 +161,10 @@ public:
      * Show the infobar with the provided message and icon for a specific period
      * of time.
      *
-     * @param aMessage is the message to display
-     * @param aTime is the amount of time in milliseconds to show the infobar
-     * @param aFlags is the flag containing the icon to display on the left side of the infobar
+     * @param aMessage is the message to display.
+     * @param aTime is the amount of time in milliseconds to show the infobar.
+     * @param aFlags is the flag containing the icon to display on the left side of the infobar.
+     * @param aType is the info bar message type.
      */
     void ShowMessageFor( const wxString& aMessage, int aTime, int aFlags = wxICON_INFORMATION,
                          MESSAGE_TYPE aType = WX_INFOBAR::MESSAGE_TYPE::GENERIC );
@@ -202,12 +206,9 @@ public:
     void QueueDismiss();
 
     /**
-     * Returns true if the infobar is being updated.
+     * Address some long-standing bugs regarding infobars comming up only partial-width.
      */
-    bool IsLocked()
-    {
-        return m_updateLock;
-    }
+    void FixSize();
 
 protected:
     /**
@@ -240,19 +241,24 @@ protected:
     void onTimer( wxTimerEvent& aEvent );
 
     void onSize( wxSizeEvent& aEvent );
+    void doSize();
 
     /**
-     * Update the AUI pane to show or hide this infobar.
-     *
-     * @param aShow is true to show the pane
+     * Lay out every overlay infobar sharing this one's parent as a top-anchored stack, so that
+     * two infobars on the same canvas do not cover each other.
      */
-    void updateAuiLayout( bool aShow );
+    void stackOverlays();
+
+    /**
+     * Repaint the parent so that the area the infobar covered is not left stale.
+     */
+    void refreshParent();
 
 protected:
     int           m_showTime;       ///< The time to show the infobar. 0 = don't auto hide
     bool          m_updateLock;     ///< True if this infobar requested the UI update
+    bool          m_overlay;        ///< True if this infobar is drawn on top of its parent
     wxTimer*      m_showTimer;      ///< The timer counting the autoclose period
-    wxAuiManager* m_auiManager;     ///< The AUI manager that contains this infobar
     MESSAGE_TYPE  m_type;           ///< The type of message being displayed
     wxString      m_message;        ///< The original message without wrapping
 
@@ -333,9 +339,9 @@ public:
     bool HasMessage() const override;
 
     /**
-     * Update the infobar with the reported text.
+     * Update the infobar with the reported text. Consumes the pending report.
      */
-    void Finalize();
+    void Finalize() override;
 
 private:
     bool                      m_messageSet;
@@ -343,4 +349,3 @@ private:
     std::unique_ptr<wxString> m_message;
     SEVERITY                  m_severity;
 };
-#endif // INFOBAR_H_

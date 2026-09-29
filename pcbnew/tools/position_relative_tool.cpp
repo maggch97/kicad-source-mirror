@@ -53,10 +53,13 @@
  * moves. A dedup set ensures each footprint is only moved once even when multiple of its pads
  * are in the selection.
  *
+ * @param[in] aSelection is the selected objects to move.
+ * @param[in] aMoveVec is the distance to move \a aSelection.
+ * @param[in] aCommit is the commit object to handle undo/redo actions.
  * @param aAllowFreePads when true, pads are moved individually without promotion.
  */
 static void moveSelectionBy( const PCB_SELECTION& aSelection, const VECTOR2I& aMoveVec,
-                             BOARD_COMMIT& commit, bool aAllowFreePads )
+                             BOARD_COMMIT& aCommit, bool aAllowFreePads )
 {
     std::set<BOARD_ITEM*> moved;
 
@@ -73,7 +76,7 @@ static void moveSelectionBy( const PCB_SELECTION& aSelection, const VECTOR2I& aM
         if( !moved.insert( boardItem ).second )
             continue;
 
-        commit.Modify( boardItem, nullptr, RECURSE_MODE::RECURSE );
+        aCommit.Modify( boardItem, nullptr, RECURSE_MODE::RECURSE );
         boardItem->Move( aMoveVec );
     }
 }
@@ -191,10 +194,9 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
     if( frame()->IsCurrentTool( ACTIONS::measureTool ) )
         return 0;
 
-    auto& view = *getView();
-    auto& controls = *getViewControls();
-
-    frame()->PushTool( aEvent );
+    KIGFX::VIEW*          view = getView();
+    KIGFX::VIEW_CONTROLS* controls = getViewControls();
+    SCOPED_TOOL_PUSHER    raii( frame(), aEvent );
 
     bool invertXAxis = displayOptions().m_DisplayInvertXAxis;
     bool invertYAxis = displayOptions().m_DisplayInvertYAxis;
@@ -217,12 +219,12 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
                               && frame()->GetPcbNewSettings()->m_AllowFreePads );
 
     // Some colour to make it obviously not just a ruler
-    ruler.SetColor( view.GetPainter()->GetSettings()->GetLayerColor( LAYER_ANCHOR ) );
+    ruler.SetColor( view->GetPainter()->GetSettings()->GetLayerColor( LAYER_ANCHOR ) );
     ruler.SetShowTicks( false );
     ruler.SetShowEndArrowHead( true );
 
-    view.Add( &ruler );
-    view.SetVisible( &ruler, false );
+    view->Add( &ruler );
+    view->SetVisible( &ruler, false );
 
     auto setCursor =
             [&]()
@@ -251,10 +253,10 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
     auto cleanup =
             [&] ()
             {
-                view.SetVisible( &ruler, false );
-                controls.SetAutoPan( false );
-                controls.CaptureCursor( false );
-                controls.ForceCursorPosition( false );
+                view->SetVisible( &ruler, false );
+                controls->SetAutoPan( false );
+                controls->CaptureCursor( false );
+                controls->ForceCursorPosition( false );
                 originSet = false;
                 setInitialMsg();
             };
@@ -269,10 +271,10 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
 
     Activate();
     // Must be done after Activate() so that it gets set into the correct context
-    controls.ShowCursor( true );
-    controls.SetAutoPan( false );
-    controls.CaptureCursor( false );
-    controls.ForceCursorPosition( false );
+    controls->ShowCursor( true );
+    controls->SetAutoPan( false );
+    controls->CaptureCursor( false );
+    controls->ForceCursorPosition( false );
 
     // Set initial cursor
     setCursor();
@@ -287,15 +289,15 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
     {
         setCursor();
         grid.SetSnap( !evt->Modifier( MD_SHIFT ) );
-        grid.SetUseGrid( view.GetGAL()->GetGridSnapping() && !evt->DisableGridSnapping() );
-        VECTOR2I cursorPos = evt->HasPosition() ? evt->Position() : controls.GetMousePosition();
+        grid.SetUseGrid( view->GetGAL()->GetGridSnapping() && !evt->DisableGridSnapping() );
+        VECTOR2I cursorPos = evt->HasPosition() ? evt->Position() : controls->GetMousePosition();
         setPopupPosition();
 
         if( !evt->IsActivate() && !evt->IsCancelInteractive() )
         {
             // If we are switching, the canvas may not be valid any more
-            cursorPos = grid.BestSnapAnchor( cursorPos, nullptr );
-            controls.ForceCursorPosition( true, cursorPos );
+            cursorPos = grid.ResolveSnap( cursorPos, nullptr ).position;
+            controls->ForceCursorPosition( true, cursorPos );
         }
         else
         {
@@ -305,38 +307,36 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
         if( evt->IsCancelInteractive() )
         {
             if( originSet )
-            {
                 cleanup();
-            }
             else
-            {
-                frame()->PopTool( aEvent );
                 break;
-            }
         }
         else if( evt->IsActivate() )
         {
             if( originSet )
                 cleanup();
 
-            frame()->PopTool( aEvent );
             break;
         }
         // click or drag starts
-        else if( !originSet && ( evt->IsDrag( BUT_LEFT ) || evt->IsClick( BUT_LEFT ) ) )
+        else if( !originSet && (   evt->IsDrag( BUT_LEFT )
+                                || evt->IsClick( BUT_LEFT )
+                                || evt->IsAction( &ACTIONS::cursorClick ) ) )
         {
             twoPtMgr.SetOrigin( cursorPos );
             twoPtMgr.SetEnd( cursorPos );
 
             setDragMsg();
 
-            controls.CaptureCursor( true );
-            controls.SetAutoPan( true );
+            controls->CaptureCursor( true );
+            controls->SetAutoPan( true );
 
             originSet = true;
         }
         // second click or mouse up after drag ends
-        else if( originSet && ( evt->IsClick( BUT_LEFT ) || evt->IsMouseUp( BUT_LEFT ) ) )
+        else if( originSet && (   evt->IsClick( BUT_LEFT )
+                               || evt->IsAction( &ACTIONS::cursorClick )
+                               || evt->IsMouseUp( BUT_LEFT ) ) )
         {
             // Hide the popup text so it doesn't get in the way
             statusPopup.Hide();
@@ -356,7 +356,7 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
 
                 // Leave the arrow in place but update it
                 twoPtMgr.SetEnd( twoPtMgr.GetOrigin() + offsetVector );
-                view.Update( &ruler, KIGFX::GEOMETRY );
+                view->Update( &ruler, KIGFX::GEOMETRY );
                 canvas()->Refresh();
             }
 
@@ -364,13 +364,15 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
 
             setInitialMsg();
 
-            controls.SetAutoPan( false );
-            controls.CaptureCursor( false );
+            controls->SetAutoPan( false );
+            controls->CaptureCursor( false );
 
             statusPopup.Popup();
         }
         // move or drag when origin set updates rules
-        else if( originSet && ( evt->IsMotion() || evt->IsDrag( BUT_LEFT ) ) )
+        else if( originSet && (   evt->IsMotion()
+                               || evt->IsAction( &ACTIONS::refreshPreview )
+                               || evt->IsDrag( BUT_LEFT ) ) )
         {
             auto snap = LEADER_MODE::DIRECT;
 
@@ -383,8 +385,8 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
             // The end is fixed; we must update the origin
             twoPtMgr.SetOrigin( cursorPos );
 
-            view.SetVisible( &ruler, true );
-            view.Update( &ruler, KIGFX::GEOMETRY );
+            view->SetVisible( &ruler, true );
+            view->Update( &ruler, KIGFX::GEOMETRY );
         }
         else if( evt->IsAction( &ACTIONS::updateUnits ) )
         {
@@ -392,7 +394,7 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
             {
                 units = frame()->GetUserUnits();
                 ruler.SwitchUnits( units );
-                view.Update( &ruler, KIGFX::GEOMETRY );
+                view->Update( &ruler, KIGFX::GEOMETRY );
                 canvas()->ForceRefresh();
             }
 
@@ -411,7 +413,7 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
 
             ruler.UpdateDir( invertXAxis, invertYAxis );
 
-            view.Update( &ruler, KIGFX::GEOMETRY );
+            view->Update( &ruler, KIGFX::GEOMETRY );
             canvas()->Refresh();
             evt->SetPassEvent();
         }
@@ -420,8 +422,8 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
             // Often this will end up changing the items we just moved, so the ruler will be
             // in the wrong place. Clear it away and the user can restart
             twoPtMgr.Reset();
-            view.SetVisible( &ruler, false );
-            view.Update( &ruler, KIGFX::GEOMETRY );
+            view->SetVisible( &ruler, false );
+            view->Update( &ruler, KIGFX::GEOMETRY );
 
             evt->SetPassEvent();
         }
@@ -431,13 +433,13 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
         }
     }
 
-    view.SetVisible( &ruler, false );
-    view.Remove( &ruler );
+    view->SetVisible( &ruler, false );
+    view->Remove( &ruler );
 
     frame()->GetCanvas()->SetCurrentCursor( KICURSOR::ARROW );
-    controls.SetAutoPan( false );
-    controls.CaptureCursor( false );
-    controls.ForceCursorPosition( false );
+    controls->SetAutoPan( false );
+    controls->CaptureCursor( false );
+    controls->ForceCursorPosition( false );
 
     canvas()->SetStatusPopup( nullptr );
     return 0;

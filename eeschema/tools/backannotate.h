@@ -91,13 +91,15 @@ public:
     struct PCB_FP_DATA
     {
         PCB_FP_DATA( const wxString& aRef, const wxString& aFootprint, const wxString& aValue, bool aDNP,
-                     bool aExcludeFromBOM, bool aExcludeFromPosFiles, const std::map<wxString, wxString>& aPinMap,
+                     bool aExcludeFromBOM, bool aExcludeFromSim, bool aExcludeFromPosFiles,
+                     const std::map<wxString, wxString>& aPinMap,
                      const std::map<wxString, wxString>& aFieldsMap ) :
                 m_ref( aRef ),
                 m_footprint( aFootprint ),
                 m_value( aValue ),
                 m_DNP( aDNP ),
                 m_excludeFromBOM( aExcludeFromBOM ),
+                m_excludeFromSim( aExcludeFromSim ),
                 m_excludeFromPosFiles( aExcludeFromPosFiles ),
                 m_pinMap( aPinMap ),
                 m_fieldsMap( aFieldsMap )
@@ -108,12 +110,13 @@ public:
         wxString                     m_value;
         bool                         m_DNP;
         bool                         m_excludeFromBOM;
+        bool                         m_excludeFromSim;
         bool                         m_excludeFromPosFiles;
         std::map<wxString, wxString> m_pinMap;
         std::map<wxString, wxString> m_fieldsMap;
     };
 
-    ///< Map to hold NETLIST footprints data
+    /// Map to hold NETLIST footprints data
     using PCB_FOOTPRINTS_MAP = std::map<wxString, std::shared_ptr<PCB_FP_DATA>>;
 
     using CHANGELIST_ITEM = std::pair<SCH_REFERENCE, std::shared_ptr<PCB_FP_DATA>>;
@@ -145,14 +148,13 @@ public:
 
 private:
     /**
-     * Parse netlist sent over KiWay express mail interface and fill \ref m_pcbModules.
+     * Parse netlist sent over KiWay express mail interface and fill \ref m_pcbFootprints.
      *
      * @param aPayload is the netlist from Pcbnew.
-     * @return number of errors during parsing.
      */
     void getPcbModulesFromString( const std::string& aPayload );
 
-    ///< Create changelist.
+    /// Create changelist.
     void getChangeList();
 
     /**
@@ -174,7 +176,7 @@ private:
                                       SCH_COMMIT* aCommit );
 
     void processNetNameChange( SCH_COMMIT* aCommit, const wxString& aRef, SCH_PIN* aPin,
-                               const SCH_CONNECTION* aConnection, const wxString& aOldName, const wxString& aNewName );
+                               const SCH_SHEET_PATH& aSheet, const wxString& aOldName, const wxString& aNewName );
 
 private:
     REPORTER&                    m_reporter;

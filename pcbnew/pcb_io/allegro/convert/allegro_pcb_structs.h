@@ -133,7 +133,7 @@ enum class FMT_VER
     V_UNKNOWN,
     V_PRE_V16, // Allegro versions before 16.0 (unsupported binary format)
     V_160, // Allegro 16.0, 0x00130000
-    V_162, // Allegro 16.2  0x00130400
+    V_162, // Allegro 16.2  0x00130400, 0x00130500
     V_164, // Allegro 16.4, 0x00130C00
     V_165, // Allegro 16.5, 0x00131000
     V_166, // Allegro 16.6, 0x00131500
@@ -141,6 +141,8 @@ enum class FMT_VER
     V_174, // Allegro 17.4, 0x00140900
     V_175, // Allegro 17.5, 0x00141500
     V_180, // Allegro 18.0, 0x00150000
+    V_181, // Allegro 18.1, 0x00150200
+    V_190, // Allegro 19.0, 0x00160100
 };
 
 constexpr bool operator>=( FMT_VER lhs, FMT_VER rhs )
@@ -355,6 +357,9 @@ struct FILE_HEADER
     COND_GE<FMT_VER::V_180, LINKED_LIST> m_LL_V18_6;
 
     COND_GE<FMT_VER::V_180, uint32_t> m_0x35_Start_V18;
+
+    COND_GE<FMT_VER::V_181, std::array<uint32_t, 8>> m_Unknown_V181;
+
     COND_GE<FMT_VER::V_180, uint32_t> m_0x35_End_V18;
 
     // Fixed length string field
@@ -649,6 +654,8 @@ enum FIELD_KEYS
     MIN_NECK_WIDTH = 0x5c,
     MAX_NECK_LENGTH = 0x1fb,
     PHYS_CONSTRAINT_SET = 0x1a0,  ///< Physical Constraint Set assignment
+    MODEL_3D_FILE = 0x345,        ///< 3D model file name, size, mtime and display colour
+    MODEL_3D_PLACEMENT = 0x346,   ///< 3D model units, XYZ offset and XYZ rotation
 };
 
 
@@ -783,7 +790,7 @@ struct BLK_0x08_PIN_NUMBER
 
     COND_GE<FMT_VER::V_172, uint32_t> m_StrPtr;
 
-    ///< Pointer to 0x11 PIN_NAME object
+    /// Pointer to 0x11 PIN_NAME object
     uint32_t m_PinNamePtr;
 
     COND_GE<FMT_VER::V_172, uint32_t> m_Unknown1;
@@ -978,6 +985,8 @@ struct BLK_0x0F_FUNCTION_SLOT
 
     std::array<char, 32> m_CompDeviceType;
 
+    COND_GE<FMT_VER::V_190, uint32_t> m_CompDeviceTypePtr;
+
     COND_GE<FMT_VER::V_172, uint32_t> m_Next;
 
     uint32_t m_Ptr0x06;
@@ -1029,11 +1038,11 @@ struct BLK_0x11_PIN_NAME
     uint8_t  m_Type;
     uint16_t m_R;
     uint32_t m_Key;
-    ///< Pointer to pin name string
+    /// Pointer to pin name string
     uint32_t m_PinNameStrPtr;
-    ///< Pointer to next 0x11 PIN_NAME object or 0x0F SLOT
+    /// Pointer to next 0x11 PIN_NAME object or 0x0F SLOT
     uint32_t m_Next;
-    ///< Pointer to 0x08 PIN_NUMBER object
+    /// Pointer to 0x08 PIN_NUMBER object
     uint32_t m_PinNumberPtr;
     uint32_t m_Unknown1;
 
@@ -1134,7 +1143,7 @@ struct BLK_0x1B_NET
 
     uint32_t m_Assignment;
     uint32_t m_Ratline;
-    ///< Pointer to first 0x03 FIELD object or null
+    /// Pointer to first 0x03 FIELD object or null
     uint32_t m_FieldsPtr;
     uint32_t m_MatchGroupPtr; ///< Diff pair / match group pointer (0x26 or 0x2C)
     uint32_t m_ModelPtr;
@@ -1205,8 +1214,8 @@ struct PADSTACK_COMPONENT
     COND_GE<FMT_VER::V_172, int32_t> m_Z1;
 
     // This is the pad component offset
-    int32_t m_X3;
-    int32_t m_X4;
+    int32_t m_OffsetX;
+    int32_t m_OffsetY;
 
     /**
      * Seems to point to various things:
@@ -1387,6 +1396,7 @@ struct BLK_0x1C_PADSTACK
      *
      * V>=172 (21 fixed):
      *   Slot 14 = ~TSM (top solder mask)
+     *   Slot 15 = ~BSM (bottom solder mask)
      */
     enum SLOTS
     {
@@ -1395,8 +1405,15 @@ struct BLK_0x1C_PADSTACK
         PASTEMASK_TOP_V16X  = 5,
         FILMMASK_TOP_V16X   = 7,
 
+        SOLDERMASK_TOP_V165 = 1,
+        PASTEMASK_TOP_V165  = 6,
+        FILMMASK_TOP_V165   = 8,
+
         // V>=172 verified slots
         SOLDERMASK_TOP_V17X = 14,
+        SOLDERMASK_BOT_V17X = 15,
+        PASTEMASK_TOP_V17X  = 16,
+        PASTEMASK_BOT_V17X  = 17
     };
 
     /**
@@ -1529,10 +1546,9 @@ struct BLK_0x1E_SI_MODEL
     uint32_t m_Key;
     uint32_t m_Next;         ///< Linked list next pointer (used by LL_WALKER)
 
-    // Versioning seems unsure here
-    // At least it is in Kinoma (V_164)
-    COND_GE<FMT_VER::V_164, uint16_t> m_Unknown2;
-    COND_GE<FMT_VER::V_164, uint16_t> m_Unknown3;
+    // Present in 16.2 (TWR-MCF51JG LAY-26493) and Kinoma (V_164); no 16.0 sample yet
+    COND_GE<FMT_VER::V_162, uint16_t> m_Unknown2;
+    COND_GE<FMT_VER::V_162, uint16_t> m_Unknown3;
 
     uint32_t m_StrPtr;
     uint32_t m_Size;
@@ -1837,9 +1853,10 @@ struct BLK_0x2A_LAYER_LIST
 
 
 /**
- * Footprint definition (template) shared by multiple placed instances. Contains the
- * library symbol path (m_SymLibPathPtr), bounding box, and a linked list of placed
- * instances starting at m_FirstInstPtr (0x2D blocks).
+ * Footprint definition (template) shared by multiple placed instances. Contains a
+ * chain of 0x03 FIELD blocks (m_FieldsPtr) holding the library symbol path and the
+ * 3D model assignment, a bounding box, and a linked list of placed instances
+ * starting at m_FirstInstPtr (0x2D blocks).
  */
 struct BLK_0x2B_FOOTPRINT_DEF
 {
@@ -1858,7 +1875,10 @@ struct BLK_0x2B_FOOTPRINT_DEF
     uint32_t m_UnknownPtr3;
     uint32_t m_UnknownPtr4;
     uint32_t m_UnknownPtr5;
-    uint32_t m_SymLibPathPtr;
+
+    /// Pointer to first 0x03 FIELD object or null
+    uint32_t m_FieldsPtr;
+
     uint32_t m_UnknownPtr6;
     uint32_t m_UnknownPtr7;
     uint32_t m_UnknownPtr8;
@@ -2298,7 +2318,7 @@ struct BLK_0x36_DEF_TABLE
         uint32_t m_CharHeight;
         uint32_t m_CharWidth;
 
-        COND_GE<FMT_VER::V_174, uint32_t> m_Unknown2;
+        COND_GE_LT<FMT_VER::V_174, FMT_VER::V_190, uint32_t> m_Unknown2;
 
         uint32_t m_CharacterSpace;
         uint32_t m_LineSpace;
@@ -2457,6 +2477,15 @@ struct BLK_0x3B_PROPERTY
  * Ordered list of block keys. Context-dependent usage; appears alongside other
  * block types for grouping related objects.
  */
+struct BLK_0x3E
+{
+    static constexpr uint8_t BLOCK_TYPE_CODE = 0x3E;
+
+    uint32_t                m_Key;
+    std::array<uint32_t, 9> m_Unknown;
+};
+
+
 struct BLK_0x3C_KEY_LIST
 {
     static constexpr uint8_t BLOCK_TYPE_CODE = 0x3C;

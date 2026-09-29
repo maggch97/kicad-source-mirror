@@ -8,8 +8,10 @@
     "boost-bimap",
     "boost-filesystem",
     "boost-functional",
+    "boost-graph",
     "boost-iterator",
     "boost-locale",
+    "boost-math",
     "boost-optional",
     "boost-property-tree",
     "boost-ptr-container",
@@ -30,6 +32,8 @@
       "host": true
     },
     "harfbuzz",
+    "libiconv",
+    "libpng",
     "glm",
     {
       "name": "opencascade",
@@ -59,21 +63,12 @@
       "$comment": "Pinned due to bad vcpkg port updating to a non-real version"
     },
     {
-      "name": "python3",
-      "version": "3.11.5#0"
-    },
-    {
       "name": "wxwidgets-33",
-      "version": "3.3.1#4"
+      "version": "3.3.3#2"
     },
     {
       "name": "ngspice",
       "version": "46#0"
-    },
-    {
-      "name": "protobuf",
-      "version": "3.21.12#4",
-      "$comment": "Pinned until compat in kicad is improved"
     }
   ]
 }

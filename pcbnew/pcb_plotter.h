@@ -20,9 +20,12 @@
 #pragma once
 
 #include <pcb_plot_params.h>
+#include <map>
 #include <vector>
 
 class BOARD;
+class FOOTPRINT;
+class PROJECT;
 class REPORTER;
 class wxFileName;
 class JOB_EXPORT_PCB_PLOT;
@@ -66,6 +69,14 @@ public:
                                    const wxString& aExtension );
 
     /**
+     * True when the board's out-of-date-chart policy regenerated charts during the last
+     * Plot().
+     *
+     * The board changed in memory and no plot writes the board file, so an interactive
+     * caller has to mark the document modified or the regenerated charts are lost on close.
+     */
+
+    /**
      * Translate a JOB to PCB_PLOT_PARAMS
      */
     static void PlotJobToPlotOpts( PCB_PLOT_PARAMS& aOpts, JOB_EXPORT_PCB_PLOT* aJob,
@@ -83,3 +94,16 @@ private:
     LSEQ getPlotSequence( PCB_LAYER_ID aLayerToPlot, LSEQ aPlotWithAllLayersSeq );
 
 };
+
+
+/**
+ * Plot a footprint to an SVG file, with the footprint origin at the SVG origin and the
+ * page/viewBox sized to the footprint's bounding box.
+ *
+ * The footprint is plotted through a temporary board with the footprint placed at its
+ * origin. Fit-to-board is assumed.
+ */
+bool PlotFootprintToSVG( const FOOTPRINT& aFootprint, PROJECT& aProject,
+                         const std::map<wxString, wxString>* aVarOverrides, PCB_PLOT_PARAMS& aPlotOpts,
+                         const LSEQ& aLayersToPlot, const LSEQ& aLayersOnAll, const wxString& aFileName,
+                         REPORTER* aReporter = nullptr );

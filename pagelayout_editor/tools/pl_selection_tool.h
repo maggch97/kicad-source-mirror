@@ -75,6 +75,8 @@ public:
      */
     void SelectPoint( const VECTOR2I& aWhere, bool* aSelectionCancelledFlag = nullptr );
 
+    int SelectAll( const TOOL_EVENT& aEvent );
+
     int ClearSelection( const TOOL_EVENT& aEvent );
     void ClearSelection();
 
@@ -143,7 +145,7 @@ private:
      */
     bool selectionContains( const VECTOR2I& aPoint ) const;
 
-    ///< Set up handlers for various events.
+    /// Set up handlers for various events.
     void setTransitions() override;
 
 private:

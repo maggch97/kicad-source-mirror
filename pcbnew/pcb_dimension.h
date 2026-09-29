@@ -30,6 +30,8 @@
 class LINE_READER;
 class MSG_PANEL_ITEM;
 
+enum class DIM_VALUE_MODE : int;   // defined in constraints/constraint_builder.h
+
 
 /// How to display the units in a dimension's text
 enum class DIM_UNITS_FORMAT
@@ -153,6 +155,27 @@ public:
         SetOverrideText( aValue );
         Update();
     }
+
+    /// Value mode from board state via DimensionValueMode
+    DIM_VALUE_MODE GetValueMode() const;
+
+    /**
+     * Property panel setter for value mode override text flag lives on dimension
+     * length constraint is board state staged via panel commit for shared undo step
+     */
+    void ChangeValueMode( DIM_VALUE_MODE aMode );
+
+    /**
+     * Mode aware value for panel driving shows constraint length arbitrary shows override text
+     * otherwise shows measured value
+     */
+    wxString GetValueFieldText() const;
+
+    /**
+     * Property panel setter for value arbitrary text owned by dimension
+     * driving edits board level constraint via panel driven mirrors geometry and is never written
+     */
+    void ChangeValueFieldText( const wxString& aText );
 
     int GetMeasuredValue() const { return m_measuredValue; }
 
@@ -294,6 +317,7 @@ public:
      * changed.
      *
      * @param axis_pos is the vertical axis position to mirror around.
+     * @param aFlipDirection is the axis (X or Y) to mirror around.
      */
     virtual void Mirror( const VECTOR2I& axis_pos, FLIP_DIRECTION aFlipDirection ) override;
 
@@ -306,13 +330,20 @@ public:
     const BOX2I GetBoundingBox() const override;
 
     std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
-                                              FLASHING aFlash = FLASHING::DEFAULT ) const override;
+                                              FLASHING aFlash = FLASHING::DEFAULT,
+                                              DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const override;
 
     wxString GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const override;
 
     const BOX2I ViewBBox() const override;
 
+    std::vector<int> ViewGetLayers() const override;
+
+    double ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const override;
+
     void ClearRenderCache() override;
+
+    double GetCoverageArea( int aTextMargin ) const override;
 
     void TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance,
                                   int aError, ERROR_LOC aErrorLoc,
@@ -349,7 +380,7 @@ protected:
      * Draws an arrow and updates the shape container.
      * example arrow 0Deg tail:4  (---->)
      *
-     * @param startPoint arrow point.
+     * @param aStartPoint arrow point.
      * @param anAngle arrow angle.
      * @param aLength arrow tail length.
      */
@@ -380,7 +411,7 @@ protected:
     VECTOR2I m_start; ///< Start, FP-relative when in a footprint, board absolute otherwise.
     VECTOR2I m_end;   ///< End, FP-relative when in a footprint, board absolute otherwise.
 
-    ///< Internal cache of drawn shapes
+    /// Internal cache of drawn shapes
     std::vector<std::shared_ptr<SHAPE>> m_shapes;
 
     bool       m_inClearRenderCache;      ///< re-entrancy guard
@@ -464,6 +495,7 @@ public:
      * Update the stored height basing on points coordinates.
      *
      * @param aCrossbarStart is the start point of the crossbar.
+     * @param aCrossbarEnd is the end point of the crossbar.
      */
     void UpdateHeight( const VECTOR2I& aCrossbarStart, const VECTOR2I& aCrossbarEnd );
 

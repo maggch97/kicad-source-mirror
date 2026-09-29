@@ -28,6 +28,8 @@
 #include <wildcards_and_files_ext.h>
 #include <wx/filename.h>
 
+#include <json_common.h>
+
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -370,6 +372,137 @@ BOOST_AUTO_TEST_CASE( UnloadProjectSavesToOwnDirectory )
     std::string savedA = readFile( proAPath );
     BOOST_CHECK_MESSAGE( savedA.find( "OWNER" ) == std::string::npos,
                          "active project's file must not receive the unloaded project's data" );
+}
+
+
+// Switching projects must replace the active project even when a passive one sorts first
+BOOST_AUTO_TEST_CASE( LoadActiveProjectReplacesActiveNotPassive )
+{
+    auto projectPath = [&]( const std::string& aName )
+    {
+        fs::path dir = m_tempDir / aName;
+        fs::create_directories( dir );
+        return wxString( ( dir / ( aName + ".kicad_pro" ) ).string() );
+    };
+
+    const wxString active = projectPath( "z_active" );
+    const wxString passive = projectPath( "a_passive" );
+    const wxString next = projectPath( "m_next" );
+
+    SETTINGS_MANAGER mgr;
+
+    mgr.LoadProject( active, true );
+    mgr.LoadProject( passive, false );
+    mgr.LoadProject( next, true );
+
+    BOOST_CHECK_EQUAL( mgr.Prj().GetProjectFullName(), next );
+    BOOST_CHECK( mgr.GetProject( active ) == nullptr );
+    BOOST_CHECK( mgr.GetProject( passive ) != nullptr );
+}
+
+
+/**
+ * Opening a project and saving it without any user change must not rewrite the .kicad_pro.
+ *
+ * A file written by an older build omits parameters added since, so on load those parameters
+ * hold their defaults while being absent from the file. Store() once counted every such absent
+ * parameter as modified, which resurrected the missing keys and rewrote an otherwise-unchanged
+ * project (and its .kicad_prl), spuriously touching version control and file timestamps.
+ *
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24402
+ */
+BOOST_AUTO_TEST_CASE( NoRewriteWhenUnchanged )
+{
+    fs::path projectDir = m_tempDir / "unchanged_project";
+    fs::create_directories( projectDir );
+
+    fs::path proPath = projectDir / "unchanged_project.kicad_pro";
+
+    // Produce a canonical, fully-populated current-version file with KiCad's own writer so the
+    // reload round-trip is otherwise clean.
+    {
+        std::ofstream seed( proPath );
+        seed << R"({"meta":{"version":3}})";
+        seed.close();
+
+        SETTINGS_MANAGER mgr;
+        BOOST_REQUIRE( mgr.LoadProject( wxString( proPath.string() ), true ) );
+        BOOST_REQUIRE( mgr.SaveProject() );
+        mgr.UnloadProject( &mgr.Prj(), false );
+    }
+
+    auto readFile = []( const fs::path& aPath )
+    {
+        std::ifstream in( aPath );
+        std::stringstream buffer;
+        buffer << in.rdbuf();
+        return buffer.str();
+    };
+
+    // Files saved before ipc2581 (PARAM) and bus_aliases (PARAM_LAMBDA) existed omit both keys, and a
+    // no-op load must not resurrect their defaults
+    {
+        nlohmann::json js = nlohmann::json::parse( readFile( proPath ) );
+        js["board"].erase( "ipc2581" );
+        js["schematic"].erase( "bus_aliases" );
+
+        std::ofstream out( proPath );
+        out << std::setw( 2 ) << js << std::endl;
+        out.close();
+    }
+
+    std::string before = readFile( proPath );
+    BOOST_REQUIRE( before.find( "ipc2581" ) == std::string::npos );
+    BOOST_REQUIRE( before.find( "bus_aliases" ) == std::string::npos );
+
+    SETTINGS_MANAGER mgr;
+    BOOST_REQUIRE( mgr.LoadProject( wxString( proPath.string() ), true ) );
+
+    PROJECT_FILE& projectFile = mgr.Prj().GetProjectFile();
+
+    // The auto-save path must decline to write when nothing changed.
+    BOOST_CHECK( !projectFile.SaveToFile( wxString( projectDir.string() ) ) );
+
+    // And the on-disk file must be byte-for-byte unchanged.
+    BOOST_CHECK_EQUAL( before, readFile( proPath ) );
+
+    // An explicitly cleared alias table must survive reopening even when the old file omitted it
+    mgr.UnloadProject( &mgr.Prj(), false );
+    BOOST_REQUIRE( mgr.LoadProject( wxString( proPath.string() ), true ) );
+    PROJECT_FILE& edited = mgr.Prj().GetProjectFile();
+    BOOST_REQUIRE( !edited.GetJson( "schematic.bus_aliases" ) );
+    edited.m_BusAliasesDefined = true;
+    BOOST_REQUIRE( edited.SaveToFile( wxString( projectDir.string() ) ) );
+    nlohmann::json saved = nlohmann::json::parse( readFile( proPath ) );
+    BOOST_CHECK( saved["schematic"]["bus_aliases"].is_object() );
+    BOOST_CHECK( saved["schematic"]["bus_aliases"].empty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( AliasMigrationPreservesNonemptyDefinitions )
+{
+    const fs::path projectPath = m_tempDir / "aliases.kicad_pro";
+    const nlohmann::json aliases = { { "USB", { "D+", "D-" } } };
+
+    {
+        std::ofstream output( projectPath );
+        output << nlohmann::json( { { "meta", { { "version", 3 } } },
+                                   { "schematic", { { "bus_aliases", aliases } } } } ).dump( 2 );
+        output.close();
+        BOOST_REQUIRE( output.good() );
+    }
+
+    SETTINGS_MANAGER manager;
+    BOOST_REQUIRE( manager.LoadProject( wxString( projectPath.string() ), true ) );
+    PROJECT_FILE& project = manager.Prj().GetProjectFile();
+    BOOST_REQUIRE( project.m_BusAliasesDefined );
+    BOOST_REQUIRE_EQUAL( project.m_BusAliases.size(), 1 );
+    BOOST_CHECK( project.m_BusAliases.at( "USB" ) == std::vector<wxString>( { "D+", "D-" } ) );
+    BOOST_REQUIRE( project.SaveToFile( wxString( m_tempDir.string() ) ) );
+    std::ifstream input( projectPath );
+    const nlohmann::json saved = nlohmann::json::parse( input );
+    BOOST_CHECK_EQUAL( saved["meta"]["version"].get<int>(), 4 );
+    BOOST_CHECK( saved["schematic"]["bus_aliases"] == aliases );
 }
 
 

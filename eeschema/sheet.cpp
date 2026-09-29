@@ -18,6 +18,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <map>
+#include <core/utf8.h>
 #include <sch_draw_panel.h>
 #include <common.h>
 #include <confirm.h>
@@ -178,7 +180,7 @@ bool SCH_EDIT_FRAME::ChangeSheetFile( SCH_SHEET* aSheet, const wxString& aNewFil
     SCHEMATIC&  schematic = Schematic();
 
     // Resolve text variables before touching disk. The field keeps the raw text for portability.
-    wxFileName  sheetFileName( ExpandTextVars( aNewFilename, &schematic.Project() ) );
+    wxFileName  sheetFileName( ExpandTextVars( aNewFilename, &schematic.Project(), INTERNAL ) );
     SCH_SCREEN* currentScreen = GetCurrentSheet().LastScreen();
 
     wxCHECK( currentScreen, false );
@@ -438,16 +440,21 @@ bool SCH_EDIT_FRAME::LoadSheetFromFile( SCH_SHEET* aSheet, SCH_SHEET_PATH* aCurr
 
     wxString fullFilename = fileName.GetFullPath();
 
+    // The caller owns the sheet a plugin returns here, so name the context. An importer that can
+    // only adopt a whole document into the schematic cannot satisfy that and refuses instead.
+    std::map<std::string, UTF8> loadProps;
+    loadProps["hierarchical_sheet_load"] = "1";
+
     try
     {
         if( aSheet->GetScreen() != nullptr )
         {
-            tmpSheet.reset( pi->LoadSchematicFile( fullFilename, &Schematic() ) );
+            tmpSheet.reset( pi->LoadSchematicFile( fullFilename, &Schematic(), nullptr, &loadProps ) );
         }
         else
         {
             tmpSheet->SetFileName( fullFilename );
-            pi->LoadSchematicFile( fullFilename, &Schematic(), tmpSheet.get() );
+            pi->LoadSchematicFile( fullFilename, &Schematic(), tmpSheet.get(), &loadProps );
         }
 
         if( !pi->GetError().IsEmpty() )
@@ -862,6 +869,27 @@ bool SCH_EDIT_FRAME::EditSheetProperties( SCH_SHEET* aSheet, SCH_SHEET_PATH* aHi
 }
 
 
+class PRINT_TITLEBLOCK_CONTEXT
+{
+public:
+    PRINT_TITLEBLOCK_CONTEXT( SCH_EDIT_FRAME* aFrame, bool aPrintTitleBlock ) :
+            m_frame( aFrame )
+    {
+        m_originalValue = m_frame->eeconfig()->m_Printing.title_block;
+        m_frame->eeconfig()->m_Printing.title_block = aPrintTitleBlock;
+    }
+
+    ~PRINT_TITLEBLOCK_CONTEXT()
+    {
+        m_frame->eeconfig()->m_Printing.title_block = m_originalValue;
+    }
+
+private:
+    SCH_EDIT_FRAME*  m_frame;
+    bool             m_originalValue;
+};
+
+
 void SCH_EDIT_FRAME::DrawCurrentSheetToClipboard()
 {
     wxRect       drawArea;
@@ -921,15 +949,11 @@ void SCH_EDIT_FRAME::DrawCurrentSheetToClipboard()
     {
         dc.SetUserScale( 1.0, 1.0 );
         SCH_PRINTOUT printout( this, wxEmptyString );
-        // Ensure title block will be when printed on clipboard, regardless
-        // the current Cairo print option
-        EESCHEMA_SETTINGS* eecfg = eeconfig();
-        bool print_tb_opt = eecfg->m_Printing.title_block;
-        eecfg->m_Printing.title_block = true;
-        bool success = printout.PrintPage( GetScreen(), cfg->GetPrintDC(), false );
-        eecfg->m_Printing.title_block = print_tb_opt;
 
-        if( !success )
+        // Ensure title block will be when printed on clipboard, regardless of the current Cairo print option
+        PRINT_TITLEBLOCK_CONTEXT raii( this, true );
+
+        if( !printout.PrintPage( GetScreen(), cfg->GetPrintDC(), false ) )
             wxLogMessage( _( "Cannot create the schematic image") );
     }
     catch( ... )

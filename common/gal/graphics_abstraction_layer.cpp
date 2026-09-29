@@ -31,7 +31,9 @@
 
 #include <math/util.h>      // for KiROUND
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 using namespace KIGFX;
 
@@ -246,16 +248,51 @@ double GAL::computeMinGridSpacing() const
 }
 
 
+void GAL::SetGridSources( std::vector<GRID_SOURCE> aSources )
+{
+    std::stable_sort( aSources.begin(), aSources.end(),
+                      []( const GRID_SOURCE& a, const GRID_SOURCE& b )
+                      {
+                          return a.TakesPrecedenceOver( b );
+                      } );
+
+    m_gridSources = std::move( aSources );
+}
+
+
+BOX2D GAL::gridScreenBBox( const GRID_SOURCE& aSrc ) const
+{
+    const VECTOR2D corners[4] = { m_screenWorldMatrix * VECTOR2D( 0, 0 ),
+                                  m_screenWorldMatrix * VECTOR2D( m_screenSize.x, 0 ),
+                                  m_screenWorldMatrix * VECTOR2D( 0, m_screenSize.y ),
+                                  m_screenWorldMatrix * VECTOR2D( m_screenSize ) };
+
+    const double co = std::cos( aSrc.orientation );
+    const double so = std::sin( aSrc.orientation );
+
+    BOX2D bbox;
+
+    for( const VECTOR2D& w : corners )
+    {
+        const VECTOR2D off = w - aSrc.origin;
+        bbox.Merge( VECTOR2D( co * off.x - so * off.y, so * off.x + co * off.y ) );
+    }
+
+    return bbox;
+}
+
+
 VECTOR2D GAL::GetGridPoint( const VECTOR2D& aPoint ) const
 {
-#if 0
-    // This old code expects a non zero grid size, which can be wrong here.
-    return VECTOR2D( KiROUND( ( aPoint.x - m_gridOffset.x ) / m_gridSize.x ) *
-                     m_gridSize.x + m_gridOffset.x,
-                     KiROUND( ( aPoint.y - m_gridOffset.y ) / m_gridSize.y ) *
-                     m_gridSize.y + m_gridOffset.y );
-#else
-    // if grid size == 0.0 there is no grid, so use aPoint as grid reference position
+    // m_gridSources is precedence-ordered by SetGridSources, so the first cursor-snap
+    // source covering aPoint is the one that owns it.
+    for( const GRID_SOURCE& src : m_gridSources )
+    {
+        if( src.snapCursor && src.Contains( aPoint ) )
+            return src.Snap( aPoint );
+    }
+
+    // Display-grid fallback.  Grid size 0 = no grid, return aPoint unchanged.
     double cx = m_gridSize.x > 0.0 ? KiROUND( ( aPoint.x - m_gridOffset.x ) / m_gridSize.x ) *
                 m_gridSize.x + m_gridOffset.x
                                    : aPoint.x;
@@ -264,7 +301,6 @@ VECTOR2D GAL::GetGridPoint( const VECTOR2D& aPoint ) const
                                    : aPoint.y;
 
     return VECTOR2D( cx, cy );
-#endif
 }
 
 

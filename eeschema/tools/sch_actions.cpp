@@ -24,7 +24,9 @@
 #include <core/typeinfo.h>
 #include <layer_ids.h>
 #include <sch_bitmap.h>
+#include <sch_shape.h>
 #include <sch_line_wire_bus_tool.h>
+#include <tool/arc_draw_mode.h>
 #include <tool/tool_action.h>
 
 class DESIGN_BLOCK;
@@ -192,6 +194,20 @@ TOOL_ACTION SCH_ACTIONS::saveLibraryAs( TOOL_ACTION_ARGS()
         .LegacyHotkeyName( "Save As" )
         .FriendlyName( _( "Save Library As..." ) )
         .Tooltip( _( "Save the current library to a new file" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::saveLibraryAsPacked( TOOL_ACTION_ARGS()
+        .Name( "eeschema.SymbolLibraryControl.saveLibraryAsPacked" )
+        .Scope( AS_GLOBAL )
+        .LegacyHotkeyName( "Save As Packed" )
+        .FriendlyName( _( "Save Library As Packed..." ) )
+        .Tooltip( _( "Save the current unpacked library to a new packed library file" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::saveLibraryAsUnpacked( TOOL_ACTION_ARGS()
+        .Name( "eeschema.SymbolLibraryControl.saveLibraryAsUnpacked" )
+        .Scope( AS_GLOBAL )
+        .LegacyHotkeyName( "Save As Unpacked" )
+        .FriendlyName( _( "Save Library As Unpacked..." ) )
+        .Tooltip( _( "Save the current packed library to a new unpacked library folder" ) ) );
 
 TOOL_ACTION SCH_ACTIONS::compareLibraryWithFile( TOOL_ACTION_ARGS()
         .Name( "eeschema.SymbolLibraryControl.CompareLibraryWithFile" )
@@ -760,6 +776,71 @@ TOOL_ACTION SCH_ACTIONS::drawArc( TOOL_ACTION_ARGS()
         .Flags( AF_ACTIVATE )
         .Parameter( SHAPE_T::ARC ) );
 
+TOOL_ACTION SCH_ACTIONS::drawArcCenter( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawArcCenter" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Center, Start, End" ) )
+        .Tooltip( _( "Draw arcs by clicking the center, the start point, then the end point" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_center )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::CENTER_START_END ) );
+
+TOOL_ACTION SCH_ACTIONS::drawArcStartEndMid( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawArcStartEndMid" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Start, End, Midpoint" ) )
+        .Tooltip( _( "Draw arcs by clicking the start point, the end point, then a point on the arc" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_start_end_mid )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::START_END_MID ) );
+
+TOOL_ACTION SCH_ACTIONS::drawArcStartEndCenter( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawArcStartEndCenter" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Start, End, Center" ) )
+        .Tooltip( _( "Draw arcs by clicking the start point, the end point, then the center" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_start_end_center )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::START_END_CENTER ) );
+
+TOOL_ACTION SCH_ACTIONS::drawArcTangent( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawArcTangent" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Tangent" ) )
+        .Tooltip( _( "Draw arcs tangent to the previous arc or to the line or arc ending at the start point" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_tangent )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::TANGENT ) );
+
+TOOL_ACTION SCH_ACTIONS::drawArcStartDirEnd( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawArcStartDirEnd" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Start, Direction, End" ) )
+        .Tooltip( _( "Draw arcs by clicking the start point, a point giving the start direction, then the end point" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_start_dir_end )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::START_DIR_END ) );
+
+const TOOL_ACTION& SCH_ACTIONS::DrawArcForMode( ARC_DRAW_MODE aMode )
+{
+    switch( aMode )
+    {
+    case ARC_DRAW_MODE::CENTER_START_END: return drawArcCenter;
+    case ARC_DRAW_MODE::START_END_MID:    return drawArcStartEndMid;
+    case ARC_DRAW_MODE::START_END_CENTER: return drawArcStartEndCenter;
+    case ARC_DRAW_MODE::TANGENT:          return drawArcTangent;
+    case ARC_DRAW_MODE::START_DIR_END:    return drawArcStartDirEnd;
+    }
+
+    return drawArcCenter;
+}
+
+
 TOOL_ACTION SCH_ACTIONS::drawBezier( TOOL_ACTION_ARGS()
         .Name( "eeschema.InteractiveDrawing.drawBezier" )
         .Scope( AS_GLOBAL )
@@ -768,6 +849,15 @@ TOOL_ACTION SCH_ACTIONS::drawBezier( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::add_bezier )
         .Flags( AF_ACTIVATE )
         .Parameter( SHAPE_T::BEZIER ) );
+
+TOOL_ACTION SCH_ACTIONS::drawPolygon( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawPolygon" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Polygons" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_graphical_polygon )
+        .Flags( AF_ACTIVATE )
+        .Parameter( SHAPE_T::POLY ) );
 
 TOOL_ACTION SCH_ACTIONS::placeImage( TOOL_ACTION_ARGS()
         .Name( "eeschema.InteractiveDrawing.placeImage" )
@@ -786,13 +876,6 @@ TOOL_ACTION SCH_ACTIONS::drawRuleArea( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::add_keepout_area )
         .Flags( AF_ACTIVATE )
         .Parameter( SHAPE_T::RECTANGLE ) );
-
-TOOL_ACTION SCH_ACTIONS::deleteLastPoint( TOOL_ACTION_ARGS()
-        .Name( "eeschema.InteractiveDrawing.deleteLastPoint" )
-        .Scope( AS_CONTEXT )
-        .FriendlyName( _( "Delete Last Point" ) )
-        .Tooltip( _( "Delete the last point added to the current item" ) )
-        .Icon( BITMAPS::undo ) );
 
 TOOL_ACTION SCH_ACTIONS::closeOutline( TOOL_ACTION_ARGS()
         .Name( "eeschema.InteractiveDrawing.closeOutline" )
@@ -968,6 +1051,20 @@ TOOL_ACTION SCH_ACTIONS::updateSymbol( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Update Symbol..." ) )
         .Tooltip( _( "Update symbol to include any changes from the library" ) )
         .Icon( BITMAPS::refresh ) );
+
+TOOL_ACTION SCH_ACTIONS::setVariantSymbol( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveEdit.setVariantSymbol" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Set Variant Symbol..." ) )
+        .Tooltip( _( "Assign an alternate library symbol for this design variant" ) )
+        .Icon( BITMAPS::exchange ) );
+
+TOOL_ACTION SCH_ACTIONS::clearVariantSymbol( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveEdit.clearVariantSymbol" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Clear Variant Symbol" ) )
+        .Tooltip( _( "Remove the variant symbol override and revert to the base symbol" ) )
+        .Icon( BITMAPS::cancel ) );
 
 TOOL_ACTION SCH_ACTIONS::assignNetclass( TOOL_ACTION_ARGS()
         .Name( "eeschema.InteractiveEdit.assignNetclass" )
@@ -1837,6 +1934,12 @@ TOOL_ACTION SCH_ACTIONS::toggleDottedSecondary( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Dotted Current/Phase" ) )
         .Tooltip( _( "Draw secondary signal trace (current or phase) with a dotted line" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::toggleSmithChart( TOOL_ACTION_ARGS()
+        .Name( "eeschema.Simulator.toggleSmithChart" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Smith Chart" ) )
+        .Tooltip( _( "Show S-parameter results on a Smith chart" ) ) );
 
 TOOL_ACTION SCH_ACTIONS::toggleDarkModePlots( TOOL_ACTION_ARGS()
         .Name( "eeschema.Simulator.toggleDarkModePlots" )

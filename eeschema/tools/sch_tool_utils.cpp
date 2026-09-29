@@ -50,14 +50,14 @@ wxString GetSchItemAsText( const SCH_ITEM& aItem )
     case SCH_SHEET_PIN_T:
     {
         const SCH_TEXT& text = static_cast<const SCH_TEXT&>( aItem );
-        return text.GetShownText( true );
+        return text.GetShownText( FOR_CANVAS );
     }
 
     case SCH_FIELD_T:
     {
         // Goes via EDA_TEXT
         const SCH_FIELD& field = static_cast<const SCH_FIELD&>( aItem );
-        return field.GetShownText( true );
+        return field.GetShownText( FOR_CANVAS );
     }
 
     case SCH_TEXTBOX_T:
@@ -68,7 +68,7 @@ wxString GetSchItemAsText( const SCH_ITEM& aItem )
 
         // Call the correct GetShownText overload with nullptr for settings/path and aDepth=0
         // This ensures proper variable expansion and escape marker conversion
-        return textbox.GetShownText( nullptr, nullptr, true, 0 );
+        return textbox.GetShownText( nullptr, nullptr, FOR_CANVAS );
     }
 
     case SCH_PIN_T:
@@ -90,7 +90,7 @@ wxString GetSchItemAsText( const SCH_ITEM& aItem )
             for( int col = 0; col < table.GetColCount(); ++col )
             {
                 const SCH_TABLECELL* cell = table.GetCell( row, col );
-                s << cell->GetShownText( true );
+                s << cell->GetShownText( FOR_CANVAS );
 
                 if( col < table.GetColCount() - 1 )
                 {
@@ -128,13 +128,49 @@ wxString GetSelectedItemsAsText( const SELECTION& aSel )
             itemText.Trim( false ).Trim( true );
 
             if( !itemText.IsEmpty() )
-            {
-                itemTexts.Add( std::move( itemText ) );
-            }
+                itemTexts.Add( itemText );
         }
     }
 
     return wxJoin( itemTexts, '\n', '\0' );
+}
+
+
+template <typename T>
+static std::vector<SCH_ITEM*> flattenGroups( const T& aItems )
+{
+    std::vector<SCH_ITEM*> flattened;
+    std::vector<SCH_ITEM*> toVisit;
+
+    for( EDA_ITEM* item : aItems )
+        toVisit.push_back( static_cast<SCH_ITEM*>( item ) );
+
+    while( !toVisit.empty() )
+    {
+        SCH_ITEM* item = toVisit.back();
+        toVisit.pop_back();
+        flattened.push_back( item );
+
+        if( item->Type() == SCH_GROUP_T )
+        {
+            for( EDA_ITEM* child : static_cast<SCH_GROUP*>( item )->GetItems() )
+                toVisit.push_back( static_cast<SCH_ITEM*>( child ) );
+        }
+    }
+
+    return flattened;
+}
+
+
+std::vector<SCH_ITEM*> FlattenGroups( const EDA_ITEMS& aItems )
+{
+    return flattenGroups( aItems );
+}
+
+
+std::vector<SCH_ITEM*> FlattenGroups( const std::deque<EDA_ITEM*>& aItems )
+{
+    return flattenGroups( aItems );
 }
 
 
@@ -404,7 +440,7 @@ std::set<wxString> GetSheetNamesFromPaths( const std::set<wxString>& aSheetPaths
                         if( !nameField )
                             continue;
 
-                        wxString name = nameField->GetShownText( false );
+                        wxString name = nameField->GetShownText( FOR_NETNAME );
 
                         if( name.IsEmpty() )
                             continue;
@@ -444,7 +480,7 @@ wxString UniqueSheetName( SCH_SCREEN* aScreen, const wxString& aBaseName )
     std::set<wxString> existing;
 
     for( SCH_ITEM* item : aScreen->Items().OfType( SCH_SHEET_T ) )
-        existing.insert( static_cast<SCH_SHEET*>( item )->GetShownName( false ).Lower() );
+        existing.insert( static_cast<SCH_SHEET*>( item )->GetShownName( INTERNAL ).Lower() );
 
     if( !existing.count( aBaseName.Lower() ) )
         return aBaseName;
@@ -483,4 +519,26 @@ wxString UniqueGroupName( SCH_SCREEN* aScreen, const wxString& aBaseName )
     }
 
     return aBaseName;
+}
+
+
+void PrunePastedSymbolInstances( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSchematic )
+{
+    wxCHECK( aSymbol && aSchematic.IsValid(), /* void */ );
+
+    const wxString projectName = aSchematic.Project().GetProjectName();
+
+    std::vector<KIID_PATH> pathsToRemove;
+
+    // Claiming rewrites a field in place, so only the removals have to wait for the walk to end
+    for( const SCH_SYMBOL_INSTANCE& instance : aSymbol->GetInstances() )
+    {
+        if( !aSchematic.IsInstancePathInProject( instance.m_Path ) )
+            pathsToRemove.emplace_back( instance.m_Path );
+        else if( instance.m_ProjectName != projectName )
+            aSymbol->SetInstanceProjectName( instance.m_Path, projectName );
+    }
+
+    for( const KIID_PATH& path : pathsToRemove )
+        aSymbol->RemoveInstance( path );
 }

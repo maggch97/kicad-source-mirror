@@ -79,7 +79,8 @@ public:
      * Update the score for this part. This is accumulative - it will be
      * called once per search term.
      *
-     * @param aMatcher  an EDA_COMBINED_MATCHER initialized with the search term
+     * @param aMatchers an EDA_COMBINED_MATCHER initialized with the search term.
+     * @param aFilter is an optional filter callback.
      */
     virtual void UpdateScore( const std::vector<std::unique_ptr<EDA_COMBINED_MATCHER>>& aMatchers,
                               std::function<bool( LIB_TREE_NODE& aNode )>* aFilter ) = 0;
@@ -103,8 +104,7 @@ public:
     /**
      * Compare two nodes. Returns true if aNode1 < aNode2.
      */
-    static bool Compare( LIB_TREE_NODE const& aNode1, LIB_TREE_NODE const& aNode2,
-                         bool aUseScores );
+    static bool Compare( LIB_TREE_NODE const& aNode1, LIB_TREE_NODE const& aNode2, bool aUseScores );
 
     LIB_TREE_NODE();
     virtual ~LIB_TREE_NODE() {}
@@ -118,38 +118,35 @@ public:
         INVALID
     };
 
-    typedef std::vector<std::unique_ptr<LIB_TREE_NODE>> PTR_VECTOR;
-
-    LIB_TREE_NODE*  m_Parent;     // Parent node or null
-    PTR_VECTOR      m_Children;   // List of child nodes
-    enum TYPE       m_Type;       // Node type
+    LIB_TREE_NODE*                               m_Parent;     // Parent node or null
+    std::vector<std::unique_ptr<LIB_TREE_NODE>>  m_Children;   // List of child nodes
+    enum TYPE                                    m_Type;       // Node type
 
     /**
-     * The rank of the item before any search terms are applied. This is
-     * a fairly expensive sort (involving string compares) so it helps to
-     * store the result of that sort.
+     * The rank of the item before any search terms are applied. This is a fairly expensive sort (involving
+     * string compares) so it helps to store the result of that sort.
      */
-    int         m_IntrinsicRank;
+    int                          m_IntrinsicRank;
 
-    int         m_Score;       // The score of an item resulting from the search algorithm.
-    bool        m_ExactMatch;  // True if a search term exactly matched one of this node's fields.
-    bool        m_Pinned;      // Item should appear at top when there is no search string
+    int                          m_Score;       // The score of an item resulting from the search algorithm.
+    bool                         m_ExactMatch;  // True if a search term exactly matched one of this node's fields.
+    bool                         m_Pinned;      // Item should appear at top when there is no search string
 
-    wxString    m_Name;        // Actual name of the part
-    wxString    m_Desc;        // Description to be displayed
-    wxString    m_Footprint;   // Footprint ID as a string (ie: the footprint field text)
-    int         m_PinCount;    // Pin count from symbol, or unique pad count from footprint
+    wxString                     m_Name;        // Actual name of the part
+    wxString                     m_Desc;        // Description to be displayed
+    wxString                     m_Footprint;   // Footprint ID as a string (ie: the footprint field text)
+    int                          m_PinCount;    // Pin count from symbol, or unique pad count from footprint
 
     std::vector<SEARCH_TERM>     m_SearchTerms;    /// List of weighted search terms
     std::map<wxString, wxString> m_Fields;         /// @see LIB_TREE_ITEMS::GetChooserFields
 
-    LIB_ID      m_LibId;       // LIB_ID determined by the parent library nickname and alias name.
-    int         m_Unit;        // Actual unit, or zero
-    bool        m_IsRoot;      // Indicates if the symbol is a root symbol instead of an alias.
-    bool        m_IsPower;     // Indicates if the symbol is a local or global power symbol
+    LIB_ID                       m_LibId;       // LIB_ID determined by the parent library nickname and alias name.
+    int                          m_Unit;        // Actual unit, or zero
+    bool                         m_IsRoot;      // Indicates if the symbol is a root symbol instead of an alias.
+    bool                         m_IsPower;     // Indicates if the symbol is a local or global power symbol
 
-    bool        m_IsRecentlyUsedGroup;
-    bool        m_IsAlreadyPlacedGroup;
+    bool                         m_IsRecentlyUsedGroup;
+    bool                         m_IsAlreadyPlacedGroup;
 
 protected:
     std::vector<SEARCH_TERM> m_sourceSearchTerms;
@@ -204,12 +201,12 @@ public:
      *
      * All fields will be populated from the LIB_ALIAS, including children
      * (unit nodes will be generated automatically).  This does not keep
-     * the pointer to the #LIB_ALIAS object because at any time, a #LIB_ALIAS
+     * the pointer to the #LIB_SYMBOL object because at any time, a #LIB_SYMBOL
      * can be remove from a library which will result in an invalid pointer.
      * The alias must be resolved at the time of use.  Anything else is a bug.
      *
-     * @param aParent   parent node, should be a CMP_TREE_NODE_LIB
-     * @param aItem     LIB_COMPONENT to populate the node.
+     * @param aParent   parent node, should be a #LIB_TREE_NODE
+     * @param aItem     #LIB_TREE_ITEM to populate the node.
      */
     LIB_TREE_NODE_ITEM( LIB_TREE_NODE* aParent, LIB_TREE_ITEM* aItem );
 
@@ -218,9 +215,6 @@ public:
      */
     void Update( LIB_TREE_ITEM* aItem );
 
-    /**
-     * Perform the actual search.
-     */
     void UpdateScore( const std::vector<std::unique_ptr<EDA_COMBINED_MATCHER>>& aMatchers,
                       std::function<bool( LIB_TREE_NODE& aNode )>* aFilter ) override;
 
@@ -259,7 +253,7 @@ public:
     /**
      * Construct a new alias node, add it to this library, and return it.
      *
-     * @param aItem    LIB_COMPONENT to provide data
+     * @param aItem is the #LIB_TREE_ITEM to add to this node.
      */
     LIB_TREE_NODE_ITEM& AddItem( LIB_TREE_ITEM* aItem );
 

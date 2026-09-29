@@ -20,14 +20,17 @@
  */
 
 #include "properties_panel.h"
+#include <bitmaps.h>
 #include <tool/selection.h>
 #include <eda_base_frame.h>
 #include <eda_item.h>
+#include <i18n_utility.h>
 #include <import_export.h>
 #include <pgm_base.h>
 #include <properties/pg_cell_renderer.h>
 #include <properties/property.h>
 #include <properties/property_mgr.h>
+#include <widgets/bitmap_button.h>
 
 #include <algorithm>
 #include <iterator>
@@ -38,6 +41,8 @@
 #include <wx/settings.h>
 #include <wx/stattext.h>
 #include <wx/propgrid/advprops.h>
+#include <wx/menu.h>
+#include <wx/utils.h>
 
 
 // This is provided by wx >3.3.0
@@ -45,11 +50,38 @@
 extern APIIMPORT wxPGGlobalVarsClass* wxPGGlobalVars;
 #endif
 
+
+class PROPERTIES_PANEL_GRID : public wxPropertyGrid
+{
+public:
+    PROPERTIES_PANEL_GRID( wxWindow* aParent ) :
+            wxPropertyGrid( aParent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxPG_DEFAULT_STYLE | wxPG_TOOLTIPS )
+    {
+    }
+
+    void ScrollWindow( int aDx, int aDy, const wxRect* aRect = nullptr ) override
+    {
+        wxPropertyGrid::ScrollWindow( aDx, aDy, aRect );
+
+        if( PROPERTIES_PANEL* panel = static_cast<PROPERTIES_PANEL*>( GetParent() ) )
+            panel->positionCategoryButtons();
+    }
+
+    /// True while a wxPropertyGrid event (e.g. right-click) is being processed.
+    bool IsProcessingWxPGEvent() const { return m_processedEvent != nullptr; }
+
+#if wxUSE_STATUSBAR
+    wxStatusBar* GetStatusBar() override { return nullptr; }
+#endif
+};
+
+
 PROPERTIES_PANEL::PROPERTIES_PANEL( wxWindow* aParent, EDA_BASE_FRAME* aFrame ) :
         wxPanel( aParent ),
         m_SuppressGridChangeEvents( 0 ),
         m_frame( aFrame ),
-        m_splitter_key_proportion( -1 )
+        m_splitter_key_proportion( -1 ),
+        m_deferredRebuildTimer( this )
 {
     wxBoxSizer* mainSizer = new wxBoxSizer( wxVERTICAL );
 
@@ -84,9 +116,8 @@ PROPERTIES_PANEL::PROPERTIES_PANEL( wxWindow* aParent, EDA_BASE_FRAME* aFrame ) 
     m_caption = new wxStaticText( this, wxID_ANY, _( "No objects selected" ) );
     mainSizer->Add( m_caption, 0, wxALL | wxEXPAND, 5 );
 
-    m_grid = new wxPropertyGrid( this );
+    m_grid = new PROPERTIES_PANEL_GRID( this );
     m_grid->SetUnspecifiedValueAppearance( wxPGCell( wxT( "<...>" ) ) );
-    m_grid->SetExtraStyle( wxPG_EX_HELP_AS_TOOLTIPS );
 
 #if wxCHECK_VERSION( 3, 3, 0 )
     m_grid->SetValidationFailureBehavior( wxPGVFBFlags::MarkCell );
@@ -128,6 +159,26 @@ PROPERTIES_PANEL::PROPERTIES_PANEL( wxWindow* aParent, EDA_BASE_FRAME* aFrame ) 
 
     m_grid->CenterSplitter();
 
+    // Actual edits are allowed or vetoed per-property based on whether or not it's
+    // something where the label/key should be editable (user fields, custom properties, ...)
+    m_grid->MakeColumnEditable( 0 );
+
+    Bind( wxEVT_PG_ITEM_EXPANDED,
+          [&]( wxPropertyGridEvent& )
+          {
+              positionCategoryButtons();
+          } );
+
+    Bind( wxEVT_PG_ITEM_COLLAPSED,
+          [&]( wxPropertyGridEvent& )
+          {
+              positionCategoryButtons();
+          } );
+
+    Bind( wxEVT_PG_LABEL_EDIT_BEGIN, &PROPERTIES_PANEL::onLabelEditBegin, this );
+    Bind( wxEVT_PG_LABEL_EDIT_ENDING, &PROPERTIES_PANEL::onLabelEditEnding, this );
+    Bind( wxEVT_PG_RIGHT_CLICK, &PROPERTIES_PANEL::onRightClick, this );
+
     Connect( wxEVT_CHAR_HOOK, wxKeyEventHandler( PROPERTIES_PANEL::onCharHook ), nullptr, this );
     Connect( wxEVT_PG_CHANGED, wxPropertyGridEventHandler( PROPERTIES_PANEL::valueChanged ), nullptr, this );
     Connect( wxEVT_PG_CHANGING, wxPropertyGridEventHandler( PROPERTIES_PANEL::valueChanging ), nullptr, this );
@@ -137,6 +188,7 @@ PROPERTIES_PANEL::PROPERTIES_PANEL( wxWindow* aParent, EDA_BASE_FRAME* aFrame ) 
           [&]( wxPropertyGridEvent& )
           {
               m_splitter_key_proportion = static_cast<float>( m_grid->GetSplitterPosition() ) / m_grid->GetSize().x;
+              positionCategoryButtons();
           } );
 
     Bind( wxEVT_SIZE,
@@ -145,11 +197,19 @@ PROPERTIES_PANEL::PROPERTIES_PANEL( wxWindow* aParent, EDA_BASE_FRAME* aFrame ) 
               CallAfter( [this]()
                          {
                             RecalculateSplitterPos();
+                            positionCategoryButtons();
                          } );
               aEvent.Skip();
           } );
 
     m_frame->Bind( EDA_LANG_CHANGED, &PROPERTIES_PANEL::OnLanguageChanged, this );
+
+    Bind( wxEVT_TIMER,
+          [this]( wxTimerEvent& )
+          {
+              rebuildProperties( m_deferredSelection );
+          },
+          m_deferredRebuildTimer.GetId() );
 }
 
 
@@ -190,6 +250,19 @@ void PROPERTIES_PANEL::rebuildProperties( const SELECTION& aSelection )
 {
     SUPPRESS_GRID_CHANGED_EVENTS raii( this );
 
+    // wxPG defers property deletion while one of its events is being processed
+    // (m_processedEvent != nullptr), and wxPropertyGridPageState::DoClear() then
+    // leaves the old rows in place; re-appending the new set on top of them
+    // duplicates every row.  This happens when e.g. the context menu (opened from
+    // a grid right-click) removes a property.  Re-run once the event has unwound.
+    if( static_cast<PROPERTIES_PANEL_GRID*>( m_grid )->IsProcessingWxPGEvent() )
+    {
+        hideCategoryButtons();
+        m_deferredSelection = aSelection;
+        m_deferredRebuildTimer.StartOnce( 1 );
+        return;
+    }
+
     auto reset =
             [&]()
             {
@@ -203,6 +276,7 @@ void PROPERTIES_PANEL::rebuildProperties( const SELECTION& aSelection )
     if( aSelection.Empty() )
     {
         m_caption->SetLabel( _( "No objects selected" ) );
+        hideCategoryButtons();
         reset();
         return;
     }
@@ -253,11 +327,83 @@ void PROPERTIES_PANEL::rebuildProperties( const SELECTION& aSelection )
 
         for( auto it = commonProps.begin(); it != commonProps.end(); )
         {
-            if( !propMgr.GetProperty( type, it->first ) )
-                it = commonProps.erase( it );
-            else
+            if( PROPERTY_BASE* prop = propMgr.GetProperty( type, it->first ) )
+            {
+                // A dummy property won't have the enum values, etc., so replace them with a "real" property
+                if( it->second->IgnoreValue() )
+                    it->second = prop;
+
                 ++it;
+            }
+            else
+            {
+                it = commonProps.erase( it );
+            }
         }
+    }
+
+    for( const EDA_ITEM* item : aSelection )
+    {
+        for( PROPERTY_BASE* prop : item->GetDynamicProperties() )
+        {
+            bool commonToAll = true;
+
+            for( const EDA_ITEM* other : aSelection )
+            {
+                std::vector<PROPERTY_BASE*> otherProps = other->GetDynamicProperties();
+
+                if( std::ranges::none_of( otherProps,
+                                          [&]( PROPERTY_BASE* p )
+                                          {
+                                              return p->Name() == prop->Name();
+                                          } ) )
+                {
+                    commonToAll = false;
+                    break;
+                }
+            }
+
+            if( !commonToAll || commonProps.contains( prop->Name() ) )
+                continue;
+
+            commonProps.emplace( prop->Name(), prop );
+
+            auto maxOrderIt = std::ranges::max_element( displayOrder,
+                                                        []( const auto& aL, const auto& aR )
+                                                        {
+                                                            return aL.second < aR.second;
+                                                        } );
+            int  nextOrder = maxOrderIt == displayOrder.end() ? 0 : maxOrderIt->second + 1;
+            displayOrder.emplace( prop->Name(), nextOrder );
+
+            if( const wxString& dynGroup = prop->Group(); !dynGroup.IsEmpty() && !groups.contains( dynGroup ) )
+            {
+                groupDisplayOrder.emplace_back( dynGroup );
+                groups.insert( dynGroup );
+            }
+        }
+    }
+
+    // Always show the Custom Properties group, even when it has no members, because it has the
+    // clearest path to add a custom property (the custom "+" button)
+    if( !groups.contains( _HKI( "Custom Properties" ) ) )
+    {
+        groupDisplayOrder.emplace_back( _HKI( "Custom Properties" ) );
+        groups.insert( _HKI( "Custom Properties" ) );
+    }
+
+    // Show category groups that have an action button if they are forced
+    // (e.g. we show "add custom property" even when no custom properties exist)
+    for( const CATEGORY_BUTTON& entry : m_categoryButtons )
+    {
+        if( !entry.forceCategory || groups.contains( entry.groupKey ) )
+            continue;
+
+        if( entry.enableFunc && !entry.enableFunc() )
+            continue;
+
+        groupDisplayOrder.emplace_back( entry.groupKey );
+        groups.insert( entry.groupKey );
     }
 
     bool isLibraryEditor = m_frame->IsType( FRAME_FOOTPRINT_EDITOR )
@@ -353,11 +499,15 @@ void PROPERTIES_PANEL::rebuildProperties( const SELECTION& aSelection )
 
     for( const wxString& groupName : groupDisplayOrder )
     {
-        if( !pgPropGroups.count( groupName ) )
+        if( groupName != _HKI( "Custom Properties" ) && !pgPropGroups.contains( groupName ) )
             continue;
 
-        std::vector<wxPGProperty*>& properties = pgPropGroups[groupName];
-        wxString                    groupCaption = wxGetTranslation( groupName );
+        std::vector<wxPGProperty*> properties;
+
+        if( pgPropGroups.contains( groupName ) )
+            properties = pgPropGroups[groupName];
+
+        wxString groupCaption = wxGetTranslation( groupName );
 
         auto groupItem = new wxPropertyCategory( groupName.IsEmpty() ? unspecifiedGroupCaption
                                                                      : groupCaption );
@@ -375,6 +525,7 @@ void PROPERTIES_PANEL::rebuildProperties( const SELECTION& aSelection )
     }
 
     RecalculateSplitterPos();
+    updateCategoryButtons();
 }
 
 
@@ -420,7 +571,7 @@ bool PROPERTIES_PANEL::extractValueAndWritability( const SELECTION& aSelection, 
 
     for( EDA_ITEM* item : aSelection )
     {
-        PROPERTY_BASE* property = propMgr.GetProperty( TYPE_HASH( *item ), aPropName );
+        PROPERTY_BASE* property = propMgr.GetProperty( item, aPropName );
 
         if( !property )
             return false;
@@ -430,6 +581,9 @@ bool PROPERTIES_PANEL::extractValueAndWritability( const SELECTION& aSelection, 
 
         if( property->IsHiddenFromPropertiesManager() )
             return false;
+
+        if( property->IgnoreValue() )
+            continue;
 
         wxPGChoices choices = property->GetChoices( item );
 
@@ -484,6 +638,177 @@ void PROPERTIES_PANEL::onShow( wxShowEvent& aEvent )
 
     aEvent.Skip();
 }
+
+
+void PROPERTIES_PANEL::onLabelEditBegin( wxPropertyGridEvent& aEvent )
+{
+    wxPGProperty* pgProp = aEvent.GetProperty();
+
+    if( !pgProp || !isKeyEditable( pgProp ) )
+    {
+        aEvent.Veto();
+        return;
+    }
+
+    // Remember the original label so an invalid rename can be undone.
+    m_editingOriginalLabel = pgProp->GetLabel();
+}
+
+
+void PROPERTIES_PANEL::onLabelEditEnding( wxPropertyGridEvent& aEvent )
+{
+    wxPGProperty* pgProp = aEvent.GetProperty();
+
+    if( !pgProp || !isKeyEditable( pgProp ) )
+        return;
+
+    const wxString oldName = pgProp->GetBaseName();
+
+    wxTextCtrl* labelEditor = m_grid->GetLabelEditor();
+    wxString    newName;
+
+    if( labelEditor )
+        newName = labelEditor->GetValue();
+
+    if( !m_pendingNewKey.IsEmpty() && oldName == m_pendingNewKey )
+    {
+        const wxString pendingKey = m_pendingNewKey;
+
+        m_pendingNewKey.Clear();
+
+        if( m_resolvingPendingKey )
+        {
+            if( newName.IsEmpty() || isKeyNameInUse( newName ) )
+                onNewItemLeftBlank( pendingKey );
+            else
+                onKeyRenamed( oldName, newName );
+        }
+        else if( newName.IsEmpty() || isKeyNameInUse( newName ) )
+        {
+            CallAfter(
+                    [this, pendingKey]()
+                    {
+                        onNewItemLeftBlank( pendingKey );
+                    } );
+        }
+        else
+        {
+            CallAfter(
+                    [this, oldName, newName]()
+                    {
+                        onKeyRenamed( oldName, newName );
+                    } );
+        }
+
+        return;
+    }
+
+    if( newName == oldName )
+        return;
+
+    if( newName.IsEmpty() || isKeyNameInUse( newName ) )
+    {
+        const wxString originalLabel = m_editingOriginalLabel;
+
+        CallAfter(
+                [this, oldName, originalLabel, newName]()
+                {
+                    for( wxPropertyGridIterator it = m_grid->GetIterator(); !it.AtEnd(); it.Next() )
+                    {
+                        wxPGProperty* p = it.GetProperty();
+
+                        if( p->GetBaseName() == oldName && p->GetLabel() == newName )
+                        {
+                            p->SetLabel( originalLabel );
+                            m_grid->Refresh();
+                            break;
+                        }
+                    }
+                } );
+
+        return;
+    }
+
+    CallAfter(
+            [this, oldName, newName]()
+            {
+                onKeyRenamed( oldName, newName );
+            } );
+}
+
+
+void PROPERTIES_PANEL::onRightClick( wxPropertyGridEvent& aEvent )
+{
+    wxPGProperty* pgProp = aEvent.GetProperty();
+
+    if( !pgProp )
+        return;
+
+    m_contextMenuPropertyName = pgProp->GetBaseName();
+
+    wxMenu* menu = new wxMenu;
+
+    if( !buildContextMenu( *menu, pgProp ) )
+    {
+        delete menu;
+        return;
+    }
+
+    // Defer showing the menu until the property event has finished
+    const wxPoint pos = ScreenToClient( wxGetMousePosition() );
+    CallAfter( [this, menu, pos]()
+               {
+                   PopupMenu( menu, pos );
+                   delete menu;
+               } );
+}
+
+
+void PROPERTIES_PANEL::settlePendingLabelEdit()
+{
+    if( !m_grid->GetLabelEditor() )
+    {
+        m_pendingNewKey.Clear();
+        return;
+    }
+
+    const wxString newName = m_grid->GetLabelEditor()->GetValue();
+    const wxString pendingKey = m_pendingNewKey;
+
+    m_resolvingPendingKey = true;
+    m_grid->EndLabelEdit( true );
+    m_resolvingPendingKey = false;
+
+    if( pendingKey.IsEmpty() )
+        return;
+
+    if( newName.IsEmpty() || isKeyNameInUse( newName ) )
+        onNewItemLeftBlank( pendingKey );
+    else if( newName != pendingKey )
+        onKeyRenamed( pendingKey, newName );
+}
+
+
+void PROPERTIES_PANEL::beginLabelEdit( const wxString& aKey, bool aStartBlank )
+{
+    for( wxPropertyGridIterator it = m_grid->GetIterator(); !it.AtEnd(); it.Next() )
+    {
+        wxPGProperty* p = it.GetProperty();
+
+        if( !p->IsCategory() && p->GetBaseName() == aKey )
+        {
+            m_grid->SelectProperty( p );
+            m_grid->BeginLabelEdit( 0 );
+
+            if( aStartBlank && m_grid->GetLabelEditor() )
+                m_grid->GetLabelEditor()->SetValue( wxEmptyString );
+
+            break;
+        }
+    }
+}
+
+
 
 
 void PROPERTIES_PANEL::onCharHook( wxKeyEvent& aEvent )
@@ -607,4 +932,109 @@ void PROPERTIES_PANEL::SetSplitterProportion( float aProportion )
 {
     m_splitter_key_proportion = aProportion;
     RecalculateSplitterPos();
+}
+
+
+void PROPERTIES_PANEL::addCategoryButton( const wxString& aGroupKey, const wxString& aTooltip, BITMAPS aBitmap,
+                                          std::function<void()> aAction, std::function<bool()> aEnableFunc,
+                                          bool aForceCategory )
+{
+    BITMAP_BUTTON* button = new BITMAP_BUTTON( m_grid, wxID_ANY );
+    button->SetBitmap( KiBitmapBundle( aBitmap ) );
+    button->SetToolTip( aTooltip );
+    button->Hide();
+
+    button->Bind( wxEVT_BUTTON,
+                  [this, button]( wxCommandEvent& )
+                  {
+                      for( CATEGORY_BUTTON& entry : m_categoryButtons )
+                      {
+                          if( entry.button == button )
+                          {
+                              entry.action();
+                              return;
+                          }
+                      }
+                  } );
+
+    m_categoryButtons.emplace_back( CATEGORY_BUTTON{ .button = button,
+                                                     .groupKey = aGroupKey,
+                                                     .action = std::move( aAction ),
+                                                     .enableFunc = std::move( aEnableFunc ),
+                                                     .forceCategory = aForceCategory } );
+}
+
+
+wxPGProperty* PROPERTIES_PANEL::categoryForGroup( const wxString& aGroupKey ) const
+{
+    const wxString caption = wxGetTranslation( aGroupKey );
+
+    for( wxPropertyGridIterator it = m_grid->GetIterator( wxPG_ITERATE_VISIBLE ); !it.AtEnd(); it.Next() )
+    {
+        if( wxPGProperty* pgProp = it.GetProperty(); pgProp->IsCategory() && pgProp->GetLabel() == caption )
+            return pgProp;
+    }
+
+    return nullptr;
+}
+
+
+void PROPERTIES_PANEL::updateCategoryButtons()
+{
+    positionCategoryButtons();
+}
+
+
+void PROPERTIES_PANEL::hideCategoryButtons()
+{
+    for( CATEGORY_BUTTON& entry : m_categoryButtons )
+        entry.button->Hide();
+}
+
+
+void PROPERTIES_PANEL::positionCategoryButtons()
+{
+    const int rightEdgeBase = m_grid->GetClientSize().x - m_grid->FromDIP( 4 );
+    int       nextRightEdge = rightEdgeBase;
+    wxString  currentRow;
+    bool      haveCurrentRow = false;
+
+    for( CATEGORY_BUTTON& entry : m_categoryButtons )
+    {
+        if( bool sameRow = haveCurrentRow && currentRow == entry.groupKey; !sameRow )
+        {
+            currentRow = entry.groupKey;
+            haveCurrentRow = true;
+            nextRightEdge = rightEdgeBase;
+        }
+
+        wxPGProperty* category = categoryForGroup( entry.groupKey );
+        bool          visible = false;
+        int           rowY = 0;
+        int           rowHeight = m_grid->GetRowHeight();
+
+        if( category && ( !entry.enableFunc || entry.enableFunc() ) )
+        {
+            rowY = m_grid->CalcScrolledPosition( wxPoint( 0, category->GetY() ) ).y;
+            visible = ( rowY + rowHeight > 0 ) && ( rowY < m_grid->GetClientSize().y );
+        }
+
+        if( !visible )
+        {
+            entry.button->Hide();
+            continue;
+        }
+
+        const wxSize btnSize = entry.button->GetSize();
+        const int    btnY = rowY + ( rowHeight - btnSize.y ) / 2;
+        const int    btnX = nextRightEdge - btnSize.x;
+
+        if( !entry.button->IsShown() )
+            entry.button->Show();
+
+        entry.button->SetPosition( wxPoint( std::max( 0, btnX ), std::max( 0, btnY ) ) );
+        entry.button->Raise();
+
+        nextRightEdge = btnX - m_grid->FromDIP( 2 );
+    }
 }

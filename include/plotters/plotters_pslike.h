@@ -27,6 +27,7 @@
 
 #include "plotter.h"
 #include <memory>
+#include <optional>
 #include <plotters/pdf_stroke_font.h>
 #include <plotters/pdf_outline_font.h>
 #include <math/vector3.h>
@@ -262,6 +263,7 @@ public:
             m_totalOutlineNodes( 0 ),
             m_3dModelHandle( -1 ),
             m_3dExportMode( false ),
+            m_usedBase14Fonts( false ),
             m_strokeFontManager( nullptr ),
             m_outlineFontManager( nullptr )
     {
@@ -544,9 +546,9 @@ protected:
     /**
      * Start a PDF stream (for the page).
      *
-     * @param handle -1 (default) for a new object. Especially from PDF 1.5 streams can contain
+     * @param aHandle -1 (default) for a new object. Especially from PDF 1.5 streams can contain
      *               a lot of things, but for the moment we only handle page content.
-     * @eturn The object handle opened
+     * @return The object handle opened
      */
     int startPdfStream( int aHandle = -1 );
 
@@ -616,6 +618,10 @@ protected:
 
     int  m_3dModelHandle;
     bool m_3dExportMode;
+
+    /// Set when the non-embeddable font fallback references the base-14 /KicadFont* resources.
+    bool m_usedBase14Fonts;
+
     std::unique_ptr<PDF_STROKE_FONT_MANAGER> m_strokeFontManager;
     std::unique_ptr<PDF_OUTLINE_FONT_MANAGER> m_outlineFontManager;
 };
@@ -689,6 +695,17 @@ public:
     virtual void SetSvgCoordinatesFormat( unsigned aPrecision ) override;
 
     /**
+     * Set an explicit bounding box for the plotted content (in IUs).
+     *
+     * When set, the SVG width/height and viewBox are derived from this box transformed to
+     * device units, so the plotted content keeps its origin at the SVG origin even when it
+     * extends to negative coordinates.  When not set, the page size is used.
+     *
+     * @param aBBoxIU the bounding box of the content to plot, in plotter coordinates.
+     */
+    virtual void SetPlotBBox( const BOX2I& aBBoxIU ) override;
+
+    /**
      * Calling this function allows one to define the beginning of a group
      * of drawing items (used in SVG format to separate components)
      * @param aData should be a string for the SVG ID tag
@@ -701,17 +718,6 @@ public:
      * @param aData should be null
      */
     virtual void EndBlock( void* aData ) override;
-
-    /**
-     * Start a new named layer group in the SVG output.
-     * @param aLayerName The name/id for the layer group
-     */
-    void StartLayer( const wxString& aLayerName );
-
-    /**
-     * End the current layer group in the SVG output.
-     */
-    void EndLayer();
 
     virtual void Text( const VECTOR2I&        aPos,
                        const COLOR4D&         aColor,
@@ -738,6 +744,8 @@ public:
                            void*                  aData = nullptr ) override;
 
 protected:
+    virtual VECTOR2D userToDeviceCoordinates( const VECTOR2I& aCoordinate ) override;
+
     /**
      * Initialize m_pen_rgb_color from reduced values r, g ,b
      * ( reduced values are 0.0 to 1.0 )
@@ -747,8 +755,9 @@ protected:
     /**
      * Output the string which define pen and brush color, shape, transparency
      *
+     * @param aLineWidth is the width of the line to plot.
      * @param aIsGroup If false, do not form a new group for the style.
-     * @param aExtraStyle If given, the string will be added into the style string before closing
+     * @param aExtraStyle If given, the string will be added into the style string before closing.
      */
     void setSVGPlotStyle( int aLineWidth, bool aIsGroup = true,
                           const std::string& aExtraStyle = {} );
@@ -772,4 +781,6 @@ protected:
                                     // Use 3-6 (3 means um precision, 6 nm precision) in PcbNew
                                     // 3-4 in other modules (avoid values >4 to avoid overflow)
                                     // see also comment for m_useInch.
+
+    std::optional<BOX2I> m_plotBBoxIU; // Explicit plot content bounding box (IUs), when set.
 };

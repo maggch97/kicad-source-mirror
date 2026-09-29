@@ -33,6 +33,7 @@ void PICKER_TOOL_BASE::reset()
     m_picked = std::nullopt;
     m_clickHandler = std::nullopt;
     m_motionHandler = std::nullopt;
+    m_areaHandler = std::nullopt;
     m_cancelHandler = std::nullopt;
     m_finalizeHandler = std::nullopt;
 }
@@ -79,7 +80,7 @@ int PICKER_TOOL::Main( const TOOL_EVENT& aEvent )
 
     const TOOL_EVENT sourceEvent = *aEvent.Parameter<const TOOL_EVENT*>();
 
-    m_frame->PushTool( sourceEvent );
+    SCOPED_TOOL_PUSHER raii( m_frame, sourceEvent );
     Activate();
 
     setControls();
@@ -126,7 +127,7 @@ int PICKER_TOOL::Main( const TOOL_EVENT& aEvent )
 
             break;
         }
-        else if( evt->IsClick( BUT_LEFT ) )
+        else if( evt->IsClick( BUT_LEFT ) || evt->IsAction( &ACTIONS::cursorClick ) )
         {
             bool getNext = false;
 
@@ -155,7 +156,7 @@ int PICKER_TOOL::Main( const TOOL_EVENT& aEvent )
                 setControls();
             }
         }
-        else if( evt->IsMotion() )
+        else if( evt->IsMotion() || evt->IsAction( &ACTIONS::refreshPreview ) )
         {
             if( m_motionHandler )
             {
@@ -168,7 +169,9 @@ int PICKER_TOOL::Main( const TOOL_EVENT& aEvent )
                 }
             }
         }
-        else if( evt->IsDblClick( BUT_LEFT ) || evt->IsDrag( BUT_LEFT ) )
+        else if( evt->IsDblClick( BUT_LEFT )
+                || evt->IsAction( &ACTIONS::cursorDblClick )
+                || evt->IsDrag( BUT_LEFT ) )
         {
             // Not currently used, but we don't want to pass them either
         }
@@ -195,7 +198,6 @@ int PICKER_TOOL::Main( const TOOL_EVENT& aEvent )
 
     reset();
     controls->ForceCursorPosition( false );
-    m_frame->PopTool( sourceEvent );
     return 0;
 }
 

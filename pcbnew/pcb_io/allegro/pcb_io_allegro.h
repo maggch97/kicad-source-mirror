@@ -40,9 +40,6 @@ public:
     bool CanReadBoard( const wxString& aFileName ) const override;
     bool CanReadLibrary( const wxString& aFileName ) const override;
 
-    BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe, const std::map<std::string, UTF8>* aProperties,
-                      PROJECT* aProject ) override;
-
     long long GetLibraryTimestamp( const wxString& aLibraryPath ) const override { return 0; }
 
     // void FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aLibraryPath,
@@ -62,4 +59,8 @@ public:
     bool LoadBoardFromData( const uint8_t* aData, size_t aSize, BOARD& aBoard );
 
     PCB_IO_ALLEGRO();
+
+private:
+    void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                    const std::map<std::string, UTF8>* aProperties, PROJECT* aProject ) override;
 };

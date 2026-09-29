@@ -294,13 +294,42 @@ message RunBoardJobExportPs
     bool use_global_settings = 8;
 }
 
+// Gerber coordinate precision
+enum GerberPrecision
+{
+    GP_UNKNOWN = 0;
+    GP_5 = 1;
+    GP_6 = 2;
+}
+
 // Plots a board to Gerber files. Returns RunJobResponse.
 message RunBoardJobExportGerbers
 {
     kiapi.common.types.RunJobSettings job_settings = 1;
 
-    // One or more board layers to export.
-    repeated kiapi.board.types.BoardLayer layers = 2;
+    BoardPlotSettings plot_settings = 2;
+
+    // If true, the Gerber plot settings stored in the board file are used instead of the
+    // settings provided in this message.  When set, the layers list is derived from the
+    // board's plot layer selection.
+    bool use_board_plot_params = 3;
+
+    // If true, a Gerber job file (.gbrjob) is created alongside the plot outputs.
+    bool create_gerber_job_file = 4;
+
+    // If true, Gerber X2 netlist attributes are included in the plot outputs.
+    bool include_netlist_attributes = 5;
+
+    // If true, Gerber X2 format is used.
+    bool use_x2_format = 6;
+
+    // If true, aperture macros are disabled in the plot outputs.
+    bool disable_aperture_macros = 7;
+
+    // If true, Protel-style file extensions are used (e.g. .gbr → .gtl).
+    bool use_protel_file_extensions = 8;
+
+    GerberPrecision precision = 9;
 }
 
 enum DrillFormat
@@ -536,4 +565,68 @@ message RunBoardJobExportStats
     bool exclude_footprints_without_pads = 4;
     bool subtract_holes_from_board_area = 5;
     bool subtract_holes_from_copper_areas = 6;
+}
+
+// Plots board layers to a PNG file. Returns RunJobResponse.
+message RunBoardJobExportPng
+{
+    kiapi.common.types.RunJobSettings job_settings = 1;
+
+    BoardPlotSettings plot_settings = 2;
+
+    // Range 72-2400.  If unspecified, will use the GUI default resolution (300 DPI).
+    optional int32 dpi = 3;
+
+    // If unspecified, anti-aliasing will follow the GUI default (enabled)
+    kiapi.common.types.AntialiasingMode antialiasing = 4;
+
+    // Supports BJPM_ALL_LAYERS_ONE_PAGE and BJPM_EACH_LAYER_OWN_FILE.
+    BoardJobPaginationMode page_mode = 5;
+
+    // If true, will plot using the background color from the theme specified in
+    // plot_settings.  If false or absent, will plot with a transparent background.
+    optional bool plot_background_color = 6;
+}
+
+// Which reference point of the board maps to the IDF file origin.
+enum IdfOriginMode
+{
+    IOM_UNKNOWN = 0;
+    // Center of the board outline bounding box.
+    IOM_BOARD_CENTER = 1;
+    // The board's grid origin.
+    IOM_GRID_ORIGIN = 2;
+    // The board's auxiliary (drill/place file) origin.
+    IOM_DRILL_ORIGIN = 3;
+    // A user-specified point; see user_origin.
+    IOM_USER = 4;
+}
+
+// Exports a board to IDFv3 files.  Returns RunJobResponse.
+message RunBoardJobExportIdf
+{
+    kiapi.common.types.RunJobSettings job_settings = 1;
+
+    // Millimeters or mils are accepted
+    kiapi.common.types.Units units = 2;
+
+    IdfOriginMode origin_mode = 3;
+
+    // Origin point used when origin_mode is IOM_USER.
+    kiapi.common.types.Vector2 user_origin = 4;
+
+    // If true, footprints without the through-hole or SMD attribute are included.
+    bool include_unspecified = 5;
+
+    // If true, footprints marked DNP in the current variant are included.
+    bool include_dnp = 6;
+
+    // If true, footprints without an explicit height property or explicit IDF model will be
+    // excluded from the export.  If false / absent, footprints without an explicit height set will
+    // be exported if they have a visible STEP model, using the height of the tallest model.
+    bool only_use_explicit_heights = 7;
+
+    // The footprint field to export as the component part number in the IDF library file.
+    // Defaults to the Value field if unspecified.
+    optional string part_number_field = 8;
 }

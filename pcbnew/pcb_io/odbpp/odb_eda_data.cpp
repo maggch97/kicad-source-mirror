@@ -121,7 +121,7 @@ void EDA_DATA::SUB_NET_PLANE::WriteSubnet( std::ostream& ost ) const
 
     static const std::map<CUTOUT_TYPE, std::string> cutout_type_map = {
         { CUTOUT_TYPE::CIRCLE, "C" },
-        { CUTOUT_TYPE::RECT, "R" },
+        { CUTOUT_TYPE::RECTANGLE, "R" },
         { CUTOUT_TYPE::OCTAGON, "O" },
         { CUTOUT_TYPE::EXACT, "E" }
     };
@@ -351,8 +351,11 @@ void EDA_DATA::PACKAGE::AddPin( const PAD* aPad, size_t aPinNum )
         pin->mtype = PIN::MOUNT_TYPE::UNDEFINED;
     }
 
-    const std::shared_ptr<SHAPE_POLY_SET>& polygons =
-        aPad->GetEffectivePolygon( PADSTACK::ALL_LAYERS, ERROR_INSIDE );
+    // AddPackage() unflips the footprint, so this pin record always describes the component-side
+    // land
+    PCB_LAYER_ID mountLayer = aPad->Padstack().EffectiveLayerFor( F_Cu );
+
+    const std::shared_ptr<SHAPE_POLY_SET>& polygons = aPad->GetEffectivePolygon( mountLayer, ERROR_INSIDE );
 
     // TODO: Here we put all pad shapes as polygonl, we should switch by pad shape
     // Note:pad only use polygons->Polygon(0),

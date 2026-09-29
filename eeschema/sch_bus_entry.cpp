@@ -18,6 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <connectivity/conn_presentation.h>
 #include <sch_draw_panel.h>
 #include <bitmaps.h>
 #include <core/mirror.h>
@@ -33,7 +34,6 @@
 #include <settings/color_settings.h>
 #include <netclass.h>
 #include <trigo.h>
-#include <board_item.h>
 #include <connection_graph.h>
 #include <api/api_enums.h>
 #include <api/api_utils.h>
@@ -132,6 +132,7 @@ void SCH_BUS_ENTRY_BASE::Serialize( google::protobuf::Any& aContainer ) const
     if( m_stroke.GetColor() != COLOR4D::UNSPECIFIED )
         PackColor( *stroke->mutable_color(), m_stroke.GetColor() );
 
+    kiapi::common::PackCustomProperties( entry.mutable_custom_properties(), *this );
     aContainer.PackFrom( entry );
 }
 
@@ -155,6 +156,7 @@ bool SCH_BUS_ENTRY_BASE::Deserialize( const google::protobuf::Any& aContainer )
     m_pos = UnpackVector2( entry.position(), schIUScale );
     m_size = UnpackVector2( entry.size(), schIUScale );
     SetLocked( entry.locked() == types::LockedState::LS_LOCKED );
+    kiapi::common::UnpackCustomProperties( entry.custom_properties(), *this );
 
     m_stroke.SetWidth( UnpackDistance( entry.stroke().width(), schIUScale ) );
     m_stroke.SetLineStyle( FromProtoEnum<LINE_STYLE, types::StrokeLineStyle>( entry.stroke().style() ) );
@@ -569,19 +571,8 @@ void SCH_BUS_ENTRY_BASE::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame,
 
     aList.emplace_back( _( "Bus Entry Type" ), msg );
 
-    SCH_CONNECTION* conn = nullptr;
-
     if( !IsConnectivityDirty() && dynamic_cast<SCH_EDIT_FRAME*>( aFrame ) )
-        conn = Connection();
-
-    if( conn )
-    {
-        conn->AppendInfoToMsgPanel( aList );
-
-        if( !conn->IsBus() )
-            aList.emplace_back( _( "Resolved Netclass" ),
-                                GetEffectiveNetClass()->GetHumanReadableName() );
-    }
+        SCH_CONNECTIVITY::AppendConnectionInfo( *this, aList );
 }
 
 
@@ -704,14 +695,14 @@ static struct SCH_BUS_ENTRY_DESC
                              .Map( WIRE_STYLE::DASHDOTDOT, _HKI( "Dash-Dot-Dot" ) );
         }
 
-        propMgr.AddProperty( new PROPERTY_ENUM<SCH_BUS_ENTRY_BASE, WIRE_STYLE>(
-                _HKI( "Wire Style" ), &SCH_BUS_ENTRY_BASE::SetWireStyle, &SCH_BUS_ENTRY_BASE::GetWireStyle ) );
+        propMgr.AddProperty( new PROPERTY_ENUM<SCH_BUS_ENTRY_BASE, WIRE_STYLE>( _HKI( "Wire Style" ),
+                        &SCH_BUS_ENTRY_BASE::SetWireStyle, &SCH_BUS_ENTRY_BASE::GetWireStyle ) );
 
         propMgr.AddProperty( new PROPERTY<SCH_BUS_ENTRY_BASE, int>( _HKI( "Line Width" ),
-                    &SCH_BUS_ENTRY_BASE::SetPenWidth, &SCH_BUS_ENTRY_BASE::GetPenWidth,
-                    PROPERTY_DISPLAY::PT_SIZE ) );
+                        &SCH_BUS_ENTRY_BASE::SetPenWidth, &SCH_BUS_ENTRY_BASE::GetPenWidth,
+                        PROPERTY_DISPLAY::PT_SIZE ) );
 
         propMgr.AddProperty( new PROPERTY<SCH_BUS_ENTRY_BASE, COLOR4D>( _HKI( "Color" ),
-                    &SCH_BUS_ENTRY_BASE::SetBusEntryColor, &SCH_BUS_ENTRY_BASE::GetBusEntryColor ) );
+                        &SCH_BUS_ENTRY_BASE::SetBusEntryColor, &SCH_BUS_ENTRY_BASE::GetBusEntryColor ) );
     }
 } _SCH_BUS_ENTRY_DESC;

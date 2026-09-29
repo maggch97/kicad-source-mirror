@@ -74,6 +74,7 @@ public:
         std::vector<KIID> uuids;
         SIZES_SETTINGS sizes;
         int layer;
+        bool useConnectedTrackWidth;
 
         EVENT_ENTRY() :
                 type( EVT_START_ROUTE ),
@@ -86,7 +87,8 @@ public:
                 type( aE.type ),
                 uuids( aE.uuids ),
                 sizes( aE.sizes ),
-                layer( aE.layer )
+                layer( aE.layer ),
+                useConnectedTrackWidth( aE.useConnectedTrackWidth )
         {
         }
     };
@@ -95,7 +97,7 @@ public:
     {
         LOG_DATA() {};
         ~LOG_DATA() {};
-        ROUTER_MODE m_Mode;
+        ROUTER_MODE m_Mode = PNS_MODE_ROUTE_SINGLE;
         std::optional<wxString> m_BoardHash;
         std::vector<ITEM*> m_AddedItems;
         std::set<KIID> m_RemovedItems;
@@ -126,11 +128,13 @@ public:
     static EVENT_ENTRY ParseEventFromJSON( const nlohmann::json& aJSON );
     static wxString FormatLogFileAsJSON( const LOG_DATA& aLogData );
 
-private:
+protected:
 
     static nlohmann::json formatSizesAsJSON( const SIZES_SETTINGS& aEvent );
     static nlohmann::json formatRouterItemAsJSON( const PNS::ITEM* aItem );
     static nlohmann::json formatShapeAsJSON( const SHAPE* aShape );
+    static SIZES_SETTINGS parseSizesFromJSON( const nlohmann::json& aJSON );
+
 
     std::vector<EVENT_ENTRY> m_events;
     std::optional<TEST_CASE_TYPE> m_testCaseType;

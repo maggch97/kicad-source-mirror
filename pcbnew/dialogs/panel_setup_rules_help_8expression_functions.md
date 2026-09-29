@@ -2,6 +2,10 @@
 
 All function parameters support simple wildcards (`*` and `?`).
 
+Arguments can also be expressions. For example,
+`A.intersectsFrontCourtyard(B.Parent)` tests whether `A` intersects the front
+courtyard of `B`'s parent footprint.
+
 
 ```
     A.enclosedByArea('<zone_name>')
@@ -143,6 +147,14 @@ matches `<class_name>`.  Class assignments live in the project's
     A.isBuriedVia()
 ```
 > True if `A` is a buried via.
+
+
+```
+    A.isStackedVia()
+```
+> True if `A` is a microvia that lands on another microvia, or is landed on by one.
+
+> The test is hole overlap, so a staggered pair counts whenever the holes touch.
 
 
 ```

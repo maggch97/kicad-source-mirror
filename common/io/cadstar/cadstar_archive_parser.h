@@ -36,6 +36,7 @@
 
 #include <math/vector2d.h>
 #include <io/cadstar/cadstar_archive_objects.h>
+#include <trace_helpers.h>
 
 // THROW_IO_ERROR definitions to ensure consistent wording is used in the error messages
 
@@ -54,14 +55,15 @@
 #define THROW_PARSING_IO_ERROR( param, location ) \
     THROW_IO_ERROR( wxString::Format( _( "Unable to parse '%s' in '%s'" ), param, location ) )
 
-// Warning variants that log instead of throwing, allowing import to continue
-// when encountering unknown nodes from newer CADSTAR versions
+// Trace variants that log instead of throwing, allowing import to continue when encountering
+// unknown nodes from newer CADSTAR versions. These are developer diagnostics rather than
+// anything the user can act on, so they stay silent unless KICAD_CADSTAR_IO is traced.
 
 #define WARN_UNKNOWN_NODE_IO_ERROR( nodename, location ) \
-    wxLogWarning( wxString::Format( _( "Unknown node '%s' in '%s'" ), nodename, location ) )
+    wxLogTrace( traceCadstarIo, wxT( "Unknown node '%s' in '%s'" ), nodename, location )
 
 #define WARN_UNKNOWN_PARAMETER_IO_ERROR( param, location ) \
-    wxLogWarning( wxString::Format( _( "Unknown Parameter '%s' in '%s'" ), param, location ) )
+    wxLogTrace( traceCadstarIo, wxT( "Unknown Parameter '%s' in '%s'" ), param, location )
 
 //=================================
 // MACRO DEFINITIONS
@@ -256,7 +258,7 @@ public:
         void Parse( XNODE* aNode, PARSER_CONTEXT* aContext ) override;
     };
 
-    //Note: there are possibly several other resolutions, but HUNDREDTH MICRON is only one known
+    // Note: there are possibly several other resolutions, but HUNDREDTH MICRON is only one known
     enum class RESOLUTION
     {
         HUNDREDTH_MICRON
@@ -906,8 +908,8 @@ public:
         FIGURE_ID   ID;
         LINECODE_ID LineCodeID;
         LAYER_ID    LayerID;
-        SHAPE       Shape; //< Uses the component's coordinate frame if within a component
-                           //< definition, otherwise uses the design's coordinate frame.
+        SHAPE       Shape; ///< Uses the component's coordinate frame if within a component
+                           ///< definition, otherwise uses the design's coordinate frame.
         GROUP_ID      GroupID = wxEmptyString; ///< If not empty, this FIGURE is part of a group
         REUSEBLOCKREF ReuseBlockRef;
         SWAP_RULE     SwapRule = SWAP_RULE::BOTH; ///< Only applicable to Figures in Components
@@ -1347,6 +1349,7 @@ public:
 
     /**
      * @param aNode with a child node containing an EVALUE
+     * @param aContext
      * @param aValueToParse
      *
      * Logs a warning (does not throw) if the child node is not an EVALUE.
@@ -1357,9 +1360,10 @@ public:
      * If no children are present, it just returns an empty vector (without throwing an exception).
      *
      * @param aNode containing a series of POINT objects
+     * @param aContext
      * @param aTestAllChildNodes
      * @param aExpectedNumPoints if UNDEFINED_VALUE (i.e. -1), this is check is disabled
-     * @return std::vector containing all POINT objects
+     * @return all POINT objects
      *
      * Logs a warning (does not throw) if aTestAllChildNodes is true and one of the child nodes
      * is not a valid POINT object.
@@ -1376,13 +1380,13 @@ public:
      * If no children are present, it just returns an empty vector (without throwing an exception).
      *
      * @param aNode containing a series of VERTEX objects
+     * @param aContext
      * @param aTestAllChildNodes
-     * @param aExpectedNumPoints if -1, this is check is disabled
-     * @return std::vector containing all VERTEX objects
+     * @return all VERTEX objects
      *
      * Logs a warning (does not throw) if aTestAllChildNodes is true and one of the child nodes
      * is not a valid VERTEX object.
-     * @throw IO_ERROR if unable to parse a VERTEX object
+     * @throw #IO_ERROR if unable to parse a VERTEX object
      */
     static std::vector<VERTEX> ParseAllChildVertices( XNODE* aNode, PARSER_CONTEXT* aContext,
                                                       bool aTestAllChildNodes = false );
@@ -1391,13 +1395,13 @@ public:
      * If no children are present, it just returns an empty vector (without throwing an exception).
      *
      * @param aNode containing a series of CUTOUT objects
+     * @param aContext
      * @param aTestAllChildNodes
-     * @param aExpectedNumPoints if -1, this is check is disabled
-     * @return std::vector containing all CUTOUT objects
+     * @return all CUTOUT objects
      *
      * Logs a warning (does not throw) if aTestAllChildNodes is true and one of the child nodes
      * is not a valid CUTOUT object.
-     * @throw IO_ERROR if unable to parse a CUTOUT object
+     * @throw #IO_ERROR if unable to parse a CUTOUT object
      */
     static std::vector<CUTOUT> ParseAllChildCutouts( XNODE* aNode, PARSER_CONTEXT* aContext,
                                                      bool aTestAllChildNodes = false );

@@ -35,6 +35,9 @@ public:
 
     ~SCH_TABLE();
 
+    void Serialize( google::protobuf::Any& aContainer ) const override;
+    bool Deserialize( const google::protobuf::Any& aContainer ) override;
+
     static inline bool ClassOf( const EDA_ITEM* aItem )
     {
         return aItem && SCH_TABLE_T == aItem->Type();
@@ -117,7 +120,9 @@ public:
 
     int GetRowCount() const
     {
-        return m_cells.size() / m_colCount;
+        wxCHECK_MSG( m_colCount, 0, wxT( "Degenerate table with no columns!" ) );
+
+        return (int) m_cells.size() / m_colCount;
     }
 
     void SetColWidth( int aCol, int aWidth ) { m_colWidths[aCol] = aWidth; }

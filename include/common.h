@@ -20,13 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-/**
- * The common library
- * @file common.h
- */
-
-#ifndef INCLUDE__COMMON_H_
-#define INCLUDE__COMMON_H_
+#pragma once
 
 #include <kicommon.h>
 #include <functional>
@@ -84,20 +78,31 @@ KICOMMON_API wxString JoinExtensions( const std::vector<std::string>& aExts );
 /**
  * Replace any environment variable & text variable references with their values.
  *
- * @param aString a string containing (perhaps) references to env var
+ * @param aString a string containing (perhaps) references to env var.
+ * @param aProject the project to get variable substitutions from.
+ *
  * @return the expanded environment variable.
  */
 KICOMMON_API const wxString ExpandEnvVarSubstitutions( const wxString& aString, const PROJECT* aProject );
 
-/**
- * Expand '${var-name}' templates in text.
- */
-#define FOR_ERC_DRC 1
+enum RESOLUTION_CONTEXT
+{
+    FOR_CANVAS,
+    FOR_GUI,
+    FOR_NETNAME,
+    FOR_ERC_DRC,
+    INTERNAL,       // Importantly, keeps the escape on literal variable references (such as "\${foo}")
+    RESOLVED,
+    RAW_VALUE
+};
+
+KICOMMON_API void FinalizeTextVarExpansion( wxString& aText, RESOLUTION_CONTEXT aContext );
 
 KICOMMON_API wxString ExpandTextVars( const wxString& aSource, const std::function<bool( wxString* )>* aResolver,
-                                      int aFlags = 0, int aDepth = 0 );
+                                      RESOLUTION_CONTEXT aContext, int aDepth = 0 );
 
-KICOMMON_API wxString ExpandTextVars( const wxString& aSource, const PROJECT* aProject, int aFlags = 0 );
+KICOMMON_API wxString ExpandTextVars( const wxString& aSource, const PROJECT* aProject,
+                                      RESOLUTION_CONTEXT aContext );
 
 /**
  * Normalize a file path so its text variables survive ExpandTextVars.
@@ -115,7 +120,7 @@ KICOMMON_API wxString NormalizeFilePathForTextVars( const wxString& aPath );
  * resolving. Nested references are captured at every nesting level.
  *
  * Used by the reactive dependency tracker to register edges on SetText without
- * needing a resolver context. Escape sequences (`\${...}`) are skipped. `@{...}`
+ * needing a resolver context. Escape sequences (`\${...}`) are skipped. `\@{...}`
  * math expressions are walked so that nested `${...}` inside them is captured.
  */
 KICOMMON_API std::vector<TEXT_VAR_REF_KEY> ExtractTextVarReferences( const wxString& aSource );
@@ -123,11 +128,11 @@ KICOMMON_API std::vector<TEXT_VAR_REF_KEY> ExtractTextVarReferences( const wxStr
 /**
  * Multi-pass text variable expansion and math expression evaluation.
  *
- * Performs recursive resolution of both ${...} variable references and @{...} math expressions,
+ * Performs recursive resolution of both ${...} variable references and \@{...} math expressions,
  * then cleans up escape sequences (\${...} and \@{...}) to display literals.
  *
  * This helper encapsulates the common pattern used across schematic text components:
- * - While text contains ${...} or @{...} and depth < max:
+ * - While text contains ${...} or \@{...} and depth < max:
  *   - Expand variables via ExpandTextVars()
  *   - Evaluate math expressions via EXPRESSION_EVALUATOR
  * - Convert escape markers back to literals
@@ -146,9 +151,14 @@ KICOMMON_API wxString ResolveTextVars( const wxString& aSource, const std::funct
 KICOMMON_API wxString GetGeneratedFieldDisplayName( const wxString& aSource );
 
 /**
- * Returns true if the string is generated, e.g contains a single text var reference
+ * Returns true if the entire string is generated, e.g is a single text var reference
  */
-KICOMMON_API bool IsGeneratedField( const wxString& aSource );
+KICOMMON_API bool IsGeneratedField( const wxString& aFieldName );
+
+/**
+ * Returns true if some of the string is generated, e.g contains a text var or expression
+ */
+KICOMMON_API bool IsGeneratedValue( const wxString& aValue );
 
 /**
  * Returns a user-visible HTML string describing a footprint reference designator.
@@ -168,5 +178,3 @@ KICOMMON_API const wxString ResolveUriByEnvVars( const wxString& aUri, const PRO
  */
 KICOMMON_API bool WarnUserIfOperatingSystemUnsupported();
 
-
-#endif // INCLUDE__COMMON_H_

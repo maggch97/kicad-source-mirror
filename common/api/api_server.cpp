@@ -74,6 +74,29 @@ KICAD_API_SERVER::~KICAD_API_SERVER()
 }
 
 
+wxFileName KICAD_API_SERVER::StandardSocketPath()
+{
+    wxFileName socket;
+
+#ifdef __WXMAC__
+    socket.AssignDir( wxS( "/tmp" ) );
+#else
+    socket.AssignDir( wxStandardPaths::Get().GetTempDir() );
+#endif
+
+    socket.AppendDir( wxS( "kicad" ) );
+    socket.SetFullName( wxS( "api.sock" ) );
+
+    return socket;
+}
+
+
+std::string KICAD_API_SERVER::StandardSocketUrl()
+{
+    return fmt::format( "ipc://{}", StandardSocketPath().GetFullPath().ToUTF8().data() );
+}
+
+
 void KICAD_API_SERVER::Start()
 {
     if( Running() )
@@ -83,13 +106,7 @@ void KICAD_API_SERVER::Start()
 
     if( m_socketPathOverride.IsEmpty() )
     {
-#ifdef __WXMAC__
-        socket.AssignDir( wxS( "/tmp" ) );
-#else
-        socket.AssignDir( wxStandardPaths::Get().GetTempDir() );
-#endif
-        socket.AppendDir( wxS( "kicad" ) );
-        socket.SetFullName( wxS( "api.sock" ) );
+        socket = StandardSocketPath();
     }
     else
     {
@@ -195,6 +212,13 @@ void KICAD_API_SERVER::DeregisterHandler( API_HANDLER* aHandler )
 }
 
 
+void KICAD_API_SERVER::NotifyNetSettingsChanged()
+{
+    for( API_HANDLER* handler : m_handlers )
+        handler->onNetSettingsChanged();
+}
+
+
 std::string KICAD_API_SERVER::SocketPath() const
 {
     return m_server ? m_server->SocketPath() : "";
@@ -268,16 +292,21 @@ void KICAD_API_SERVER::handleApiRequestString( std::string& aRequestString )
     }
 
     API_RESULT result;
+    bool notifyNetSettings = false;
 
     for( API_HANDLER* handler : m_handlers )
     {
         result = handler->Handle( request );
+        notifyNetSettings |= handler->clearNetSettingsNotification();
 
         if( result.has_value() )
             break;
         else if( result.error().status() != ApiStatusCode::AS_UNHANDLED )
             break;
     }
+
+    if( notifyNetSettings )
+        NotifyNetSettingsChanged();
 
     // Note: at the point we call Reply(), we no longer own requestString.
 

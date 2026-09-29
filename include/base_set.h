@@ -24,7 +24,17 @@
 #include <limits>
 #include <ostream>
 #include <stdexcept>
+
+// dynamic_bitset pulls in libpopcnt, whose static dispatch helpers go unused in the great
+// majority of the translation units this header reaches.
+#if defined( __GNUC__ ) && !defined( __clang__ )
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
 #include <dynamic_bitset.h>
+#if defined( __GNUC__ ) && !defined( __clang__ )
+#pragma GCC diagnostic pop
+#endif
 
 #include <core/arraydim.h>
 #include <core/kicad_algo.h>
@@ -277,7 +287,7 @@ public:
     {
         std::string ret;
 
-        int     bit_count = size();
+        int     bit_count = static_cast<int>( size() );
 
         for( int bit=0;  bit<bit_count;  ++bit )
         {
@@ -347,7 +357,7 @@ public:
      */
     int ParseHex( const std::string& str )
     {
-        return ParseHex( str.c_str(), str.length() );
+        return ParseHex( str.c_str(), static_cast<int>( str.length() ) );
     }
 
     /**
@@ -366,7 +376,7 @@ public:
         const char* rstart = aStart + aCount - 1;
         const char* rend   = aStart - 1;
 
-        const int bitcount = size();
+        const int bitcount = static_cast<const int>( size() );
 
         int nibble_ndx = 0;
 
@@ -400,7 +410,7 @@ public:
             ++nibble_ndx;
         }
 
-        int byte_count = aStart + aCount - 1 - rstart;
+        int byte_count = static_cast<int>( aStart + aCount - 1 - rstart );
 
         assert( byte_count >= 0 );
 

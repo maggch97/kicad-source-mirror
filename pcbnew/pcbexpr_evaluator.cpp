@@ -17,8 +17,6 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "pcbexpr_evaluator.h"
-
 #include <inspectable_impl.h>
 
 #include <cstdio>
@@ -27,11 +25,15 @@
 
 #include <board.h>
 #include <footprint.h>
+#include <gal/color4d.h>
+#include <geometry/eda_angle.h>
 #include <lset.h>
 #include <board_connected_item.h>
 #include <drc/drc_engine.h>
 #include <component_classes/component_class.h>
 #include <string_utils.h>
+
+#include "pcbexpr_evaluator.h"
 
 
 /* --------------------------------------------------------------------------------------------
@@ -401,6 +403,62 @@ KICAD_T PCBEXPR_CONTEXT::GetEffectiveType( const BOARD_ITEM* aItem ) const
 }
 
 
+PCBEXPR_PROPERTY_KIND PCBEXPR_VAR_REF::ClassifyProperty( const PROPERTY_BASE* aProperty )
+{
+    const TYPE_ID type = aProperty->TypeHash();
+
+    if( type == TYPE_HASH( int ) )
+        return PCBEXPR_PROPERTY_KIND::INT_KIND;
+    else if( type == TYPE_HASH( std::optional<int> ) )
+        return PCBEXPR_PROPERTY_KIND::OPTIONAL_INT;
+    else if( type == TYPE_HASH( unsigned ) )
+        return PCBEXPR_PROPERTY_KIND::UNSIGNED;
+    else if( type == TYPE_HASH( long long int ) )
+        return PCBEXPR_PROPERTY_KIND::LONG_LONG;
+    else if( type == TYPE_HASH( double ) )
+        return PCBEXPR_PROPERTY_KIND::DOUBLE;
+    else if( type == TYPE_HASH( std::optional<double> ) )
+        return PCBEXPR_PROPERTY_KIND::OPTIONAL_DOUBLE;
+    else if( type == TYPE_HASH( bool ) )
+        return PCBEXPR_PROPERTY_KIND::BOOL_KIND;
+    else if( type == TYPE_HASH( wxString ) )
+        return PCBEXPR_PROPERTY_KIND::STRING;
+    else if( aProperty->HasChoices() )
+        return PCBEXPR_PROPERTY_KIND::ENUM;
+    else if( type == TYPE_HASH( EDA_ANGLE ) )
+        return PCBEXPR_PROPERTY_KIND::ANGLE;
+    else if( type == TYPE_HASH( COLOR4D ) )
+        return PCBEXPR_PROPERTY_KIND::COLOR;
+
+    return PCBEXPR_PROPERTY_KIND::UNSUPPORTED;
+}
+
+
+LIBEVAL::VAR_TYPE_T PCBEXPR_VAR_REF::ExpressionType( PCBEXPR_PROPERTY_KIND aKind )
+{
+    switch( aKind )
+    {
+    case PCBEXPR_PROPERTY_KIND::INT_KIND:
+    case PCBEXPR_PROPERTY_KIND::OPTIONAL_INT:
+    case PCBEXPR_PROPERTY_KIND::UNSIGNED:
+    case PCBEXPR_PROPERTY_KIND::LONG_LONG:
+    case PCBEXPR_PROPERTY_KIND::BOOL_KIND: return LIBEVAL::VT_NUMERIC;
+
+    case PCBEXPR_PROPERTY_KIND::DOUBLE:
+    case PCBEXPR_PROPERTY_KIND::OPTIONAL_DOUBLE:
+    case PCBEXPR_PROPERTY_KIND::ANGLE: return LIBEVAL::VT_NUMERIC_DOUBLE;
+
+    case PCBEXPR_PROPERTY_KIND::STRING:
+    case PCBEXPR_PROPERTY_KIND::ENUM:
+    case PCBEXPR_PROPERTY_KIND::COLOR: return LIBEVAL::VT_STRING;
+
+    case PCBEXPR_PROPERTY_KIND::UNSUPPORTED: return LIBEVAL::VT_PARSE_ERROR;
+    }
+
+    return LIBEVAL::VT_PARSE_ERROR;
+}
+
+
 LIBEVAL::VALUE* PCBEXPR_VAR_REF::GetValue( LIBEVAL::CONTEXT* aCtx )
 {
     PCBEXPR_CONTEXT* context = static_cast<PCBEXPR_CONTEXT*>( aCtx );
@@ -445,58 +503,92 @@ LIBEVAL::VALUE* PCBEXPR_VAR_REF::GetValue( LIBEVAL::CONTEXT* aCtx )
     }
     else
     {
-        if( m_type == LIBEVAL::VT_NUMERIC )
+        if( !PROPERTY_MANAGER::Instance().IsAvailableFor( TYPE_HASH( *item ), it->second.property, item ) )
         {
-            if( m_isOptional )
-            {
-                std::optional<int> val = item->Get<std::optional<int>>( it->second );
-
-                if( val.has_value() )
-                    return new LIBEVAL::VALUE( static_cast<double>( val.value() ) );
-
-                return LIBEVAL::VALUE::MakeNullValue();
-            }
-
-            return new LIBEVAL::VALUE( static_cast<double>( item->Get<int>( it->second ) ) );
+            return new LIBEVAL::VALUE();
         }
-        else if( m_type == LIBEVAL::VT_NUMERIC_DOUBLE )
+
+        if( item->Type() == PCB_FOOTPRINT_T && item->GetBoard() )
         {
-            if( m_isOptional )
+            const wxString variant = item->GetBoard()->GetCurrentVariant();
+
+            if( !variant.IsEmpty() )
             {
-                std::optional<double> val = item->Get<std::optional<double>>( it->second );
+                FOOTPRINT*      fp = static_cast<FOOTPRINT*>( item );
+                const wxString& name = it->second.property->Name();
 
-                if( val.has_value() )
-                    return new LIBEVAL::VALUE( val.value() );
-
-                return LIBEVAL::VALUE::MakeNullValue();
+                if( name == wxT( "Do not Populate" ) )
+                    return new LIBEVAL::VALUE( static_cast<double>( fp->GetDNPForVariant( variant ) ) );
+                else if( name == wxT( "Exclude From Bill of Materials" ) )
+                    return new LIBEVAL::VALUE( static_cast<double>( fp->GetExcludedFromBOMForVariant( variant ) ) );
+                else if( name == wxT( "Exclude From Simulation" ) )
+                    return new LIBEVAL::VALUE( static_cast<double>( fp->GetExcludedFromSimForVariant( variant ) ) );
+                else if( name == wxT( "Exclude From Position Files" ) )
+                    return new LIBEVAL::VALUE(
+                            static_cast<double>( fp->GetExcludedFromPosFilesForVariant( variant ) ) );
             }
-
-            return new LIBEVAL::VALUE( item->Get<double>( it->second ) );
         }
-        else
+
+        switch( it->second.kind )
+        {
+        case PCBEXPR_PROPERTY_KIND::INT_KIND:
+            return new LIBEVAL::VALUE( static_cast<double>( item->Get<int>( it->second.property ) ) );
+
+        case PCBEXPR_PROPERTY_KIND::OPTIONAL_INT:
+        {
+            std::optional<int> val = item->Get<std::optional<int>>( it->second.property );
+
+            if( val )
+                return new LIBEVAL::VALUE( static_cast<double>( *val ) );
+
+            return LIBEVAL::VALUE::MakeNullValue();
+        }
+
+        case PCBEXPR_PROPERTY_KIND::UNSIGNED:
+            return new LIBEVAL::VALUE( static_cast<double>( item->Get<unsigned>( it->second.property ) ) );
+
+        case PCBEXPR_PROPERTY_KIND::LONG_LONG:
+            return new LIBEVAL::VALUE( static_cast<double>( item->Get<long long int>( it->second.property ) ) );
+
+        case PCBEXPR_PROPERTY_KIND::DOUBLE: return new LIBEVAL::VALUE( item->Get<double>( it->second.property ) );
+
+        case PCBEXPR_PROPERTY_KIND::OPTIONAL_DOUBLE:
+        {
+            std::optional<double> val = item->Get<std::optional<double>>( it->second.property );
+
+            if( val )
+                return new LIBEVAL::VALUE( *val );
+
+            return LIBEVAL::VALUE::MakeNullValue();
+        }
+
+        case PCBEXPR_PROPERTY_KIND::BOOL_KIND:
+            return new LIBEVAL::VALUE( static_cast<double>( item->Get<bool>( it->second.property ) ) );
+
+        case PCBEXPR_PROPERTY_KIND::STRING:
+        {
+            wxString str = item->Get<wxString>( it->second.property );
+
+            if( it->second.property->Name() == wxT( "Pin Type" ) )
+                return new PCBEXPR_PINTYPE_VALUE( str );
+
+            // If it quacks like a duck, it is a duck
+            double doubleVal;
+
+            if( EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, str, doubleVal ) )
+                return new LIBEVAL::VALUE( doubleVal );
+
+            return new LIBEVAL::VALUE( str );
+        }
+
+        case PCBEXPR_PROPERTY_KIND::ENUM:
         {
             wxString str;
 
-            if( !m_isEnum )
+            if( it->second.property->Name() == wxT( "Layer" ) || it->second.property->Name() == wxT( "Layer Top" )
+                || it->second.property->Name() == wxT( "Layer Bottom" ) )
             {
-                str = item->Get<wxString>( it->second );
-
-                if( it->second->Name() == wxT( "Pin Type" ) )
-                    return new PCBEXPR_PINTYPE_VALUE( str );
-
-                // If it quacks like a duck, it is a duck
-                double doubleVal;
-
-                if( EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, str, doubleVal ) )
-                    return new LIBEVAL::VALUE( doubleVal );
-
-                return new LIBEVAL::VALUE( str );
-            }
-            else if( it->second->Name() == wxT( "Layer" )
-                        || it->second->Name() == wxT( "Layer Top" )
-                        || it->second->Name() == wxT( "Layer Bottom" ) )
-            {
-                const wxAny& any = item->Get( it->second );
+                const wxAny& any = item->Get( it->second.property );
                 PCB_LAYER_ID layer;
 
                 if( any.GetAs<PCB_LAYER_ID>( &layer ) )
@@ -506,7 +598,7 @@ LIBEVAL::VALUE* PCBEXPR_VAR_REF::GetValue( LIBEVAL::CONTEXT* aCtx )
             }
             else
             {
-                const wxAny& any = item->Get( it->second );
+                const wxAny& any = item->Get( it->second.property );
 
                 if( any.GetAs<wxString>( &str ) )
                     return new LIBEVAL::VALUE( str );
@@ -514,7 +606,18 @@ LIBEVAL::VALUE* PCBEXPR_VAR_REF::GetValue( LIBEVAL::CONTEXT* aCtx )
 
             return new LIBEVAL::VALUE();
         }
+
+        case PCBEXPR_PROPERTY_KIND::ANGLE:
+            return new LIBEVAL::VALUE( item->Get<EDA_ANGLE>( it->second.property ).AsDegrees() );
+
+        case PCBEXPR_PROPERTY_KIND::COLOR:
+            return new LIBEVAL::VALUE( item->Get<COLOR4D>( it->second.property ).ToCSSString() );
+
+        case PCBEXPR_PROPERTY_KIND::UNSUPPORTED: return new LIBEVAL::VALUE();
+        }
     }
+
+    return new LIBEVAL::VALUE();
 }
 
 
@@ -618,11 +721,23 @@ std::unique_ptr<LIBEVAL::VAR_REF> PCBEXPR_UCODE::CreateVarRef( const wxString& a
                 return nullptr;
         }
 
-        // Navigation is only meaningful for the item operands; the layer pseudo-item "L" has
-        // no parent.
-        if( baseVar != wxT( "A" ) && baseVar != wxT( "AB" ) && baseVar != wxT( "B" ) )
+        // Navigation requires one concrete item; combined-item "AB" and layer "L" have no parent.
+        if( baseVar != wxT( "A" ) && baseVar != wxT( "B" ) )
             return nullptr;
     }
+
+    // Existing rules spell the layer under test "L.Layer"
+    if( baseVar == wxT( "L" ) && aField.CmpNoCase( wxT( "Layer" ) ) == 0 )
+        return std::make_unique<PCBEXPR_VAR_REF>( 2 );
+
+    if( !aField.IsEmpty() && ( baseVar == wxT( "AB" ) || baseVar == wxT( "L" ) ) )
+        return nullptr;
+
+    if( baseVar == wxT( "B" ) || baseVar == wxT( "AB" ) )
+        m_requiresPairItems = true;
+
+    if( baseVar == wxT( "B" ) )
+        m_referencesItemB = true;
 
     auto withNav =
             [&navigation]( std::unique_ptr<PCBEXPR_VAR_REF> aRef ) -> std::unique_ptr<PCBEXPR_VAR_REF>
@@ -689,6 +804,12 @@ std::unique_ptr<LIBEVAL::VAR_REF> PCBEXPR_UCODE::CreateVarRef( const wxString& a
     wxString field( aField );
     field.Replace( wxT( "_" ),  wxT( " " ) );
 
+    // Alias renamed properties so that older custom rules keep working.
+    if( !field.CmpNoCase( wxT( "Origin X" ) ) )
+        field = wxT( "Start X" );
+    else if( !field.CmpNoCase( wxT( "Origin Y" ) ) )
+        field = wxT( "Start Y" );
+
     for( const PROPERTY_MANAGER::CLASS_INFO& cls : propMgr.GetAllClasses() )
     {
         if( propMgr.IsOfType( cls.type, TYPE_HASH( BOARD_ITEM ) ) )
@@ -697,47 +818,18 @@ std::unique_ptr<LIBEVAL::VAR_REF> PCBEXPR_UCODE::CreateVarRef( const wxString& a
 
             if( prop )
             {
-                vref->AddAllowedClass( cls.type, prop );
+                PCBEXPR_PROPERTY_KIND kind = PCBEXPR_VAR_REF::ClassifyProperty( prop );
+                LIBEVAL::VAR_TYPE_T   expressionType = PCBEXPR_VAR_REF::ExpressionType( kind );
 
-                if( prop->TypeHash() == TYPE_HASH( int ) )
+                if( expressionType == LIBEVAL::VT_PARSE_ERROR
+                    || ( vref->GetType() != LIBEVAL::VT_UNDEFINED && vref->GetType() != expressionType ) )
                 {
-                    vref->SetType( LIBEVAL::VT_NUMERIC );
+                    vref->SetType( LIBEVAL::VT_PARSE_ERROR );
+                    return vref;
                 }
-                else if( prop->TypeHash() == TYPE_HASH( std::optional<int> ) )
-                {
-                    vref->SetType( LIBEVAL::VT_NUMERIC );
-                    vref->SetIsOptional();
-                }
-                else if( prop->TypeHash() == TYPE_HASH( double ) )
-                {
-                    vref->SetType( LIBEVAL::VT_NUMERIC_DOUBLE );
-                }
-                else if( prop->TypeHash() == TYPE_HASH( std::optional<double> ) )
-                {
-                    vref->SetType( LIBEVAL::VT_NUMERIC_DOUBLE );
-                    vref->SetIsOptional();
-                }
-                else if( prop->TypeHash() == TYPE_HASH( bool ) )
-                {
-                    vref->SetType( LIBEVAL::VT_NUMERIC );
-                }
-                else if( prop->TypeHash() == TYPE_HASH( wxString ) )
-                {
-                    vref->SetType( LIBEVAL::VT_STRING );
-                }
-                else if ( prop->HasChoices() )
-                {   // it's an enum, we treat it as string
-                    vref->SetType( LIBEVAL::VT_STRING );
-                    vref->SetIsEnum( true );
-                }
-                else
-                {
-                    wxString msg = wxString::Format( wxT( "PCBEXPR_UCODE::createVarRef: Unknown "
-                                                          "property type %s from %s." ),
-                                                     cls.name,
-                                                     field );
-                    wxFAIL_MSG( msg );
-                }
+
+                vref->AddAllowedClass( cls.type, prop, kind );
+                vref->SetType( expressionType );
             }
         }
     }
@@ -837,11 +929,12 @@ PCBEXPR_COMPILER::PCBEXPR_COMPILER( LIBEVAL::UNIT_RESOLVER* aUnitResolver )
  */
 
 PCBEXPR_EVALUATOR::PCBEXPR_EVALUATOR( LIBEVAL::UNIT_RESOLVER* aUnitResolver ) :
-    m_result( 0 ),
-    m_units( EDA_UNITS::MM ),
-    m_compiler( aUnitResolver ),
-    m_ucode(),
-    m_errorStatus()
+        m_result( 0 ),
+        m_resultAsDouble( 0.0 ),
+        m_units( EDA_UNITS::MM ),
+        m_compiler( aUnitResolver ),
+        m_ucode(),
+        m_errorStatus()
 {
 }
 
@@ -864,7 +957,8 @@ bool PCBEXPR_EVALUATOR::Evaluate( const wxString& aExpr )
 
     if( result->GetType() == LIBEVAL::VT_NUMERIC )
     {
-        m_result = KiROUND( result->AsDouble() );
+        m_resultAsDouble = result->AsDouble();
+        m_result = KiROUND( m_resultAsDouble );
         m_units = result->GetUnits();
     }
 

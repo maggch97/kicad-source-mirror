@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include <bitmaps.h>
+#include <api/api_utils.h>
 #include <api/schematic/schematic_types.pb.h>
 #include <google/protobuf/any.pb.h>
 #include <eda_draw_frame.h>
@@ -36,17 +37,23 @@
 #include <properties/property.h>
 #include <properties/property_mgr.h>
 
-SCH_GROUP::SCH_GROUP() : SCH_ITEM( nullptr, SCH_GROUP_T )
+
+SCH_GROUP::SCH_GROUP() :
+        SCH_ITEM( nullptr, SCH_GROUP_T )
 {
     SetLayer( LAYER_GROUP );
 }
 
-SCH_GROUP::SCH_GROUP( SCH_ITEM* aParent ) : SCH_ITEM( aParent, SCH_GROUP_T )
+
+SCH_GROUP::SCH_GROUP( SCH_ITEM* aParent ) :
+        SCH_ITEM( aParent, SCH_GROUP_T )
 {
     SetLayer( LAYER_GROUP );
 }
 
-SCH_GROUP::SCH_GROUP( SCH_SCREEN* aParent ) : SCH_ITEM( aParent, SCH_GROUP_T )
+
+SCH_GROUP::SCH_GROUP( SCH_SCREEN* aParent ) :
+        SCH_ITEM( aParent, SCH_GROUP_T )
 {
     SetLayer( LAYER_GROUP );
 }
@@ -67,11 +74,20 @@ void SCH_GROUP::Serialize( google::protobuf::Any& aContainer ) const
     for( EDA_ITEM* member : sortedItems )
         group.add_items()->set_value( member->m_Uuid.AsStdString() );
 
+    kiapi::common::PackCustomProperties( group.mutable_custom_properties(), *this );
     aContainer.PackFrom( group );
 }
 
 
 bool SCH_GROUP::Deserialize( const google::protobuf::Any& aContainer )
+{
+    return DeserializeGroup( aContainer, nullptr );
+}
+
+
+// Note: this only records the group members in m_deserializedItems.  A proper AddItem() must
+// be done in a second pass (FinalizeGroupDeserialization()).
+bool SCH_GROUP::DeserializeGroup( const google::protobuf::Any& aContainer, COMMIT* aCommit )
 {
     using namespace kiapi::schematic::types;
 
@@ -83,8 +99,10 @@ bool SCH_GROUP::Deserialize( const google::protobuf::Any& aContainer )
     const_cast<KIID&>( m_Uuid ) = KIID( group.id().value() );
     SetName( wxString::FromUTF8( group.name() ) );
     SetLocked( group.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+    kiapi::common::UnpackCustomProperties( group.custom_properties(), *this );
 
     m_items.clear();
+    m_deserializedItems.clear();
 
     SCHEMATIC* schematic = Schematic();
 
@@ -94,13 +112,18 @@ bool SCH_GROUP::Deserialize( const google::protobuf::Any& aContainer )
     for( const kiapi::common::types::KIID& memberId : group.items() )
     {
         KIID id( memberId.value() );
+        EDA_ITEM* item = schematic->ResolveItem( id, nullptr, true );
 
-        if( SCH_ITEM* item = schematic->ResolveItem( id, nullptr, true ) )
-            m_items.insert( item );
+        if( !item && aCommit )
+            item = aCommit->ResolveItem( id );
+
+        if( item )
+            m_deserializedItems.insert( item );
     }
 
     return true;
 }
+
 
 std::unordered_set<SCH_ITEM*> SCH_GROUP::GetSchItems() const
 {
@@ -480,14 +503,26 @@ double SCH_GROUP::Similarity( const SCH_ITEM& aOther ) const
 
     const SCH_GROUP& other = static_cast<const SCH_GROUP&>( aOther );
 
+    if( m_items.empty() )
+        return 0.0;
+
     double similarity = 0.0;
 
     for( EDA_ITEM* item : m_items )
     {
+        double maxSimilarity = 0.0;
+
         for( EDA_ITEM* otherItem : other.m_items )
         {
-            similarity += static_cast<SCH_ITEM*>( item )->Similarity( *static_cast<SCH_ITEM*>( otherItem ) );
+            double itemSimilarity = static_cast<SCH_ITEM*>( item )->Similarity( *static_cast<SCH_ITEM*>( otherItem ) );
+
+            maxSimilarity = std::max( maxSimilarity, itemSimilarity );
+
+            if( maxSimilarity == 1.0 )
+                break;
         }
+
+        similarity += maxSimilarity;
     }
 
     return similarity / m_items.size();
@@ -510,8 +545,8 @@ static struct SCH_GROUP_DESC
 
         const wxString groupTab = _HKI( "Group Properties" );
 
-        propMgr.AddProperty(
-                new PROPERTY<EDA_GROUP, wxString>( _HKI( "Name" ), &SCH_GROUP::SetName, &SCH_GROUP::GetName ),
-                groupTab );
+        propMgr.AddProperty( new PROPERTY<EDA_GROUP, wxString>( _HKI( "Name" ),
+                    &SCH_GROUP::SetName, &SCH_GROUP::GetName ),
+                    groupTab );
     }
 } _SCH_GROUP_DESC;

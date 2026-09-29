@@ -34,10 +34,8 @@
 class ZONE_PREVIEW_CANVAS : public PCB_DRAW_PANEL_GAL
 {
 public:
-    ZONE_PREVIEW_CANVAS( BOARD* aPcb, ZONE* aZone, PCB_LAYER_ID aLayer, wxWindow* aParentWindow,
-                         KIGFX::GAL_DISPLAY_OPTIONS& aOptions, wxWindowID aWindowId = 0,
-                         const wxPoint& aPosition = wxDefaultPosition, const wxSize& aSize = wxDefaultSize,
-                         GAL_TYPE aGalType = GAL_TYPE_OPENGL );
+    ZONE_PREVIEW_CANVAS( BOARD* aPcb, std::unique_ptr<ZONE> aZone, PCB_LAYER_ID aLayer, wxWindow* aParentWindow,
+                         KIGFX::GAL_DISPLAY_OPTIONS& aOptions, GAL_TYPE aGalType );
     ~ZONE_PREVIEW_CANVAS() override = default;
 
     const wxSize GetPageSizeIU() const;
@@ -53,5 +51,6 @@ public:
 private:
     BOARD*                                     m_pcb;
     std::unique_ptr<BOARD_EDGES_BOUNDING_ITEM> m_pcb_bounding_box;
+    std::unique_ptr<ZONE>                      m_zone;
     bool                                       m_zoomLocked;
 };

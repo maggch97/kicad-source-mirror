@@ -293,7 +293,10 @@ message TextAttributes
   HorizontalAlignment         horizontal_alignment = 2;
   VerticalAlignment           vertical_alignment   = 3;
   kiapi.common.types.Angle    angle                = 4;
-  double                      line_spacing         = 5;
+
+  // Explicit optional since 10.0.7; leaving absent will use the default spacing of 1.0
+  optional double             line_spacing         = 5;
+
   kiapi.common.types.Distance stroke_width         = 6;
   bool                        italic               = 7;
   bool                        bold                 = 8;
@@ -333,8 +336,28 @@ message TextBox
 
   // Reserved for future use; base objects don't support locking right now
   //kiapi.common.types.LockedState    locked       = 5;
+  reserved 5;
 
   string                            text         = 6;
+
+  // Reserved for future use; hyperlinks aren't currently supported but may be in the future
+  // string hyperlink = 7;
+  reserved 7;
+
+  // Since: 10.0.7
+  bool border_enabled = 8;
+
+  // Since: 10.0.7
+  kiapi.common.types.Distance margin_left   = 9;
+
+  // Since: 10.0.7
+  kiapi.common.types.Distance margin_top    = 10;
+
+  // Since: 10.0.7
+  kiapi.common.types.Distance margin_right  = 11;
+
+  // Since: 10.0.7
+  kiapi.common.types.Distance margin_bottom = 12;
 }
 
 message StrokeAttributes
@@ -425,6 +448,29 @@ message GraphicEllipseArcAttributes
   kiapi.common.types.Angle    end_angle    = 6;
 }
 
+enum LineEndingStyle
+{
+  LES_UNKNOWN    = 0;
+  LES_NONE       = 1;
+  LES_ARROW      = 2;
+  LES_CIRCLE     = 3;
+  LES_SQUARE     = 4;
+  LES_ARROW_OPEN = 5;
+}
+
+message LineEnding
+{
+  LineEndingStyle style = 1;
+
+  // Size in the same direction as the line.  If omitted, auto width (5x line width)
+  optional kiapi.common.types.Distance length = 2;
+
+  // Perpendicular size.  If omitted, auto width (matches length, or 5x line width)
+  optional kiapi.common.types.Distance width = 3;
+
+  optional kiapi.common.types.StrokeAttributes stroke = 4;
+}
+
 message GraphicShape
 {
   // Reserved for future use; base EDA_SHAPE doesn't have an ID or locked state right now
@@ -442,6 +488,10 @@ message GraphicShape
     GraphicEllipseAttributes     ellipse      = 10;
     GraphicEllipseArcAttributes  ellipse_arc  = 11;
   }
+
+  // Since 11.0
+  optional LineEnding start_ending = 12;
+  optional LineEnding end_ending   = 13;
 }
 
 // A SHAPE_COMPOUND in KiCad
@@ -510,16 +560,6 @@ enum ElectricalPinType
   EPT_NO_CONNECT = 12;
 }
 
-message RuleCheckerMarkerID
-{
-  string opaque_id = 1;
-}
-
-message RuleCheckerMarker
-{
-  RuleCheckerMarkerID id = 1;
-}
-
 enum RuleSeverity
 {
   RS_UNKNOWN = 0;
@@ -580,4 +620,13 @@ message PageSettings
   // Path to a .kicad_wks drawing sheet file.
   // Empty string means the default (built-in) drawing sheet is used.
   string drawing_sheet = 5;
+}
+
+// A single arbitrary user-defined string property attached to an item.
+// Keys and values are free-form strings whose meanings are defined by the user.
+// Since: 11.0
+message CustomProperty
+{
+  string key = 1;
+  string value = 2;
 }

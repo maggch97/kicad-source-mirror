@@ -80,6 +80,23 @@ public:
 
     const std::string& Token() const { return m_token; }
 
+    /**
+     * Return the default API socket path (without the ipc:// scheme).
+     */
+    static wxFileName StandardSocketPath();
+
+    /**
+     * Return the default API socket URL (including the ipc:// scheme).
+     */
+    static std::string StandardSocketUrl();
+
+    /**
+     * Calls onNetSettingsChanged() on every registered handler, so that editors can update
+     * state derived from project net settings after they are changed via the API.
+     * Must be called from the main thread.
+     */
+    void NotifyNetSettingsChanged();
+
 private:
 
     /**

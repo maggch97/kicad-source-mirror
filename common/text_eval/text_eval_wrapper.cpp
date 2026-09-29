@@ -1701,28 +1701,30 @@ EXPRESSION_EVALUATOR::createCombinedCallback( const std::unordered_map<wxString,
 
             // Create a resolver that will return true if the variable was found
             bool                             wasResolved = false;
-            std::function<bool( wxString* )> resolver = [&wasResolved]( wxString* token ) -> bool
-            {
-                // If we get here, ExpandTextVars found the variable and wants to resolve it
-                // For our purposes, we just want to know if it exists, so return false
-                // to keep the original ${varname} format, and set our flag
-                wasResolved = true;
-                return false; // Don't replace, just detect
-            };
+            std::function<bool( wxString* )> resolver =
+                    [&wasResolved]( wxString* token ) -> bool
+                    {
+                        // If we get here, ExpandTextVars found the variable and wants to resolve it
+                        // For our purposes, we just want to know if it exists, so return false
+                        // to keep the original ${varname} format, and set our flag
+                        wasResolved = true;
+                        return false; // Don't replace, just detect
+                    };
 
-            wxString expandedResult = ExpandTextVars( testString, &resolver );
+            wxString expandedResult = ExpandTextVars( testString, &resolver, INTERNAL );
 
             if( wasResolved )
             {
                 // Variable exists in KiCad's system, now get its actual value
-                std::function<bool( wxString* )> valueResolver = []( wxString* token ) -> bool
-                {
-                    // Let ExpandTextVars resolve this normally
-                    // We'll get the resolved value in token
-                    return false; // Use default resolution
-                };
+                std::function<bool( wxString* )> valueResolver =
+                        []( wxString* token ) -> bool
+                        {
+                            // Let ExpandTextVars resolve this normally
+                            // We'll get the resolved value in token
+                            return false; // Use default resolution
+                        };
 
-                wxString resolvedValue = ExpandTextVars( testString, &valueResolver );
+                wxString resolvedValue = ExpandTextVars( testString, &valueResolver, INTERNAL );
 
                 // Check if it was actually resolved (not still ${varname})
                 if( resolvedValue != testString )

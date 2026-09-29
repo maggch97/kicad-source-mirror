@@ -33,7 +33,7 @@
 class EDA_GROUP;
 class BASE_SCREEN;
 
-///< Types of changes
+/// Types of changes
 enum CHANGE_TYPE {
     CHT_ADD     = 1,
     CHT_REMOVE  = 2,
@@ -88,7 +88,7 @@ public:
         return Stage( aItem, CHT_REMOVE, aScreen );
     }
 
-    ///< Notify observers that aItem has been removed
+    /// Notify observers that aItem has been removed
     COMMIT& Removed( EDA_ITEM* aItem, BASE_SCREEN *aScreen = nullptr )
     {
         return Stage( aItem, CHT_REMOVE | CHT_DONE, aScreen );
@@ -126,10 +126,21 @@ public:
     void Unmodify( EDA_ITEM* aItem, BASE_SCREEN* aScreen );
 
     /// Execute the changes.
-    virtual void Push( const wxString& aMessage = wxT( "A commit" ), int aFlags = 0 ) = 0;
+    virtual void Push( const wxString& aMessage = wxEmptyString, int aFlags = 0 ) = 0;
 
     /// Revert the commit by restoring the modified items state.
     virtual void Revert() = 0;
+
+    int Checkpoint() { return (int) m_entries.size(); }
+    virtual void RevertToCheckpoint( int aCheckpoint ) = 0;
+
+    /**
+     * Search for an item in this commit that matches the provided KIID.
+     *
+     * @param aID is the KIID to search for in the committed items.
+     * @return null pointer if \a aID is null or the item is not found.
+     */
+    virtual EDA_ITEM* ResolveItem( KIID& aID ) = 0;
 
     bool Empty() const
     {
@@ -182,4 +193,3 @@ protected:
     std::set<std::pair<EDA_ITEM*, BASE_SCREEN*>> m_deletedItems;
     std::vector<COMMIT_LINE>                     m_entries;
 };
-

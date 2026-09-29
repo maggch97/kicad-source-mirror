@@ -533,16 +533,17 @@ bool TOOL_DISPATCHER::ShouldDropAutoRepeat( int aKeyCode, wxLongLong aNowMs, boo
 }
 
 
+const int MAX_MOUSE_BUTTON = 0x04;
+
 bool TOOL_DISPATCHER::isStaleAutoRepeat( const wxKeyEvent& aKeyEvent )
 {
     int key = aKeyEvent.GetKeyCode();
 
     // wxGetKeyState answers reliably for letters, digits and the named WXK_ codes used as
     // hotkeys; modifier-only keys never reach here.
-    bool keyIsDown = wxGetKeyState( static_cast<wxKeyCode>( key ) );
+    bool keyIsDown = key > MAX_MOUSE_BUTTON && wxGetKeyState( static_cast<wxKeyCode>( key ) );
 
-    return ShouldDropAutoRepeat( key, wxGetLocalTimeMillis(), keyIsDown, m_lastKeyCode,
-                                 m_lastKeyTime );
+    return ShouldDropAutoRepeat( key, wxGetLocalTimeMillis(), keyIsDown, m_lastKeyCode, m_lastKeyTime );
 }
 
 
@@ -563,6 +564,9 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
     KIPLATFORM::APP::ForceTimerMessagesToBeCreatedIfNecessary();
 
     wxEventType type = aEvent.GetEventType();
+
+    if( m_lastKeyCode > MAX_MOUSE_BUTTON && !wxGetKeyState( static_cast<wxKeyCode>( m_lastKeyCode ) ) )
+        m_lastKeyCode = 0;
 
     // Sometimes there is no window that has the focus (it happens when another PCB_BASE_FRAME
     // is opened and is iconized on Windows).
@@ -586,8 +590,9 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
 
     if( isMouseClick( type ) )
     {
-        if( m_toolMgr->GetToolHolder() && m_toolMgr->GetToolHolder()->GetToolCanvas() &&
-            !m_toolMgr->GetToolHolder()->GetToolCanvas()->HasFocus() )
+        if( m_toolMgr->GetToolHolder()
+                && m_toolMgr->GetToolHolder()->GetToolCanvas()
+                && !m_toolMgr->GetToolHolder()->GetToolCanvas()->HasFocus() )
         {
             m_toolMgr->GetToolHolder()->GetToolCanvas()->SetFocus();
         }
@@ -595,12 +600,13 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
 
     // Mouse handling
     // Note: wxEVT_LEFT_DOWN event must always be skipped.
-    if( type == wxEVT_MOTION || type == wxEVT_MOUSEWHEEL ||
-        type == wxEVT_MAGNIFY ||
-        isMouseClick( type ) ||
-        // Event issued when mouse retains position in screen coordinates,
-        // but changes in world coordinates (e.g. autopanning)
-        type == KIGFX::WX_VIEW_CONTROLS::EVT_REFRESH_MOUSE )
+    if( type == wxEVT_MOTION
+            || type == wxEVT_MOUSEWHEEL
+            || type == wxEVT_MAGNIFY
+            || isMouseClick( type )
+            // Event issued when mouse retains position in screen coordinates,
+            // but changes in world coordinates (e.g. autopanning)
+            || type == KIGFX::WX_VIEW_CONTROLS::EVT_REFRESH_MOUSE )
     {
         wxMouseEvent* me = static_cast<wxMouseEvent*>( &aEvent );
         int mods = decodeModifiers( me );
@@ -636,8 +642,7 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
         // when WX_VIEW_CONTROLS is not in use, like in the 3D viewer)
         if( !evt && me->GetWheelRotation() != 0 )
         {
-            const unsigned modBits =
-                    static_cast<unsigned>( mods ) & MD_MODIFIER_MASK;
+            const unsigned modBits = static_cast<unsigned>( mods ) & MD_MODIFIER_MASK;
             const bool shouldHandle = std::popcount( modBits ) > 1;
 
             if( shouldHandle )
@@ -770,13 +775,11 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
 
     if( evt )
     {
-        wxLogTrace( kicadTraceToolStack, wxS( "TOOL_DISPATCHER::DispatchWxEvent %s" ),
-                    evt->Format() );
+        wxLogTrace( kicadTraceToolStack, wxS( "TOOL_DISPATCHER::DispatchWxEvent %s" ), evt->Format() );
 
         handled = m_toolMgr->ProcessEvent( *evt );
 
-        wxLogTrace( kicadTraceToolStack,
-                    wxS( "TOOL_DISPATCHER::DispatchWxEvent - Handled: %s  %s" ),
+        wxLogTrace( kicadTraceToolStack, wxS( "TOOL_DISPATCHER::DispatchWxEvent - Handled: %s  %s" ),
                     ( handled ? wxS( "true" ) : wxS( "false" ) ), evt->Format() );
     }
 

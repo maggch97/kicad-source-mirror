@@ -50,6 +50,7 @@
 #include <wx/hyperlink.h>
 #include <wx/msgdlg.h>
 #include <sch_edit_tool.h>
+#include <tool/tool_manager.h>
 
 
 wxDEFINE_EVENT( EDA_EVT_CLOSE_ERC_DIALOG, wxCommandEvent );
@@ -102,7 +103,6 @@ DIALOG_ERC::DIALOG_ERC( SCH_EDIT_FRAME* parent ) :
 
     m_markerTreeModel = new ERC_TREE_MODEL( parent, m_markerDataView );
     m_markerDataView->AssociateModel( m_markerTreeModel );
-    m_markerTreeModel->Update( m_markerProvider, getSeverities() );
 
     // Prevent RTL locales from mirroring the text in the data views
     m_markerDataView->SetLayoutDirection( wxLayout_LeftToRight );
@@ -188,18 +188,14 @@ void DIALOG_ERC::UpdateAnnotationWarning()
     {
         if( !m_infoBar->IsShownOnScreen() )
         {
-            wxHyperlinkCtrl* button = new wxHyperlinkCtrl( m_infoBar, wxID_ANY, _( "Show Annotation dialog" ),
-                                                           wxEmptyString );
-
-            button->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& aEvent )>(
+            m_infoBar->RemoveAllButtons();
+            m_infoBar->AddLink( _( "Show Annotation dialog" ),
                           [&]( wxHyperlinkEvent& aEvent )
                           {
                               wxHtmlLinkEvent htmlEvent( aEvent.GetId(), wxHtmlLinkInfo( aEvent.GetURL() ) );
                               OnLinkClicked( htmlEvent );
-                          } ) );
+                          } );
 
-            m_infoBar->RemoveAllButtons();
-            m_infoBar->AddButton( button );
             m_infoBar->ShowMessage( _( "Schematic is not fully annotated. ERC results will be incomplete." ) );
         }
     }
@@ -413,8 +409,8 @@ void DIALOG_ERC::OnDeleteOneClick( wxCommandEvent& aEvent )
 
 void DIALOG_ERC::OnDeleteAllClick( wxCommandEvent& event )
 {
-    bool includeExclusions = false;
-    int  numExcluded = 0;
+    bool   includeExclusions = false;
+    size_t numExcluded = m_parent->Schematic().GetUnresolvedERCExclusionCount();
 
     if( m_markerProvider )
         numExcluded += m_markerProvider->GetCount( RPT_SEVERITY_EXCLUSION );
@@ -434,7 +430,10 @@ void DIALOG_ERC::OnDeleteAllClick( wxCommandEvent& event )
             includeExclusions = true;
     }
 
-    deleteAllMarkers( includeExclusions );
+    if( includeExclusions )
+        m_parent->Schematic().ClearUnresolvedERCExclusions();
+
+    DeleteAllMarkers( includeExclusions );
     m_ercRun = false;
 
     // redraw the schematic
@@ -486,8 +485,7 @@ void DIALOG_ERC::OnRunERCClick( wxCommandEvent& event )
 
     UpdateAnnotationWarning();
 
-    sch->RecordERCExclusions();
-    deleteAllMarkers( true );
+    m_parent->ClearErcMarkers();
 
     std::vector<std::reference_wrapper<RC_ITEM>> violations = ERC_ITEM::GetItemsWithSeverities();
     m_ignoredList->DeleteAllItems();
@@ -610,17 +608,7 @@ void DIALOG_ERC::testErc()
                          m_parent->Kiway().KiFACE( KIWAY::FACE_CVPCB ), &m_parent->Prj(), this );
     }
 
-    // Update marker list:
-    m_markerTreeModel->Update( m_markerProvider, getSeverities() );
-
-    // Display new markers from the current screen:
-    for( SCH_ITEM* marker : m_parent->GetScreen()->Items().OfType( SCH_MARKER_T ) )
-    {
-        m_parent->GetCanvas()->GetView()->Remove( marker );
-        m_parent->GetCanvas()->GetView()->Add( marker );
-    }
-
-    m_parent->GetCanvas()->Refresh();
+    m_parent->RefreshErcMarkers();
 }
 
 
@@ -650,12 +638,11 @@ void DIALOG_ERC::OnERCItemSelected( wxDataViewEvent& aEvent )
             // Determine the owning sheet for sheet-specific items
             std::shared_ptr<ERC_ITEM> ercItem = std::static_pointer_cast<ERC_ITEM>( node->m_RcItem );
 
+            if( ercItem->IsSheetSpecific() )
+                sheet = ercItem->GetSpecificSheetPath();
+
             switch( node->m_Type )
             {
-            case RC_TREE_NODE::MARKER:
-                if( ercItem->IsSheetSpecific() )
-                    sheet = ercItem->GetSpecificSheetPath();
-                break;
             case RC_TREE_NODE::MAIN_ITEM:
                 if( ercItem->MainItemHasSheetPath() )
                     sheet = ercItem->GetMainItemSheetPath();
@@ -667,6 +654,19 @@ void DIALOG_ERC::OnERCItemSelected( wxDataViewEvent& aEvent )
             default:
                 break;
             }
+        }
+
+        if( !sheet.empty() )
+        {
+            const auto currentPath = m_parent->Schematic().Hierarchy().GetSheetPathByKIIDPath( sheet.PathRef() );
+
+            if( !currentPath )
+            {
+                aEvent.Skip();
+                return;
+            }
+
+            sheet = *currentPath;
         }
 
         WINDOW_THAWER thawer( m_parent );
@@ -851,13 +851,7 @@ void DIALOG_ERC::OnERCItemRClick( wxDataViewEvent& aEvent )
             setMarkerExcluded( m_markerProvider, marker, false );
             m_parent->GetCanvas()->GetView()->Update( marker );
 
-            // The restored severity may fall outside the current filter, so re-filter when it no
-            // longer matches instead of leaving a stale node in the view.
-            if( getSeverities() & marker->GetSeverity() )
-                static_cast<RC_TREE_MODEL*>( aEvent.GetModel() )->ValueChanged( node );
-            else
-                static_cast<RC_TREE_MODEL*>( aEvent.GetModel() )->Update( m_markerProvider,
-                                                                          getSeverities() );
+            m_markerTreeModel->Update( m_markerProvider, getSeverities() );
 
             modified = true;
         }
@@ -884,13 +878,7 @@ void DIALOG_ERC::OnERCItemRClick( wxDataViewEvent& aEvent )
 
             m_parent->GetCanvas()->GetView()->Update( marker );
 
-            // The marker survives as an exclusion, so when exclusions are hidden it must leave
-            // the filtered view without being counted as deleted; a rebuild re-filters cleanly.
-            if( getSeverities() & RPT_SEVERITY_EXCLUSION )
-                static_cast<RC_TREE_MODEL*>( aEvent.GetModel() )->ValueChanged( node );
-            else
-                static_cast<RC_TREE_MODEL*>( aEvent.GetModel() )->Update( m_markerProvider,
-                                                                          getSeverities() );
+            m_markerTreeModel->Update( m_markerProvider, getSeverities() );
 
             modified = true;
         }
@@ -957,6 +945,7 @@ void DIALOG_ERC::OnERCItemRClick( wxDataViewEvent& aEvent )
 
         SCH_SCREENS ScreenList( m_parent->Schematic().Root() );
         ScreenList.DeleteMarkers( MARKER_BASE::MARKER_ERC, rcItem->GetErrorCode() );
+        m_parent->Schematic().ClearUnresolvedERCExclusions( rcItem->GetErrorCode() );
 
         // Rebuild model and view
         static_cast<RC_TREE_MODEL*>( aEvent.GetModel() )->Update( m_markerProvider, getSeverities() );
@@ -966,10 +955,18 @@ void DIALOG_ERC::OnERCItemRClick( wxDataViewEvent& aEvent )
 
     case ID_EDIT_PIN_CONFLICT_MAP:
         m_parent->ShowSchematicSetupDialog( _( "Pin Conflicts Map" ) );
+
+        // Rebuild model and view
+        static_cast<RC_TREE_MODEL*>( aEvent.GetModel() )->Update( m_markerProvider, getSeverities() );
+        updateDisplayedCounts();
         break;
 
     case ID_EDIT_SEVERITIES:
         m_parent->ShowSchematicSetupDialog( _( "Violation Severity" ) );
+
+        // Rebuild model and view
+        static_cast<RC_TREE_MODEL*>( aEvent.GetModel() )->Update( m_markerProvider, getSeverities() );
+        updateDisplayedCounts();
         break;
 
     case ID_EDIT_CONNECTION_GRID:
@@ -1005,6 +1002,7 @@ void DIALOG_ERC::OnIgnoredItemRClick( wxListEvent& event )
         if( settings.GetSeverity( errorCode ) != severity )
         {
             settings.SetSeverity( errorCode, (SEVERITY) severity );
+            m_ignoredList->DeleteItem( event.m_itemIndex );
 
             updateDisplayedCounts();
             redrawDrawPanel();
@@ -1073,7 +1071,7 @@ void DIALOG_ERC::ExcludeMarker( SCH_MARKER* aMarker )
 
     RC_TREE_NODE* node = nullptr;
 
-    if( m_notebook->GetSelection() == 0 )
+    if( !marker && m_notebook->GetSelection() == 0 )
     {
         node = RC_TREE_MODEL::ToNode( m_markerDataView->GetCurrentItem() );
 
@@ -1089,15 +1087,8 @@ void DIALOG_ERC::ExcludeMarker( SCH_MARKER* aMarker )
     setMarkerExcluded( m_markerProvider, marker, true );
     m_parent->GetCanvas()->GetView()->Update( marker );
 
-    if( node )
-    {
-        // The marker survives as an exclusion, so when exclusions are hidden it must leave the
-        // filtered view without being counted as deleted; a rebuild re-filters cleanly.
-        if( getSeverities() & RPT_SEVERITY_EXCLUSION )
-            m_markerTreeModel->ValueChanged( node );
-        else
-            m_markerTreeModel->Update( m_markerProvider, getSeverities() );
-    }
+    // Severity changes affect both report order and the tree's matching provider indices.
+    m_markerTreeModel->Update( m_markerProvider, getSeverities() );
 
     updateDisplayedCounts();
     redrawDrawPanel();
@@ -1124,7 +1115,7 @@ void DIALOG_ERC::OnSeverity( wxCommandEvent& aEvent )
 }
 
 
-void DIALOG_ERC::deleteAllMarkers( bool aIncludeExclusions )
+void DIALOG_ERC::DeleteAllMarkers( bool aIncludeExclusions )
 {
     // Clear current selection list to avoid selection of deleted items
     // Freeze to avoid repainting the dialog, which can cause a RePaint()
@@ -1173,7 +1164,8 @@ void DIALOG_ERC::OnSaveReport( wxCommandEvent& aEvent )
     ERC_REPORT reportWriter( &m_parent->Schematic(), m_parent->GetUserUnits(), m_markerProvider );
 
     bool success = false;
-    if( fn.GetExt() == FILEEXT::JsonFileExtension )
+
+    if( fn.GetExt().Lower() == FILEEXT::JsonFileExtension )
         success = reportWriter.WriteJsonReport( fn.GetFullPath() );
     else
         success = reportWriter.WriteTextReport( fn.GetFullPath() );

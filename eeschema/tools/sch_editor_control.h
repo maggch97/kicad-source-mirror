@@ -22,7 +22,7 @@
 #ifndef SCH_EDITOR_CONTROL_H
 #define SCH_EDITOR_CONTROL_H
 
-#include <sch_base_frame.h>
+#include <sch_edit_frame.h>
 #include <tools/sch_tool_base.h>
 #include <status_popup.h>
 
@@ -75,10 +75,10 @@ public:
     bool RescueLegacyProject( bool aRunningOnDemand );
     bool RescueSymbolLibTableProject( bool aRunningOnDemand );
 
-    ///< Notifies pcbnew about the selected item.
+    /// Notifies pcbnew about the selected item.
     int CrossProbeToPcb( const TOOL_EVENT& aEvent );
 
-    ///< Equivalent to the above, but initiated by the user.
+    /// Equivalent to the above, but initiated by the user.
     int ExplicitCrossProbeToPcb( const TOOL_EVENT& aEvent );
 
     int ExportSymbolsToLibrary( const TOOL_EVENT& aEvent );
@@ -86,23 +86,23 @@ public:
     int SimProbe( const TOOL_EVENT& aEvent );
     int SimTune( const TOOL_EVENT& aEvent );
 
-    ///< Highlight net under the cursor.
+    /// Highlight net under the cursor.
     int HighlightNet( const TOOL_EVENT& aEvent );
 
-    ///< Highlight net chain under the cursor.
+    /// Highlight net chain under the cursor.
     int HighlightNetChain( const TOOL_EVENT& aEvent );
     int RemoveFromNetChain( const TOOL_EVENT& aEvent );
 
-    ///< Remove any net highlighting
+    /// Remove any net highlighting
     int ClearHighlight( const TOOL_EVENT& aEvent );
 
-    ///< Update net highlighting after an edit
+    /// Update net highlighting after an edit
     int UpdateNetHighlighting( const TOOL_EVENT& aEvent );
 
-    ///< Launch a tool to highlight nets.
+    /// Launch a tool to highlight nets.
     int HighlightNetCursor( const TOOL_EVENT& aEvent );
 
-    ///< Replace one of a net chain's terminal pins.
+    /// Replace one of a net chain's terminal pins.
     int ReplaceTerminalPin( const TOOL_EVENT& aEvent );
     int NameNetChain( const TOOL_EVENT& aEvent );
     int CreateNetChainBetweenPins( const TOOL_EVENT& aEvent );
@@ -115,7 +115,7 @@ public:
     int Undo( const TOOL_EVENT& aEvent );
     int Redo( const TOOL_EVENT& aEvent );
 
-    ///< Clipboard support.
+    /// Clipboard support.
     int Cut( const TOOL_EVENT& aEvent );
     int Copy( const TOOL_EVENT& aEvent );
     int CopyAsText( const TOOL_EVENT& aEvent );
@@ -213,7 +213,7 @@ public:
     int CopyVariant( const TOOL_EVENT& aEvent );
 
 private:
-    ///< copy selection to clipboard or to m_duplicateClipboard
+    /// copy selection to clipboard or to m_duplicateClipboard
     bool doCopy( bool aUseDuplicateClipboard = false );
 
     bool rescueProject( RESCUER& aRescuer, bool aRunningOnDemand );
@@ -233,12 +233,9 @@ private:
     void setPastedSymbolInstances( const SCH_SCREEN* aScreen );
 
     /**
-     * Remove all pasted symbol instances that do not belong to the current project.
+     * Reconcile every pasted symbol's instances against the current project.
      *
-     * @warning This should **only** be called when cleaning up after a paste.  Otherwise it
-     *          could clobber symbol instances for schematics shared across projects.  Use
-     *          SCH_SCREENS::PruneOrphanedSymbolInstances() to clean up invalid instance for
-     *          the current project.
+     * @see PrunePastedSymbolInstances() for the rules and for when it is safe to call this.
      */
     void prunePastedSymbolInstances();
 
@@ -265,7 +262,7 @@ private:
     bool processCmpToFootprintLinkFile( const wxString& aFullFilename, bool aForceVisibilityState,
                                         bool aVisibilityState );
 
-    ///< Set up handlers for various events.
+    /// Set up handlers for various events.
     void setTransitions() override;
 
 private:

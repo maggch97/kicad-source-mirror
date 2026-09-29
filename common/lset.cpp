@@ -805,7 +805,6 @@ GAL_SET GAL_SET::DefaultVisible()
         LAYER_VIA_HOLEWALLS,
         LAYER_DRC_ERROR,
         LAYER_DRC_WARNING,
-        LAYER_DRC_SHAPES,
         // LAYER_DRC_EXCLUSION,      // DRC exclusions hidden by default
         LAYER_DRAWINGSHEET,
         LAYER_GP_OVERLAY,
@@ -820,7 +819,10 @@ GAL_SET GAL_SET::DefaultVisible()
         LAYER_LOCKED_ITEM_SHADOW,
         // LAYER_BOARD_OUTLINE_AREA,    // currently hidden by default
         LAYER_CONFLICTS_SHADOW,
-        LAYER_POINTS
+        LAYER_CONSTRAINT_SHADOW,
+        LAYER_POINTS,
+        LAYER_SUBGRIDS,
+        LAYER_VIA_STITCHING
     };
 
     static const GAL_SET saved( visible, arrayDim( visible ) );

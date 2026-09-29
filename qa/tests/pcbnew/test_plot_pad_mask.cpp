@@ -24,8 +24,6 @@
 #include <footprint.h>
 #include <pad.h>
 #include <pcb_track.h>
-#include <zone.h>
-#include <zone_filler.h>
 #include <pcbplot.h>
 #include <plotters/plotter_gerber.h>
 #include <pcb_plot_params.h>
@@ -69,6 +67,7 @@ BOOST_AUTO_TEST_CASE( RoundRectMaskMatchesInflatedOutline )
     auto footprint = std::make_unique<FOOTPRINT>( &board );
 
     auto pad = new PAD( footprint.get() );
+    pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
     pad->SetAttribute( PAD_ATTRIB::SMD );
     pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::ROUNDRECT );
     pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( padW, padH ) );
@@ -84,8 +83,7 @@ BOOST_AUTO_TEST_CASE( RoundRectMaskMatchesInflatedOutline )
 
     // Replicate the fixed plot-path mutation: grow the pad to padPlotsSize and
     // grow the corner radius by mask_clearance.
-    pad->SetSize( PADSTACK::ALL_LAYERS,
-                  VECTOR2I( padW + 2 * maskClearance, padH + 2 * maskClearance ) );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( padW + 2 * maskClearance, padH + 2 * maskClearance ) );
     pad->SetRoundRectCornerRadius( PADSTACK::ALL_LAYERS, originalRadius + maskClearance );
 
     SHAPE_POLY_SET produced;
@@ -125,11 +123,11 @@ BOOST_AUTO_TEST_CASE( RoundRectGerberMaskApertureHasCorrectRadius )
     BOARD board;
     board.GetDesignSettings().m_SolderMaskExpansion = 0;
 
-    auto footprint = std::make_unique<FOOTPRINT>( &board );
-    footprint->SetPosition( VECTOR2I( pcbIUScale.mmToIU( 50.0 ),
-                                      pcbIUScale.mmToIU( 50.0 ) ) );
+    std::unique_ptr<FOOTPRINT> footprint = std::make_unique<FOOTPRINT>( &board );
+    footprint->SetPosition( VECTOR2I( pcbIUScale.mmToIU( 50.0 ), pcbIUScale.mmToIU( 50.0 ) ) );
 
-    auto pad = new PAD( footprint.get() );
+    PAD* pad = new PAD( footprint.get() );
+    pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
     pad->SetAttribute( PAD_ATTRIB::SMD );
     pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::ROUNDRECT );
     pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( padW, padH ) );
@@ -213,8 +211,7 @@ BOOST_AUTO_TEST_CASE( RoundRectGerberMaskApertureHasCorrectRadius )
     const double expectedRadiusRatio = static_cast<double>( originalRadius + maskClearance )
                                        / static_cast<double>( padW + 2 * maskClearance );
     const double buggyRadiusRatio    = radiusRatio;
-    BOOST_TEST_MESSAGE( "Expected r/bbox " << expectedRadiusRatio
-                                           << " buggy " << buggyRadiusRatio );
+    BOOST_TEST_MESSAGE( "Expected r/bbox " << expectedRadiusRatio << " buggy " << buggyRadiusRatio );
 
     std::regex arcRe( R"(X(-?\d+)Y(-?\d+)I(-?\d+)J(-?\d+)D01\*)" );
     auto arcBegin = std::sregex_iterator( buffer.begin(), buffer.end(), arcRe );
@@ -230,11 +227,8 @@ BOOST_AUTO_TEST_CASE( RoundRectGerberMaskApertureHasCorrectRadius )
         double ratio = r / static_cast<double>( bboxExtent );
 
         BOOST_CHECK_MESSAGE( std::abs( ratio - expectedRadiusRatio ) < 1e-3,
-                             "Arc radius/bbox ratio " << ratio
-                                                      << " does not match expected "
-                                                      << expectedRadiusRatio
-                                                      << " (buggy value would be "
-                                                      << buggyRadiusRatio << ")" );
+                             "Arc radius/bbox ratio " << ratio << " does not match expected "  << expectedRadiusRatio
+                                                      << " (buggy value would be " << buggyRadiusRatio << ")" );
         arcCount++;
     }
 
@@ -245,75 +239,30 @@ BOOST_AUTO_TEST_CASE( RoundRectGerberMaskApertureHasCorrectRadius )
 }
 
 
-// Plot one layer to gerber and count draw and flash operations
-static int plotLayerOpCount( BOARD& aBoard, PCB_LAYER_ID aLayer )
+BOOST_AUTO_TEST_CASE( PthPadKeepsMaskOpeningWhenCopperRemoved )
 {
-    GERBER_PLOTTER         plotter;
-    SIMPLE_RENDER_SETTINGS renderSettings;
-    plotter.SetRenderSettings( &renderSettings );
-    plotter.UseX2format( true );
-
-    wxString gbrPath = wxFileName::CreateTempFileName( wxT( "kicad_gbr_24910" ) );
-    BOOST_REQUIRE( !gbrPath.IsEmpty() );
-    BOOST_REQUIRE( plotter.OpenFile( gbrPath ) );
-
-    plotter.SetViewport( VECTOR2I( 0, 0 ), pcbIUScale.IU_PER_MILS / 10, 1.0, false );
-    BOOST_REQUIRE( plotter.StartPlot( wxT( "1" ) ) );
-
-    PCB_PLOT_PARAMS plotOpts;
-    plotOpts.SetFormat( PLOT_FORMAT::GERBER );
-    plotOpts.SetUseGerberX2format( true );
-
-    PlotStandardLayer( &aBoard, &plotter, LSET( { aLayer } ), plotOpts );
-
-    BOOST_REQUIRE( plotter.EndPlot() );
-
-    wxFFile file( gbrPath, wxT( "rb" ) );
-    BOOST_REQUIRE( file.IsOpened() );
-    wxFileOffset len = file.Length();
-    std::string  buffer;
-    buffer.resize( static_cast<size_t>( len ) );
-    BOOST_REQUIRE_EQUAL( file.Read( buffer.data(), len ), static_cast<size_t>( len ) );
-    file.Close();
-    wxRemoveFile( gbrPath );
-
-    std::regex opRe( R"(X-?\d+Y-?\d+(?:I-?\d+J-?\d+)?D0[123]\*)" );
-    auto       begin = std::sregex_iterator( buffer.begin(), buffer.end(), opRe );
-    return static_cast<int>( std::distance( begin, std::sregex_iterator() ) );
-}
-
-
-// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24910
-// A "connected layers only" PTH pad connected on B.Cu only must not get
-// a mask aperture on F.Mask in gerber output.
-BOOST_AUTO_TEST_CASE( UnconnectedPthPadPlotsNoMaskAperture )
-{
-    const int diameter = pcbIUScale.mmToIU( 2.0 );
-    const int drill = pcbIUScale.mmToIU( 1.0 );
-
     BOARD board;
-    board.GetDesignSettings().m_SolderMaskExpansion = 0;
 
-    auto net = new NETINFO_ITEM( &board, "N1", 1 );
+    NETINFO_ITEM* net = new NETINFO_ITEM( &board, "N1", 1 );
     board.Add( net );
 
     const VECTOR2I padPos( pcbIUScale.mmToIU( 50.0 ), pcbIUScale.mmToIU( 50.0 ) );
 
-    auto footprint = std::make_unique<FOOTPRINT>( &board );
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
     footprint->SetPosition( padPos );
 
-    auto pad = new PAD( footprint.get() );
+    PAD* pad = new PAD( footprint );
     pad->SetAttribute( PAD_ATTRIB::PTH );
     pad->SetLayerSet( PAD::PTHMask() );
-    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( diameter, diameter ) );
-    pad->SetDrillSize( VECTOR2I( drill, drill ) );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( pcbIUScale.mmToIU( 2.0 ), pcbIUScale.mmToIU( 2.0 ) ) );
+    pad->SetDrillSize( VECTOR2I( pcbIUScale.mmToIU( 1.0 ), pcbIUScale.mmToIU( 1.0 ) ) );
     pad->SetPosition( padPos );
     pad->SetUnconnectedLayerMode( UNCONNECTED_LAYER_MODE::REMOVE_ALL );
     pad->SetNet( net );
     footprint->Add( pad );
-    board.Add( footprint.release() );
+    board.Add( footprint );
 
-    auto track = new PCB_TRACK( &board );
+    PCB_TRACK* track = new PCB_TRACK( &board );
     track->SetStart( padPos );
     track->SetEnd( padPos + VECTOR2I( pcbIUScale.mmToIU( 5.0 ), 0 ) );
     track->SetLayer( B_Cu );
@@ -325,71 +274,9 @@ BOOST_AUTO_TEST_CASE( UnconnectedPthPadPlotsNoMaskAperture )
 
     BOOST_REQUIRE( !pad->FlashLayer( F_Cu ) );
     BOOST_REQUIRE( pad->FlashLayer( B_Cu ) );
-    BOOST_REQUIRE( !pad->FlashLayer( F_Mask ) );
-    BOOST_REQUIRE( pad->FlashLayer( B_Mask ) );
 
-    BOOST_CHECK_EQUAL( plotLayerOpCount( board, F_Mask ), 0 );
-    BOOST_CHECK_GT( plotLayerOpCount( board, B_Mask ), 0 );
-}
-
-
-// A "connected layers only" PTH pad connected on F.Cu only through a zone
-// fill keeps its copper there, so the F.Mask aperture must stay too.
-BOOST_AUTO_TEST_CASE( ZoneConnectedPthPadKeepsMaskAperture )
-{
-    const int diameter = pcbIUScale.mmToIU( 2.0 );
-    const int drill = pcbIUScale.mmToIU( 1.0 );
-
-    BOARD board;
-    board.GetDesignSettings().m_SolderMaskExpansion = 0;
-
-    auto net = new NETINFO_ITEM( &board, "N1", 1 );
-    board.Add( net );
-
-    const VECTOR2I padPos( pcbIUScale.mmToIU( 50.0 ), pcbIUScale.mmToIU( 50.0 ) );
-
-    auto footprint = std::make_unique<FOOTPRINT>( &board );
-    footprint->SetPosition( padPos );
-
-    auto pad = new PAD( footprint.get() );
-    pad->SetAttribute( PAD_ATTRIB::PTH );
-    pad->SetLayerSet( PAD::PTHMask() );
-    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( diameter, diameter ) );
-    pad->SetDrillSize( VECTOR2I( drill, drill ) );
-    pad->SetPosition( padPos );
-    pad->SetUnconnectedLayerMode( UNCONNECTED_LAYER_MODE::REMOVE_ALL );
-    pad->SetNet( net );
-    footprint->Add( pad );
-    board.Add( footprint.release() );
-
-    ZONE* zone = new ZONE( &board );
-    zone->SetLayer( F_Cu );
-    zone->SetNet( net );
-    zone->SetPadConnection( ZONE_CONNECTION::FULL );
-    zone->SetMinThickness( pcbIUScale.mmToIU( 0.2 ) );
-
-    SHAPE_POLY_SET outline;
-    outline.NewOutline();
-    outline.Append( VECTOR2I( pcbIUScale.mmToIU( 40 ), pcbIUScale.mmToIU( 40 ) ) );
-    outline.Append( VECTOR2I( pcbIUScale.mmToIU( 60 ), pcbIUScale.mmToIU( 40 ) ) );
-    outline.Append( VECTOR2I( pcbIUScale.mmToIU( 60 ), pcbIUScale.mmToIU( 60 ) ) );
-    outline.Append( VECTOR2I( pcbIUScale.mmToIU( 40 ), pcbIUScale.mmToIU( 60 ) ) );
-    zone->AddPolygon( outline.COutline( 0 ) );
-    board.Add( zone );
-
-    board.BuildConnectivity();
-
-    ZONE_FILLER        filler( &board, nullptr );
-    std::vector<ZONE*> toFill = { zone };
-    BOOST_REQUIRE( filler.Fill( toFill ) );
-
-    BOOST_REQUIRE( pad->FlashLayer( F_Cu ) );
-    BOOST_REQUIRE( !pad->FlashLayer( B_Cu ) );
     BOOST_CHECK( pad->FlashLayer( F_Mask ) );
-    BOOST_CHECK( !pad->FlashLayer( B_Mask ) );
-
-    BOOST_CHECK_GT( plotLayerOpCount( board, F_Mask ), 0 );
-    BOOST_CHECK_EQUAL( plotLayerOpCount( board, B_Mask ), 0 );
+    BOOST_CHECK( pad->FlashLayer( B_Mask ) );
 }
 
 

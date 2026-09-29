@@ -194,6 +194,20 @@ public:
      */
     void UnregisterUnitBinder( UNIT_BINDER* aUnitBinder );
 
+    /**
+     * A mode agnostic way to close a dialog.
+     *
+     * This replaces the protected method wxDialog::EndDialog() which unfortunately was not made virtual
+     * and knows nothing of our custom QuasiModal behavior.
+     *
+     * @warning Do not call EndModal or EndQuasimodal directly.  This is a bug because it's not
+     *          known in advance how the dialog was opened and cannot be guaranteed not to change in
+     *          the future.
+     *
+     * @param aReturnCode is the return code from ending Modal and QuasiModal dialogs.
+     */
+    void EndDialogShim( int aReturnCode );
+
 protected:
     /**
      * In all dialogs, we must call the same functions to fix minimal dlg size, the default
@@ -282,6 +296,13 @@ private:
      * EndQuasiModal which is possible with any dialog derived from #DIALOG_SHIM.
      */
     void OnCloseWindow( wxCloseEvent& aEvent );
+    void OnActivate( wxActivateEvent& aEvent );
+
+    /**
+     * Focus the requested initial target if it is visible, otherwise focus the dialog
+     * itself so keyboard events (especially ESC) are always delivered.
+     */
+    void forceInitialFocus();
 
     void OnSize( wxSizeEvent& aEvent );
     void OnMove( wxMoveEvent& aEvent );
@@ -310,7 +331,23 @@ private:
     std::string generateKey( const wxWindow* aWin ) const;
 
     void registerUndoRedoHandlers( wxWindowList& aChildren );
+
+    /**
+     * Tell the undo mechanism to snapshot the current value of a control and record it
+     * as an undo step when the value changes.
+     *
+     * If you call this from an event handler that generates multiple change events,
+     * they will be coalesced into a single undo step.
+     */
     void recordControlChange( wxWindow* aCtrl );
+
+    /**
+     * Apply outstanding control changes to the undo stack, and clear the pending list.
+     *
+     * Runs at the end of the current event handler.
+     */
+    void flushPendingControlChanges();
+
     void onCommandEvent( wxCommandEvent& aEvent );
     void onSpinEvent( wxSpinEvent& aEvent );
     void onSpinDoubleEvent( wxSpinDoubleEvent& aEvent );
@@ -368,6 +405,7 @@ protected:
     std::vector<UNDO_STEP>            m_undoStack;
     std::vector<UNDO_STEP>            m_redoStack;
     std::map<wxWindow*, wxVariant>    m_currentValues;
+    std::set<wxWindow*>               m_controlsWithPendingChanges;
     std::set<wxWindow*>               m_noControlUndoRedo;
     bool                              m_handlingUndoRedo;
     bool                              m_childReleased;

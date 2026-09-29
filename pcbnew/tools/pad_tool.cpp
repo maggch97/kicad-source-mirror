@@ -88,8 +88,8 @@ bool PAD_TOOL::Init()
         CONDITIONAL_MENU& menu = selTool->GetToolMenu().GetMenu();
 
         SELECTION_CONDITION padSel = SELECTION_CONDITIONS::HasType( PCB_PAD_T );
-        SELECTION_CONDITION singlePadSel = SELECTION_CONDITIONS::Count( 1 ) &&
-                                           SELECTION_CONDITIONS::OnlyTypes( padTypes );
+        SELECTION_CONDITION singlePadSel = SELECTION_CONDITIONS::Count( 1 )
+                                            && SELECTION_CONDITIONS::OnlyTypes( padTypes );
 
         auto explodeCondition =
                 [this]( const SELECTION& aSel )
@@ -204,9 +204,28 @@ static void doPushPadProperties( BOARD& board, const PAD& aSrcPad, BOARD_COMMIT&
 
         for( PAD* pad : footprint->Pads() )
         {
-            // TODO(JE) padstacks
-            if( aPadShapeFilter && pad->GetShape( PADSTACK::ALL_LAYERS ) != aSrcPad.GetShape( PADSTACK::ALL_LAYERS ) )
-                continue;
+            if( aPadShapeFilter )
+            {
+                bool shapesMatch = true;
+
+                // Compare in both directions to catch all potentialy unique layer defintions
+                pad->Padstack().ForEachUniqueLayer(
+                        [&]( PCB_LAYER_ID aLayer )
+                        {
+                            if( pad->GetShape( aLayer ) != aSrcPad.GetShape( aLayer ) )
+                                shapesMatch = false;
+                        } );
+
+                aSrcPad.Padstack().ForEachUniqueLayer(
+                        [&]( PCB_LAYER_ID aLayer )
+                        {
+                            if( aSrcPad.GetShape( aLayer ) != pad->GetShape( aLayer ) )
+                                shapesMatch = false;
+                        } );
+
+                if( !shapesMatch )
+                    continue;
+            }
 
             EDA_ANGLE padAngle = pad->GetOrientation() - footprint->GetOrientation();
 
@@ -320,7 +339,7 @@ int PAD_TOOL::EnumeratePads( const TOOL_EVENT& aEvent )
 
     m_toolMgr->RunAction( ACTIONS::selectionClear );
 
-    frame()->PushTool( aEvent );
+    SCOPED_TOOL_PUSHER raii( frame(), aEvent );
 
     VECTOR2I          oldMousePos;  // store the previous mouse cursor position, during mouse drag
     std::list<PAD*>   selectedPads;
@@ -348,6 +367,8 @@ int PAD_TOOL::EnumeratePads( const TOOL_EVENT& aEvent )
     RENDER_SETTINGS*     settings = view->GetPainter()->GetSettings();
     const std::set<int>& activeLayers = settings->GetHighContrastLayers();
     bool                 isHighContrast = settings->GetHighContrast();
+
+    view->SyncLayerVisibilityCache();   // Required for ViewGetLOD() calls.
 
     auto checkVisibility =
             [&]( BOARD_ITEM* item )
@@ -415,15 +436,11 @@ int PAD_TOOL::EnumeratePads( const TOOL_EVENT& aEvent )
         {
             m_toolMgr->RunAction( ACTIONS::selectionClear );
             commit.Revert();
-
-            frame()->PopTool( aEvent );
             break;
         }
         else if( evt->IsActivate() )
         {
             commit.Push( _( "Renumber Pads" ) );
-
-            frame()->PopTool( aEvent );
             break;
         }
         else if( evt->IsDrag( BUT_LEFT ) || evt->IsClick( BUT_LEFT ) )
@@ -522,10 +539,9 @@ int PAD_TOOL::EnumeratePads( const TOOL_EVENT& aEvent )
                 }
             }
         }
-        else if( evt->IsDblClick( BUT_LEFT ) )
+        else if( evt->IsDblClick( BUT_LEFT ) || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
             commit.Push( _( "Renumber Pads" ) );
-            frame()->PopTool( aEvent );
             break;
         }
         else if( evt->IsClick( BUT_RIGHT ) )
@@ -584,7 +600,6 @@ int PAD_TOOL::PlacePad( const TOOL_EVENT& aEvent )
 
         std::unique_ptr<BOARD_ITEM> CreateItem() override
         {
-            // TODO(JE) padstacks
             PAD* pad = new PAD( m_board->GetFirstFootprint() );
             PAD* master = m_frame->GetDesignSettings().m_Pad_Master.get();
 
@@ -653,8 +668,8 @@ int PAD_TOOL::PlacePad( const TOOL_EVENT& aEvent )
                 ignored_items.insert( ignored_items.end(), graphics.begin(), graphics.end() );
             }
 
-            VECTOR2I cursorPos = m_gridHelper.BestSnapAnchor( position, LSET::AllLayersMask(), GRID_CURRENT,
-                                                              ignored_items );
+            VECTOR2I cursorPos = m_gridHelper.ResolveSnap( position, LSET::AllLayersMask(),
+                                                           GRID_CURRENT, ignored_items      ).position;
             viewControls->ForceCursorPosition( true, cursorPos );
             aItem->SetPosition( cursorPos );
         }
@@ -703,16 +718,15 @@ int PAD_TOOL::EditPad( const TOOL_EVENT& aEvent )
     }
     else if( selection.Size() == 1 && selection[0]->Type() == PCB_PAD_T )
     {
-        PCB_LAYER_ID layer;
         PAD*         pad = static_cast<PAD*>( selection[0] );
         BOARD_COMMIT commit( frame() );
 
         commit.Modify( pad );
-        explodePad( pad, &layer, commit );
+        explodePad( pad, commit );
         commit.Push( _( "Edit Pad" ) );
 
         m_toolMgr->RunAction( ACTIONS::selectionClear );
-        frame()->SetActiveLayer( layer );
+        frame()->SetActiveLayer( pad->GetPrincipalLayer() );
 
         settings->m_PadEditModePad = pad;
         enterPadEditMode();
@@ -827,41 +841,49 @@ void PAD_TOOL::ExitPadEditMode()
 }
 
 
-void PAD_TOOL::explodePad( PAD* aPad, PCB_LAYER_ID* aLayer, BOARD_COMMIT& aCommit )
+void PAD_TOOL::explodePad( PAD* aPad, BOARD_COMMIT& aCommit )
 {
-    if( aPad->IsOnLayer( F_Cu ) )
-        *aLayer = F_Cu;
-    else if( aPad->IsOnLayer( B_Cu ) )
-        *aLayer = B_Cu;
-    else
-        *aLayer = aPad->GetLayerSet().UIOrder().front();
-
-    // TODO(JE) padstacks
-    if( aPad->GetShape( PADSTACK::ALL_LAYERS ) == PAD_SHAPE::CUSTOM )
-    {
-        for( const std::shared_ptr<PCB_SHAPE>& primitive : aPad->GetPrimitives( PADSTACK::ALL_LAYERS ) )
-        {
-            PCB_SHAPE* shape = static_cast<PCB_SHAPE*>( primitive->Duplicate( true, &aCommit ) );
-
-            shape->SetParent( board()->GetFirstFootprint() );
-            shape->Rotate( VECTOR2I( 0, 0 ), aPad->GetOrientation() );
-            shape->Move( aPad->ShapePos( PADSTACK::ALL_LAYERS ) );
-            shape->SetLayer( *aLayer );
-
-            if( shape->IsProxyItem() && shape->GetShape() == SHAPE_T::SEGMENT )
+    auto explodePrimitives =
+            [&]( PCB_LAYER_ID padstackStorageLayer, PCB_LAYER_ID targetBoardLayer )
             {
-                if( aPad->GetLocalThermalSpokeWidthOverride().has_value() )
-                    shape->SetWidth( aPad->GetLocalThermalSpokeWidthOverride().value() );
-                else
-                    shape->SetWidth( pcbIUScale.mmToIU( ZONE_THERMAL_RELIEF_COPPER_WIDTH_MM ) );
-            }
+                if( aPad->GetShape( padstackStorageLayer ) == PAD_SHAPE::CUSTOM )
+                {
+                    for( const std::shared_ptr<PCB_SHAPE>& primitive : aPad->GetPrimitives( padstackStorageLayer ) )
+                    {
+                        PCB_SHAPE* shape = static_cast<PCB_SHAPE*>( primitive->Duplicate( true, &aCommit ) );
 
-            aCommit.Add( shape );
-        }
+                        shape->SetParent( board()->GetFirstFootprint() );
+                        shape->Rotate( VECTOR2I( 0, 0 ), aPad->GetOrientation() );
+                        shape->Move( aPad->ShapePos( padstackStorageLayer ) );
+                        shape->SetLayer( targetBoardLayer );
 
-        // TODO(JE) padstacks
-        aPad->SetShape( PADSTACK::ALL_LAYERS, aPad->GetAnchorPadShape( PADSTACK::ALL_LAYERS ) );
-        aPad->DeletePrimitivesList();
+                        if( shape->IsProxyItem() && shape->GetShape() == SHAPE_T::SEGMENT )
+                        {
+                            if( aPad->GetLocalThermalSpokeWidthOverride().has_value() )
+                                shape->SetWidth( aPad->GetLocalThermalSpokeWidthOverride().value() );
+                            else
+                                shape->SetWidth( pcbIUScale.mmToIU( ZONE_THERMAL_RELIEF_COPPER_WIDTH_MM ) );
+                        }
+
+                        aCommit.Add( shape );
+                    }
+
+                    aPad->SetShape( padstackStorageLayer, aPad->GetAnchorPadShape( padstackStorageLayer ) );
+                    aPad->DeletePrimitivesList( padstackStorageLayer );
+                }
+            };
+
+    if( aPad->Padstack().Mode() == PADSTACK::MODE::NORMAL )
+    {
+        explodePrimitives( PADSTACK::ALL_LAYERS, aPad->GetPrincipalLayer() );
+    }
+    else
+    {
+        aPad->Padstack().ForEachUniqueLayer(
+                [&]( PCB_LAYER_ID layer )
+                {
+                    explodePrimitives( layer, layer );
+                } );
     }
 
     aPad->SetFlags( ENTERED );
@@ -878,6 +900,7 @@ std::vector<PCB_SHAPE*> PAD_TOOL::RecombinePad( PAD* aPad, bool aIsDryRun )
 
     return aPad->Recombine( aIsDryRun, maxError );
 }
+
 
 int PAD_TOOL::PadTable( const TOOL_EVENT& aEvent )
 {

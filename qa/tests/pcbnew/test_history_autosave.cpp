@@ -18,16 +18,20 @@
  */
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
+#include <qa_utils/file_utils.h>
 
 #include <board.h>
+#include <board_design_settings.h>
 #include <local_history.h>
 #include <pgm_base.h>
 #include <project.h>
+#include <project/project_file.h>
 #include <settings/common_settings.h>
 #include <settings/settings_manager.h>
 
 #include <git2.h>
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -105,38 +109,83 @@ struct SCOPED_PROJECT_LOAD
 };
 
 
-// Recursively remove the directory on destruction so test failures (which throw out of
-// BOOST_REQUIRE) do not leak temp directories.
-struct SCOPED_TEMP_DIR
-{
-    explicit SCOPED_TEMP_DIR( const wxString& aPrefix )
-    {
-        wxString base = wxStandardPaths::Get().GetTempDir();
-        m_path = base + wxFileName::GetPathSeparator() + aPrefix
-                 + wxString::Format( wxS( "_%lu_%ld" ),
-                                     static_cast<unsigned long>( ::wxGetProcessId() ),
-                                     static_cast<long>( wxDateTime::UNow().GetTicks() ) );
-        wxFileName::Mkdir( m_path, 0777, wxPATH_MKDIR_FULL );
-    }
-
-    ~SCOPED_TEMP_DIR()
-    {
-        if( !m_path.IsEmpty() && wxDirExists( m_path ) )
-            wxFileName::Rmdir( m_path, wxPATH_RMDIR_RECURSIVE );
-    }
-
-    const wxString& Path() const { return m_path; }
-
-    wxString m_path;
-};
-
-
 void writeTextFile( const wxString& aPath, const wxString& aContents )
 {
     wxFFile f( aPath, wxT( "w" ) );
     BOOST_REQUIRE( f.IsOpened() );
     f.Write( aContents );
     f.Close();
+}
+
+
+std::string readTextFile( const wxString& aPath )
+{
+    wxFFile f( aPath, wxT( "rb" ) );
+    BOOST_REQUIRE( f.IsOpened() );
+
+    wxString text;
+    BOOST_REQUIRE( f.ReadAll( &text ) );
+
+    return text.ToStdString();
+}
+
+
+std::string historyEntryBytes( const HISTORY_FILE_DATA& aEntry )
+{
+    if( !aEntry.content.empty() )
+        return aEntry.content;
+
+    if( !aEntry.sourcePath.IsEmpty() )
+        return readTextFile( aEntry.sourcePath );
+
+    return std::string();
+}
+
+
+// One project seeded on disk and loaded, shared by the snapshot tests.
+struct SNAPSHOT_PROJECT
+{
+    SNAPSHOT_PROJECT( const wxString& aDirPrefix, const wxString& aFileName ) :
+            m_tempDir( aDirPrefix ),
+            m_proPath( m_tempDir.ChildPathStr( aFileName ) )
+    {
+        writeTextFile( m_proPath, wxS( "{ \"meta\": { \"version\": 3 } }\n" ) );
+        m_project = std::make_unique<SCOPED_PROJECT_LOAD>( m_mgr, m_proPath );
+    }
+
+    PROJECT&      Project() { return m_mgr.Prj(); }
+    PROJECT_FILE& ProjectFile() { return m_mgr.Prj().GetProjectFile(); }
+
+    SETTINGS_MANAGER                     m_mgr;
+    KI_TEST::SCOPED_TEMP_DIR             m_tempDir;
+    wxString                             m_proPath;
+    std::unique_ptr<SCOPED_PROJECT_LOAD> m_project;
+};
+
+
+void addViaStackPreset( BOARD_DESIGN_SETTINGS& aSettings, const wxString& aName )
+{
+    VIA_STACK_PRESET preset;
+    preset.m_Name = aName;
+    aSettings.m_ViaStackPresets.push_back( preset );
+}
+
+
+// Snapshot the project and return the bytes recorded for the .kicad_pro.
+std::string snapshotProjectBytes( PROJECT& aProject )
+{
+    std::vector<HISTORY_FILE_DATA> fileData;
+    aProject.SaveToHistory( aProject.GetProjectFullName(), fileData );
+
+    auto it = std::find_if( fileData.begin(), fileData.end(),
+                            []( const HISTORY_FILE_DATA& aEntry )
+                            {
+                                return aEntry.relativePath.EndsWith( wxS( ".kicad_pro" ) );
+                            } );
+
+    BOOST_REQUIRE( it != fileData.end() );
+
+    return historyEntryBytes( *it );
 }
 }  // namespace
 
@@ -208,8 +257,8 @@ BOOST_AUTO_TEST_CASE( NoSnapshotWithoutProjectFile )
     SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
     backupEnabled = true;
 
-    SCOPED_TEMP_DIR notAProject( wxS( "kicad_qa_no_project" ) );
-    const wxString& path = notAProject.Path();
+    KI_TEST::SCOPED_TEMP_DIR notAProject( wxS( "kicad_qa_no_project" ) );
+    const wxString& path = notAProject.PathStr();
 
     // Drop a board file in but no .kicad_pro - this mirrors saving a board to /tmp
     // from standalone pcbnew.
@@ -243,8 +292,8 @@ BOOST_AUTO_TEST_CASE( CommitFullProjectSnapshotHandlesSubdirectories )
     SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
     backupEnabled = true;
 
-    SCOPED_TEMP_DIR project( wxS( "kicad_qa_subdirs" ) );
-    const wxString& path = project.Path();
+    KI_TEST::SCOPED_TEMP_DIR project( wxS( "kicad_qa_subdirs" ) );
+    const wxString& path = project.PathStr();
 
     writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "subdirs.kicad_pro" ), wxS( "{}\n" ) );
     writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "subdirs.kicad_pcb" ),
@@ -292,8 +341,8 @@ BOOST_AUTO_TEST_CASE( RestoreCommitPreservesZipBackupsDirectory )
     SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
     backupEnabled = true;
 
-    SCOPED_TEMP_DIR tempProject( wxS( "kicad_qa_issue24016" ) );
-    const wxString& projectPath = tempProject.Path();
+    KI_TEST::SCOPED_TEMP_DIR tempProject( wxS( "kicad_qa_issue24016" ) );
+    const wxString& projectPath = tempProject.PathStr();
 
     wxString boardPath =
             projectPath + wxFileName::GetPathSeparator() + wxS( "issue24016.kicad_pcb" );
@@ -353,8 +402,8 @@ BOOST_AUTO_TEST_CASE( RestoreCommitPreservesNestedProject )
     SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
     backupEnabled = true;
 
-    SCOPED_TEMP_DIR tempProject( wxS( "kicad_qa_nested_project" ) );
-    const wxString& projectPath = tempProject.Path();
+    KI_TEST::SCOPED_TEMP_DIR tempProject( wxS( "kicad_qa_nested_project" ) );
+    const wxString& projectPath = tempProject.PathStr();
 
     // Parent project (projectA): minimal .kicad_pro plus a board file.
     wxString parentPro = projectPath + wxFileName::GetPathSeparator() + wxS( "projectA.kicad_pro" );
@@ -415,8 +464,8 @@ BOOST_AUTO_TEST_CASE( RestoreCommitRetainsTimestampedBackup )
     SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
     backupEnabled = true;
 
-    SCOPED_TEMP_DIR tempProject( wxS( "kicad_qa_retained_backup" ) );
-    const wxString& projectPath = tempProject.Path();
+    KI_TEST::SCOPED_TEMP_DIR tempProject( wxS( "kicad_qa_retained_backup" ) );
+    const wxString& projectPath = tempProject.PathStr();
 
     wxString boardPath = projectPath + wxFileName::GetPathSeparator() + wxS( "rb.kicad_pcb" );
     wxString projectFile = projectPath + wxFileName::GetPathSeparator() + wxS( "rb.kicad_pro" );
@@ -488,8 +537,8 @@ BOOST_AUTO_TEST_CASE( CommitFullProjectSnapshotExcludesNonKiCadFiles )
     SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
     backupEnabled = true;
 
-    SCOPED_TEMP_DIR project( wxS( "kicad_qa_privacy" ) );
-    const wxString& path = project.Path();
+    KI_TEST::SCOPED_TEMP_DIR project( wxS( "kicad_qa_privacy" ) );
+    const wxString& path = project.PathStr();
 
     writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
     writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "p.kicad_pcb" ),
@@ -567,8 +616,8 @@ BOOST_AUTO_TEST_CASE( FirstAutosaveSkipsCommitWhenStagedMatchesDisk )
     SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
     backupEnabled = true;
 
-    SCOPED_TEMP_DIR project( wxS( "kicad_qa_first_idle_autosave" ) );
-    const wxString& path = project.Path();
+    KI_TEST::SCOPED_TEMP_DIR project( wxS( "kicad_qa_first_idle_autosave" ) );
+    const wxString& path = project.PathStr();
 
     writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
     writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "p.kicad_pcb" ),
@@ -626,8 +675,8 @@ BOOST_AUTO_TEST_CASE( SaverSkippedAfterOwningDocumentDestroyed )
     SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
     backupEnabled = true;
 
-    SCOPED_TEMP_DIR project( wxS( "kicad_qa_saver_lifetime" ) );
-    const wxString&  path = project.Path();
+    KI_TEST::SCOPED_TEMP_DIR project( wxS( "kicad_qa_saver_lifetime" ) );
+    const wxString&  path = project.PathStr();
     const wxString   sep = wxFileName::GetPathSeparator();
 
     writeTextFile( path + sep + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
@@ -682,8 +731,8 @@ BOOST_AUTO_TEST_CASE( FirstManualSaveAlwaysCommitsOnFreshProject )
     SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
     backupEnabled = true;
 
-    SCOPED_TEMP_DIR project( wxS( "kicad_qa_first_manual_save" ) );
-    const wxString& path = project.Path();
+    KI_TEST::SCOPED_TEMP_DIR project( wxS( "kicad_qa_first_manual_save" ) );
+    const wxString& path = project.PathStr();
 
     writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
     writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "p.kicad_pcb" ),
@@ -728,8 +777,8 @@ BOOST_AUTO_TEST_CASE( ZipFormatSkipsIncrementalAutosave )
     SCOPED_BACKUP_FORMAT_OVERRIDE restoreFormat( format );
     format = BACKUP_FORMAT::ZIP;
 
-    SCOPED_TEMP_DIR project( wxS( "kicad_qa_zip_skips_incremental" ) );
-    const wxString& path = project.Path();
+    KI_TEST::SCOPED_TEMP_DIR project( wxS( "kicad_qa_zip_skips_incremental" ) );
+    const wxString& path = project.PathStr();
 
     writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
     writeTextFile( path + wxFileName::GetPathSeparator() + wxS( "p.kicad_pcb" ),
@@ -773,8 +822,8 @@ BOOST_AUTO_TEST_CASE( ZipFormatWritesRecoveryFiles )
     SCOPED_BACKUP_LOCATION_OVERRIDE restoreLocation( location );
     location = BACKUP_LOCATION::PROJECT_DIR;
 
-    SCOPED_TEMP_DIR project( wxS( "kicad_qa_zip_recovery_files" ) );
-    const wxString& path = project.Path();
+    KI_TEST::SCOPED_TEMP_DIR project( wxS( "kicad_qa_zip_recovery_files" ) );
+    const wxString& path = project.PathStr();
     const wxString  sep = wxFileName::GetPathSeparator();
 
     writeTextFile( path + sep + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
@@ -816,8 +865,8 @@ BOOST_AUTO_TEST_CASE( CloudSyncTouchedAutosaveFalselyFlaggedStale )
     SCOPED_BACKUP_LOCATION_OVERRIDE restoreLocation( location );
     location = BACKUP_LOCATION::PROJECT_DIR;
 
-    SCOPED_TEMP_DIR project( wxS( "kicad_qa_cloudsync_autosave" ) );
-    const wxString& path = project.Path();
+    KI_TEST::SCOPED_TEMP_DIR project( wxS( "kicad_qa_cloudsync_autosave" ) );
+    const wxString& path = project.PathStr();
     const wxString  sep = wxFileName::GetPathSeparator();
 
     // FindStaleAutosaveFiles resolves the autosave root through the active project, so it must
@@ -863,8 +912,8 @@ BOOST_AUTO_TEST_CASE( DivergentAutosaveStillFlaggedStale )
     SCOPED_BACKUP_LOCATION_OVERRIDE restoreLocation( location );
     location = BACKUP_LOCATION::PROJECT_DIR;
 
-    SCOPED_TEMP_DIR project( wxS( "kicad_qa_divergent_autosave" ) );
-    const wxString& path = project.Path();
+    KI_TEST::SCOPED_TEMP_DIR project( wxS( "kicad_qa_divergent_autosave" ) );
+    const wxString& path = project.PathStr();
     const wxString  sep = wxFileName::GetPathSeparator();
 
     writeTextFile( path + sep + wxS( "p.kicad_pro" ), wxS( "{}\n" ) );
@@ -890,6 +939,118 @@ BOOST_AUTO_TEST_CASE( DivergentAutosaveStillFlaggedStale )
 
     BOOST_CHECK_MESSAGE( stale.size() == 1,
                          "Genuinely divergent autosave must still be flagged stale for recovery" );
+}
+
+
+BOOST_AUTO_TEST_CASE( EnforceSizeLimitKeepsUnstagedFilesInNextSnapshot )
+{
+    LIBGIT2_SCOPE libgit;
+
+    bool&                backupEnabled = Pgm().GetCommonSettings()->m_Backup.enabled;
+    SCOPED_BOOL_OVERRIDE restoreBackupFlag( backupEnabled );
+    backupEnabled = true;
+
+    KI_TEST::SCOPED_TEMP_DIR project( wxS( "kicad_qa_trim_partial_save" ) );
+    const wxString& path = project.PathStr();
+    const wxString  sep = wxFileName::GetPathSeparator();
+
+    writeTextFile( path + sep + wxS( "trim.kicad_pro" ), wxS( "{}\n" ) );
+    writeTextFile( path + sep + wxS( "trim.kicad_pcb" ), wxS( "(kicad_pcb (version 20240108))\n" ) );
+    writeTextFile( path + sep + wxS( "trim.kicad_sch" ), wxS( "(kicad_sch (version 20240108))\n" ) );
+
+    LOCAL_HISTORY history;
+    BOOST_REQUIRE( history.CommitFullProjectSnapshot( path, wxS( "Initial" ) ) );
+
+    writeTextFile( path + sep + wxS( "trim.kicad_pcb" ), wxS( "(kicad_pcb (version 20240108) (net 1))\n" ) );
+    BOOST_REQUIRE( history.CommitFullProjectSnapshot( path, wxS( "Second" ) ) );
+
+    BOOST_REQUIRE( history.EnforceSizeLimit( path, 1 ) );
+
+    writeTextFile( path + sep + wxS( "trim.kicad_sch" ), wxS( "(kicad_sch (version 20240108) (mod))\n" ) );
+    BOOST_REQUIRE( history.CommitSnapshot( { path + sep + wxS( "trim.kicad_sch" ) }, wxS( "Sch Save" ) ) );
+
+    wxString        historyDir = path + sep + wxS( ".history" );
+    git_repository* repo = nullptr;
+    BOOST_REQUIRE( git_repository_open( &repo, historyDir.mb_str().data() ) == 0 );
+
+    git_oid     headOid;
+    git_commit* head = nullptr;
+    git_tree*   tree = nullptr;
+    BOOST_REQUIRE( git_reference_name_to_id( &headOid, repo, "HEAD" ) == 0 );
+    BOOST_REQUIRE( git_commit_lookup( &head, repo, &headOid ) == 0 );
+    BOOST_REQUIRE( git_commit_tree( &tree, head ) == 0 );
+
+    BOOST_CHECK_MESSAGE( git_tree_entry_byname( tree, "trim.kicad_sch" ),
+                         "schematic missing from snapshot after trim" );
+    BOOST_CHECK_MESSAGE( git_tree_entry_byname( tree, "trim.kicad_pcb" ), "board dropped from snapshot after trim" );
+    BOOST_CHECK_MESSAGE( git_tree_entry_byname( tree, "trim.kicad_pro" ),
+                         "project file dropped from snapshot after trim" );
+
+    git_tree_free( tree );
+    git_commit_free( head );
+    git_repository_free( repo );
+}
+
+
+// A snapshot must serialize the live project settings, not copy the stale file from disk.
+BOOST_AUTO_TEST_CASE( ProjectSnapshotCarriesUnsavedSettings )
+{
+    SNAPSHOT_PROJECT tc( wxS( "kicad_qa_pro_snapshot" ), wxS( "snap.kicad_pro" ) );
+    BOOST_REQUIRE( tc.m_mgr.SaveProject() );
+
+    BOARD_DESIGN_SETTINGS bds( &tc.ProjectFile(), "board.design_settings" );
+    addViaStackPreset( bds, wxS( "History Preset" ) );
+
+    std::string bytes = snapshotProjectBytes( tc.Project() );
+
+    BOOST_CHECK_MESSAGE( bytes.find( "History Preset" ) != std::string::npos,
+                         "project file snapshot must carry the unsaved via stack preset" );
+}
+
+
+// The snapshot flush must not swallow the next real save.
+BOOST_AUTO_TEST_CASE( ProjectSaveStillWritesAfterSnapshot )
+{
+    SNAPSHOT_PROJECT tc( wxS( "kicad_qa_pro_snapshot_save" ), wxS( "snapsave.kicad_pro" ) );
+    BOOST_REQUIRE( tc.m_mgr.SaveProject() );
+
+    PROJECT_FILE&         projectFile = tc.ProjectFile();
+    BOARD_DESIGN_SETTINGS bds( &projectFile, "board.design_settings" );
+    addViaStackPreset( bds, wxS( "History Preset" ) );
+
+    projectFile.m_TextVars[wxS( "HISTORY_VAR" )] = wxS( "kept" );
+
+    snapshotProjectBytes( tc.Project() );
+
+    BOOST_CHECK_MESSAGE( projectFile.SaveToFile( tc.m_tempDir.PathStr() ),
+                         "a real save after the snapshot must still write the file" );
+
+    std::string onDisk = readTextFile( tc.m_proPath );
+
+    BOOST_CHECK_MESSAGE( onDisk.find( "History Preset" ) != std::string::npos,
+                         "the via stack preset must reach the file after the snapshot" );
+    BOOST_CHECK_MESSAGE( onDisk.find( "HISTORY_VAR" ) != std::string::npos,
+                         "the text variable must reach the file after the snapshot" );
+}
+
+
+// A snapshot of a clean project must not make the next save rewrite an unchanged file (#24402).
+BOOST_AUTO_TEST_CASE( ProjectSnapshotDoesNotDirtyACleanProject )
+{
+    SNAPSHOT_PROJECT tc( wxS( "kicad_qa_pro_snapshot_clean" ), wxS( "snapclean.kicad_pro" ) );
+
+    PROJECT_FILE&         projectFile = tc.ProjectFile();
+    BOARD_DESIGN_SETTINGS bds( &projectFile, "board.design_settings" );
+
+    BOOST_REQUIRE( tc.m_mgr.SaveProject() );
+
+    std::string before = readTextFile( tc.m_proPath );
+
+    snapshotProjectBytes( tc.Project() );
+
+    BOOST_CHECK_MESSAGE( !projectFile.SaveToFile( tc.m_tempDir.PathStr() ),
+                         "an unchanged project must not be rewritten after a snapshot" );
+    BOOST_CHECK_EQUAL( before, readTextFile( tc.m_proPath ) );
 }
 
 

@@ -22,6 +22,8 @@
  */
 #include <boost/test/unit_test.hpp>
 #include <mock_pgm_base.h>
+#include <qa_utils/wx_utils/wx_assert.h>
+#include <qa_utils/file_utils.h>
 #include <settings/settings_manager.h>
 #include <settings/kicad_settings.h>
 
@@ -41,6 +43,8 @@ bool init_unit_test()
     boost::unit_test::framework::master_test_suite().p_name.value = "Common library module tests";
     bool ok = wxInitialize();
 
+    wxSetAssertHandler( &KI_TEST::wxAssertThrower );
+
     if( ok )
     {
         Pgm().InitPgm( true, true );
@@ -55,6 +59,8 @@ bool init_unit_test()
 
 int main( int argc, char* argv[] )
 {
+    KI_TEST::SCOPED_PROCESS_TEMP_DIR scopedTempDir( "kicad_qa_common" );
+
     int ret = boost::unit_test::unit_test_main( &init_unit_test, argc, argv );
 
     // This causes some glib warnings on GTK3 (http://trac.wxwidgets.org/ticket/18274)

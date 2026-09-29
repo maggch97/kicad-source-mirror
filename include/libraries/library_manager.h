@@ -27,6 +27,7 @@
 #include <shared_mutex>
 
 #include <kicommon.h>
+#include <ki_error.h>
 #include <libraries/library_table.h>
 #include <io/io_base.h>
 
@@ -49,7 +50,7 @@ enum class LOAD_STATUS
 struct KICOMMON_API LIB_STATUS
 {
     LOAD_STATUS                  load_status = LOAD_STATUS::INVALID;
-    std::optional<LIBRARY_ERROR> error;
+    std::optional<LIBRARY_ERROR> error = std::nullopt;
 };
 
 
@@ -107,6 +108,7 @@ public:
     /**
      * Test for the existence of \a aNickname in the library tables.
      *
+     * @param aNickname is the library nickname.
      * @param aCheckEnabled if true will only return true for enabled libraries
      * @return true if a library \a aNickname exists in the loaded tables.
      */
@@ -156,7 +158,17 @@ public:
 
     virtual std::optional<LIB_STATUS> LoadOne( LIB_DATA* aLib ) = 0;
 
-    /// Returns async load progress between 0.0 and 1.0, or nullopt if load is not in progress
+    /// Validates that a library is loadable.  May not necessarily load the library!
+    virtual std::optional<LIB_STATUS> CheckLibrary( LIB_DATA* aLib ) { return LoadOne( aLib ); }
+
+    /// Returns the fraction of the libraries queued by AsyncLoad() that have been
+    /// processed, or nullopt when there is nothing to report (no load has been requested
+    /// since the last reset, or every library was already loaded).
+    ///
+    /// This is the non-blocking view of the load: anything other than 1.0 means a load
+    /// may still be running.  It reaches 1.0 once the last library has been counted,
+    /// which can be a moment before the workers retire, so a path that must not stall
+    /// still waits with BlockUntilLoaded().
     std::optional<float> AsyncLoadProgress() const;
 
     void BlockUntilLoaded();
@@ -174,8 +186,9 @@ public:
     std::vector<std::pair<wxString, LIB_STATUS>> GetLibraryStatuses() const;
 
     /// Returns all library load errors as newline-separated strings for display
-    wxString GetLibraryLoadErrors() const;
+    std::vector<KI_ERROR> GetLibraryLoadErrors() const;
 
+    /// Synchronously recreates the plugin for and reloads the given library
     void ReloadLibraryEntry( const wxString& aNickname,
                              LIBRARY_TABLE_SCOPE aScope = LIBRARY_TABLE_SCOPE::BOTH );
 
@@ -191,7 +204,7 @@ public:
 
     virtual bool SupportsConfigurationDialog( const wxString& aNickname ) const { return false; }
 
-    virtual void ShowConfigurationDialog( const wxString& aNickname, wxWindow* aParent ) const {};
+    virtual int ShowConfigurationDialog( const wxString& aNickname, wxWindow* aParent ) const { return wxID_CANCEL; }
 
     virtual std::optional<LIBRARY_ERROR> LibraryError( const wxString& aNickname ) const;
 
@@ -201,12 +214,15 @@ protected:
     virtual std::shared_mutex&            globalLibsMutex() = 0;
     virtual std::shared_mutex&            globalLibsMutex() const = 0;
 
-    /// Override in derived class to perform library-specific enumeration.
-    /// @param aUri is the pre-resolved library URI (must be resolved on the main thread
-    ///             since URI expansion accesses PROJECT data that is not thread-safe).
+    /**
+     * Override in derived class to perform library-specific enumeration.
+     * @param aLib
+     * @param aUri is the pre-resolved library URI (must be resolved on the main thread
+     *             since URI expansion accesses PROJECT data that is not thread-safe).
+     */
     virtual void enumerateLibrary( LIB_DATA* aLib, const wxString& aUri ) = 0;
 
-    static wxString getUri( const LIBRARY_TABLE_ROW* aRow );
+    wxString getUri( const LIBRARY_TABLE_ROW* aRow ) const;
 
     std::optional<const LIB_DATA*> fetchIfLoaded( const wxString& aNickname ) const;
 
@@ -249,7 +265,9 @@ protected:
     /// and tree refreshes. Keyed by nickname, a safe over-approximation of the real resource (the
     /// plugin instance): sharing one mutex across two distinct resources can only over-serialize,
     /// never under-protect. Static because global-library plugins are shared process-wide.
-    static std::mutex& pluginMutex( const wxString& aNickname );
+    /// Recursive because database/http libraries resolve references back through the adapter into
+    /// other plugins' LoadSymbol paths while already holding their own mutex.
+    static std::recursive_mutex& pluginMutex( const wxString& aNickname );
 
     LIBRARY_MANAGER& m_manager;
 
@@ -270,7 +288,11 @@ protected:
 class KICOMMON_API LIBRARY_MANAGER
 {
 public:
-    LIBRARY_MANAGER();
+    /// An explicit project is borrowed until this manager and its adapters are destroyed.
+    explicit LIBRARY_MANAGER( const PROJECT* aProject = nullptr );
+
+    const PROJECT& Project() const;
+    bool IsProjectScoped() const { return m_project != nullptr; }
 
     ~LIBRARY_MANAGER();
 
@@ -347,8 +369,10 @@ public:
                                          LIBRARY_TABLE_SCOPE aScope );
 
     /**
-     * Returns a flattened list of libraries of the given type
+     * Returns a flattened list of libraries of the given type.
+     *
      * @param aType determines which type of libraries to return (symbol, footprint, ...)
+     * @param aScope
      * @param aIncludeInvalid will include the nicknames of libraries even if they could not be
      *                        loaded for some reason (file not found, etc)
      * @return a list of library nicknames (the first part of a LIB_ID)
@@ -370,6 +394,7 @@ public:
     std::optional<LIBRARY_TABLE_ROW*> FindRowByURI( LIBRARY_TABLE_TYPE aType, const wxString &aUri,
                                                     LIBRARY_TABLE_SCOPE aScope = LIBRARY_TABLE_SCOPE::BOTH ) const;
 
+    /// Synchronously recreates the plugin for and reloads the given library
     void ReloadLibraryEntry( LIBRARY_TABLE_TYPE aType, const wxString& aNickname,
                              LIBRARY_TABLE_SCOPE aScope = LIBRARY_TABLE_SCOPE::BOTH );
 
@@ -393,7 +418,8 @@ public:
     std::optional<wxString> GetFullURI( LIBRARY_TABLE_TYPE aType, const wxString& aNickname,
                                         bool aSubstituted = false );
 
-    static wxString GetFullURI( const LIBRARY_TABLE_ROW* aRow, bool aSubstituted = false );
+    static wxString GetFullURI( const LIBRARY_TABLE_ROW* aRow, bool aSubstituted = false,
+                               const PROJECT* aProject = nullptr );
 
     static wxString ExpandURI( const wxString& aShortURI, const PROJECT& aProject );
 
@@ -403,8 +429,8 @@ public:
      * Return true if a library table row was added by the Plugin and Content Manager.
      *
      * PCM-managed rows are identified by the full unexpanded URI template emitted by
-     * PCM_LIB_TRAVERSER, namely ${KICADn_3RD_PARTY}/<category>/<pkgid>/<library> where
-     * <category> is one of the PCM content folders and <library> carries the matching
+     * PCM_LIB_TRAVERSER, namely \${KICADn_3RD_PARTY}/\<category\>/\<pkgid\>/\<library\> where
+     * \<category\> is one of the PCM content folders and \<library\> carries the matching
      * library extension. Matching the full template, rather than the expanded absolute
      * path or the env-var prefix alone, prevents false positives both when a user library
      * uses a different env var whose expanded path is a descendant of the 3RD_PARTY
@@ -444,6 +470,7 @@ private:
 
     void createEmptyTable( LIBRARY_TABLE_TYPE aType, LIBRARY_TABLE_SCOPE aScope );
 
+    const PROJECT* const m_project;
     std::map<LIBRARY_TABLE_TYPE, std::unique_ptr<LIBRARY_TABLE>> m_tables;
 
     /// Map of full URI to table object for tables that are referenced by global or project tables

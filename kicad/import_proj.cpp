@@ -20,6 +20,7 @@
 
 #include "import_proj.h"
 #include <import_proj_properties.h>
+#include <kidialog.h>
 #include <wildcards_and_files_ext.h>
 #include <macros.h>
 #include <string_utils.h>
@@ -120,7 +121,12 @@ void IMPORT_PROJ_HELPER::ImportIndividualFile( KICAD_T aFT, int aImportedFileTyp
             ext = m_InputFile.GetExt();
 
         wxFileName candidate = m_InputFile;
-        candidate.SetExt( ext );
+
+        // Selected file often the one wanted (e.g. schematic in schematic-only
+        // import); keep on-disk name so uppercase ext still resolves on
+        // case-sensitive fs. Rewrite ext only when seeking differently-typed sibling
+        if( m_InputFile.GetExt().CmpNoCase( ext ) != 0 )
+            candidate.SetExt( ext );
 
         if( !candidate.FileExists() )
             continue;
@@ -162,6 +168,10 @@ void IMPORT_PROJ_HELPER::doImport( const wxString& aFile, FRAME_T aFrameType, in
 
         std::string packet = ss.str();
         frame->Kiway().ExpressMail( aFrameType, MAIL_IMPORT_FILE, packet, m_frame );
+
+        if( aFrameType == FRAME_SCH && aImportedFileType == SCH_IO_MGR::SCH_ORCAD
+            && IMPORT_PROJ_PROPS::SplitNetNameMap( From_UTF8( packet ) ) )
+            m_properties[IMPORT_PROJ_PROPS::NET_NAME_MAP] = packet;
 
         if( !frame->IsShownOnScreen() )
             frame->Show( true );
@@ -666,6 +676,74 @@ void IMPORT_PROJ_HELPER::GedaProjectHandler()
 }
 
 
+static wxFileName findSiblingByExt( const wxFileName& aBase, const wxString& aExt )
+{
+    wxDir dir( aBase.GetPath() );
+
+    if( dir.IsOpened() )
+    {
+        wxString found;
+
+        for( bool more = dir.GetFirst( &found, wxEmptyString, wxDIR_FILES ); more;
+             more = dir.GetNext( &found ) )
+        {
+            wxFileName fn( aBase.GetPath(), found );
+
+            if( fn.GetName().CmpNoCase( aBase.GetName() ) == 0 && fn.GetExt().CmpNoCase( aExt ) == 0 )
+                return fn;
+        }
+    }
+
+    return wxFileName();
+}
+
+
+void IMPORT_PROJ_HELPER::OrcadProjectHandler()
+{
+    m_properties.erase( IMPORT_PROJ_PROPS::NET_NAME_MAP );
+
+    // Import selected OrCAD Capture schematic (.dsn) first
+    ImportIndividualFile( SCHEMATIC_T, SCH_IO_MGR::SCH_ORCAD );
+
+    // Only a successful schematic import replies with a net-name map, even an empty one.
+    if( !m_properties.count( IMPORT_PROJ_PROPS::NET_NAME_MAP ) )
+        return;
+
+    // OrCAD designs pair w/ Cadence Allegro board; offer import, defaulting to
+    // sibling board (matched case-insensitively) next to schematic
+    wxFileName brdFile = findSiblingByExt( m_InputFile, wxS( "brd" ) );
+    bool       haveSibling = brdFile.FileExists();
+
+    wxString msg = haveSibling
+                           ? wxString::Format( _( "Import the associated Allegro board '%s'?" ),
+                                               brdFile.GetFullName() )
+                           : _( "Import an associated Allegro board file?" );
+
+    KIDIALOG dlg( m_frame, msg, _( "Import Allegro Board" ), wxOK | wxCANCEL | wxICON_QUESTION );
+    dlg.SetOKCancelLabels( _( "OK" ), _( "Skip" ) );
+
+    if( dlg.ShowModal() != wxID_OK )
+        return;
+
+    if( !haveSibling )
+    {
+        wxFileDialog fileDlg( m_frame, _( "Locate Allegro Board" ), m_InputFile.GetPath(),
+                              wxEmptyString, FILEEXT::AllegroPcbFilesWildcard(),
+                              wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+
+        if( fileDlg.ShowModal() != wxID_OK )
+            return;
+
+        brdFile.Assign( fileDlg.GetPath() );
+    }
+
+    // ExpressMail dispatches synchronously and loaded target project sets generated
+    // board path, so import source board directly, no staging copy
+    if( brdFile.FileExists() )
+        doImport( brdFile.GetFullPath(), FRAME_PCB_EDITOR, PCB_IO_MGR::ALLEGRO );
+}
+
+
 void IMPORT_PROJ_HELPER::ImportFiles( int aImportedSchFileType, int aImportedPcbFileType )
 {
     m_properties.clear();
@@ -689,6 +767,11 @@ void IMPORT_PROJ_HELPER::ImportFiles( int aImportedSchFileType, int aImportedPcb
     else if( importedSchFileType == SCH_IO_MGR::SCH_ALTIUM || importedPcbFileType == PCB_IO_MGR::ALTIUM_DESIGNER )
     {
         AltiumProjectHandler();
+        return;
+    }
+    else if( aImportedSchFileType == SCH_IO_MGR::SCH_ORCAD )
+    {
+        OrcadProjectHandler();
         return;
     }
     else if( aImportedSchFileType == SCH_IO_MGR::SCH_GEDA )

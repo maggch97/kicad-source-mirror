@@ -63,7 +63,7 @@ class KICOMMON_API PROJECT
 {
 public:
     /**
-     * The set of #_ELEMs that a #PROJECT can hold.
+     * The set of #_ELEM objects that a #PROJECT can hold.
      */
     enum class ELEM
     {
@@ -216,8 +216,6 @@ public:
         DOC_PATH,
         SCH_LIB_PATH,
         SCH_LIB_SELECT, // eeschema/selpart.cpp
-        SCH_LIBEDIT_CUR_LIB,
-        SCH_LIBEDIT_CUR_SYMBOL, // eeschema/libeditframe.cpp
 
         VIEWER_3D_PATH,
         VIEWER_3D_FILTER_INDEX,
@@ -338,7 +336,7 @@ private:
     /**
      * Set the backing store file for this project.
      *
-     * This should only be called by #SETTINGS_MANGER on load.
+     * This should only be called by #SETTINGS_MANAGER on load.
      *
      * @param aFile is a loaded PROJECT_FILE.
      */
@@ -360,7 +358,7 @@ private:
     }
 
     /**
-     * Return the full path and file name of the project specific library table \a aLibTableName..
+     * Return the full path and file name of the project specific library table \a aLibTableName.
      */
     const wxString libTableName( const wxString& aLibTableName ) const;
 

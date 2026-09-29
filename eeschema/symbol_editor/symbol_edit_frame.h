@@ -52,6 +52,18 @@ class UNDO_REDO_CONTAINER;
 
 
 /**
+ * Types of KiCad symbol library save actions.
+ */
+enum class SAVE_LIBRARY_AS
+{
+    ORIGINAL,              ///< Save to the original symbol library format.
+    NEW,                   ///< Save to a new library in the original symbol library format.
+    PACKED,                ///< Save an unpacked symbol library to the packed format.
+    UNPACKED               ///< Save a packed symbol library to the unpacked format.
+};
+
+
+/**
  * The symbol library editor main window.
  */
 class SYMBOL_EDIT_FRAME : public SCH_BASE_FRAME
@@ -89,16 +101,6 @@ public:
     bool HasLibModifications() const;
 
     bool CanCloseSymbolFromSchematic( bool doClose );
-
-    /**
-     * The nickname of the current library being edited and empty string if none.
-     */
-    wxString GetCurLib() const;
-
-    /**
-     * Set the current library nickname and returns the old library nickname.
-     */
-    wxString SetCurLib( const wxString& aLibNickname );
 
     LIB_TREE* GetLibTree() const override { return m_treePane->GetLibTree(); }
 
@@ -204,7 +206,7 @@ public:
     /**
      * Save the currently selected library to a new file.
      */
-    void SaveLibraryAs();
+    void SaveLibraryAs( SAVE_LIBRARY_AS aSaveType = SAVE_LIBRARY_AS::NEW );
 
     /**
      * Save all modified symbols and libraries.
@@ -295,6 +297,12 @@ public:
     int  GetBodyStyle() const { return m_bodyStyle; }
     void SetBodyStyle( int aBodyStyle );
 
+    void SetDrawSpecificUnit( bool aSpecific ) { m_drawSpecificUnit = aSpecific; }
+    bool GetDrawSpecificUnit() const { return m_drawSpecificUnit; }
+
+    void SetDrawSpecificBodyStyle( bool aSpecific ) { m_drawSpecificBodyStyle = aSpecific; }
+    bool GetDrawSpecificBodyStyle() const { return m_drawSpecificBodyStyle; }
+
     bool GetShowInvisibleFields();
     bool GetShowInvisiblePins();
 
@@ -373,9 +381,8 @@ public:
     /**
      * Create the SVG print file for the current edited symbol.
      * @param aFullFileName is the full filename
-     * @param aOffset is a plot offset, in iu
      */
-    void SVGPlotSymbol( const wxString& aFullFileName, const VECTOR2I& aOffset );
+    void SVGPlotSymbol( const wxString& aFullFileName );
 
     /**
      * Synchronize the library manager to the symbol library table, and then the symbol tree
@@ -447,16 +454,31 @@ public:
      *  - The symbol must not be from a legacy library.
      *
      * Note that many things are not editable in a non-root symbol (ie: an alias), but others
-     * are so this routine no longer returns false for an alias.
+     * are so this routine is true for an alias symbol.  Use #IsSymbolGraphicallyEditable()
+     * to test if a symbol's graphical elements can be edited.
      */
     bool IsSymbolEditable() const;
 
+    /**
+     * Test if a symbol is loaded and can be edited graphically.
+     *
+     * The following conditions are required for a symbol to be graphically editable:
+     *  - The symbol must be selected from either a library or the schematic.
+     *  - The symbol must not be from a legacy library.
+     *  - The symbol must not be an alias unless it is from a schematic.
+     *
+     * This returns false for an alias symbol that is not from a schematic, even
+     * though some of its fields can be edited.  Use #IsSymbolEditable() to test if a symbol
+     * can be edited in any way.
+     */
+    bool IsSymbolGraphicallyEditable() const;
+
     bool IsSymbolAlias() const;
 
-    ///< Return true if \a aLibId is an alias for the editor screen symbol.
+    /// Return true if \a aLibId is an alias for the editor screen symbol.
     bool IsCurrentSymbol( const LIB_ID& aLibId ) const;
 
-    ///< Restore the empty editor screen, without any symbol or library selected.
+    /// Restore the empty editor screen, without any symbol or library selected.
     void emptyScreen();
 
     void ClearToolbarControl( int aId ) override;
@@ -467,11 +489,20 @@ protected:
 
     void doReCreateMenuBar() override;
 
+    PLUGIN_ACTION_SCOPE PluginActionScope() const override
+    {
+        return PLUGIN_ACTION_SCOPE::SYMBOL;
+    }
+
     void updateSelectionFilterVisbility() override;
+
+    void onPluginAvailabilityChanged( wxCommandEvent& aEvt );
 
 private:
     // Set up the tool framework
     void setupTools();
+
+    void updateInfoBar();
 
     void saveSymbolCopyAs( bool aOpenCopy );
 
@@ -482,29 +513,21 @@ private:
      * changes made to the library are saved.
      *
      * @param aLibrary is the library name.
-     * @param aNewFile Ask for a new file name to save the library.
+     * @param aSaveType is the type library save to perform. @see LIBRARY_SAVE_AS
      * @return True if the library was successfully saved.
      */
-    bool saveLibrary( const wxString& aLibrary, bool aNewFile );
+    bool saveLibrary( const wxString& aLibrary,  SAVE_LIBRARY_AS aSaveType = SAVE_LIBRARY_AS::ORIGINAL );
 
     /**
-     * Set the current active library to \a aLibrary.
+     * Load a symbol from a library, optionally setting the selected unit and body style.
      *
-     * @param aLibrary the nickname of the library in the symbol library table.  If empty,
-     *                 display list of available libraries to select from.
-     */
-    void SelectActiveLibrary( const wxString& aLibrary = wxEmptyString );
-
-    /**
-     * Load a symbol from the current active library, optionally setting the selected unit
-     * and convert.
-     *
+     * @param aLibName The nickname of the library
      * @param aSymbolName The symbol alias name to load from the current library.
      * @param aUnit Unit to be selected
-     * @param aBodyStyle Convert to be selected
+     * @param aBodyStyle Body style to be selected
      * @return true if the symbol loaded correctly.
      */
-    bool LoadSymbolFromCurrentLib( const wxString& aSymbolName, int aUnit = 0, int aBodyStyle = 0 );
+    bool LoadSymbolFromLib( const wxString& aLibName, const wxString& aSymbolName, int aUnit = 0,  int aBodyStyle = 0 );
 
     /**
      * Create a copy of \a aLibEntry into memory.
@@ -516,22 +539,32 @@ private:
      * @param aBodyStyle the initial DeMorgan variant to show.
      * @return True if a copy of \a aLibEntry was successfully copied.
      */
-    bool LoadOneLibrarySymbolAux( LIB_SYMBOL* aLibEntry, const wxString& aLibrary, int aUnit,
-                                  int aBodyStyle );
+    bool LoadOneLibrarySymbol( LIB_SYMBOL* aLibEntry, const wxString& aLibrary, int aUnit, int aBodyStyle );
 
-    ///< Create a backup copy of a file with requested extension.
-    bool backupFile( const wxFileName& aOriginalFile, const wxString& aBackupExt );
+    /**
+     * Create a backup copy of a symbol library.
+     *
+     * For packed symbol libraries, a copy is made of the original file name with extension is set to .bak.
+     * For unpacked symbol libraries, a zip archive is created containing all of the symbol library files
+     * (.kicad_sym) is created using the last file path name + "_backup.zip".
+     *
+     * @param aOriginalFile contains the library path and/or file name.
+     * @param[out] aErrorMsg will contain an error message if the backup fails.
+     * @retval true if the backup succeeded.
+     * @retval false if the backup failed.
+     */
+    bool backupLibrary( const wxFileName& aOriginalFile, wxString& aErrorMsg );
 
-    ///< Return currently edited symbol.
+    /// Return currently edited symbol.
     LIB_SYMBOL* getTargetSymbol() const;
 
-    ///< Return either the library selected in the symbol tree, if context menu is active or
-    ///< the library that is currently modified.
+    /// Return either the library selected in the symbol tree, if context menu is active or
+    /// the library that is currently modified.
     wxString getTargetLib() const;
 
     void centerItemIdleHandler( wxIdleEvent& aEvent );
 
-    /*
+    /**
      * Return true when the operation has succeeded (all requested libraries have been saved
      * or none was selected and confirmed by OK).
      *
@@ -539,13 +572,10 @@ private:
      */
     bool saveAllLibraries( bool aRequireConfirmation );
 
-    ///< Save the current symbol.
+    /// Save the current symbol.
     bool saveCurrentSymbol();
 
-    ///< Store the currently modified symbol in the library manager buffer.
-    void storeCurrentSymbol();
-
-    ///< Rename LIB_SYMBOL aliases to avoid conflicts before adding a symbol to a library.
+    /// Rename LIB_SYMBOL aliases to avoid conflicts before adding a symbol to a library.
     void ensureUniqueName( LIB_SYMBOL* aSymbol, const wxString& aLibrary );
 
     /**
@@ -565,7 +595,7 @@ private:
      *
      * @note The library defined by \a aLibFile must be a KiCad (s-expression) library.
      *
-     * @param aLibNickmane is the nickname of an existing library table entry.
+     * @param aLibNickname is the nickname of an existing library table entry.
      * @param aLibFile is the full path and file name of the symbol library to replace in the
      *                 table.
      * @return true if successful or false if a failure occurs.
@@ -626,9 +656,9 @@ private:
     bool promptAndCloseSymbolTab( int aIdx );
 
     /**
-     * Prompt to save each dirty instance (schematic) tab that is not the active one, since the active
-     * tab's unsaved state is handled by CanCloseSymbolFromSchematic. Returns false if the user cancels
-     * so the window close can be vetoed.
+     * Prompt to save each dirty instance (symbol from schematic) tab that is not the active one, since
+     * the active tab's unsaved state is handled by CanCloseSymbolFromSchematic. Returns false if the
+     * user cancels so the window close can be vetoed.
      */
     bool promptToSaveInactiveInstanceTabs();
 
@@ -683,31 +713,8 @@ private:
     DECLARE_EVENT_TABLE()
 
 public:
-    /**
-     * Set to true to synchronize pins at the same position when editing symbols with multiple
-     * units or multiple body styles.  Deleting or moving pins will affect all pins at the same
-     * location.
-     * When units are interchangeable, synchronizing editing of pins is usually the best way,
-     * because if units are interchangeable, it implies that all similar pins are at the same
-     * location.
-     * When units are not interchangeable, do not synchronize editing of pins, because each symbol
-     * is specific, and there are no (or few) similar pins between units.
-     *
-     * Setting this to false allows editing each pin per symbol or body style regardless other
-     * pins at the same location. This requires the user to open each symbol or body style to make
-     * changes to the other pins at the same location.
-     *
-     * To know if others pins must be coupled when editing a pin, use SynchronizePins() instead
-     * of m_syncPinEdit, because SynchronizePins() is more reliable (takes in account the fact
-     * units are interchangeable, there are more than one unit).
-     *
-     * @todo Determine why this member variable is public when all the rest are private and
-     *       either make it private or document why it needs to be public.
-     */
-    bool          m_SyncPinEdit;
-
 private:
-    ///< Helper screen used when no symbol is loaded
+    /// Helper screen used when no symbol is loaded
     SCH_SCREEN*         m_dummyScreen;
 
     LIB_SYMBOL*         m_symbol;                // a symbol I own, it is not in any library, but a copy could be.
@@ -730,26 +737,32 @@ private:
     // AddTab() activates synchronously.
     bool m_loadingSymbolTab = false;
 
-    // While true, promptAndCloseSymbolTab() skips the unsaved-changes dialog.
+    /// While true, promptAndCloseSymbolTab() skips the unsaved-changes dialog.
     bool m_silentSymbolTabClose = false;
 
     LIB_ID                      m_centerItemOnIdle;
 
-    // The unit number to edit and show
+    /// The unit number to edit and show
     int         m_unit;
 
-    // Show the normal shape (m_bodyStyle <= 1) or the DeMorgan converted shape (m_bodyStyle > 1)
+    /// Show the normal shape (m_bodyStyle <= 1) or the DeMorgan converted shape (m_bodyStyle > 1)
     int         m_bodyStyle;
 
-    ///< Flag if the symbol being edited was loaded directly from a schematic.
+    /// When editing a symbol: only apply new graphic items to the current unit.
+    bool        m_drawSpecificUnit;
+
+    /// When editing a symbol: only apply new graphic items to the current body style.
+    bool        m_drawSpecificBodyStyle;
+
+    /// Flag if the symbol being edited was loaded directly from a schematic.
     bool        m_isSymbolFromSchematic;
 
-    ///< True while a schematic-edit auto-hide of the library tree still needs restoring on save.
+    /// True while a schematic-edit auto-hide of the library tree still needs restoring on save.
     bool        m_libTreeAutoHiddenForSchematicEdit;
 
     KIID        m_schematicSymbolUUID;
 
-     ///< RefDes of the symbol (only valid if symbol was loaded from schematic)
+    /// RefDes of the symbol (only valid if symbol was loaded from schematic)
     wxString    m_reference;
 
     // True to force DeMorgan/normal tools selection enabled.

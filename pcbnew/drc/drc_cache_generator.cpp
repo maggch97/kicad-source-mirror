@@ -34,6 +34,10 @@ bool DRC_CACHE_GENERATOR::Run()
 {
     m_board = m_drcEngine->GetBoard();
 
+    // Everything below appends to the board's DRC caches rather than replacing them, so they
+    // have to start out empty.
+    m_board->IncrementTimeStamp();
+
     int&           largestClearance = m_board->m_DRCMaxClearance;
     int&           largestPhysicalClearance = m_board->m_DRCMaxPhysicalClearance;
     DRC_CONSTRAINT worstConstraint;
@@ -93,17 +97,18 @@ bool DRC_CACHE_GENERATOR::Run()
 
     std::set<ZONE*> allZones;
 
-    auto cacheBBoxes = []( ZONE* zone, const LSET& copperLayers )
-    {
-        if( !zone->GetParentFootprint() )
-            zone->Outline()->BuildBBoxCaches();
+    auto cacheBBoxes =
+            []( ZONE* zone, const LSET& copperLayers )
+            {
+                if( !zone->GetParentFootprint() )
+                    zone->Outline()->BuildBBoxCaches();
 
-        for( PCB_LAYER_ID layer : copperLayers )
-        {
-            if( SHAPE_POLY_SET* fill = zone->GetFill( layer ) )
-                fill->BuildBBoxCaches();
-        }
-    };
+                for( PCB_LAYER_ID layer : copperLayers )
+                {
+                    if( SHAPE_POLY_SET* fill = zone->GetFill( layer ) )
+                        fill->BuildBBoxCaches();
+                }
+            };
 
     for( ZONE* zone : m_board->Zones() )
     {
@@ -182,7 +187,8 @@ bool DRC_CACHE_GENERATOR::Run()
                 copperLayers.RunOnLayers(
                         [&]( PCB_LAYER_ID layer )
                         {
-                            m_board->m_CopperItemRTreeCache->Insert( item, layer, largestClearance );
+                            m_board->m_CopperItemRTreeCache->Insert( item, layer, CLEARANCE_CONSTRAINT,
+                                                                     largestClearance );
                         } );
 
                 done.fetch_add( 1 );
@@ -209,8 +215,9 @@ bool DRC_CACHE_GENERATOR::Run()
             {
                 std::unique_lock<std::shared_mutex> writeLock( m_board->m_CachesMutex );
 
-                if( !m_board->m_CopperItemRTreeCache )
-                    m_board->m_CopperItemRTreeCache = std::make_shared<DRC_RTREE>();
+                // Always start from an empty tree: the traversal below re-inserts every copper
+                // item, and a DRC_RTREE stops accepting inserts once it has been built. 
+                m_board->m_CopperItemRTreeCache = std::make_shared<DRC_RTREE>();
 
                 forEachGeometryItem( itemTypes, boardCopperLayers, addToCopperTree );
                 m_board->m_CopperItemRTreeCache->Build();
@@ -257,7 +264,7 @@ bool DRC_CACHE_GENERATOR::Run()
                            [&]( PCB_LAYER_ID layer )
                            {
                                if( IsCopperLayer( layer ) )
-                                   rtree->Insert( aZone, layer );
+                                   rtree->Insert( aZone, layer, CLEARANCE_CONSTRAINT );
                            } );
 
                    rtree->Build();

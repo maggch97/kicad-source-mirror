@@ -27,6 +27,7 @@
 #include <core/ignore.h>
 #include <kiway.h>
 #include <pgm_base.h>
+#include <lib_symbol.h>
 #include <sch_io/sch_io.h>
 #include <schematic.h>
 #include <sch_sheet.h>
@@ -284,13 +285,13 @@ BOOST_AUTO_TEST_CASE( LabelsRemainGlobalForFlatNamespace )
 
 
 /**
- * Verify that the Eagle "@<tag>" linking hint on a pin name is stripped from the displayed
- * pin name while still resolving the device <connect> mapping correctly.
+ * Verify that the Eagle "\<tag\>" linking hint on a pin name is stripped from the displayed
+ * pin name while still resolving the device \<connect\> mapping correctly.
  *
  * Regression test for issue #24483: Eagle disambiguates duplicate pin names within a symbol
- * with a trailing "@<tag>" (e.g. "IN@1", "IN@2", "NC@3").  This tag is metadata used only to
- * link pins to pads via <connect>; it should not appear as visible pin text.  The importer
- * was setting the raw Eagle name as the KiCad pin name, leaking "@1"/"@2"/"@3" into the
+ * with a trailing "\<tag>" (e.g. "IN\@1", "IN\@2", "NC\@3").  This tag is metadata used only to
+ * link pins to pads via \<connect\>; it should not appear as visible pin text.  The importer
+ * was setting the raw Eagle name as the KiCad pin name, leaking "\@1"/"\@2"/"\@3" into the
  * schematic.
  */
 BOOST_AUTO_TEST_CASE( PinNameTagStripped )
@@ -497,4 +498,73 @@ BOOST_AUTO_TEST_CASE( BinaryNetLabelAndHighVariantImported )
     BOOST_CHECK_EQUAL( symbolCount, 36 );
     BOOST_REQUIRE_MESSAGE( c4, "CPOL-EU symbol C4 (variant ordinal 131) was not imported" );
     BOOST_CHECK( c4->GetLibSymbolRef() != nullptr );
+}
+
+
+/**
+ * An Eagle ">NAME"/">VALUE" text only says where and how a field is drawn, so it must not
+ * replace the reference prefix that the deviceset declares
+ */
+BOOST_AUTO_TEST_CASE( LibrarySymbolFieldsKeepTheirText )
+{
+    const wxFileName eagleFn = getEagleTestSchematic( "issue24829_brenner.sch" );
+    BOOST_REQUIRE( wxFileExists( eagleFn.GetFullPath() ) );
+
+    std::unique_ptr<SCHEMATIC> schematic;
+    loadEagleSchematic( eagleFn, wxS( "eagle_field_text" ), schematic );
+
+    std::map<wxString, LIB_SYMBOL*> libSymbolByRef;
+
+    for( const SCH_SHEET_PATH& sheetPath : schematic->BuildSheetListSortedByPageNumbers() )
+    {
+        SCH_SCREEN* screen = sheetPath.LastScreen();
+
+        if( !screen )
+            continue;
+
+        for( SCH_ITEM* item : screen->Items().OfType( SCH_SYMBOL_T ) )
+        {
+            SCH_SYMBOL* sym = static_cast<SCH_SYMBOL*>( item );
+
+            if( sym->GetLibSymbolRef() )
+                libSymbolByRef[sym->GetField( FIELD_T::REFERENCE )->GetText()] = sym->GetLibSymbolRef().get();
+        }
+    }
+
+    BOOST_REQUIRE_GT( libSymbolByRef.size(), 0 );
+
+    int prefixCount = 0;
+
+    for( const auto& [ref, libSymbol] : libSymbolByRef )
+    {
+        const wxString libRef = libSymbol->GetReferenceField().GetText();
+        const wxString libValue = libSymbol->GetValueField().GetText();
+
+        BOOST_CHECK_MESSAGE( !libRef.Contains( wxS( "${" ) ),
+                             ref.ToStdString() << " library reference prefix is '"
+                             << libRef.ToStdString() << "'" );
+        BOOST_CHECK_MESSAGE( !libValue.Contains( wxS( "${" ) ),
+                             ref.ToStdString() << " library value is '"
+                             << libValue.ToStdString() << "'" );
+
+        // A deviceset can declare no prefix, which correctly leaves the field empty
+        if( libRef.IsEmpty() )
+            continue;
+
+        // Eagle names each part from the deviceset prefix and a number
+        wxString expectedPrefix = ref;
+
+        while( !expectedPrefix.IsEmpty() && wxIsdigit( expectedPrefix.Last() ) )
+            expectedPrefix.RemoveLast();
+
+        BOOST_CHECK_MESSAGE( libRef == expectedPrefix,
+                             ref.ToStdString() << " library reference prefix is '"
+                             << libRef.ToStdString() << "', expected '"
+                             << expectedPrefix.ToStdString() << "'" );
+
+        ++prefixCount;
+    }
+
+    // Keep the prefix check from becoming vacuous if the fields come back empty
+    BOOST_CHECK_GT( prefixCount, 30 );
 }

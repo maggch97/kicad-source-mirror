@@ -17,9 +17,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef RC_ITEM_H
-#define RC_ITEM_H
+#pragma once
 
+#include <deque>
 #include <memory>
 #include <vector>
 
@@ -27,7 +27,6 @@
 #include <units_provider.h>
 #include <kiid.h>
 #include <reporter.h>
-#include <math/vector2d.h>
 
 class MARKER_BASE;
 class EDA_BASE_FRAME;
@@ -63,6 +62,8 @@ public:
 
     /**
      * Remove (and optionally deletes) the indexed item from the list.
+     *
+     * @param aIndex is the index of the item to delete.
      * @param aDeep If true, the source item should be deleted as well as its entry in the list.
      */
     virtual void DeleteItem( int aIndex, bool aDeep ) = 0;
@@ -101,14 +102,17 @@ public:
 
     void SetErrorMessage( const wxString& aMessage ) { m_errorMessage = aMessage; }
 
-    void SetErrorDetail( const wxString& aMsg ) { SetErrorMessage( GetErrorText( true ) + wxS( " " ) + aMsg ); }
+    void SetErrorDetail( const wxString& aMsg )
+    {
+        SetErrorMessage( GetErrorText( true ) + wxS( " " ) + aMsg );
+    }
 
     void SetItems( const KIIDS& aIds ) { m_ids = aIds; }
 
     void AddItem( EDA_ITEM* aItem );
 
-    void SetItems( const EDA_ITEM* aItem, const EDA_ITEM* bItem = nullptr,
-                   const EDA_ITEM* cItem = nullptr, const EDA_ITEM* dItem = nullptr );
+    void SetItems( const EDA_ITEM* aItem, const EDA_ITEM* bItem = nullptr, const EDA_ITEM* cItem = nullptr,
+                   const EDA_ITEM* dItem = nullptr );
 
     void SetItems( const KIID& aItem, const KIID& bItem = niluuid, const KIID& cItem = niluuid,
                    const KIID& dItem = niluuid )
@@ -147,12 +151,9 @@ public:
      * @param aUnitsProvider is the units provider that will be used to output coordinates
      * @param aSeverity is the severity of this item
      * @param aItemMap is a map allowing the lookup of items from KIIDs
-     *
-     * @return None
      */
     virtual void GetJsonViolation( RC_JSON::VIOLATION& aViolation, UNITS_PROVIDER* aUnitsProvider,
-                                   SEVERITY aSeverity,
-                                   const std::map<KIID, EDA_ITEM*>& aItemMap ) const;
+                                   SEVERITY aSeverity, const std::map<KIID, EDA_ITEM*>& aItemMap ) const;
 
     int GetErrorCode() const { return m_errorCode; }
     void SetErrorCode( int aCode ) { m_errorCode = aCode; }
@@ -196,10 +197,11 @@ protected:
      *
      * @param aItem is the affected item being described
      * @param aIndex is 0 for the main item and 1 for the aux item
+     * @param aUnitsProvider is the provider to handle units.
      */
-    virtual wxString getItemDescription( EDA_ITEM* aItem, int aIndex,
-                                         UNITS_PROVIDER* aUnitsProvider ) const;
+    virtual wxString getItemDescription( EDA_ITEM* aItem, int aIndex, UNITS_PROVIDER* aUnitsProvider ) const;
 
+protected:
     int           m_errorCode;         ///< The error code's numeric value
     wxString      m_errorMessage;      ///< A message describing the details of this specific error
     wxString      m_errorTitle;        ///< The string describing the type of error
@@ -207,7 +209,6 @@ protected:
     MARKER_BASE*  m_parent;            ///< The marker this item belongs to, if any
 
     KIIDS         m_ids;
-
 };
 
 
@@ -224,8 +225,7 @@ public:
         COMMENT
     };
 
-    RC_TREE_NODE( RC_TREE_NODE* aParent, const std::shared_ptr<RC_ITEM>& aRcItem,
-                  NODE_TYPE aType ) :
+    RC_TREE_NODE( RC_TREE_NODE* aParent, const std::shared_ptr<RC_ITEM>& aRcItem, NODE_TYPE aType ) :
             m_Type( aType ),
             m_RcItem( aRcItem ),
             m_Parent( aParent )
@@ -242,13 +242,14 @@ public:
     RC_TREE_NODE( const RC_TREE_NODE& ) = delete;
     RC_TREE_NODE& operator=( const RC_TREE_NODE& ) = delete;
 
-    NODE_TYPE                  m_Type;
-    std::shared_ptr<RC_ITEM>   m_RcItem;
-
     struct HANDLE
     {
         RC_TREE_NODE* m_Node = nullptr;
     };
+
+public:
+    NODE_TYPE                  m_Type;
+    std::shared_ptr<RC_ITEM>   m_RcItem;
 
     HANDLE*                    m_Handle = nullptr;
     RC_TREE_NODE*              m_Parent;
@@ -300,12 +301,8 @@ public:
 
     wxDataViewItem GetParent( wxDataViewItem const& aItem ) const override;
 
-    unsigned int GetChildren( wxDataViewItem const& aItem,
-                              wxDataViewItemArray&  aChildren ) const override;
+    unsigned int GetChildren( wxDataViewItem const& aItem, wxDataViewItemArray&  aChildren ) const override;
 
-    // Simple, single-text-column model
-    unsigned int GetColumnCount() const override { return 1; }
-    wxString GetColumnType( unsigned int aCol ) const override { return "string"; }
     bool HasContainerColumns( wxDataViewItem const& aItem ) const override { return true; }
 
     bool HasValue( const wxDataViewItem& item, unsigned col ) const override
@@ -319,14 +316,12 @@ public:
     /**
      * Called by the wxDataView to fetch an item's value.
      */
-    void GetValue( wxVariant& aVariant, wxDataViewItem const& aItem,
-                   unsigned int aCol ) const override;
+    void GetValue( wxVariant& aVariant, wxDataViewItem const& aItem, unsigned int aCol ) const override;
 
     /**
      * Called by the wxDataView to edit an item's content.
      */
-    bool SetValue( wxVariant const& aVariant, wxDataViewItem const& aItem,
-                   unsigned int aCol ) override
+    bool SetValue( wxVariant const& aVariant, wxDataViewItem const& aItem, unsigned int aCol ) override
     {
         // Editing not supported
         return false;
@@ -336,8 +331,7 @@ public:
      * Called by the wxDataView to fetch an item's formatting.  Return true if the
      * item has non-default attributes.
      */
-    bool GetAttr( wxDataViewItem const& aItem, unsigned int aCol,
-                  wxDataViewItemAttr& aAttr ) const override;
+    bool GetAttr( wxDataViewItem const& aItem, unsigned int aCol, wxDataViewItemAttr& aAttr ) const override;
 
     void ValueChanged( RC_TREE_NODE* aNode );
 
@@ -353,12 +347,26 @@ public:
 protected:
     RC_TREE_NODE* createNode( RC_TREE_NODE* aParent, const std::shared_ptr<RC_ITEM>& aRcItem,
                               RC_TREE_NODE::NODE_TYPE aType );
-    void          retireNodeTree( RC_TREE_NODE* aNode );
-    void          deleteNodeTree( RC_TREE_NODE* aNode );
-    void     rebuildModel( std::shared_ptr<RC_ITEMS_PROVIDER> aProvider, int aSeverities );
+    void retireNodeTree( RC_TREE_NODE* aNode );
+    void deleteNodeTree( RC_TREE_NODE* aNode );
+
+    /**
+     * Retire and destroy every node in the tree.
+     *
+     * Retired handles are kept alive so that stale wxDataViewItems resolve to nullptr.
+     */
+    void clearTree();
+
+    /**
+     * Repopulate the node tree from \a aProvider.  Touches no wxWidgets state.
+     */
+    void rebuildTree( std::shared_ptr<RC_ITEMS_PROVIDER> aProvider, int aSeverities );
+
+    void rebuildModel( std::shared_ptr<RC_ITEMS_PROVIDER> aProvider, int aSeverities );
 
     void onViewSize( wxSizeEvent& aEvent );
 
+protected:
     EDA_DRAW_FRAME*                    m_editFrame;
     wxDataViewCtrl*                    m_view;
     int                                m_severities;
@@ -366,8 +374,9 @@ protected:
     wxDataViewColumn*                  m_hyperlinkColumn = nullptr;
     std::shared_ptr<RC_ITEMS_PROVIDER> m_rcItemsProvider;
 
-    std::vector<std::unique_ptr<RC_TREE_NODE::HANDLE>> m_handles;   // Stable wx item IDs
+    /// Stable wx item IDs.  Handles are retired but never freed before the model dies because
+    /// wxDataViewCtrl hands back item IDs long after the rows they named were destroyed; the
+    /// deque keeps existing handle addresses valid as more are appended.
+    std::deque<RC_TREE_NODE::HANDLE>   m_handles;
     std::vector<RC_TREE_NODE*>         m_tree;              // I own this
 };
-
-#endif      // RC_ITEM_H

@@ -51,6 +51,7 @@ class APPEARANCE_CONTROLS_3D;
 enum EDA_3D_VIEWER_STATUSBAR
 {
     ACTIVITY = 0,
+    RENDER_TIME,
     HOVERED_ITEM,
     X_POS,
     Y_POS,
@@ -145,6 +146,8 @@ public:
     void ExportImage( EDA_3D_VIEWER_EXPORT_FORMAT aFormat, const wxSize& aSize );
 
 protected:
+    APP_SETTINGS_BASE* config() const override;
+
     void setupUIConditions() override;
 
     void handleIconizeEvent( wxIconizeEvent& aEvent ) override;
@@ -269,6 +272,7 @@ private:
 private:
     wxFileName                     m_defaultSaveScreenshotFileName;
 
+    wxPanel*                       m_canvasHolder;
     EDA_3D_CANVAS*                 m_canvas;
     BOARD_ADAPTER                  m_boardAdapter;
     CAMERA&                        m_currentCamera;

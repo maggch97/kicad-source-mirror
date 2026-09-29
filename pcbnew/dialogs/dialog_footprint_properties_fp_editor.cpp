@@ -28,9 +28,11 @@
 #include <3d_rendering/opengl/3d_model.h>
 #include <3d_viewer/eda_3d_viewer_frame.h>
 #include <bitmaps.h>
+#include <board.h>
 #include <board_commit.h>
 #include <board_design_settings.h>
 #include <confirm.h>
+#include <core/kicad_algo.h>
 
 #include <dialogs/dialog_text_entry.h>
 #include <dialogs/panel_preview_3d_model.h>
@@ -47,6 +49,7 @@
 #include <panel_fp_properties_3d_model.h>
 #include <pgm_base.h>
 #include <settings/settings_manager.h>
+#include <template_fieldnames.h>
 #include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
 #include <tools/pcb_selection_tool.h>
@@ -203,6 +206,7 @@ DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR( FO
     m_customUserLayersGrid->SetTable( m_customUserLayers );
 
     m_itemsGrid->PushEventHandler( new GRID_TRICKS( m_itemsGrid ) );
+    m_itemsGrid->Bind( wxEVT_GRID_CELL_CHANGING, &DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::OnGridCellChanging, this );
     m_privateLayersGrid->PushEventHandler( new GRID_TRICKS( m_privateLayersGrid,
                                                             [this]( wxCommandEvent& aEvent )
                                                             {
@@ -293,6 +297,8 @@ DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR( FO
 
 DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::~DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR()
 {
+    m_itemsGrid->Unbind( wxEVT_GRID_CELL_CHANGING, &DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::OnGridCellChanging, this );
+
     // Prevents crash bug in wxGrid's d'tor
     m_itemsGrid->DestroyTable( m_fields );
     m_privateLayersGrid->DestroyTable( m_privateLayers );
@@ -314,6 +320,18 @@ DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::~DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR()
 
 bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataToWindow()
 {
+    if( !wxDialog::TransferDataToWindow() )
+        return false;
+
+    if( !m_embeddedFiles->CommitPendingChanges() )
+        return false;
+
+    if( !m_PanelGeneral->TransferDataToWindow() )
+        return false;
+
+    if( !m_3dPanel->Validate() )
+        return false;
+
     LIB_ID   fpID          = m_footprint->GetFPID();
     wxString footprintName = fpID.GetLibItemName();
 
@@ -322,18 +340,10 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataToWindow()
     m_DocCtrl->SetValue( EscapeString( m_footprint->GetLibDescription(), CTX_LINE ) );
     m_KeywordCtrl->SetValue( m_footprint->GetKeywords() );
 
-    if( !wxDialog::TransferDataToWindow() )
-        return false;
-
-    if( !m_PanelGeneral->TransferDataToWindow() )
-        return false;
-
     // Add the models to the panel
-    if( !m_3dPanel->TransferDataToWindow() )
-        return false;
+    (void) m_3dPanel->TransferDataToWindow();
 
-    if( !m_embeddedFiles->TransferDataToWindow() )
-        return false;
+    (void) m_embeddedFiles->TransferDataToWindow();
 
     // Footprint Fields
     for( PCB_FIELD* field : m_footprint->GetFields() )
@@ -399,6 +409,7 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataToWindow()
     }
 
     m_boardOnly->SetValue( m_footprint->GetAttributes() & FP_BOARD_ONLY );
+    m_cbExcludeFromSim->SetValue( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_SIM );
     m_excludeFromPosFiles->SetValue( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_POS_FILES );
     m_excludeFromBOM->SetValue( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_BOM );
     m_cbDNP->SetValue( m_footprint->GetAttributes() & FP_DNP );
@@ -441,11 +452,11 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataToWindow()
 
     m_cbDuplicatePadsAreJumpers->SetValue( m_footprint->GetDuplicatePadNumbersAreJumpers() );
 
-    for( const std::set<wxString>& group : m_footprint->JumperPadGroups() )
+    for( const JUMPER_GROUP& group : m_footprint->JumperPadGroups().GetAll() )
     {
         wxString groupTxt;
 
-        for( const wxString& pinNumber : group )
+        for( const wxString& pinNumber : group.GetNames() )
         {
             if( !groupTxt.IsEmpty() )
                 groupTxt << ", ";
@@ -734,26 +745,31 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataFromWindow()
     // Update fields
     m_frame->GetToolManager()->RunAction( ACTIONS::selectionClear );
 
-    while( !m_footprint->GetFields().empty() )
+    std::vector<PCB_FIELD*> addedFields;
+    std::vector<PCB_FIELD*> detachedFields;
+
+    m_footprint->UpdateFields( *m_fields, addedFields, detachedFields );
+
+    for( PCB_FIELD* field : detachedFields )
     {
-        PCB_FIELD* existing = m_footprint->GetFields().front();
-        view->Remove( existing );
-        m_footprint->Remove( existing );
-        delete existing;
+        view->Remove( field );
+        delete field;
     }
 
-    for( PCB_FIELD& field : *m_fields )
+    for( PCB_FIELD* field : m_footprint->GetFields() )
     {
-        PCB_FIELD* newField = field.CloneField();
-        m_footprint->Add( newField );
-        view->Add( newField );
+        // Reused fields are already known to the view
+        if( alg::contains( addedFields, field ) )
+            view->Add( field );
+        else
+            view->Update( field );
 
-        if( newField->IsSelected() )
+        if( field->IsSelected() )
         {
             // The old copy was in the selection list, but this one is not.  Remove the
             // out-of-sync selection flag so we can re-add the field to the selection.
-            newField->ClearSelected();
-            selectionTool->AddItemToSel( newField, true );
+            field->ClearSelected();
+            selectionTool->AddItemToSel( field, true );
         }
     }
 
@@ -788,6 +804,9 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataFromWindow()
 
     if( m_boardOnly->GetValue() )
         attributes |= FP_BOARD_ONLY;
+
+    if( m_cbExcludeFromSim->GetValue() )
+        attributes |= FP_EXCLUDE_FROM_SIM;
 
     if( m_excludeFromPosFiles->GetValue() )
         attributes |= FP_EXCLUDE_FROM_POS_FILES;
@@ -843,12 +862,12 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataFromWindow()
     for( const PAD* pad : m_footprint->Pads() )
         availablePads.insert( pad->GetNumber() );
 
-    std::vector<std::set<wxString>> newJumpers;
+    JUMPER_GROUP_SET newJumpers;
 
     for( int ii = 0; ii < m_jumperGroupsGrid->GetNumberRows(); ++ii )
     {
-        wxStringTokenizer tokenizer( m_jumperGroupsGrid->GetCellValue( ii, 0 ), ", \t\r\n", wxTOKEN_STRTOK );
-        std::set<wxString>& group = newJumpers.emplace_back();
+        wxStringTokenizer  tokenizer( m_jumperGroupsGrid->GetCellValue( ii, 0 ), ", \t\r\n", wxTOKEN_STRTOK );
+        std::set<wxString> names;
 
         while( tokenizer.HasMoreTokens() )
         {
@@ -866,8 +885,11 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataFromWindow()
                 return false;
             }
 
-            group.insert( token );
+            names.insert( token );
         }
+
+        if( std::optional<JUMPER_GROUP> group = JUMPER_GROUP::Make( std::move( names ) ) )
+            newJumpers.Add( std::move( *group ) );
     }
 
     m_footprint->JumperPadGroups() = std::move( newJumpers );
@@ -891,7 +913,7 @@ void DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::OnAddField( wxCommandEvent& event )
             {
                 const BOARD_DESIGN_SETTINGS& dsnSettings = m_frame->GetDesignSettings();
 
-                PCB_FIELD newField( m_footprint, FIELD_T::USER, GetUserFieldName( m_fields->size(), DO_TRANSLATE ) );
+                PCB_FIELD newField( m_footprint, FIELD_T::USER, GetUserFieldName( m_fields->size(), TRANSLATED ) );
 
                 // Set active layer if legal; otherwise copy layer from previous text item
                 if( LSET::AllTechMask().test( m_frame->GetActiveLayer() ) )
@@ -931,11 +953,7 @@ void DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::OnDeleteField( wxCommandEvent& event
             },
             [&]( int row )
             {
-                m_fields->erase( m_fields->begin() + row );
-
-                // notify the grid
-                wxGridTableMessage msg( m_fields, wxGRIDTABLE_NOTIFY_ROWS_DELETED, row, 1 );
-                m_itemsGrid->ProcessTableMessage( msg );
+                m_fields->DeleteRows( row );
             } );
 
     OnModify();
@@ -1069,6 +1087,45 @@ void DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::onRemoveGroup( WX_GRID* aGrid )
 }
 
 
+void DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::OnGridCellChanging( wxGridEvent& aEvent )
+{
+    wxGridCellEditor* editor = m_itemsGrid->GetCellEditor( aEvent.GetRow(), aEvent.GetCol() );
+    wxControl*        control = editor->GetControl();
+
+    if( control && control->GetValidator() && !control->GetValidator()->Validate( control ) )
+    {
+        aEvent.Veto();
+        m_delayedFocusGrid = m_itemsGrid;
+        m_delayedFocusRow = aEvent.GetRow();
+        m_delayedFocusColumn = aEvent.GetCol();
+        m_delayedFocusPage = NOTEBOOK_PAGES::PAGE_GENERAL;
+    }
+    else if( aEvent.GetCol() == PFC_NAME )
+    {
+        wxString newName = aEvent.GetString();
+
+        for( int row = 0; row < m_itemsGrid->GetNumberRows(); ++row )
+        {
+            if( row == aEvent.GetRow() )
+                continue;
+
+            if( FieldNamesAreDuplicates( newName, m_itemsGrid->GetCellValue( row, PFC_NAME ) ) )
+            {
+                aEvent.Veto();
+                m_delayedFocusGrid = m_itemsGrid;
+                m_delayedFocusRow = aEvent.GetRow();
+                m_delayedFocusColumn = aEvent.GetCol();
+                m_delayedFocusPage = NOTEBOOK_PAGES::PAGE_GENERAL;
+                m_delayedErrorMessage = wxString::Format( _( "Field name '%s' already in use." ), newName );
+                break;
+            }
+        }
+    }
+
+    editor->DecRef();
+}
+
+
 void DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::OnUpdateUI( wxUpdateUIEvent& event )
 {
     // Handle a delayed focus.  The delay allows us to:
@@ -1079,7 +1136,15 @@ void DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::OnUpdateUI( wxUpdateUIEvent& event )
     if( static_cast<int>( m_delayedFocusPage ) >= 0 )
     {
         if( m_NoteBook->GetSelection() != static_cast<int>( m_delayedFocusPage ) )
-            m_NoteBook->ChangeSelection( static_cast<int>( m_delayedFocusPage ) );
+        {
+            const int newPage = static_cast<int>( m_delayedFocusPage );
+            const int oldPage = m_NoteBook->ChangeSelection( newPage );
+
+            // Notify page tools without rerunning the validation that requested this switch.
+            wxBookCtrlEvent changed( wxEVT_NOTEBOOK_PAGE_CHANGED, m_NoteBook->GetId(), newPage, oldPage );
+            changed.SetEventObject( m_NoteBook );
+            m_NoteBook->GetEventHandler()->ProcessEvent( changed );
+        }
 
         m_delayedFocusPage = NOTEBOOK_PAGES::PAGE_UNKNOWN;
     }

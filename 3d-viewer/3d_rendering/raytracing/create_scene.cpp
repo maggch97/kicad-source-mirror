@@ -26,7 +26,6 @@
 #include "shapes3D/cylinder_3d.h"
 #include "shapes3D/frustum_3d.h"
 #include "shapes3D/triangle_3d.h"
-#include "shapes3D/dummy_block_3d.h"
 #include "shapes2D/layer_item_2d.h"
 #include "shapes2D/ring_2d.h"
 #include "shapes2D/polygon_2d.h"
@@ -68,10 +67,6 @@ static float TransparencyControl( float aGrayColorValue, float aTransparency )
     return glm::max( glm::min( aGrayColorValue * ca + aaa, 1.0f ), 0.0f );
 }
 
-/**
- * Scale conversion from 3d model units to pcb units
- */
-#define UNITS3D_TO_UNITSPCB ( pcbIUScale.IU_PER_MM )
 
 
 void RENDER_3D_RAYTRACE_BASE::setupMaterials()
@@ -401,8 +396,7 @@ void RENDER_3D_RAYTRACE_BASE::createItemsFromContainer( const BVH_CONTAINER_2D* 
 extern void buildBoardBoundingBoxPoly( const BOARD* aBoard, SHAPE_POLY_SET& aOutline );
 
 
-void RENDER_3D_RAYTRACE_BASE::Reload( REPORTER* aStatusReporter, REPORTER* aWarningReporter,
-                                 bool aOnlyLoadCopperAndShapes )
+void RENDER_3D_RAYTRACE_BASE::Reload( bool aOnlyLoadCopperAndShapes, std::stop_token aStop )
 {
     m_reloadRequested = false;
 
@@ -415,10 +409,17 @@ void RENDER_3D_RAYTRACE_BASE::Reload( REPORTER* aStatusReporter, REPORTER* aWarn
 
     if( !aOnlyLoadCopperAndShapes )
     {
-        m_boardAdapter.InitSettings( aStatusReporter, aWarningReporter );
+        m_boardAdapter.InitSettings( m_activityReporter, m_warningReporter );
+        m_boardAdapter.CreateLayers( m_activityReporter );
 
         SFVEC3F camera_pos = m_boardAdapter.GetBoardCenter();
         m_camera.SetBoardLookAtPos( camera_pos );
+    }
+
+    {
+        // Drop the BVH before freeing objects it indexes (and before any layer rebuild).
+        std::lock_guard<std::mutex> lock( m_hitTestMutex );
+        m_accelerator.reset();
     }
 
     m_objectContainer.Clear();
@@ -427,8 +428,16 @@ void RENDER_3D_RAYTRACE_BASE::Reload( REPORTER* aStatusReporter, REPORTER* aWarn
 
     setupMaterials();
 
-    if( aStatusReporter )
-        aStatusReporter->Report( _( "Load Raytracing: board" ) );
+    if( aStop.stop_requested() )
+        return;
+
+    if( m_activityReporter )
+    {
+        if( aOnlyLoadCopperAndShapes )
+            m_activityReporter->Report( _( "Building hit-test scene..." ) );
+        else
+            m_activityReporter->Report( _( "Load Raytracing: board" ) );
+    }
 
     // Create and add the outline board
     delete m_outlineBoard2dObjects;
@@ -658,8 +667,13 @@ void RENDER_3D_RAYTRACE_BASE::Reload( REPORTER* aStatusReporter, REPORTER* aWarn
         }
     }
 
-    if( aStatusReporter )
-        aStatusReporter->Report( _( "Load Raytracing: layers" ) );
+    if( m_activityReporter )
+    {
+        if( aOnlyLoadCopperAndShapes )
+            m_activityReporter->Report( _( "Building hit-test scene: layers..." ) );
+        else
+            m_activityReporter->Report( _( "Load Raytracing: layers" ) );
+    }
 
     // Add layers maps (except B_Mask and F_Mask)
     for( const std::pair<const PCB_LAYER_ID, BVH_CONTAINER_2D*>& entry :
@@ -721,11 +735,19 @@ void RENDER_3D_RAYTRACE_BASE::Reload( REPORTER* aStatusReporter, REPORTER* aWarn
             break;
 
         case B_CrtYd:
+            layerColor = m_boardAdapter.m_BCourtyardColor;
+            break;
+
         case F_CrtYd:
+            layerColor = m_boardAdapter.m_FCourtyardColor;
             break;
 
         case B_Fab:
+            layerColor = m_boardAdapter.m_BFabColor;
+            break;
+
         case F_Fab:
+            layerColor = m_boardAdapter.m_FFabColor;
             break;
 
         default:
@@ -753,6 +775,9 @@ void RENDER_3D_RAYTRACE_BASE::Reload( REPORTER* aStatusReporter, REPORTER* aWarn
         }
 
         createItemsFromContainer( container2d, layer_id, materialLayer, layerColor, 0.0f );
+
+        if( aStop.stop_requested() )
+            return;
     } // for each layer on map
 
     // Create plated copper
@@ -888,10 +913,18 @@ void RENDER_3D_RAYTRACE_BASE::Reload( REPORTER* aStatusReporter, REPORTER* aWarn
     int64_t stats_startLoad3DmodelsTime = stats_endConvertTime;
 #endif
 
-    if( aStatusReporter )
-        aStatusReporter->Report( _( "Loading 3D models..." ) );
+    if( m_activityReporter )
+    {
+        if( aOnlyLoadCopperAndShapes )
+            m_activityReporter->Report( _( "Building hit-test scene: 3D models..." ) );
+        else
+            m_activityReporter->Report( _( "Loading 3D models..." ) );
+    }
 
-    load3DModels( m_objectContainer, aOnlyLoadCopperAndShapes );
+    load3DModels( m_objectContainer, aOnlyLoadCopperAndShapes, aStop );
+
+    if( aStop.stop_requested() )
+        return;
 
 #ifdef PRINT_STATISTICS_3D_VIEWER
     int64_t stats_endLoad3DmodelsTime = GetRunningMicroSecs();
@@ -1061,16 +1094,31 @@ void RENDER_3D_RAYTRACE_BASE::Reload( REPORTER* aStatusReporter, REPORTER* aWarn
         m_camera.SetMinZoom( min_zoom );
     }
 
-    // Create an accelerator
-    delete m_accelerator;
-    m_accelerator = new BVH_PBRT( m_objectContainer, 8, SPLITMETHOD::MIDDLE );
+    if( aStop.stop_requested() )
+        return;
 
-    if( aStatusReporter )
+    // Create an accelerator
+    std::unique_ptr<ACCELERATOR_3D> accelerator =
+            std::make_unique<BVH_PBRT>( m_objectContainer, 8, SPLITMETHOD::MIDDLE );
+
+    {
+        std::lock_guard<std::mutex> lock( m_hitTestMutex );
+        m_accelerator = std::move( accelerator );
+    }
+
+    if( m_activityReporter )
     {
         // Calculation time in seconds
         double calculation_time = (double) ( GetRunningMicroSecs() - stats_startReloadTime ) / 1e6;
 
-        aStatusReporter->Report( wxString::Format( _( "Reload time %.3f s" ), calculation_time ) );
+        if( aOnlyLoadCopperAndShapes )
+        {
+            m_activityReporter->Report( wxString::Format( _( "Hit-test scene ready in %.3f s" ), calculation_time ) );
+        }
+        else
+        {
+            m_activityReporter->Report( wxString::Format( _( "Reload time %.3f s" ), calculation_time ) );
+        }
     }
 }
 
@@ -1912,7 +1960,8 @@ void RENDER_3D_RAYTRACE_BASE::addPadsAndVias()
 
 
 void RENDER_3D_RAYTRACE_BASE::addPlaceholderToRaytracer( CONTAINER_3D& aDstContainer, const FOOTPRINT* aFootprint,
-                                                         const glm::mat4& aFpMatrix, bool aHasExtrudedBody )
+                                                         const glm::mat4& aFpMatrix, bool aHasExtrudedBody,
+                                                         float aOpacity )
 {
     if( aHasExtrudedBody )
         return;
@@ -1933,24 +1982,34 @@ void RENDER_3D_RAYTRACE_BASE::addPlaceholderToRaytracer( CONTAINER_3D& aDstConta
     SFVEC3F boxMin( offsetX - bboxW * 0.5f, offsetY - bboxH * 0.5f, 0.0f );
     SFVEC3F boxMax( offsetX + bboxW * 0.5f, offsetY + bboxH * 0.5f, scaleZ );
 
-    BBOX_3D worldBBox;
-    worldBBox.Reset();
+    SFVEC3F corners[8];
 
     for( int i = 0; i < 8; ++i )
     {
         SFVEC3F corner( ( i & 1 ) ? boxMax.x : boxMin.x, ( i & 2 ) ? boxMax.y : boxMin.y,
                         ( i & 4 ) ? boxMax.z : boxMin.z );
 
-        glm::vec4 transformed = aFpMatrix * glm::vec4( corner, 1.0f );
-        worldBBox.Union( SFVEC3F( transformed ) );
+        corners[i] = SFVEC3F( aFpMatrix * glm::vec4( corner, 1.0f ) );
     }
 
-    DUMMY_BLOCK* placeholder = new DUMMY_BLOCK( worldBBox );
-    placeholder->SetBoardItem( const_cast<FOOTPRINT*>( aFootprint ) );
-    placeholder->SetMaterial( &m_materials.m_EpoxyBoard );
-    placeholder->SetColor( SFVEC3F( 1.0f, 0.5f, 0.0f ) );
+    static const int faces[6][4] = { { 4, 5, 7, 6 }, { 0, 2, 3, 1 }, { 0, 1, 5, 4 },
+                                     { 3, 2, 6, 7 }, { 0, 4, 6, 2 }, { 1, 3, 7, 5 } };
 
-    aDstContainer.Add( placeholder );
+    auto addTriangle = [&]( const SFVEC3F& aV0, const SFVEC3F& aV1, const SFVEC3F& aV2 )
+    {
+        TRIANGLE* triangle = new TRIANGLE( aV0, aV1, aV2 );
+        triangle->SetBoardItem( const_cast<FOOTPRINT*>( aFootprint ) );
+        triangle->SetMaterial( &m_materials.m_EpoxyBoard );
+        triangle->SetModelTransparency( 1.0f - aOpacity );
+        triangle->SetColor( SFVEC3F( 1.0f, 0.5f, 0.0f ) );
+        aDstContainer.Add( triangle );
+    };
+
+    for( const int* face : faces )
+    {
+        addTriangle( corners[face[0]], corners[face[2]], corners[face[1]] );
+        addTriangle( corners[face[0]], corners[face[3]], corners[face[2]] );
+    }
 }
 
 
@@ -2112,53 +2171,64 @@ bool RENDER_3D_RAYTRACE_BASE::addExtrudedBodyToRaytracer( CONTAINER_3D& aDstCont
         layerItem->SetBoardItem( const_cast<FOOTPRINT*>( aFootprint ) );
         layerItem->SetMaterial( bodyMaterial );
         layerItem->SetColor( objColor );
+        layerItem->SetModelTransparency( 1.0f - (float) c.a );
         aDstContainer.Add( layerItem );
     }
 
-    // Create metallic pin extrusions for THT pads (from opposite board side to standoff height)
+    // Create pin extrusions for pad holes (they move with the body, so the Z offset shifts them whole)
     if( standoff3d > 0.0f )
     {
         SHAPE_POLY_SET pinPoly;
+        SHAPE_POLY_SET pegPoly;
 
-        if( GetExtrusionPinOutline( aFootprint, pinPoly ) )
+        if( GetExtrusionPinOutlines( aFootprint, pinPoly, pegPoly ) )
         {
-            ApplyExtrusionTransform( pinPoly, body, fpPos );
-
             float oppositeSurfaceZ = m_boardAdapter.GetFootprintZPos( !isBack );
             float protrusion = 1.0f * pcbIUScale.IU_PER_MM * biuTo3d;
             float pinZBot, pinZTop;
 
             if( !isBack )
             {
-                pinZBot = oppositeSurfaceZ - protrusion;
-                pinZTop = boardSurfaceZ + standoff3d;
+                pinZBot = oppositeSurfaceZ - protrusion + zOffset3d;
+                pinZTop = boardSurfaceZ + standoff3d + zOffset3d;
             }
             else
             {
-                pinZTop = oppositeSurfaceZ + protrusion;
-                pinZBot = boardSurfaceZ - standoff3d;
+                pinZTop = oppositeSurfaceZ + protrusion - zOffset3d;
+                pinZBot = boardSurfaceZ - standoff3d - zOffset3d;
             }
+
+            auto addPinObjects =
+                    [&]( SHAPE_POLY_SET& aPoly, const MATERIAL* aMaterial, const SFVEC3F& aColor, float aTransparency )
+            {
+                if( aPoly.OutlineCount() == 0 )
+                    return;
+
+                ApplyExtrusionTransform( aPoly, body, fpPos );
+                aPoly.Fracture();
+
+                size_t prevPinCount = objList.size();
+
+                addOutlineToRaytracerObjects( m_containerWithObjectsToDelete, aPoly, biuTo3d, *aFootprint );
+
+                auto pinIt = objList.begin();
+                std::advance( pinIt, prevPinCount );
+
+                for( ; pinIt != objList.end(); ++pinIt )
+                {
+                    LAYER_ITEM* layerItem = new LAYER_ITEM( *pinIt, pinZBot, pinZTop );
+                    layerItem->SetBoardItem( const_cast<FOOTPRINT*>( aFootprint ) );
+                    layerItem->SetMaterial( aMaterial );
+                    layerItem->SetColor( aColor );
+                    layerItem->SetModelTransparency( aTransparency );
+                    aDstContainer.Add( layerItem );
+                }
+            };
 
             SFVEC3F metalColor = ConvertSRGBToLinear( SFVEC3F( 0.75f, 0.75f, 0.75f ) );
 
-            pinPoly.Fracture();
-
-            size_t prevPinCount = objList.size();
-
-            addOutlineToRaytracerObjects( m_containerWithObjectsToDelete, pinPoly, biuTo3d, *aFootprint );
-
-            // Wrap pin objects with material and Z extents
-            auto pinIt = objList.begin();
-            std::advance( pinIt, prevPinCount );
-
-            for( ; pinIt != objList.end(); ++pinIt )
-            {
-                LAYER_ITEM* layerItem = new LAYER_ITEM( *pinIt, pinZBot, pinZTop );
-                layerItem->SetBoardItem( const_cast<FOOTPRINT*>( aFootprint ) );
-                layerItem->SetMaterial( &m_materials.m_Copper );
-                layerItem->SetColor( metalColor );
-                aDstContainer.Add( layerItem );
-            }
+            addPinObjects( pinPoly, &m_materials.m_Copper, metalColor, 0.0f );
+            addPinObjects( pegPoly, bodyMaterial, objColor, 1.0f - (float) c.a );
         }
     }
 
@@ -2166,8 +2236,8 @@ bool RENDER_3D_RAYTRACE_BASE::addExtrudedBodyToRaytracer( CONTAINER_3D& aDstCont
 }
 
 
-void RENDER_3D_RAYTRACE_BASE::load3DModels( CONTAINER_3D& aDstContainer,
-                                            bool aSkipMaterialInformation )
+void RENDER_3D_RAYTRACE_BASE::load3DModels( CONTAINER_3D& aDstContainer, bool aSkipMaterialInformation,
+                                            std::stop_token aStop )
 {
     if( !m_boardAdapter.GetBoard() )
         return;
@@ -2183,6 +2253,9 @@ void RENDER_3D_RAYTRACE_BASE::load3DModels( CONTAINER_3D& aDstContainer,
     // Go for all footprints
     for( FOOTPRINT* fp : m_boardAdapter.GetBoard()->Footprints() )
     {
+        if( aStop.stop_requested() )
+            return;
+
         bool hasModels = !fp->Models().empty();
         bool showMissing = m_boardAdapter.m_Cfg->m_Render.show_missing_models;
 
@@ -2194,36 +2267,7 @@ void RENDER_3D_RAYTRACE_BASE::load3DModels( CONTAINER_3D& aDstContainer,
 
         if( ( hasModels || showMissing ) && m_boardAdapter.IsFootprintShown( fp ) )
         {
-            double zpos = m_boardAdapter.GetFootprintZPos( fp->IsFlipped() );
-
-            VECTOR2I pos = fp->GetPosition();
-
-            glm::mat4 fpMatrix = glm::mat4( 1.0f );
-
-            fpMatrix = glm::translate( fpMatrix,
-                                       SFVEC3F( pos.x * m_boardAdapter.BiuTo3dUnits(),
-                                                -pos.y * m_boardAdapter.BiuTo3dUnits(),
-                                                zpos ) );
-
-            if( !fp->GetOrientation().IsZero() )
-            {
-                fpMatrix = glm::rotate( fpMatrix, (float) fp->GetOrientation().AsRadians(),
-                                        SFVEC3F( 0.0f, 0.0f, 1.0f ) );
-            }
-
-            if( fp->IsFlipped() )
-            {
-                fpMatrix = glm::rotate( fpMatrix, glm::pi<float>(), SFVEC3F( 0.0f, 1.0f, 0.0f ) );
-
-                fpMatrix = glm::rotate( fpMatrix, glm::pi<float>(), SFVEC3F( 0.0f, 0.0f, 1.0f ) );
-            }
-
-            const double modelunit_to_3d_units_factor =
-                    m_boardAdapter.BiuTo3dUnits() * UNITS3D_TO_UNITSPCB;
-
-            fpMatrix = glm::scale(
-                    fpMatrix, SFVEC3F( modelunit_to_3d_units_factor, modelunit_to_3d_units_factor,
-                                       modelunit_to_3d_units_factor ) );
+            const glm::mat4 fpMatrix = m_boardAdapter.GetFootprintMatrix( *fp );
 
             // Get the list of model files for this model
             S3D_CACHE* cacheMgr = m_boardAdapter.Get3dCacheManager();
@@ -2250,6 +2294,8 @@ void RENDER_3D_RAYTRACE_BASE::load3DModels( CONTAINER_3D& aDstContainer,
                 }
             }
 
+            bool placeholderAdded = false;
+
             for( FP_3DMODEL& model : fp->Models() )
             {
                 if( !model.m_Show || model.m_Filename.empty() )
@@ -2266,39 +2312,25 @@ void RENDER_3D_RAYTRACE_BASE::load3DModels( CONTAINER_3D& aDstContainer,
                 // only add it if the return is not NULL.
                 if( modelPtr )
                 {
-                    glm::mat4 modelMatrix = fpMatrix;
-
-                    modelMatrix = glm::translate( modelMatrix,
-                            SFVEC3F( model.m_Offset.x, model.m_Offset.y, model.m_Offset.z ) );
-
-                    modelMatrix = glm::rotate( modelMatrix,
-                            (float) -( model.m_Rotation.z / 180.0f ) * glm::pi<float>(),
-                            SFVEC3F( 0.0f, 0.0f, 1.0f ) );
-
-                    modelMatrix = glm::rotate( modelMatrix,
-                            (float) -( model.m_Rotation.y / 180.0f ) * glm::pi<float>(),
-                            SFVEC3F( 0.0f, 1.0f, 0.0f ) );
-
-                    modelMatrix = glm::rotate( modelMatrix,
-                            (float) -( model.m_Rotation.x / 180.0f ) * glm::pi<float>(),
-                            SFVEC3F( 1.0f, 0.0f, 0.0f ) );
-
-                    modelMatrix = glm::scale( modelMatrix,
+                    glm::mat4 modelMatrix = fpMatrix * CalcModelMatrix(
+                            SFVEC3F( model.m_Offset.x, model.m_Offset.y, model.m_Offset.z ),
+                            SFVEC3F( model.m_Rotation.x, model.m_Rotation.y, model.m_Rotation.z ),
                             SFVEC3F( model.m_Scale.x, model.m_Scale.y, model.m_Scale.z ) );
 
                     addModels( aDstContainer, modelPtr, modelMatrix, (float) model.m_Opacity,
                                aSkipMaterialInformation, fp );
                 }
-                else if( showMissing )
+                else if( showMissing && !placeholderAdded )
                 {
-                    addPlaceholderToRaytracer( aDstContainer, fp, fpMatrix, hasExtrudedBody );
+                    addPlaceholderToRaytracer( aDstContainer, fp, fpMatrix, hasExtrudedBody, (float) model.m_Opacity );
+                    placeholderAdded = true;
                 }
             }
 
             // Footprint with no models assigned at all
             if( !hasModels && showMissing )
             {
-                addPlaceholderToRaytracer( aDstContainer, fp, fpMatrix, hasExtrudedBody );
+                addPlaceholderToRaytracer( aDstContainer, fp, fpMatrix, hasExtrudedBody, 1.0f );
             }
         }
     }

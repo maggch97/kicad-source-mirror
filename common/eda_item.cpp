@@ -33,6 +33,53 @@
 #include <eda_pattern_match.h>
 #include <properties/property.h>
 #include <properties/property_mgr.h>
+#include <ranges>
+
+
+class EDA_CUSTOM_PROPERTY : public PROPERTY_BASE
+{
+public:
+    EDA_CUSTOM_PROPERTY( const wxString& aKey, size_t aOwnerHash ) :
+            PROPERTY_BASE( aKey ),
+            m_key( aKey ),
+            m_ownerHash( aOwnerHash )
+    {
+        SetGroup( _HKI( "Custom Properties" ) );
+    }
+
+    size_t OwnerHash() const override { return m_ownerHash; }
+    size_t BaseHash() const override { return m_ownerHash; }
+    size_t TypeHash() const override { return TYPE_HASH( wxString ); }
+
+private:
+    void setter( void* obj, wxAny& v ) override
+    {
+        wxString value;
+
+        if( !v.GetAs( &value ) )
+            return;
+
+        EDA_ITEM* item = static_cast<EDA_ITEM*>( obj );
+        item->SetCustomProperty( m_key, value );
+    }
+
+    wxAny getter( const void* aObj ) const override
+    {
+        const EDA_ITEM* item = static_cast<const EDA_ITEM*>( aObj );
+
+        wxString value;
+
+        if( !item->GetCustomProperty( m_key, value ) )
+            return wxAny();
+
+        return wxAny( value );
+    }
+
+private:
+    wxString m_key;
+    size_t   m_ownerHash;
+};
+
 
 EDA_ITEM::EDA_ITEM( EDA_ITEM* parent, KICAD_T idType, bool isSCH_ITEM, bool isBOARD_ITEM ) :
         KIGFX::VIEW_ITEM( isSCH_ITEM, isBOARD_ITEM ),
@@ -64,9 +111,26 @@ EDA_ITEM::EDA_ITEM( const EDA_ITEM& base ) :
         m_parent( base.m_parent ),
         m_group( base.m_group ),
         m_isRollover( false ),
-        m_forceVisible( base.m_forceVisible )
+        m_forceVisible( base.m_forceVisible ),
+        m_netHighlighted( base.m_netHighlighted ),
+        m_customProperties( base.m_customProperties )
 {
     SetForcedTransparency( base.GetForcedTransparency() );
+}
+
+
+EDA_ITEM::~EDA_ITEM() = default;
+
+
+bool EDA_ITEM::IsNetHighlighted() const
+{
+    return m_netHighlighted;
+}
+
+
+void EDA_ITEM::SetNetHighlighted( bool aHighlighted )
+{
+    m_netHighlighted = aHighlighted;
 }
 
 
@@ -91,6 +155,77 @@ void EDA_ITEM::SetParent( EDA_ITEM* aParent )
     wxCHECK( aParent != this, /* void */ );
 
     m_parent = aParent;
+}
+
+
+void EDA_ITEM::RemoveCustomProperty( const wxString& aKey )
+{
+    m_customProperties.erase( aKey );
+    m_dynamicCustomPropsCache.erase( aKey );
+}
+
+
+std::vector<wxString> EDA_ITEM::RemoveConflictingCustomProperties()
+{
+    std::vector<wxString> toRemove;
+
+    for( const wxString& key : m_customProperties | std::views::keys )
+    {
+        if( PROPERTY_BASE* prop = PROPERTY_MANAGER::Instance().GetProperty( this, key ) )
+        {
+            if( prop->Group() != _HKI( "Custom Properties" ) )
+                toRemove.push_back( key );
+        }
+    }
+
+    for( const wxString& key : toRemove )
+        RemoveCustomProperty( key );
+
+    return toRemove;
+}
+
+
+bool EDA_ITEM::GetCustomProperty( const wxString& aKey, wxString& aValue ) const
+{
+    auto it = m_customProperties.find( aKey );
+
+    if( it == m_customProperties.end() )
+        return false;
+
+    aValue = it->second;
+    return true;
+}
+
+
+std::vector<PROPERTY_BASE*> EDA_ITEM::GetCustomPropertiesAsInspectables() const
+{
+    std::vector<PROPERTY_BASE*> props;
+    props.reserve( m_customProperties.size() );
+
+    const size_t ownerHash = TYPE_HASH( *this );
+
+    for( const auto& [ key, value ] : m_customProperties )
+    {
+        (void) value;
+
+        auto it = m_dynamicCustomPropsCache.find( key );
+
+        if( it == m_dynamicCustomPropsCache.end() )
+        {
+            it = m_dynamicCustomPropsCache.emplace(
+                    key, std::make_unique<EDA_CUSTOM_PROPERTY>( key, ownerHash ) ).first;
+        }
+
+        props.push_back( it->second.get() );
+    }
+
+    return props;
+}
+
+
+std::vector<PROPERTY_BASE*> EDA_ITEM::GetDynamicProperties() const
+{
+    return GetCustomPropertiesAsInspectables();
 }
 
 
@@ -354,12 +489,16 @@ EDA_ITEM& EDA_ITEM::operator=( const EDA_ITEM& aItem )
 {
     // do not call initVars()
 
-    m_structType   = aItem.m_structType;
+    // m_structType is set by the constructor and must never be assigned; copying it leaves a
+    // derived object reporting its base type while keeping its own vtable
+
     m_flags        = aItem.m_flags;
     m_parent       = aItem.m_parent;
     m_group        = aItem.m_group;
     m_forceVisible = aItem.m_forceVisible;
     m_isRollover   = aItem.m_isRollover;
+    m_netHighlighted = aItem.m_netHighlighted;
+    m_customProperties = aItem.m_customProperties;
 
     SetForcedTransparency( aItem.GetForcedTransparency() );
 
@@ -448,6 +587,8 @@ static struct EDA_ITEM_DESC
             .Map( PCB_TEXT_T,              _HKI( "Text" ) )
             .Map( PCB_TEXTBOX_T,           _HKI( "Text Box" ) )
             .Map( PCB_TABLE_T,             _HKI( "Table" ) )
+            .Map( PCB_DRILL_CHART_T,       _HKI( "Drill Chart" ) )
+            .Map( PCB_DRILL_MAP_T,         _HKI( "Drill Map" ) )
             .Map( PCB_TABLECELL_T,         _HKI( "Table Cell" ) )
             .Map( PCB_TRACE_T,             _HKI( "Track" ) )
             .Map( PCB_ARC_T,               _HKI( "Track" ) )
@@ -465,6 +606,7 @@ static struct EDA_ITEM_DESC
             .Map( PCB_NETINFO_T,           _HKI( "NetInfo" ) )
             .Map( PCB_GROUP_T,             _HKI( "Group" ) )
             .Map( PCB_BARCODE_T,           _HKI( "Barcode" ) )
+            .Map( PCB_GRID_ITEM_T,         _HKI( "Grid" ) )
 
             .Map( SCH_MARKER_T,            _HKI( "Marker" ) )
             .Map( SCH_JUNCTION_T,          _HKI( "Junction" ) )
@@ -507,7 +649,7 @@ static struct EDA_ITEM_DESC
         REGISTER_TYPE( EDA_ITEM );
 
         propMgr.AddProperty( new PROPERTY_ENUM<EDA_ITEM, KICAD_T>( wxS( "Type" ),
-                             NO_SETTER( EDA_ITEM, KICAD_T ), &EDA_ITEM::Type ) )
+                    NO_SETTER( EDA_ITEM, KICAD_T ), &EDA_ITEM::Type ) )
                 .SetIsHiddenFromPropertiesManager();
     }
 } _EDA_ITEM_DESC;

@@ -101,6 +101,13 @@ extern KICOMMON_API const wxChar* const kicadTraceCoroutineStack;
 extern KICOMMON_API const wxChar* const traceAutoSave;
 
 /**
+ * Flag to enable native operating-system model preview debug output.
+ *
+ * Use "KICAD_MODEL_PREVIEW" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceModelPreview;
+
+/**
  * Flag to enable schematic library memory deletion debug output.
  *
  * Use "KICAD_SCH_LIB_MEM" to enable.
@@ -256,6 +263,13 @@ extern KICOMMON_API const wxChar* const traceEnvVars;
 extern KICOMMON_API const wxChar* const traceGalProfile;
 
 /**
+ * Flag to enable debug output of GAL context binding.
+ *
+ * Use "KICAD_GAL_CONTEXT" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceGalContext;
+
+/**
  * Flag to enable KiCad2Step debug tracing.
  *
  * Use "KICAD2STEP" to enable.
@@ -296,6 +310,55 @@ extern KICOMMON_API const wxChar* const traceEagleIo;
  * Use "KICAD_DIPTRACE_IO" to enable.
  */
 extern KICOMMON_API const wxChar* const traceDiptraceIo;
+
+/*
+ * Flag to enable CADSTAR I/O debug tracing.
+ *
+ * Use "KICAD_CADSTAR_IO" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceCadstarIo;
+
+/*
+ * Flag to enable FABMASTER I/O debug tracing.
+ *
+ * Use "KICAD_FABMASTER" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceFabmaster;
+
+/*
+ * Flag to enable Altium I/O debug tracing.
+ *
+ * Use "KICAD_ALTIUM_IO" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceAltiumIo;
+
+/*
+ * Flag to enable ODB++ I/O debug tracing.
+ *
+ * Use "KICAD_ODBPP_IO" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceOdbppIo;
+
+/*
+ * Flag to enable EasyEDA I/O debug tracing.
+ *
+ * Use "KICAD_EASYEDA_IO" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceEasyEdaIo;
+
+/*
+ * Flag to enable PADS I/O debug tracing.
+ *
+ * Use "KICAD_PADS_IO" to enable.
+ */
+extern KICOMMON_API const wxChar* const tracePadsIo;
+
+/*
+ * Flag to enable P-CAD I/O debug tracing.
+ *
+ * Use "KICAD_PCAD_IO" to enable.
+ */
+extern KICOMMON_API const wxChar* const tracePcadIo;
 
 /*
  * Flag to enable Design Block O debug tracing.
@@ -365,6 +428,13 @@ extern KICOMMON_API const wxChar* const traceSymbolInheritance;
  * Use "KICAD_SCH_NETCHAIN" to enable.
  */
 extern KICOMMON_API const wxChar* const traceSchNetChain;
+
+/**
+ * Flag to enable tracing of imported net-name reconciliation between a schematic and its board.
+ *
+ * Use "KICAD_IMPORT_NET_NAMES" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceImportNetNames;
 
 ///@}
 

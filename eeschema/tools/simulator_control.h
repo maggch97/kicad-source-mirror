@@ -67,6 +67,7 @@ public:
     int ToggleGrid( const TOOL_EVENT& aEvent );
     int ToggleLegend( const TOOL_EVENT& aEvent );
     int ToggleDottedSecondary( const TOOL_EVENT& aEvent );
+    int ToggleSmithChart( const TOOL_EVENT& aEvent );
     int ToggleDarkModePlots( const TOOL_EVENT& aEvent );
 
     int EditAnalysisTab( const TOOL_EVENT& aEvent );
@@ -90,7 +91,7 @@ private:
 
     SIM_TAB* getCurrentSimTab();
 
-    ///< Set up handlers for various events.
+    /// Set up handlers for various events.
     void setTransitions() override;
 
 private:

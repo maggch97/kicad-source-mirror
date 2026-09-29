@@ -461,15 +461,15 @@ bool SEG::IntersectsLine( double aSlope, double aOffset, VECTOR2I& aIntersection
     {
         // Vertical segment: x = A.x, find y on the line
         const double intersect_y = aSlope * A.x + aOffset;
-        const int intersect_y_int = KiROUND( intersect_y );
 
-        // Check if intersection is within segment's y-range
+        // Compare before rounding.  The line is unbounded, so a miss lands anywhere, and
+        // narrowing it first would fault on a value this is about to discard
         const int seg_min_y = std::min( A.y, B.y );
         const int seg_max_y = std::max( A.y, B.y );
 
-        if( intersect_y_int >= seg_min_y && intersect_y_int <= seg_max_y )
+        if( intersect_y >= seg_min_y && intersect_y <= seg_max_y )
         {
-            aIntersection = VECTOR2I( A.x, intersect_y_int );
+            aIntersection = VECTOR2I( A.x, KiROUND( intersect_y ) );
             return true;
         }
         return false;
@@ -620,9 +620,20 @@ bool SEG::Collide( const SEG& aSeg, int aClearance, int* aActual ) const
 }
 
 
-bool SEG::Contains( const VECTOR2I& aP ) const
+bool SEG::Contains( const VECTOR2I& aP, int aSqDistanceThreshold ) const
 {
-    return SquaredDistance( aP ) <= 3;
+    /* Warning. This code does work in most - but not all of the cases.
+       Take the segment (0,0) - (10,0) and the point (9, 1). With the distance threshold of 3,
+       the point is assumed as contained in by the segment:
+
+             (9,1)\  
+       (0,0) ------ (10, 0)
+
+       I've made the distance threshold configurable (using the default of value of 3),
+       to not break any existing code that relies on the current rounding behaviour, but we need to
+       think of more accurate (and degeneracy-free) solution. */
+    
+    return SquaredDistance( aP ) <= aSqDistanceThreshold;
 }
 
 

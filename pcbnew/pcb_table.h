@@ -37,6 +37,8 @@ class PCB_TABLE : public BOARD_ITEM_CONTAINER
 public:
     PCB_TABLE( BOARD_ITEM* aParent, int aLineWidth );
 
+    PCB_TABLE( BOARD_ITEM* aParent );
+
     PCB_TABLE( const PCB_TABLE& aTable );
 
     ~PCB_TABLE();
@@ -53,6 +55,11 @@ public:
     {
         return wxT( "PCB_TABLE" );
     }
+
+    /**
+     * True when the cells' text comes from the board, so only their formatting is the user's
+     */
+    bool IsGenerated() const { return IsGeneratedTableType( Type() ); }
 
     void SetStrokeExternal( bool aDoStroke ) { m_strokeExternal = aDoStroke; }
     bool StrokeExternal() const              { return m_strokeExternal; }
@@ -120,7 +127,9 @@ public:
 
     int GetRowCount() const
     {
-        return m_cells.size() / m_colCount;
+        // Guarded because a hand-edited or third-party file can present a table with no
+        // columns, and dividing by it crashes the writer rather than failing the load
+        return m_colCount > 0 ? (int) m_cells.size() / m_colCount : 0;
     }
 
     void SetColWidth( int aCol, int aWidth ) { m_colWidths[aCol] = aWidth; }
@@ -171,6 +180,14 @@ public:
         aCell->SetLayer( GetLayer() );
         aCell->SetParent( this );
     }
+
+    /**
+     * Grow or shrink to aRows x aCols, keeping the cells that already exist.
+     *
+     * A regenerating table must not clear and repopulate. That would mint new UUIDs on every
+     * rebuild and break selection restore and file diffs.
+     */
+    void ResizeCells( int aRows, int aCols );
 
     void ClearCells()
     {
@@ -231,7 +248,8 @@ public:
 
     // @copydoc BOARD_ITEM::GetEffectiveShape
     std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
-                                              FLASHING aFlash = FLASHING::DEFAULT ) const override;
+                                              FLASHING aFlash = FLASHING::DEFAULT,
+                                              DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const override;
 
     void TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance,
                                   int aMaxError, ERROR_LOC aErrorLoc,
@@ -241,6 +259,7 @@ public:
      * Convert the TABLE shape to a polyset. details will be included.
      *
      * @param aBuffer a buffer to store the polygon.
+     * @param aLayer is the ID of the layer the table exists on.
      * @param aClearance the clearance around the pad.
      * @param aError the maximum deviation from true circle.
      * @param aErrorLoc should the approximation error be placed outside or inside the polygon?
@@ -281,6 +300,13 @@ public:
         return new PCB_TABLE( *this );
     }
 
+    BOARD_ITEM* Duplicate( bool addToParentGroup, BOARD_COMMIT* aCommit = nullptr ) const override;
+
+    void CopyFrom( const BOARD_ITEM* aOther ) override;
+
+    void Serialize( google::protobuf::Any &aContainer ) const override;
+    bool Deserialize( const google::protobuf::Any &aContainer ) override;
+
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
     double Similarity( const BOARD_ITEM& aOther ) const override;
@@ -295,9 +321,13 @@ public:
 #endif
 
 protected:
+    /**
+     * Derived tables pass their own KICAD_T
+     */
+    PCB_TABLE( BOARD_ITEM* aParent, KICAD_T aType, int aLineWidth );
+
     virtual void swapData( BOARD_ITEM* aImage ) override;
 
-protected:
     bool                        m_strokeExternal;
     bool                        m_StrokeHeaderSeparator;
     STROKE_PARAMS               m_borderStroke;
@@ -310,6 +340,20 @@ protected:
     std::map<int, int>          m_rowHeights;
     std::vector<PCB_TABLECELL*> m_cells;
 };
+
+
+/**
+ * True for a cell whose text is generated from the board, so only its formatting is the user's.
+ */
+inline bool IsGeneratedTableCell( const EDA_ITEM* aItem )
+{
+    if( !aItem || aItem->Type() != PCB_TABLECELL_T )
+        return false;
+
+    const PCB_TABLE* table = dynamic_cast<const PCB_TABLE*>( aItem->GetParent() );
+
+    return table && table->IsGenerated();
+}
 
 
 #endif /* PCB_TABLE_H */

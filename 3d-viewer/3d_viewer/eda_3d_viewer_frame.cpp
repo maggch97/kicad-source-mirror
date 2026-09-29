@@ -94,6 +94,7 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
                                           const wxString& aTitle, long style ) :
         KIWAY_PLAYER( aKiway, aParent, FRAME_PCB_DISPLAY3D, aTitle, wxDefaultPosition,
                       wxDefaultSize, style, QUALIFIED_VIEWER3D_FRAMENAME( aParent ), unityScale ),
+        m_canvasHolder( nullptr ),
         m_canvas( nullptr ),
         m_currentCamera( m_trackBallCamera ),
         m_trackBallCamera( 2 * RANGE_SCALE_3D )
@@ -109,10 +110,15 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
     SetIcon( icon );
 
     // Create the status line
-    static const int status_dims[5] = { -1, 170, 130, 130, 130 };
+    std::vector<int> status_dims{ -1,
+                                  -1,
+                                  -1,
+                                  GetTextExtent( wxS( "dx -88.88" ) ).x + 10,
+                                  GetTextExtent( wxS( "dy -88.88" ) ).x + 10,
+                                  GetTextExtent( wxS( "zoom -88.88" ) ).x + 10 };
 
-    wxStatusBar *status_bar = CreateStatusBar( arrayDim( status_dims ) );
-    SetStatusWidths( arrayDim( status_dims ), status_dims );
+    wxStatusBar* status_bar = CreateStatusBar( status_dims.size() );
+    SetStatusWidths( status_dims.size(), status_dims.data() );
 
     ANTIALIASING_MODE       aaMode = ANTIALIASING_MODE::AA_NONE;
     EDA_3D_VIEWER_SETTINGS* cfg = GetAppSettings<EDA_3D_VIEWER_SETTINGS>( "3d_viewer" );
@@ -120,8 +126,15 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
     if( cfg )
         aaMode = static_cast<ANTIALIASING_MODE>( cfg->m_Render.opengl_AA_mode );
 
-    m_canvas = new EDA_3D_CANVAS( this, OGL_ATT_LIST::GetAttributesList( aaMode, true ), m_boardAdapter,
-                                  m_currentCamera, PROJECT_PCB::Get3DCacheManager( &Prj() ) );
+    m_canvasHolder = new wxPanel( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxNO_BORDER );
+
+    m_canvas = new EDA_3D_CANVAS( m_canvasHolder, OGL_ATT_LIST::GetAttributesList( aaMode, true ),
+                                  m_boardAdapter, m_currentCamera,
+                                  PROJECT_PCB::Get3DCacheManager( &Prj() ) );
+
+    wxBoxSizer* canvasSizer = new wxBoxSizer( wxVERTICAL );
+    canvasSizer->Add( m_canvas, 1, wxEXPAND, 0 );
+    m_canvasHolder->SetSizer( canvasSizer );
 
     m_appearancePanel = new APPEARANCE_CONTROLS_3D( this, GetCanvas() );
 
@@ -158,19 +171,17 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
     configureToolbars();
     RecreateToolbars();
 
-    m_infoBar = new WX_INFOBAR( this, &m_auimgr );
+    m_infoBar = new WX_INFOBAR( m_canvasHolder, wxID_ANY, true );
 
     m_auimgr.SetManagedWindow( this );
 
     m_auimgr.AddPane( m_tbTopMain, EDA_PANE().HToolbar().Name( wxS( "TopMainToolbar" ) )
                       .Top().Layer( 6 ) );
-    m_auimgr.AddPane( m_infoBar, EDA_PANE().InfoBar().Name( wxS( "InfoBar" ) )
-                      .Top().Layer( 1 ) );
     m_auimgr.AddPane( m_appearancePanel, EDA_PANE().Name( "LayersManager" )
                       .Right().Layer( 3 )
                       .Caption( _( "Appearance" ) ).PaneBorder( false )
                       .MinSize( FromDIP( 180 ), -1 ).BestSize( FromDIP( 190 ), -1 ) );
-    m_auimgr.AddPane( m_canvas, EDA_PANE().Canvas().Name( wxS( "DrawFrame" ) )
+    m_auimgr.AddPane( m_canvasHolder, EDA_PANE().Canvas().Name( wxS( "DrawFrame" ) )
                       .Center() );
 
     wxAuiPaneInfo& layersManager = m_auimgr.GetPane( "LayersManager" );
@@ -181,12 +192,6 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
     if( cfg )
         layersManager.Show( cfg->m_AuiPanels.show_layer_manager );
 
-    // Call Update() to fix all pane default sizes, especially the "InfoBar" pane before
-    // hiding it.
-    m_auimgr.Update();
-
-    // We don't want the infobar displayed right away
-    m_auimgr.GetPane( wxS( "InfoBar" ) ).Hide();
     m_auimgr.Update();
 
     m_canvas->SetInfoBar( m_infoBar );
@@ -226,8 +231,17 @@ EDA_3D_VIEWER_FRAME::~EDA_3D_VIEWER_FRAME()
     Prj().GetProjectFile().m_Viewports3D = m_appearancePanel->GetUserViewports();
 
     m_canvas->SetEventDispatcher( nullptr );
-
+    
     m_auimgr.UnInit();
+
+    delete m_canvas;
+    m_canvas = nullptr;
+}
+
+
+APP_SETTINGS_BASE* EDA_3D_VIEWER_FRAME::config() const
+{
+    return GetAppSettings<EDA_3D_VIEWER_SETTINGS>( "3d_viewer" );
 }
 
 
@@ -645,6 +659,7 @@ void EDA_3D_VIEWER_FRAME::ShowChangedLanguage()
     }
 
     SetStatusText( wxEmptyString, ACTIVITY );
+    SetStatusText( wxEmptyString, RENDER_TIME );
     SetStatusText( wxEmptyString, HOVERED_ITEM );
 }
 
@@ -707,8 +722,14 @@ wxImage EDA_3D_VIEWER_FRAME::captureCurrentViewScreenshot()
     bool original_highlight = cfg.highlight_on_rollover;
     cfg.highlight_on_rollover = false;
 
-    m_canvas->DoRePaint();      // init first buffer
-    m_canvas->DoRePaint();      // init second buffer
+    if( m_canvas )
+    {
+        // Ensure any in-progress background loading finishes before capture.
+        m_canvas->JoinBgWorker();
+        m_canvas->DoRePaint(); // init first buffer
+        m_canvas->JoinBgWorker();
+        m_canvas->DoRePaint(); // init second buffer
+    }
 
     wxImage screenshotImage;
 
@@ -860,12 +881,13 @@ wxImage EDA_3D_VIEWER_FRAME::captureRaytracingScreenshot( BOARD_ADAPTER& aAdapte
     tempadapter.SetBoard( GetBoard() );
     tempadapter.m_Cfg = aAdapter.m_Cfg;
     tempadapter.InitSettings( nullptr, nullptr );
+    tempadapter.CreateLayers( nullptr );
     tempadapter.Set3dCacheManager( aAdapter.Get3dCacheManager() );
 
     RENDER_3D_RAYTRACE_RAM raytrace( tempadapter, aCamera );
     raytrace.SetCurWindowSize( aSize );
 
-    while( raytrace.Redraw( false, nullptr, nullptr ) );
+    while( raytrace.Redraw( false ) );
 
     uint8_t* rgbaBuffer = raytrace.GetBuffer();
     wxSize   realSize   = raytrace.GetRealBufferSize();
@@ -923,6 +945,7 @@ wxImage EDA_3D_VIEWER_FRAME::captureOpenGLScreenshot( BOARD_ADAPTER& aAdapter, T
     tempadapter.SetBoard( GetBoard() );
     tempadapter.m_Cfg = aAdapter.m_Cfg;
     tempadapter.InitSettings( nullptr, nullptr );
+    tempadapter.CreateLayers( nullptr );
     tempadapter.Set3dCacheManager( aAdapter.Get3dCacheManager() );
 
     auto canvas = std::make_unique<EDA_3D_CANVAS>( &temp,

@@ -27,9 +27,12 @@
 #include <core/throttle.h>
 #include <kiplatform/ui.h>
 #include <pgm_base.h>
+#include <settings/common_settings.h>
+#include <symbol_edit_frame.h>
 #include <project/project_file.h>
 #include <lib_symbol_library_manager.h>
 #include <tools/symbol_editor_control.h>
+#include <tool/tool_manager.h>
 #include <project_sch.h>
 #include <string_utils.h>
 #include <symbol_preview_widget.h>
@@ -146,13 +149,18 @@ void SYMBOL_TREE_SYNCHRONIZING_ADAPTER::Sync( const wxString& aForceRefresh,
             if( progressThrottle.Ready() )
                 aProgressCallback( i++, max, libName );
 
-            auto optRow = adapter->GetRow( libName );
+            std::optional<LIBRARY_TABLE_ROW*> optRow = adapter->GetRow( libName );
             wxCHECK2( optRow.has_value(), continue );
+
+            if( optRow.value()->Hidden() )
+                continue;
 
             bool pinned = alg::contains( cfg->m_Session.pinned_symbol_libs, libName )
                             || alg::contains( project.m_PinnedSymbolLibs, libName );
 
-            LIB_TREE_NODE_LIBRARY& lib_node = DoAddLibraryNode( libName, ( *optRow )->Description(), pinned );
+            wxString description = optRow.value()->Description();
+
+            LIB_TREE_NODE_LIBRARY& lib_node = DoAddLibraryNode( libName, description, pinned );
 
             updateLibrary( lib_node );
         }
@@ -232,8 +240,8 @@ void SYMBOL_TREE_SYNCHRONIZING_ADAPTER::updateLibrary( LIB_TREE_NODE_LIBRARY& aL
 }
 
 
-LIB_TREE_NODE::PTR_VECTOR::iterator
-SYMBOL_TREE_SYNCHRONIZING_ADAPTER::deleteLibrary( LIB_TREE_NODE::PTR_VECTOR::iterator& aLibNodeIt )
+std::vector<std::unique_ptr<LIB_TREE_NODE>>::iterator
+SYMBOL_TREE_SYNCHRONIZING_ADAPTER::deleteLibrary( std::vector<std::unique_ptr<LIB_TREE_NODE>>::iterator& aLibNodeIt )
 {
     LIB_TREE_NODE* node = aLibNodeIt->get();
     m_libHashes.erase( node->m_Name );
@@ -307,9 +315,7 @@ void SYMBOL_TREE_SYNCHRONIZING_ADAPTER::GetValue( wxVariant& aVariant, wxDataVie
             const wxString& key = m_colIdxMap.at( aCol );
 
             if( m_frame->GetCurSymbol() && m_frame->GetCurSymbol()->GetLibId() == node->m_LibId )
-            {
-                node->m_Desc = m_frame->GetCurSymbol()->GetShownDescription();
-            }
+                node->m_Desc = m_frame->GetCurSymbol()->GetShownDescription( FOR_GUI );
 
             wxString valueStr;
 

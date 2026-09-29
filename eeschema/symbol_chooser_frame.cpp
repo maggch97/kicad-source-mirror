@@ -38,7 +38,7 @@ static void AddSymbolToHistory( const PICKED_SYMBOL& aSymbol )
                     {
                         return candidate.LibId == aSymbol.LibId
                                 && candidate.Unit == aSymbol.Unit
-                                && candidate.Convert == aSymbol.Convert;
+                                && candidate.BodyStyle == aSymbol.BodyStyle;
                     } );
 
     // Add the new name at the beginning of the history list
@@ -67,7 +67,8 @@ END_EVENT_TABLE()
 SYMBOL_CHOOSER_FRAME::SYMBOL_CHOOSER_FRAME( KIWAY* aKiway, wxWindow* aParent, bool& aCancelled ) :
         SCH_BASE_FRAME( aKiway, aParent, FRAME_SYMBOL_CHOOSER, _( "Symbol Chooser" ),
                         wxDefaultPosition, wxDefaultSize, aParent ? PARENT_STYLE : MODAL_STYLE,
-                        SYMBOL_CHOOSER_FRAME_NAME )
+                        SYMBOL_CHOOSER_FRAME_NAME ),
+        m_firstPaintEvent( true )
 {
     SetModal( true );
 

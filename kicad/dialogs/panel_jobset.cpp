@@ -66,6 +66,9 @@ public:
             m_lastWidth( -1 ),
             m_marginsWidth( -1 )
     {
+        // Don't show stale output from last run
+        OptOut( m_textCtrlOutput );
+
         m_staticTextOutputName->SetLabel( wxString::Format( _( "Destination: %s" ),
                                                             aDestination->GetDescription() ) );
 
@@ -299,7 +302,7 @@ public:
         }
         else
         {
-            resolvedPath = ExpandTextVars( destination->GetPathInfo(), &m_frame->Prj() );
+            resolvedPath = ExpandTextVars( destination->GetPathInfo(), &m_frame->Prj(), INTERNAL );
             resolvedPath = ExpandEnvVarSubstitutions( resolvedPath, &m_frame->Prj() );
 
             if( resolvedPath.StartsWith( "~" ) )

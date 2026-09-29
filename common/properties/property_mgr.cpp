@@ -68,6 +68,21 @@ PROPERTY_BASE* PROPERTY_MANAGER::GetProperty( TYPE_ID aType, const wxString& aPr
 }
 
 
+PROPERTY_BASE* PROPERTY_MANAGER::GetProperty( const INSPECTABLE* aObject, const wxString& aProperty ) const
+{
+    if( PROPERTY_BASE* prop = GetProperty( TYPE_HASH( *aObject ), aProperty ) )
+        return prop;
+
+    for( PROPERTY_BASE* dynamicProp : aObject->GetDynamicProperties() )
+    {
+        if( !aProperty.CmpNoCase( dynamicProp->Name() ) )
+            return dynamicProp;
+    }
+
+    return nullptr;
+}
+
+
 const std::vector<PROPERTY_BASE*>& PROPERTY_MANAGER::GetProperties( TYPE_ID aType ) const
 {
     if( m_dirty )
@@ -79,6 +94,17 @@ const std::vector<PROPERTY_BASE*>& PROPERTY_MANAGER::GetProperties( TYPE_ID aTyp
         return EMPTY_PROP_LIST;
 
     return it->second.m_allProperties;
+}
+
+
+std::vector<PROPERTY_BASE*> PROPERTY_MANAGER::GetProperties( const INSPECTABLE* aObject ) const
+{
+    std::vector<PROPERTY_BASE*> result = GetProperties( TYPE_HASH( *aObject ) );
+
+    for( PROPERTY_BASE* prop : aObject->GetDynamicProperties() )
+        result.push_back( prop );
+
+    return result;
 }
 
 
@@ -454,6 +480,7 @@ PROPERTY_COMMIT_HANDLER::PROPERTY_COMMIT_HANDLER( COMMIT* aCommit )
                   return, wxT( "Can't have more than one managed commit at a time!" ) );
 
     PROPERTY_MANAGER::Instance().m_managedCommit = aCommit;
+    m_ownsCommit = true;
 }
 
 
@@ -462,7 +489,8 @@ PROPERTY_COMMIT_HANDLER::~PROPERTY_COMMIT_HANDLER()
     wxASSERT_MSG( PROPERTY_MANAGER::Instance().m_managedCommit != nullptr,
                   wxT( "Something went wrong: m_managedCommit already null!" ) );
 
-    PROPERTY_MANAGER::Instance().m_managedCommit = nullptr;
+    if( m_ownsCommit )
+        PROPERTY_MANAGER::Instance().m_managedCommit = nullptr;
 }
 
 

@@ -167,6 +167,8 @@ private:
         return err == 0;
     }
 
+    // These tests exercise cwd-based discovery independently of projects loaded by other tests.
+    TEXT_EVAL_VCS::CONTEXT_PATH_SCOPE m_context{ wxString() };
     LIBGIT_BACKEND* m_backend;
     wxString        m_originalDir;
     wxString        m_tempDir;
@@ -401,7 +403,12 @@ BOOST_AUTO_TEST_CASE( VcsPerformance )
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>( end - start );
 
+    // Sanitizer instrumentation changes execution cost, not the evaluation contract
+#if defined( KICAD_SANITIZE_THREADS ) || defined( KICAD_SANITIZE_ADDRESS )
+    BOOST_TEST_MESSAGE( "Instrumented VCS evaluation: " << duration.count() << " ms" );
+#else
     BOOST_CHECK_LT( duration.count(), 2000 );
+#endif
 }
 
 /**

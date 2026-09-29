@@ -68,6 +68,7 @@
 #include <pcb_marker.h>
 #include <project.h>
 #include <widgets/progress_reporter_base.h>
+#include <wx_log_utils.h>
 
 #include <pcbnew_utils/board_file_utils.h>
 
@@ -293,33 +294,28 @@ const std::map<wxString, std::vector<int>>& providerErrorCodes()
                                              DRCE_TRACK_ON_POST_MACHINED_LAYER,
                                              DRCE_UNCONNECTED_ITEMS } },
         { wxT( "clearance" ),              { DRCE_CLEARANCE, DRCE_HOLE_CLEARANCE,
-                                             DRCE_SHORTING_ITEMS, DRCE_TRACKS_CROSSING,
-                                             DRCE_ZONES_INTERSECT } },
+                                             DRCE_SHORTING_ITEMS, DRCE_TRACKS_CROSSING } },
         { wxT( "courtyard_clearance" ),    { DRCE_MALFORMED_COURTYARD, DRCE_MISSING_COURTYARD,
-                                             DRCE_NPTH_IN_COURTYARD, DRCE_OVERLAPPING_FOOTPRINTS,
-                                             DRCE_PTH_IN_COURTYARD } },
+                                             DRCE_NPTH_IN_COURTYARD, DRCE_PTH_IN_COURTYARD,
+                                             DRCE_OVERLAPPING_FOOTPRINTS } },
         { wxT( "creepage" ),               { DRCE_CREEPAGE } },
-        { wxT( "diff_pair_coupling" ),     { DRCE_DIFF_PAIR_GAP_OUT_OF_RANGE,
-                                             DRCE_DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG } },
+        { wxT( "diff_pair_coupling" ),     { DRCE_DP_GAP_OUT_OF_RANGE, DRCE_DP_UNCOUPLED_LENGTH_TOO_LONG } },
         { wxT( "disallow" ),               { DRCE_ALLOWED_ITEMS, DRCE_TEXT_ON_EDGECUTS } },
         { wxT( "edge_clearance" ),         { DRCE_EDGE_CLEARANCE, DRCE_SILK_EDGE_CLEARANCE } },
         { wxT( "footprint checks" ),       { DRCE_FOOTPRINT_TYPE_MISMATCH, DRCE_PADSTACK,
                                              DRCE_PAD_TH_WITH_NO_HOLE, DRCE_SHORTING_ITEMS } },
-        { wxT( "hole_size" ),              { DRCE_DRILL_OUT_OF_RANGE,
-                                             DRCE_MICROVIA_DRILL_OUT_OF_RANGE, DRCE_PADSTACK } },
-        { wxT( "hole_to_hole_clearance" ), { DRCE_DRILLED_HOLES_COLOCATED,
-                                             DRCE_DRILLED_HOLES_TOO_CLOSE } },
-        { wxT( "length" ),                 { DRCE_LENGTH_OUT_OF_RANGE,
-                                             DRCE_NET_CHAIN_RETURN_PATH_BREAK,
-                                             DRCE_NET_CHAIN_STUB_TOO_LONG, DRCE_SKEW_OUT_OF_RANGE,
+        { wxT( "hole_size" ),              { DRCE_DRILL_OUT_OF_RANGE, DRCE_MICROVIA_DRILL_OUT_OF_RANGE,
+                                             DRCE_PADSTACK } },
+        { wxT( "hole_to_hole_clearance" ), { DRCE_DRILLED_HOLES_COLOCATED, DRCE_DRILLED_HOLES_TOO_CLOSE } },
+        { wxT( "length" ),                 { DRCE_LENGTH_OUT_OF_RANGE, DRCE_SKEW_OUT_OF_RANGE,
+                                             DRCE_NET_CHAIN_RETURN_PATH_BREAK, DRCE_NET_CHAIN_STUB_TOO_LONG,
                                              DRCE_VIA_COUNT_OUT_OF_RANGE } },
         { wxT( "physical_clearance" ),     { DRCE_CLEARANCE, DRCE_HOLE_CLEARANCE } },
         { wxT( "silk_clearance" ),         { DRCE_SILK_CLEARANCE, DRCE_SILK_MASK_CLEARANCE } },
         { wxT( "sliver checker" ),         { DRCE_COPPER_SLIVER } },
         { wxT( "solder_mask_issues" ),     { DRCE_SILK_MASK_CLEARANCE, DRCE_SOLDERMASK_BRIDGE } },
         { wxT( "text_dimensions" ),        { DRCE_TEXT_HEIGHT, DRCE_TEXT_THICKNESS } },
-        { wxT( "text_mirroring" ),         { DRCE_MIRRORED_TEXT_ON_FRONT_LAYER,
-                                             DRCE_NONMIRRORED_TEXT_ON_BACK_LAYER } },
+        { wxT( "text_mirroring" ),         { DRCE_MIRRORED_TEXT_ON_FRONT_LAYER, DRCE_UNMIRRORED_TEXT_ON_BACK_LAYER } },
         { wxT( "angle" ),                  { DRCE_TRACK_ANGLE } },
         { wxT( "segment_length" ),         { DRCE_TRACK_SEGMENT_LENGTH } },
         { wxT( "width" ),                  { DRCE_TRACK_WIDTH } },
@@ -453,32 +449,31 @@ RUN_SAMPLE timeRun( BOARD* aBoard, const wxFileName& aRulesFile, double aTimeout
     // chained, so ordinary logging still reaches the console.
     wxLog::AddTraceMask( wxT( "KICAD_DRC_PROFILE" ) );
 
-    DRC_PROFILE_LOG* profileLog = new DRC_PROFILE_LOG();
-    wxLog*           prevTarget = wxLog::SetActiveTarget( profileLog );
-
     // Deadline starts at the check phase so a slow rule compile spends its own time without
     // eating the evaluator's budget. InitEngine is not cancellable, so the timeout only bounds
     // RunTests, which is the long pole this tool exists to measure.
     BENCH_PROGRESS progress( aTimeoutSec );
     engine->SetProgressReporter( &progress );
 
-    PROF_TIMER checkTimer;
-
-    try
+    DRC_PROFILE_LOG           profileLog;
+    std::chrono::milliseconds runDuration{ 0 };
     {
-        engine->RunTests( EDA_UNITS::MM, true, false );
-    }
-    catch( const std::exception& e )
-    {
-        std::printf( "error during RunTests: %s\n", e.what() );
-    }
+        SCOPED_WXLOG_TARGET logOverride( &profileLog );
 
-    checkTimer.Stop();
+        try
+        {
+            SCOPED_PROF_TIMER scopedTimer( runDuration );
+            engine->RunTests( EDA_UNITS::MM, true, false );
+        }
+        catch( const std::exception& e )
+        {
+            std::printf( "error during RunTests: %s\n", e.what() );
+        }
+    }
 
     engine->SetProgressReporter( nullptr );
-    wxLog::SetActiveTarget( prevTarget );
 
-    sample.providerMs = profileLog->ProviderMs();
+    sample.providerMs = profileLog.ProviderMs();
 
     sample.timedOut = progress.TimedOut();
 
@@ -491,9 +486,9 @@ RUN_SAMPLE timeRun( BOARD* aBoard, const wxFileName& aRulesFile, double aTimeout
     // Prefer the engine's own "DRC took" total as the check denominator since it brackets
     // the same span the provider rows live in. Fall back to our outer timer if the trace
     // line did not arrive (e.g. RunTests bailed early).
-    double engineTotal = profileLog->TotalMs();
+    double engineTotal = profileLog.TotalMs();
 
-    sample.checkMs = engineTotal > 0.0 ? engineTotal : checkTimer.msecs();
+    sample.checkMs = engineTotal > 0.0 ? engineTotal : static_cast<double>( runDuration.count() );
 
     double providerSum = 0.0;
 
@@ -505,8 +500,6 @@ RUN_SAMPLE timeRun( BOARD* aBoard, const wxFileName& aRulesFile, double aTimeout
     sample.cacheGenMs = std::max( 0.0, sample.checkMs - providerSum );
 
     sample.violations = violationCount.load( std::memory_order_relaxed );
-
-    delete profileLog;
 
     return sample;
 }

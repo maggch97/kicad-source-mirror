@@ -120,6 +120,16 @@ inline void RotatePoint( VECTOR2D& point, const VECTOR2D& aCenter, const EDA_ANG
 }
 
 /**
+ * Return a new VECTOR2D that is the result of rotating aVector by aAngle.
+ */
+inline VECTOR2D GetRotated( const VECTOR2D& aVector, const EDA_ANGLE& aAngle )
+{
+    VECTOR2D result = aVector;
+    RotatePoint( &result.x, &result.y, aAngle );
+    return result;
+}
+
+/**
  * Determine the center of an arc or circle given three points on its circumference.
  *
  * @param aStart The starting point of the circle (equivalent to aEnd).
@@ -148,7 +158,7 @@ const VECTOR2I CalcArcMid( const VECTOR2I& aStart, const VECTOR2I& aEnd, const V
                            bool aMinArcAngle = true );
 
 /**
- * Test if \a aRefPoint is with \a aDistance on the line defined by \a aStart and \a aEnd..
+ * Test if \a aRefPoint is with \a aDistance on the line defined by \a aStart and \a aEnd.
  *
  * @param aRefPoint = reference point to test
  * @param aStart is the first end-point of the line segment

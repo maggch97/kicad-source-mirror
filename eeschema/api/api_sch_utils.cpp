@@ -19,10 +19,12 @@
  */
 
 #include <algorithm>
+#include <set>
 #include <trace_helpers.h>
 
 #include <sch_pin.h>
 #include <lib_symbol.h>
+#include <schematic.h>
 #include <sch_symbol.h>
 #include <sch_bitmap.h>
 #include <sch_bus_entry.h>
@@ -32,8 +34,10 @@
 #include <sch_label.h>
 #include <sch_line.h>
 #include <sch_no_connect.h>
+#include <sch_rule_area.h>
 #include <sch_shape.h>
 #include <sch_sheet.h>
+#include <sch_sheet_path.h>
 #include <sch_screen.h>
 #include <sch_sheet_pin.h>
 #include <sch_table.h>
@@ -42,6 +46,10 @@
 #include <sch_textbox.h>
 
 #include "api_sch_utils.h"
+
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+#include <schematic.h>
 
 #include <api/api_utils.h>
 #include <api/api_enums.h>
@@ -71,6 +79,7 @@ std::unique_ptr<EDA_ITEM> CreateItemForType( KICAD_T aType, EDA_ITEM* aContainer
     case SCH_GLOBAL_LABEL_T:    return std::make_unique<SCH_GLOBALLABEL>();
     case SCH_HIER_LABEL_T:      return std::make_unique<SCH_HIERLABEL>();
     case SCH_DIRECTIVE_LABEL_T: return std::make_unique<SCH_DIRECTIVE_LABEL>();
+    case SCH_RULE_AREA_T:       return std::make_unique<SCH_RULE_AREA>();
     case SCH_FIELD_T:           return std::make_unique<SCH_FIELD>( parentSchItem );
     case SCH_GROUP_T:           return std::make_unique<SCH_GROUP>();
     case SCH_SYMBOL_T:          return std::make_unique<SCH_SYMBOL>();
@@ -153,7 +162,7 @@ bool PackSymbol( kiapi::schematic::types::SchematicSymbolInstance* aOutput, cons
     if( !any.UnpackTo( aOutput ) )
         return false;
 
-    PackSheetPath( *aOutput->mutable_path(), path );
+    PackSheetPath( *aOutput->mutable_path(), aPath );
     aOutput->mutable_reference_field()->mutable_text()->set_text( instance.m_Reference.ToUTF8() );
     aOutput->mutable_unit()->set_unit( instance.m_Unit );
 
@@ -176,30 +185,30 @@ bool PackSymbol( kiapi::schematic::types::SchematicSymbolInstance* aOutput, cons
         pin->Serialize( *item->mutable_item() );
     }
 
-    // Pin-to-pad maps (issue #2282): report the library symbol's effective bundle and, on the
-    // instance, the active override.
+    // Also include the pins from non-placed units
     if( const LIB_SYMBOL* lib = aInput->GetLibSymbolRef().get() )
     {
-        kiapi::schematic::types::LibSymbolPinMaps* pinMaps = def->mutable_pin_maps();
+        std::set<wxString> placedNumbers;
 
-        for( const ASSOCIATED_FOOTPRINT& assoc : lib->GetEffectiveAssociatedFootprints() )
+        for( const SCH_PIN* pin : pins )
+            placedNumbers.insert( pin->GetNumber() );
+
+        for( const SCH_PIN* libPin : lib->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES ) )
         {
-            kiapi::schematic::types::AssociatedFootprint* a = pinMaps->add_associated_footprints();
-            PackLibId( a->mutable_footprint(), assoc.m_FootprintLibId );
-            a->set_map_name( assoc.m_MapName.ToUTF8() );
-        }
-
-        for( const PIN_MAP& map : lib->GetEffectivePinMaps().GetAll() )
-        {
-            kiapi::schematic::types::PinMap* m = pinMaps->add_pin_maps();
-            m->set_name( map.GetName().ToUTF8() );
-
-            for( const PIN_MAP_ENTRY& entry : map.GetEntries() )
+            if( libPin->GetBodyStyle() && aInput->GetBodyStyle()
+                    && aInput->GetBodyStyle() != libPin->GetBodyStyle() )
             {
-                kiapi::schematic::types::PinMapEntry* e = m->add_entries();
-                e->set_pin_number( entry.m_PinNumber.ToUTF8() );
-                e->set_pad_number( entry.m_PadNumber.ToUTF8() );
+                continue;
             }
+
+            if( placedNumbers.count( libPin->GetNumber() ) )
+                continue;
+
+            kiapi::schematic::types::SchematicSymbolChild* item = def->add_items();
+            item->mutable_unit()->set_unit( libPin->GetUnit() );
+            item->mutable_body_style()->set_style( libPin->GetBodyStyle() );
+            item->set_is_private( libPin->IsPrivate() );
+            libPin->Serialize( *item->mutable_item() );
         }
     }
 
@@ -210,17 +219,25 @@ bool PackSymbol( kiapi::schematic::types::SchematicSymbolInstance* aOutput, cons
 
     kiapi::schematic::types::SchematicSymbolAttributes* attributes = aOutput->mutable_attributes();
 
-    attributes->set_exclude_from_simulation( instance.m_ExcludedFromSim );
-    attributes->set_exclude_from_bill_of_materials( instance.m_ExcludedFromBOM );
-    attributes->set_exclude_from_board( instance.m_ExcludedFromBoard );
-    attributes->set_exclude_from_position_files( instance.m_ExcludedFromPosFiles );
-    attributes->set_do_not_populate( instance.m_DNP );
+    attributes->set_exclude_from_simulation( aInput->GetExcludedFromSim() );
+    attributes->set_exclude_from_bill_of_materials( aInput->GetExcludedFromBOM() );
+    attributes->set_exclude_from_board( aInput->GetExcludedFromBoard() );
+    attributes->set_exclude_from_position_files( aInput->GetExcludedFromPosFiles() );
+    attributes->set_do_not_populate( aInput->GetDNP() );
+
+    // Descriptions belong to the schematic's variant registry rather than to each record.
+    SCHEMATIC* schematic = aInput->Schematic();
+
+    // Always set, so that sending the response back describes the placement's variants in full.
+    kiapi::schematic::types::SchematicSymbolVariants* variants = aOutput->mutable_variants();
 
     for( const auto& [name, variantInfo] : instance.m_Variants )
     {
-        kiapi::schematic::types::SchematicSymbolVariant* variant = aOutput->add_variants();
+        kiapi::schematic::types::SchematicSymbolVariant* variant = variants->add_variants();
         variant->set_name( name.ToUTF8() );
-        variant->set_description( variantInfo.m_Description.ToUTF8() );
+
+        if( schematic )
+            variant->set_description( schematic->GetVariantDescription( name ).ToUTF8() );
 
         attributes = variant->mutable_attributes();
         attributes->set_exclude_from_simulation( variantInfo.m_ExcludedFromSim );
@@ -231,6 +248,12 @@ bool PackSymbol( kiapi::schematic::types::SchematicSymbolInstance* aOutput, cons
 
         for( const auto& [key, value] : variantInfo.m_Fields )
             ( *variant->mutable_fields() )[std::string( key.ToUTF8() )] = value.ToUTF8();
+
+        if( variantInfo.m_SymbolOverride )
+            PackLibId( variant->mutable_symbol_override(), *variantInfo.m_SymbolOverride );
+
+        if( !variantInfo.m_PinMapOverride.IsDefault() )
+            PackPinMapOverride( variant->mutable_pin_map_override(), variantInfo.m_PinMapOverride );
     }
 
     return true;
@@ -242,25 +265,12 @@ bool UnpackSymbol( SCH_SYMBOL* aOutput, const kiapi::schematic::types::Schematic
     using namespace kiapi::common::types;
     using namespace kiapi::schematic::types;
 
-    google::protobuf::Any any;
-    any.PackFrom( aInput );
-
-    if( !aOutput->Deserialize( any ) )
+    if( !aOutput->Deserialize( aInput ) )
         return false;
-
-    SCH_SYMBOL_INSTANCE instance;
-    instance.m_Path = UnpackSheetPath( aInput.path() );
-    instance.m_Reference = wxString::FromUTF8( aInput.reference_field().text().text() );
-    instance.m_Unit = aInput.has_unit() ? aInput.unit().unit() : 1;
 
     if( aInput.has_attributes() )
     {
         const SchematicSymbolAttributes& attrs = aInput.attributes();
-        instance.m_ExcludedFromSim = attrs.exclude_from_simulation();
-        instance.m_ExcludedFromBOM = attrs.exclude_from_bill_of_materials();
-        instance.m_ExcludedFromBoard = attrs.exclude_from_board();
-        instance.m_ExcludedFromPosFiles = attrs.exclude_from_position_files();
-        instance.m_DNP = attrs.do_not_populate();
 
         aOutput->SetExcludedFromSim( attrs.exclude_from_simulation() );
         aOutput->SetExcludedFromBOM( attrs.exclude_from_bill_of_materials() );
@@ -269,32 +279,155 @@ bool UnpackSymbol( SCH_SYMBOL* aOutput, const kiapi::schematic::types::Schematic
         aOutput->SetDNP( attrs.do_not_populate() );
     }
 
+    aOutput->SetPinMapOverride( aInput.has_pin_map_override() ? UnpackPinMapOverride( aInput.pin_map_override() )
+                                                              : PIN_MAP_INSTANCE_OVERRIDE() );
+
+    return true;
+}
+
+
+// Variant names are stored and compared exactly, but SCHEMATIC::HasVariant matches case-insensitively
+std::optional<wxString> FindVariantNoCase( const SCHEMATIC* aSchematic, const wxString& aName )
+{
+    for( const wxString& variantName : aSchematic->GetVariantNames() )
+    {
+        if( variantName.CmpNoCase( aName ) == 0 )
+            return variantName;
+    }
+
+    return std::nullopt;
+}
+
+
+/// Make the schematic aware of a variant a request named.  Accepts either variant message.
+template <typename VariantProto>
+static void registerVariant( SCHEMATIC* aSchematic, const wxString& aName, const VariantProto& aInput )
+{
+    if( !aSchematic )
+        return;
+
+    wxString name( aName );
+
+    if( std::optional<wxString> canonical = FindVariantNoCase( aSchematic, name ) )
+        name = *canonical;
+
+    aSchematic->AddVariant( name );
+
+    // An empty description clears the one the variant has, so honour presence rather than text.
+    if( aInput.has_description() )
+        aSchematic->SetVariantDescription( aName, wxString::FromUTF8( aInput.description() ) );
+}
+
+
+/// Make the set of variant records on one placement of a symbol match @a aInput, by name.
+static void applySymbolVariants( SCH_SYMBOL* aSymbol,
+                                 const kiapi::schematic::types::SchematicSymbolVariants& aInput,
+                                 const SCH_SHEET_PATH& aPath, SCHEMATIC* aSchematic )
+{
+    using namespace kiapi::schematic::types;
+
+    std::set<wxString> requested;
+
     for( const SchematicSymbolVariant& variantProto : aInput.variants() )
     {
-        SCH_SYMBOL_VARIANT variant( wxString::FromUTF8( variantProto.name() ) );
-        variant.m_Description = wxString::FromUTF8( variantProto.description() );
+        wxString name = wxString::FromUTF8( variantProto.name() );
+
+        // The empty name selects the default variant, whose values are the symbol's own.
+        if( name.IsEmpty() )
+            continue;
+
+        requested.insert( name );
+        registerVariant( aSchematic, name, variantProto );
 
         if( variantProto.has_attributes() )
         {
-            const SchematicSymbolAttributes& vAttrs = variantProto.attributes();
-            variant.m_ExcludedFromSim = vAttrs.exclude_from_simulation();
-            variant.m_ExcludedFromBOM = vAttrs.exclude_from_bill_of_materials();
-            variant.m_ExcludedFromBoard = vAttrs.exclude_from_board();
-            variant.m_ExcludedFromPosFiles = vAttrs.exclude_from_position_files();
-            variant.m_DNP = vAttrs.do_not_populate();
+            const SchematicSymbolAttributes& attrs = variantProto.attributes();
+
+            aSymbol->SetExcludedFromSim( attrs.exclude_from_simulation(), &aPath, name );
+            aSymbol->SetExcludedFromBOM( attrs.exclude_from_bill_of_materials(), &aPath, name );
+            aSymbol->SetExcludedFromBoard( attrs.exclude_from_board(), &aPath, name );
+            aSymbol->SetExcludedFromPosFiles( attrs.exclude_from_position_files(), &aPath, name );
+            aSymbol->SetDNP( attrs.do_not_populate(), &aPath, name );
         }
 
-        for( const auto& [key, value] : variantProto.fields() )
-            variant.m_Fields[ wxString::FromUTF8( key ) ] = wxString::FromUTF8( value );
+        // Overrides the request dropped go back to resolving as the symbol's own value.
+        SCH_SYMBOL_INSTANCE stored;
 
-        instance.m_Variants.emplace( variant.m_Name, std::move( variant ) );
+        if( aSymbol->GetInstance( stored, aPath.Path() ) && stored.m_Variants.contains( name ) )
+        {
+            for( const auto& [fieldName, unused] : stored.m_Variants[name].m_Fields )
+            {
+                if( variantProto.fields().find( std::string( fieldName.ToUTF8() ) )
+                    == variantProto.fields().end() )
+                {
+                    aSymbol->ClearVariantField( aPath.Path(), name, fieldName );
+                }
+            }
+        }
+
+        if( variantProto.has_symbol_override() )
+            aSymbol->SetVariantSymbolOverride( aPath, name, UnpackLibId( variantProto.symbol_override() ) );
+        else
+            aSymbol->ClearVariantSymbolOverride( aPath, name );
+
+        if( variantProto.has_pin_map_override() )
+            aSymbol->SetPinMapOverride( UnpackPinMapOverride( variantProto.pin_map_override() ), &aPath, name );
+        else
+            aSymbol->SetPinMapOverride( PIN_MAP_INSTANCE_OVERRIDE(), &aPath, name );
+
+        for( const auto& [key, value] : variantProto.fields() )
+        {
+            aSymbol->SetFieldText( wxString::FromUTF8( key ), wxString::FromUTF8( value ), &aPath,
+                                   name );
+        }
     }
 
-    if( aInput.has_pin_map_override() )
-        aOutput->SetPinMapOverride( UnpackPinMapOverride( aInput.pin_map_override() ) );
+    // Variants the request left out are removed from this placement only; the variant itself
+    // stays registered with the schematic and other placements keep theirs.
+    SCH_SYMBOL_INSTANCE stored;
 
-    aOutput->AddHierarchicalReference( instance );
-    return true;
+    if( aSymbol->GetInstance( stored, aPath.Path() ) )
+    {
+        for( const auto& [name, unused] : stored.m_Variants )
+        {
+            if( !requested.contains( name ) )
+                aSymbol->DeleteVariant( aPath.Path(), name );
+        }
+    }
+}
+
+
+void ApplySymbolInstance( SCH_SYMBOL* aSymbol,
+                          const kiapi::schematic::types::SchematicSymbolInstance& aInput,
+                          const SCH_SHEET_PATH& aPath, SCHEMATIC* aSchematic )
+{
+    wxString            reference = wxString::FromUTF8( aInput.reference_field().text().text() );
+    int                 unit = aInput.has_unit() ? aInput.unit().unit() : 1;
+    SCH_SYMBOL_INSTANCE existing;
+
+    if( aSymbol->GetInstance( existing, aPath.Path() ) )
+    {
+        if( !reference.IsEmpty() )
+            aSymbol->SetRef( &aPath, reference );
+
+        aSymbol->SetUnitSelection( &aPath, unit );
+    }
+    else
+    {
+        SCH_SYMBOL_INSTANCE instance;
+        instance.m_Path = aPath.Path();
+        instance.m_Reference = reference;
+        instance.m_Unit = unit;
+
+        aSymbol->AddHierarchicalReference( instance );
+    }
+
+    // The displayed unit follows the placement the request targeted, as it does in the editor.
+    aSymbol->SetUnit( unit );
+
+    // A request that carries no variant set leaves the placement's variants as they are.
+    if( aInput.has_variants() )
+        applySymbolVariants( aSymbol, aInput.variants(), aPath, aSchematic );
 }
 
 
@@ -307,10 +440,124 @@ bool PackSheet( kiapi::schematic::types::SheetSymbol* aOutput, const SCH_SHEET* 
     if( !any.UnpackTo( aOutput ) )
         return false;
 
-    PackSheetPath( *aOutput->mutable_path(), aPath.Path() );
-    aOutput->set_page_number( aPath.GetPageNumber().ToUTF8() );
+    PackSheetPath( *aOutput->mutable_path(), aPath );
+
+    SCHEMATIC* schematic = aInput->Schematic();
+
+    kiapi::schematic::types::SheetVariants* variants = aOutput->mutable_variants();
+
+    if( const SCH_SHEET_INSTANCE* instance = aInput->GetInstance( aPath.Path() ) )
+    {
+        aOutput->set_page_number( instance->m_PageNumber.ToUTF8() );
+
+        for( const auto& [name, variantInfo] : instance->m_Variants )
+        {
+            kiapi::schematic::types::SheetVariant* variant = variants->add_variants();
+            variant->set_name( name.ToUTF8() );
+
+            if( schematic )
+                variant->set_description( schematic->GetVariantDescription( name ).ToUTF8() );
+
+            variant->set_exclude_from_sim( variantInfo.m_ExcludedFromSim );
+            variant->set_exclude_from_bom( variantInfo.m_ExcludedFromBOM );
+            variant->set_dnp( variantInfo.m_DNP );
+
+            for( const auto& [key, value] : variantInfo.m_Fields )
+                ( *variant->mutable_fields() )[std::string( key.ToUTF8() )] = value.ToUTF8();
+        }
+    }
 
     return true;
+}
+
+
+/// Make the set of variant records on one placement of a sheet match @a aInput, by name.
+///
+/// Each surviving record keeps the attributes the message leaves unset.
+static void applySheetVariants( SCH_SHEET* aSheet,
+                                const kiapi::schematic::types::SheetVariants& aInput,
+                                const SCH_SHEET_PATH& aParentPath, SCHEMATIC* aSchematic )
+{
+    using namespace kiapi::schematic::types;
+
+    std::set<wxString> requested;
+
+    for( const SheetVariant& variantProto : aInput.variants() )
+    {
+        wxString name = wxString::FromUTF8( variantProto.name() );
+
+        // The empty name selects the default variant, whose values are the sheet's own.
+        if( name.IsEmpty() )
+            continue;
+
+        requested.insert( name );
+        registerVariant( aSchematic, name, variantProto );
+
+        // Each attribute the request leaves out keeps the value this variant already has.
+        if( variantProto.has_exclude_from_sim() )
+            aSheet->SetExcludedFromSim( variantProto.exclude_from_sim(), &aParentPath, name );
+
+        if( variantProto.has_exclude_from_bom() )
+            aSheet->SetExcludedFromBOM( variantProto.exclude_from_bom(), &aParentPath, name );
+
+        if( variantProto.has_dnp() )
+            aSheet->SetDNP( variantProto.dnp(), &aParentPath, name );
+
+        // Overrides the request dropped go back to resolving as the sheet's own value.
+        if( const SCH_SHEET_INSTANCE* stored = aSheet->GetInstance( aParentPath.Path() );
+            stored && stored->m_Variants.contains( name ) )
+        {
+            std::map<wxString, wxString> storedFields = stored->m_Variants.at( name ).m_Fields;
+
+            for( const auto& [fieldName, unused] : storedFields )
+            {
+                if( variantProto.fields().find( std::string( fieldName.ToUTF8() ) )
+                    == variantProto.fields().end() )
+                {
+                    aSheet->ClearVariantField( aParentPath.Path(), name, fieldName );
+                }
+            }
+        }
+
+        for( const auto& [key, value] : variantProto.fields() )
+        {
+            aSheet->SetFieldText( wxString::FromUTF8( key ), wxString::FromUTF8( value ),
+                                  &aParentPath, name );
+        }
+    }
+
+    // Remove variants from the sheet (not the schematic) that the client didn't send.
+    if( const SCH_SHEET_INSTANCE* stored = aSheet->GetInstance( aParentPath.Path() ) )
+    {
+        std::vector<wxString> obsolete;
+
+        for( const auto& [name, unused] : stored->m_Variants )
+        {
+            if( !requested.contains( name ) )
+                obsolete.push_back( name );
+        }
+
+        for( const wxString& name : obsolete )
+            aSheet->DeleteVariant( aParentPath.Path(), name );
+    }
+}
+
+
+void ApplySheetInstance( SCH_SHEET* aSheet, const kiapi::schematic::types::SheetSymbol& aInput,
+                         const SCH_SHEET_PATH& aParentPath, SCHEMATIC* aSchematic )
+{
+    wxString       pageNumber = wxString::FromUTF8( aInput.page_number() );
+    SCH_SHEET_PATH path( aParentPath );
+
+    path.push_back( aSheet );
+
+    // Creates the placement record when it is missing and keeps an existing one's variants; an
+    // empty page number in the request leaves the placement on the page it already has.
+    path.SetPageNumber( pageNumber.IsEmpty() ? path.GetPageNumber() : pageNumber );
+
+    // A request that carries no variant set leaves the placement's variants as they are.
+    if( aInput.has_variants() )
+        applySheetVariants( aSheet, aInput.variants(), aParentPath, aSchematic );
 }
 
 
@@ -327,16 +574,76 @@ tl::expected<bool, ApiResponseStatus> UnpackSheet( SCH_SHEET* aOutput, const kia
         return tl::unexpected( e );
     }
 
-    KIID_PATH instancePath = UnpackSheetPath( aInput.path() );
+    return true;
+}
 
-    if( !instancePath.empty() )
+
+void PackSheetPath( types::SheetPath& aOutput, const SCH_SHEET_PATH& aInput )
+{
+    PackSheetPath( aOutput, aInput.Path() );
+    aOutput.set_path_human_readable( aInput.PathHumanReadable().ToUTF8() );
+}
+
+
+tl::expected<SCH_FOCUS_TARGET, ApiResponseStatus>
+ResolveFocusItems( SCHEMATIC& aSchematic, const std::vector<KIID>& aIds, const std::optional<KIID_PATH>& aSheetPath )
+{
+    if( aIds.empty() )
+        return tl::unexpected( MakeResponseStatus( AS_BAD_REQUEST, "no items were given to focus on" ) );
+
+    if( !aSchematic.HasHierarchy() )
+        aSchematic.RefreshHierarchy();
+
+    std::optional<SCH_SHEET_PATH> sheet;
+
+    if( aSheetPath )
     {
-        SCH_SHEET_INSTANCE instance;
-        instance.m_Path = instancePath;
-        instance.m_PageNumber = wxString::FromUTF8( aInput.page_number() );
+        sheet = aSchematic.Hierarchy().GetSheetPathByKIIDPath( *aSheetPath );
 
-        aOutput->AddInstance( instance );
+        if( !sheet )
+        {
+            return tl::unexpected(
+                    MakeResponseStatus( AS_BAD_REQUEST, "the requested sheet path is not valid for this schematic" ) );
+        }
     }
 
-    return true;
+    std::optional<BOX2I>     bbox;
+    std::vector<std::string> missing;
+
+    for( const KIID& id : aIds )
+    {
+        SCH_SHEET_PATH itemSheet;
+        SCH_ITEM*      item = aSheetPath ? sheet->ResolveItem( id ) : aSchematic.ResolveItem( id, &itemSheet, true );
+
+        if( !item )
+        {
+            missing.push_back( id.AsStdString() );
+            continue;
+        }
+
+        if( !sheet )
+        {
+            sheet = itemSheet;
+        }
+        else if( !aSheetPath && itemSheet != *sheet )
+        {
+            return tl::unexpected( MakeResponseStatus(
+                    AS_BAD_REQUEST, "the items are not all on one sheet; set the document's sheet path to choose "
+                                    "the sheet to focus" ) );
+        }
+
+        if( bbox )
+            bbox->Merge( item->GetBoundingBox() );
+        else
+            bbox = item->GetBoundingBox();
+    }
+
+    if( !missing.empty() )
+    {
+        return tl::unexpected(
+                MakeResponseStatus( AS_BAD_REQUEST, fmt::format( "the items {} are not in the requested document",
+                                                                 fmt::join( missing, ", " ) ) ) );
+    }
+
+    return SCH_FOCUS_TARGET{ *sheet, *bbox };
 }

@@ -24,7 +24,6 @@
 #define PCB_PROPERTIES_PANEL_H
 
 #include <widgets/properties_panel.h>
-#include <set>
 
 class SELECTION;
 class BOARD;
@@ -37,6 +36,7 @@ class PG_NET_SELECTOR_EDITOR;
 class PG_TRACK_WIDTH_EDITOR;
 class PG_FPID_EDITOR;
 class PG_URL_EDITOR;
+class wxButton;
 
 class PCB_PROPERTIES_PANEL : public PROPERTIES_PANEL
 {
@@ -61,16 +61,28 @@ protected:
     void valueChanging( wxPropertyGridEvent& aEvent ) override;
     void valueChanged( wxPropertyGridEvent& aEvent ) override;
 
+    bool isKeyEditable( const wxPGProperty* aPGProp ) const override;
+    bool isKeyNameInUse( const wxString& aName ) const override;
+    void onKeyRenamed( const wxString& aOldName, const wxString& aNewName ) override;
+
+    bool buildContextMenu( wxMenu& aMenu, wxPGProperty* aPGProp ) override;
+    void onNewItemLeftBlank( const wxString& aKey ) override;
+
+    void addBlankField();
+    void addBlankCustomProperty();
+    void removeField( const wxString& aName );
+    void removeCustomProperty( const wxString& aName );
+    void onContextMenu( wxCommandEvent& aEvent );
+
     void applyConfirmedScale( const wxString& aPropName, const wxVariant& aValue );
 
-    ///< Regenerates caches storing layer and net names
+    /// Regenerates caches storing layer and net names
     void updateLists( const BOARD* aBoard );
 
     /**
      * Get the current selection from the selection tool.
      * If the selection is empty and we're in the footprint editor, returns the footprint instead.
      *
-     * @param aSelection [out] reference to a SELECTION pointer that will be set to the selection
      * @param aFallbackSelection [out] local SELECTION object for fallback footprint selection
      * @return const SELECTION& reference to the selection (either real selection or fallback)
      */
@@ -84,6 +96,13 @@ protected:
      */
     EDA_ITEM* getFrontItem();
 
+    /**
+     * Creates a new selection with any generator children removed that are part of a read only generator.
+     *
+     * @param aSelection the selection to filter
+     */
+    static SELECTION filterOutReadOnlyGenChildren( const SELECTION& aSelection );
+
 protected:
     PCB_BASE_EDIT_FRAME* m_frame;
     PROPERTY_MANAGER&    m_propMgr;
@@ -95,7 +114,6 @@ protected:
     PG_FPID_EDITOR*      m_fpEditorInstance;
     PG_URL_EDITOR*       m_urlEditorInstance;
 
-    static std::set<wxString> m_currentFieldNames;
     wxPGChoices m_nets;
 
     bool m_scaleConfirmPending;

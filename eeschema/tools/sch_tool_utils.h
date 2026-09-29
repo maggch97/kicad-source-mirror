@@ -39,6 +39,15 @@ wxString GetSchItemAsText( const SCH_ITEM& aItem );
 wxString GetSelectedItemsAsText( const SELECTION& aSel );
 
 /**
+ * Return the given items with the members of any group added, recursively.
+ *
+ * Anchor logic needs this. A group has no connection points, and its position is its
+ * bounding box centre, which is rarely on grid.
+ */
+std::vector<SCH_ITEM*> FlattenGroups( const EDA_ITEMS& aItems );
+std::vector<SCH_ITEM*> FlattenGroups( const std::deque<EDA_ITEM*>& aItems );
+
+/**
  * Get a list of unplaced (i.e. not in schamtic) unit numbers for a symbol.
  */
 std::set<int> GetUnplacedUnitsForSymbol( const SCH_SYMBOL& aSym );
@@ -93,8 +102,11 @@ bool SwapPinGeometry( SCH_PIN* aFirst, SCH_PIN* aSecond );
  * Returns true when the given symbol has instances, e.g. is used by more than one sheet instance in this project
  * or by more than one project.
  *
- * @param aSheetNames if not nullptr, will be filled with the sheet paths that have instances of aSymbol.
- * @param aProjectNames if not nullptr, will be filled with the names of other projects that have instances of aSymbol.
+ * @param[in] aSymbol is the #SCH_SYMBOL object to test for shared instances.
+ * @param[in] aCurrentProject
+ * @param[out] aSheetPaths if not nullptr, will be filled with the sheet paths that have instances of \a aSymbol.
+ * @param[out] aProjectNames if not nullptr, will be filled with the names of other projects that have instances
+ *                           of \a aSymbol.
  *
  * @return true if the symbol has shared instances.
  */
@@ -107,7 +119,8 @@ bool SymbolHasSheetInstances( const SCH_SYMBOL& aSymbol, const wxString& aCurren
  * @param aSheetPaths set of sheet paths to convert
  * @param aSchematic the schematic to search for sheet names
  *
- * @return a set of human-readable sheet names, or the original sheet path if no name can be resolved in this schmatic (this happens when sheets are shared across projects)
+ * @return a set of human-readable sheet names, or the original sheet path if no name can be resolved in this
+ *         schmatic (this happens when sheets are shared across projects)
  */
 std::set<wxString> GetSheetNamesFromPaths( const std::set<wxString>& aSheetPaths, const SCHEMATIC& aSchematic );
 
@@ -122,3 +135,15 @@ wxString UniqueSheetName( SCH_SCREEN* aScreen, const wxString& aBaseName );
  * exists on aScreen.
  */
 wxString UniqueGroupName( SCH_SCREEN* aScreen, const wxString& aBaseName );
+
+/**
+ * Discard the instance data a paste dragged in from somewhere else, keyed by path rather than
+ * project name since that field is empty in files written before KiCad 7.
+ *
+ * @warning Only call this when cleaning up after a paste; it can clobber symbol instances for
+ *          schematics shared across projects otherwise.
+ *
+ * @param aSymbol    is the pasted symbol whose instances are reconciled.
+ * @param aSchematic is the schematic the paste target belongs to.
+ */
+void PrunePastedSymbolInstances( SCH_SYMBOL* aSymbol, const SCHEMATIC& aSchematic );

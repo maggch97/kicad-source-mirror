@@ -88,14 +88,20 @@ public:
     // Virtual function
     const BOX2I GetBoundingBox() const override;
 
-    std::shared_ptr<SHAPE>
-    GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING aFlash = FLASHING::DEFAULT ) const override;
+    std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
+                                              FLASHING aFlash = FLASHING::DEFAULT,
+                                              DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const override;
 
     wxString GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const override;
 
     BITMAPS GetMenuImage() const override;
 
     EDA_ITEM* Clone() const override;
+
+    void CopyFrom( const BOARD_ITEM* aOther ) override;
+
+    void Serialize( google::protobuf::Any& aContainer ) const override;
+    bool Deserialize( const google::protobuf::Any& aContainer ) override;
 
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
@@ -105,6 +111,7 @@ public:
      * Used in filling zones calculations.  Circles and arcs are approximated by segments.
      *
      * @param aBuffer is a buffer to store the polygon.
+     * @param aLayer is the ID of the layer to transform.
      * @param aClearance is the clearance around the pad.
      * @param aError is the maximum deviation from a true arc.
      * @param aErrorLoc whether any approximation error should be placed inside or outside
@@ -131,10 +138,12 @@ private:
     /// Recompute the cached board position from the library position and parent transform.
     void recomputePosition();
 
-    // Position in parent footprint's library frame (or board space if no parent footprint)
+    /// Position in parent footprint's library frame (or board space if no parent footprint).
     VECTOR2I m_libPos;
-    // Cached board-space position, refreshed when the parent footprint transform changes
+
+    /// Cached board-space position, refreshed when the parent footprint transform changes.
     VECTOR2I m_pos;
-    // Visual size of the point in board space
+
+    /// Visual size of the point in board space.
     int m_size;
 };

@@ -18,6 +18,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <symbol_edit_frame.h>
+#include <tool/tool_manager.h>
+#include <tools/sch_selection_tool.h>
 #include <kiway.h>
 #include <tool/action_manager.h>
 #include <tool/picker_tool.h>
@@ -28,6 +31,8 @@
 #include <tools/sch_drawing_tools.h>
 #include <confirm.h>
 #include <connection_graph.h>
+#include <advanced_config.h>
+#include <connectivity/conn_facade.h>
 #include <sch_actions.h>
 #include <sch_tool_utils.h>
 #include <increment.h>
@@ -43,12 +48,15 @@
 #include <sch_marker.h>
 #include <sch_rule_area.h>
 #include <sch_pin.h>
+#include <sch_sheet_path.h>
 #include <sch_sheet_pin.h>
 #include <sch_textbox.h>
 #include <sch_table.h>
 #include <sch_no_connect.h>
 #include <drawing_sheet/ds_proxy_view_item.h>
 #include <eeschema_id.h>
+#include <widgets/wx_infobar.h>
+#include <widgets/properties_panel.h>
 #include <dialogs/dialog_change_symbols.h>
 #include <dialogs/dialog_image_properties.h>
 #include <dialogs/dialog_line_properties.h>
@@ -70,6 +78,10 @@
 #include <wx/textdlg.h>
 #include <wx/msgdlg.h>
 #include <project/net_settings.h>
+#include <project_sch.h>
+#include <libraries/symbol_library_adapter.h>
+#include <symbol_library_common.h>
+#include <variant_symbol_utils.h>
 #include <tools/sch_tool_utils.h>
 
 
@@ -723,6 +735,37 @@ bool SCH_EDIT_TOOL::Init()
 
     auto singleSheetCondition = S_C::Count( 1 ) && S_C::OnlyTypes( sheetTypes );
 
+    auto variantActiveCondition =
+            [this]( const SELECTION& aSel )
+            {
+                return !m_frame->Schematic().GetCurrentVariant().IsEmpty();
+            };
+
+    auto noVariantActiveCondition =
+            [this]( const SELECTION& aSel )
+            {
+                return m_frame->Schematic().GetCurrentVariant().IsEmpty();
+            };
+
+    auto symbolHasVariantSymbol =
+            [this]( const SELECTION& aSel )
+            {
+                if( m_frame->Schematic().GetCurrentVariant().IsEmpty() || aSel.GetSize() != 1 )
+                    return false;
+
+                SCH_SYMBOL* sym = dynamic_cast<SCH_SYMBOL*>( aSel.Front() );
+
+                if( !sym )
+                    return false;
+
+                SCH_SHEET_PATH& sheet = m_frame->GetCurrentSheet();
+
+                std::optional<SCH_SYMBOL_VARIANT> variant =
+                        sym->GetVariant( sheet, m_frame->Schematic().GetCurrentVariant() );
+
+                return variant.has_value() && variant->m_SymbolOverride.has_value();
+            };
+
     auto makeSymbolUnitMenu =
             [&]( TOOL_INTERACTIVE* tool )
             {
@@ -907,11 +950,18 @@ bool SCH_EDIT_TOOL::Init()
     selToolMenu.AddItem( SCH_ACTIONS::autoplaceFields, autoplaceCondition, 200 );
 
     selToolMenu.AddItem( SCH_ACTIONS::editWithLibEdit, S_C::SingleSymbolOrPower && S_C::Idle, 200 );
-    selToolMenu.AddItem( SCH_ACTIONS::changeSymbol,    S_C::SingleSymbolOrPower, 200 );
-    selToolMenu.AddItem( SCH_ACTIONS::updateSymbol,    S_C::SingleSymbolOrPower, 200 );
-    selToolMenu.AddItem( SCH_ACTIONS::changeSymbols,   S_C::MultipleSymbolsOrPower, 200 );
-    selToolMenu.AddItem( SCH_ACTIONS::updateSymbols,   S_C::MultipleSymbolsOrPower, 200 );
-    selToolMenu.AddMenu( makeConvertToMenu(),          toChangeCondition, 200 );
+    selToolMenu.AddItem( SCH_ACTIONS::changeSymbol,
+                         S_C::SingleSymbolOrPower && noVariantActiveCondition, 200 );
+    selToolMenu.AddItem( SCH_ACTIONS::updateSymbol, S_C::SingleSymbolOrPower, 200 );
+    selToolMenu.AddItem( SCH_ACTIONS::changeSymbols,
+                         S_C::MultipleSymbolsOrPower && noVariantActiveCondition, 200 );
+    selToolMenu.AddItem( SCH_ACTIONS::updateSymbols, S_C::MultipleSymbolsOrPower, 200 );
+
+    selToolMenu.AddItem( SCH_ACTIONS::setVariantSymbol,
+                         S_C::SingleSymbolOrPower && variantActiveCondition, 200 );
+    selToolMenu.AddItem( SCH_ACTIONS::clearVariantSymbol,
+                         symbolHasVariantSymbol, 200 );
+    selToolMenu.AddMenu( makeConvertToMenu(), toChangeCondition, 200 );
 
     selToolMenu.AddItem( SCH_ACTIONS::cleanupSheetPins, sheetHasUndefinedPins, 250 );
     selToolMenu.AddMenu( makeLockMenu( m_selectionTool ), S_C::NotEmpty, 250 );
@@ -1575,12 +1625,12 @@ static void swapFieldPositionsWithMatching( std::vector<SCH_FIELD>& aAFields, st
 
     for( SCH_FIELD& aField : aAFields )
     {
-        const wxString name = aField.GetCanonicalName();
+        const wxString name = aField.GetUntranslatedName();
 
         auto it = std::find_if( aBFields.begin(), aBFields.end(),
                                 [name]( const SCH_FIELD& bField )
                                 {
-                                    return bField.GetCanonicalName() == name;
+                                    return bField.GetUntranslatedName() == name;
                                 } );
 
         if( it != aBFields.end() )
@@ -1606,7 +1656,7 @@ static void swapFieldPositionsWithMatching( std::vector<SCH_FIELD>& aAFields, st
     // in reverse
     for( SCH_FIELD& bField : aBFields )
     {
-        const wxString bName = bField.GetCanonicalName();
+        const wxString bName = bField.GetUntranslatedName();
         if( handledKeys.find( bName ) == handledKeys.end() )
         {
             for( unsigned ii = 0; ii < aFallbackRotationsCCW; ii++ )
@@ -1653,6 +1703,30 @@ int SCH_EDIT_TOOL::Swap( const TOOL_EVENT& aEvent )
 
     if( !commit )
         commit = &localCommit;
+
+    SCH_SCREEN*                               screen = m_frame->GetScreen();
+    std::map<SCH_SHEET_PIN*, SCH_NO_CONNECT*> noConnects;
+
+    if( !moving )
+    {
+        for( EDA_ITEM* item : sorted )
+        {
+            if( item->Type() == SCH_SHEET_T )
+            {
+                std::map<SCH_SHEET_PIN*, SCH_NO_CONNECT*> sheetNoConnects =
+                        static_cast<SCH_SHEET*>( item )->GetNoConnects();
+
+                noConnects.insert( sheetNoConnects.begin(), sheetNoConnects.end() );
+            }
+            else if( item->Type() == SCH_SHEET_PIN_T )
+            {
+                SCH_SHEET_PIN* pin = static_cast<SCH_SHEET_PIN*>( item );
+
+                for( SCH_ITEM* ncItem : screen->Items().Overlapping( SCH_NO_CONNECT_T, pin->GetTextPos() ) )
+                    noConnects[pin] = static_cast<SCH_NO_CONNECT*>( ncItem );
+            }
+        }
+    }
 
     for( size_t i = 0; i < sorted.size() - 1; i++ )
     {
@@ -1770,6 +1844,16 @@ int SCH_EDIT_TOOL::Swap( const TOOL_EVENT& aEvent )
     }
     else
     {
+        for( auto& [sheetPin, noConnect] : noConnects )
+        {
+            if( noConnect->GetPosition() != sheetPin->GetTextPos() )
+            {
+                commit->Modify( noConnect, screen );
+                noConnect->SetPosition( sheetPin->GetTextPos() );
+                updateItem( noConnect, true );
+            }
+        }
+
         if( selection.IsHover() )
             m_toolMgr->RunAction( ACTIONS::selectionClear );
 
@@ -1802,6 +1886,7 @@ int SCH_EDIT_TOOL::SwapPins( const TOOL_EVENT& aEvent )
         return 0;
 
     SCH_SELECTION&         selection = m_selectionTool->RequestSelection( { SCH_PIN_T } );
+    m_selectionTool->FilterSelectionForLockedItems();
     std::vector<EDA_ITEM*> sorted = selection.GetItemsSortedBySelectionOrder();
 
     if( selection.Size() < 2 )
@@ -1935,18 +2020,54 @@ int SCH_EDIT_TOOL::SwapPins( const TOOL_EVENT& aEvent )
 
 
 // Used by SwapPinLabels() and SwapUnitLabels() to find the single net label connected to a pin
-static SCH_LABEL_BASE* findSingleNetLabelForPin( SCH_PIN* aPin, CONNECTION_GRAPH* aGraph,
+static SCH_LABEL_BASE* findSingleNetLabelForPin( SCH_PIN* aPin, SCHEMATIC& aSchematic,
                                                  const SCH_SHEET_PATH& aSheetPath )
 {
-    if( !aGraph || !aPin )
+    if( !aPin )
         return nullptr;
 
-    CONNECTION_SUBGRAPH* sg = aGraph->GetSubgraphForItem( aPin );
+    const bool             usePublished = ADVANCED_CFG::GetCfg().m_ConnectivityEngine;
+    std::vector<SCH_ITEM*> items;
 
-    if( !sg )
-        return nullptr;
+    if( usePublished )
+    {
+        // Walk physical neighbors so the result matches the legacy subgraph rather than the whole net
+        std::set<SCH_ITEM*>    seen{ aPin };
+        std::vector<SCH_ITEM*> pending{ aPin };
 
-    const std::set<SCH_ITEM*>& items = sg->GetItems();
+        while( !pending.empty() )
+        {
+            SCH_ITEM* item = pending.back();
+            pending.pop_back();
+            items.push_back( item );
+
+            if( const auto connection = aSchematic.Connectivity().Connection( item->m_Uuid, aSheetPath.PathRef() ) )
+            {
+                for( SCH_ITEM* neighbor : connection->ConnectedItems() )
+                {
+                    if( seen.insert( neighbor ).second )
+                        pending.push_back( neighbor );
+                }
+            }
+        }
+    }
+    else if( CONNECTION_GRAPH* graph = aSchematic.ConnectionGraph() )
+    {
+        if( CONNECTION_SUBGRAPH* sg = graph->GetSubgraphForItemOnSheet( aPin, aSheetPath ) )
+            items.assign( sg->GetItems().begin(), sg->GetItems().end() );
+    }
+
+    const auto isNet = [&]( SCH_ITEM* aItem )
+    {
+        if( usePublished )
+        {
+            const auto connection = aSchematic.Connectivity().Connection( aItem->m_Uuid, aSheetPath.PathRef() );
+            return connection && connection->IsNet();
+        }
+
+        const SCH_CONNECTION* connection = aItem->Connection( &aSheetPath );
+        return connection && connection->IsNet();
+    };
 
     size_t          pinCount = 0;
     SCH_LABEL_BASE* label = nullptr;
@@ -1956,26 +2077,13 @@ static SCH_LABEL_BASE* findSingleNetLabelForPin( SCH_PIN* aPin, CONNECTION_GRAPH
         if( item->Type() == SCH_PIN_T )
             pinCount++;
 
-        switch( item->Type() )
-        {
-        case SCH_LABEL_T:
-        case SCH_GLOBAL_LABEL_T:
-        case SCH_HIER_LABEL_T:
-        {
-            SCH_CONNECTION* conn = item->Connection( &aSheetPath );
+        if( !item->IsType( { SCH_LABEL_T, SCH_GLOBAL_LABEL_T, SCH_HIER_LABEL_T } ) || !isNet( item ) )
+            continue;
 
-            if( conn && conn->IsNet() )
-            {
-                if( label )
-                    return nullptr; // more than one label
+        if( label )
+            return nullptr; // more than one label
 
-                label = static_cast<SCH_LABEL_BASE*>( item );
-            }
-
-            break;
-        }
-        default: break;
-        }
+        label = static_cast<SCH_LABEL_BASE*>( item );
     }
 
     if( pinCount != 1 )
@@ -1993,8 +2101,6 @@ int SCH_EDIT_TOOL::SwapPinLabels( const TOOL_EVENT& aEvent )
     if( orderedPins.size() < 2 )
         return 0;
 
-    CONNECTION_GRAPH* connectionGraph = m_frame->Schematic().ConnectionGraph();
-
     const SCH_SHEET_PATH& sheetPath = m_frame->GetCurrentSheet();
 
     std::vector<SCH_LABEL_BASE*> labels;
@@ -2002,7 +2108,7 @@ int SCH_EDIT_TOOL::SwapPinLabels( const TOOL_EVENT& aEvent )
     for( EDA_ITEM* item : orderedPins )
     {
         SCH_PIN*        pin = static_cast<SCH_PIN*>( item );
-        SCH_LABEL_BASE* label = findSingleNetLabelForPin( pin, connectionGraph, sheetPath );
+        SCH_LABEL_BASE* label = findSingleNetLabelForPin( pin, m_frame->Schematic(), sheetPath );
 
         if( !label )
         {
@@ -2046,8 +2152,6 @@ int SCH_EDIT_TOOL::SwapUnitLabels( const TOOL_EVENT& aEvent )
     if( selectedUnits.size() < 2 )
         return 0;
 
-    CONNECTION_GRAPH* connectionGraph = m_frame->Schematic().ConnectionGraph();
-
     const SCH_SHEET_PATH& sheetPath = m_frame->GetCurrentSheet();
 
     // Build ordered label vectors (sorted by pin X/Y) for each selected unit
@@ -2059,7 +2163,7 @@ int SCH_EDIT_TOOL::SwapUnitLabels( const TOOL_EVENT& aEvent )
 
         for( SCH_PIN* pin : symbol->GetPins( &sheetPath ) )
         {
-            SCH_LABEL_BASE* label = findSingleNetLabelForPin( pin, connectionGraph, sheetPath );
+            SCH_LABEL_BASE* label = findSingleNetLabelForPin( pin, m_frame->Schematic(), sheetPath );
 
             if( !label )
             {
@@ -2365,20 +2469,12 @@ void SCH_EDIT_TOOL::editFieldText( SCH_FIELD* aField )
 {
     KICAD_T    parentType = aField->GetParent() ? aField->GetParent()->Type() : SCHEMATIC_T;
     SCH_COMMIT commit( m_toolMgr );
-
-    // Save old symbol in undo list if not already in edit, or moving.
-    if( aField->GetEditFlags() == 0 ) // i.e. not edited, or moved
-        commit.Modify( aField, m_frame->GetScreen() );
-
-    if( parentType == SCH_SYMBOL_T && aField->GetId() == FIELD_T::REFERENCE )
-        static_cast<SCH_ITEM*>( aField->GetParent() )->SetConnectivityDirty();
-
-    wxString caption;
+    wxString   caption;
 
     // Use title caps for mandatory fields.  "Edit Sheet name Field" looks dorky.
     if( aField->IsMandatory() )
     {
-        wxString fieldName = GetDefaultFieldName( aField->GetId(), DO_TRANSLATE );
+        wxString fieldName = GetDefaultFieldName( aField->GetId(), TRANSLATED );
         caption.Printf( _( "Edit %s Field" ), TitleCaps( fieldName ) );
     }
     else
@@ -2392,7 +2488,14 @@ void SCH_EDIT_TOOL::editFieldText( SCH_FIELD* aField )
     if( dlg.ShowQuasiModal() != wxID_OK )
         return;
 
+    // The dialog changes nothing before OK, and staging bumps the connectivity revision
+    if( aField->GetEditFlags() == 0 ) // i.e. not edited, or moved
+        commit.Modify( aField, m_frame->GetScreen() );
+
     dlg.UpdateField( &commit, aField, &m_frame->GetCurrentSheet() );
+
+    if( parentType == SCH_SYMBOL_T && aField->GetId() == FIELD_T::REFERENCE )
+        static_cast<SCH_ITEM*>( aField->GetParent() )->SetConnectivityDirty();
 
     if( m_frame->eeconfig()->m_AutoplaceFields.enable || parentType == SCH_SHEET_T )
     {
@@ -2554,12 +2657,188 @@ int SCH_EDIT_TOOL::ChangeSymbols( const TOOL_EVENT& aEvent )
     DIALOG_CHANGE_SYMBOLS::MODE mode = DIALOG_CHANGE_SYMBOLS::MODE::UPDATE;
 
     if( aEvent.IsAction( &SCH_ACTIONS::changeSymbol ) || aEvent.IsAction( &SCH_ACTIONS::changeSymbols ) )
+    {
+        // Exchanging the base symbol under an active variant would rewrite all variants
+        // while the canvas shows variant-resolved values, so require the default variant.
+        if( !m_frame->Schematic().GetCurrentVariant().IsEmpty() )
+        {
+            DisplayInfoMessage( m_frame,
+                    _( "Change Symbol is not available when a design variant is active. "
+                       "Use Set Variant Symbol or switch to the default variant first." ) );
+            return 0;
+        }
+
         mode = DIALOG_CHANGE_SYMBOLS::MODE::CHANGE;
+    }
 
     DIALOG_CHANGE_SYMBOLS dlg( m_frame, selectedSymbol, mode );
 
     // QuasiModal required to invoke symbol browser
     dlg.ShowQuasiModal();
+
+    if( selection.IsHover() )
+        m_toolMgr->RunAction( ACTIONS::selectionClear );
+
+    return 0;
+}
+
+
+int SCH_EDIT_TOOL::SetVariantSymbol( const TOOL_EVENT& aEvent )
+{
+    SCH_SELECTION& selection = m_selectionTool->RequestSelection( { SCH_SYMBOL_T } );
+
+    if( selection.Empty() )
+        return 0;
+
+    SCH_SYMBOL* symbol = dynamic_cast<SCH_SYMBOL*>( selection.Front() );
+
+    if( !symbol )
+        return 0;
+
+    wxString variantName = m_frame->Schematic().GetCurrentVariant();
+
+    if( variantName.IsEmpty() )
+        return 0;
+
+    SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &m_frame->Prj() );
+
+    if( !adapter )
+        return 0;
+
+    const LIB_SYMBOL*           baseSymbol = symbol->GetLibSymbolRef().get();
+    std::shared_ptr<LIB_SYMBOL> baseFlat;
+    SYMBOL_COMPAT_FUNC          compatFunc;
+
+    if( baseSymbol )
+    {
+        // The flattened copy is shared with the callback so its lifetime cannot be cut
+        // short by schematic changes while the chooser is open.
+        baseFlat = baseSymbol->Flatten();
+
+        compatFunc =
+                [baseFlat, adapter]( const LIB_ID& aCandidate )
+                        -> std::vector<VARIANT_COMPAT_RESULT>
+                {
+                    try
+                    {
+                        if( LIB_SYMBOL* raw = adapter->LoadSymbol( aCandidate ) )
+                        {
+                            std::unique_ptr<LIB_SYMBOL> flat = raw->Flatten();
+                            return ValidateVariantSymbolCompatibility( *baseFlat, *flat );
+                        }
+                    }
+                    catch( const IO_ERROR& )
+                    {
+                    }
+
+                    return {};
+                };
+    }
+
+    SYMBOL_LIBRARY_FILTER         filter;
+    std::vector<PICKED_SYMBOL>    historyList;
+    std::vector<PICKED_SYMBOL>    alreadyPlaced;
+
+    PICKED_SYMBOL picked = m_frame->PickSymbolFromLibrary( &filter, historyList, alreadyPlaced, true,
+                                                           &symbol->GetLibId(), false, compatFunc );
+
+    if( !picked.LibId.IsValid() )
+        return 0;
+
+    LIB_SYMBOL* candidateRaw = nullptr;
+
+    try
+    {
+        candidateRaw = adapter->LoadSymbol( picked.LibId );
+    }
+    catch( const IO_ERROR& )
+    {
+        wxString symLabel =
+                picked.LibId.Format().empty() ? picked.LibId.GetLibItemName().wx_str() : picked.LibId.Format().wx_str();
+
+        DisplayErrorMessage( m_frame, wxString::Format(
+                _( "Could not load symbol '%s' from library." ), symLabel ) );
+        return 0;
+    }
+
+    if( !candidateRaw )
+        return 0;
+
+    std::unique_ptr<LIB_SYMBOL> candidateFlat = candidateRaw->Flatten();
+
+    if( baseFlat )
+    {
+        std::vector<VARIANT_COMPAT_RESULT> issues =
+                ValidateVariantSymbolCompatibility( *baseFlat, *candidateFlat );
+
+        if( !issues.empty() )
+        {
+            wxString msg = wxString::Format(
+                    _( "The selected symbol '%s' is not pin-compatible with the base symbol "
+                       "'%s'.\n\n" ),
+                    picked.LibId.Format().wx_str(),
+                    symbol->GetLibId().Format().wx_str() );
+
+            for( const VARIANT_COMPAT_RESULT& issue : issues )
+                msg += wxS( "\u2022 " ) + issue.detail + wxS( "\n" );
+
+            msg += wxS( "\n" ) + _( "Choose a symbol with equivalent pins and pin positions." );
+            wxMessageBox( msg, _( "Variant Symbol Compatibility" ), wxOK | wxICON_ERROR, m_frame );
+            return 0;
+        }
+    }
+
+    SCH_COMMIT      commit( m_toolMgr );
+    SCH_SHEET_PATH& currentSheet = m_frame->GetCurrentSheet();
+
+    commit.Modify( symbol, m_frame->GetScreen() );
+
+    symbol->SetVariantSymbolOverride( currentSheet, variantName, picked.LibId );
+    symbol->ClearCaches();
+
+    commit.Push( _( "Set Variant Symbol" ) );
+    m_frame->GetCanvas()->Refresh();
+
+    if( selection.IsHover() )
+        m_toolMgr->RunAction( ACTIONS::selectionClear );
+
+    return 0;
+}
+
+
+int SCH_EDIT_TOOL::ClearVariantSymbol( const TOOL_EVENT& aEvent )
+{
+    SCH_SELECTION& selection = m_selectionTool->RequestSelection( { SCH_SYMBOL_T } );
+
+    if( selection.Empty() )
+        return 0;
+
+    SCH_SYMBOL* symbol = dynamic_cast<SCH_SYMBOL*>( selection.Front() );
+
+    if( !symbol )
+        return 0;
+
+    wxString variantName = m_frame->Schematic().GetCurrentVariant();
+
+    if( variantName.IsEmpty() )
+        return 0;
+
+    SCH_SHEET_PATH& currentSheet = m_frame->GetCurrentSheet();
+
+    std::optional<SCH_SYMBOL_VARIANT> existingVariant =
+            symbol->GetVariant( currentSheet, variantName );
+
+    if( !existingVariant || !existingVariant->m_SymbolOverride.has_value() )
+        return 0;
+
+    SCH_COMMIT commit( m_toolMgr );
+    commit.Modify( symbol, m_frame->GetScreen() );
+
+    symbol->ClearVariantSymbolOverride( currentSheet, variantName );
+    symbol->ClearCaches();
+
+    commit.Push( _( "Clear Variant Symbol" ) );
+    m_frame->GetCanvas()->Refresh();
 
     if( selection.IsHover() )
         m_toolMgr->RunAction( ACTIONS::selectionClear );
@@ -2674,6 +2953,7 @@ int SCH_EDIT_TOOL::Properties( const TOOL_EVENT& aEvent )
         }
         else
         {
+            frame()->ShowInfoBarMsg( _( "Use Properties panel to edit properties common to selected items." ) );
             return 0;
         }
 
@@ -2715,7 +2995,26 @@ int SCH_EDIT_TOOL::Properties( const TOOL_EVENT& aEvent )
 
     default:
         if( selection.Size() > 1 )
+        {
+            WX_INFOBAR* infobar = frame()->GetInfoBar();
+
+            infobar->RemoveAllButtons();
+
+            if( !frame()->GetPropertiesPanel()->IsShownOnScreen() )
+            {
+                infobar->AddLink( _( "Show Properties panel" ),
+                        [this]( wxHyperlinkEvent& )
+                        {
+                            frame()->ToggleProperties();
+                        } );
+            }
+
+            infobar->AddCloseButton();
+            infobar->ShowMessageFor( _( "Use Properties panel to edit properties common to selected items." ),
+                                     8000, wxICON_INFORMATION );
+
             return 0;
+        }
 
         EditProperties( curr_item );
     }
@@ -2802,6 +3101,14 @@ void SCH_EDIT_TOOL::EditProperties( EDA_ITEM* aItem )
             DIALOG_CHANGE_SYMBOLS dlg( m_frame, symbol, DIALOG_CHANGE_SYMBOLS::MODE::CHANGE );
             dlg.ShowQuasiModal();
         }
+        else if( retval == SYMBOL_PROPS_WANT_SET_VARIANT_SYMBOL )
+        {
+            m_toolMgr->RunAction( SCH_ACTIONS::setVariantSymbol );
+        }
+        else if( retval == SYMBOL_PROPS_WANT_CLEAR_VARIANT_SYMBOL )
+        {
+            m_toolMgr->RunAction( SCH_ACTIONS::clearVariantSymbol );
+        }
 
         break;
     }
@@ -2862,6 +3169,11 @@ void SCH_EDIT_TOOL::EditProperties( EDA_ITEM* aItem )
             // because they are new:
             sheet->GetScreen()->ClearAnnotation( &m_frame->GetCurrentSheet(), false );
         }
+
+        // Only a push republishes the staged sheet; a cancel, a file change and the annotation
+        // reset each leave the screen revision ahead of the last recalculation
+        if( !okPressed || !isUndoable || doClearAnnotation )
+            m_frame->RecalculateConnections( nullptr, NO_CLEANUP );
 
         if( okPressed )
             m_frame->GetCanvas()->Refresh();
@@ -2969,7 +3281,12 @@ void SCH_EDIT_TOOL::EditProperties( EDA_ITEM* aItem )
         wxFAIL_MSG( wxString( "Cannot edit schematic item type " ) + aItem->GetClass() );
     }
 
-    updateItem( aItem, true );
+    // A pushed commit already updated the R-tree, and a full screen update would bump the
+    // connectivity revision after that recalculation
+    updateItem( aItem, false );
+
+    if( SCH_ITEM* schItem = dynamic_cast<SCH_ITEM*>( aItem ) )
+        m_frame->GetScreen()->UpdateDisplayBounds( schItem );
 }
 
 
@@ -3679,6 +3996,10 @@ wxString SCH_EDIT_TOOL::FixERCErrorMenuText( const std::shared_ptr<RC_ITEM>& aER
     {
         return _( "Edit Netclasses..." );
     }
+    else if( aERCItem->GetErrorCode() == ERCE_EMPTY_LABEL_NAME )
+    {
+        return _( "Remove Empty Label" );
+    }
 
     return wxEmptyString;
 }
@@ -3719,6 +4040,20 @@ void SCH_EDIT_TOOL::FixERCError( const std::shared_ptr<RC_ITEM>& aERCItem )
     else if( aERCItem->GetErrorCode() == ERCE_UNDEFINED_NETCLASS )
     {
         frame->ShowSchematicSetupDialog( _( "Net Classes" ) );
+    }
+    else if( aERCItem->GetErrorCode() == ERCE_EMPTY_LABEL_NAME )
+    {
+        SCH_SHEET_PATH sheetPath;
+        SCH_ITEM*      item = frame->Schematic().ResolveItem( aERCItem->GetMainItemID(), &sheetPath, true );
+
+        if( SCH_LABEL_BASE* label = dynamic_cast<SCH_LABEL_BASE*>( item ) )
+        {
+            m_toolMgr->RunAction( ACTIONS::selectionClear );
+
+            SCH_COMMIT commit( m_toolMgr );
+            commit.Remove( label, sheetPath.LastScreen() );
+            commit.Push( _( "Remove Empty Label" ) );
+        }
     }
 }
 
@@ -3825,6 +4160,8 @@ void SCH_EDIT_TOOL::setTransitions()
     Go( &SCH_EDIT_TOOL::ChangeSymbols,      SCH_ACTIONS::updateSymbols.MakeEvent() );
     Go( &SCH_EDIT_TOOL::ChangeSymbols,      SCH_ACTIONS::changeSymbol.MakeEvent() );
     Go( &SCH_EDIT_TOOL::ChangeSymbols,      SCH_ACTIONS::updateSymbol.MakeEvent() );
+    Go( &SCH_EDIT_TOOL::SetVariantSymbol,   SCH_ACTIONS::setVariantSymbol.MakeEvent() );
+    Go( &SCH_EDIT_TOOL::ClearVariantSymbol, SCH_ACTIONS::clearVariantSymbol.MakeEvent() );
     Go( &SCH_EDIT_TOOL::CycleBodyStyle,     SCH_ACTIONS::cycleBodyStyle.MakeEvent() );
     Go( &SCH_EDIT_TOOL::ChangeTextType,     SCH_ACTIONS::toLabel.MakeEvent() );
     Go( &SCH_EDIT_TOOL::ChangeTextType,     SCH_ACTIONS::toHLabel.MakeEvent() );

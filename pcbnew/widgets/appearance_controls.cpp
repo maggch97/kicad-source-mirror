@@ -172,8 +172,16 @@ void NET_GRID_TABLE::SetValueAsBool( int aRow, int aCol, bool aValue )
     wxASSERT( static_cast<size_t>( aRow ) < m_nets.size() );
     wxASSERT( aCol == COL_VISIBILITY );
 
-    m_nets[aRow].visible = aValue;
+    SetVisibilityState( aRow, aValue );
     updateNetVisibility( m_nets[aRow] );
+}
+
+
+void NET_GRID_TABLE::SetVisibilityState( int aRow, bool aVisible )
+{
+    wxASSERT( static_cast<size_t>( aRow ) < m_nets.size() );
+
+    m_nets[aRow].visible = aVisible;
 }
 
 
@@ -198,7 +206,7 @@ void NET_GRID_TABLE::SetValueAsCustom( int aRow, int aCol, const wxString& aType
 }
 
 
-NET_GRID_ENTRY& NET_GRID_TABLE::GetEntry( int aRow )
+const NET_GRID_ENTRY& NET_GRID_TABLE::GetEntry( int aRow ) const
 {
     wxASSERT( static_cast<size_t>( aRow ) < m_nets.size() );
     return m_nets[aRow];
@@ -207,16 +215,8 @@ NET_GRID_ENTRY& NET_GRID_TABLE::GetEntry( int aRow )
 
 int NET_GRID_TABLE::GetRowByNetcode( int aCode ) const
 {
-    auto it = std::find_if( m_nets.cbegin(), m_nets.cend(),
-            [aCode]( const NET_GRID_ENTRY& aEntry )
-            {
-                return aEntry.code == aCode;
-            } );
-
-    if( it == m_nets.cend() )
-        return -1;
-
-    return std::distance( m_nets.cbegin(), it );
+    auto it = m_netcodeToRow.find( aCode );
+    return it != m_netcodeToRow.end() ? it->second : -1;
 }
 
 
@@ -236,6 +236,7 @@ void NET_GRID_TABLE::Rebuild()
 
     int deleted = (int) m_nets.size();
     m_nets.clear();
+    m_netcodeToRow.clear();
 
     if( GetView() )
     {
@@ -264,6 +265,13 @@ void NET_GRID_TABLE::Rebuild()
                {
                  return a.name < b.name;
                } );
+
+    m_netcodeToRow.reserve( m_nets.size() );
+
+    for( size_t row = 0; row < m_nets.size(); ++row )
+    {
+        m_netcodeToRow.emplace( m_nets[row].code, static_cast<int>( row ) );
+    }
 
     if( GetView() )
     {
@@ -354,8 +362,11 @@ const APPEARANCE_CONTROLS::APPEARANCE_SETTING APPEARANCE_CONTROLS::s_objectSetti
     RR( _HKI( "DRC Exclusions" ),       LAYER_DRC_EXCLUSION,      _HKI( "DRC violations which have been individually excluded" ) ),
     RR( _HKI( "Anchors" ),              LAYER_ANCHOR,             _HKI( "Show footprint and text origins as a cross" ) ),
     RR( _HKI( "Points" ),               LAYER_POINTS,             _HKI( "Show explicit snap points as crosses" ) ),
+    RR( _HKI( "Grids" ),                LAYER_SUBGRIDS,           _HKI( "Show custom routing/placement grids" ) ),
+    RR( _HKI( "Via Stitching" ),        LAYER_VIA_STITCHING,      _HKI( "Show via stitching generator outlines" ) ),
     RR( _HKI( "Locked Item Shadow" ),   LAYER_LOCKED_ITEM_SHADOW, _HKI( "Show a shadow on locked items" ) ),
     RR( _HKI( "Colliding Courtyards" ), LAYER_CONFLICTS_SHADOW,   _HKI( "Show colliding footprint courtyards" ) ),
+    RR( _HKI( "Constrained Item Shadow" ), LAYER_CONSTRAINT_SHADOW, _HKI( "Show a shadow on constrained items" ) ),
     RR( _HKI( "Board Area Shadow" ),    LAYER_BOARD_OUTLINE_AREA, _HKI( "Show board area shadow" ) ),
     RR( _HKI( "Drawing Sheet" ),        LAYER_DRAWINGSHEET,       _HKI( "Show drawing sheet borders and title block" ) ),
     RR( _HKI( "Grid" ),                 LAYER_GRID,               _HKI( "Show the (x,y) grid dots" ) )
@@ -376,6 +387,7 @@ static std::set<int> s_allowedInFpEditor =
             LAYER_DRAW_BITMAPS,
             LAYER_GRID,
             LAYER_POINTS,
+            LAYER_VIA_STITCHING,
         };
 
 // These are the built-in layer presets that cannot be deleted
@@ -468,10 +480,10 @@ APPEARANCE_CONTROLS::APPEARANCE_CONTROLS( PCB_BASE_FRAME* aParent, wxWindow* aFo
 
     createControls();
 
-    m_btnNetInspector->SetBitmap( KiBitmapBundle( BITMAPS::list_nets_16 ) );
+    m_btnNetInspector->SetBitmap( KiBitmapBundle( BITMAPS::list_nets, 16 ) );
     m_btnNetInspector->SetPadding( 2 );
 
-    m_btnConfigureNetClasses->SetBitmap( KiBitmapBundle( BITMAPS::options_generic_16 ) );
+    m_btnConfigureNetClasses->SetBitmap( KiBitmapBundle( BITMAPS::options_generic, 16 ) );
     m_btnConfigureNetClasses->SetPadding( 2 );
 
     m_txtNetFilter->SetHint( _( "Filter nets" ) );
@@ -623,8 +635,7 @@ void APPEARANCE_CONTROLS::createControls()
     wxFont   infoFont = KIUI::GetInfoFont( this );
 
     // Create layer display options
-    m_paneLayerDisplayOptions = new WX_COLLAPSIBLE_PANE( m_panelLayers, wxID_ANY,
-                                                         _( "Layer Display Options" ) );
+    m_paneLayerDisplayOptions = new WX_COLLAPSIBLE_PANE( m_panelLayers, wxID_ANY, _( "Layer Display Options" ) );
     m_paneLayerDisplayOptions->Collapse();
     m_paneLayerDisplayOptions->SetBackgroundColour( m_notebook->GetThemeBackgroundColour() );
 
@@ -685,7 +696,7 @@ void APPEARANCE_CONTROLS::createControls()
     layerDisplayPane->Layout();
     layerDisplayOptionsSizer->Fit( layerDisplayPane );
 
-    m_panelLayersSizer->Add( m_paneLayerDisplayOptions, 0, wxEXPAND | wxTOP | wxLEFT | wxRIGHT, 5 );
+    m_panelLayersSizer->Add( m_paneLayerDisplayOptions, 0, wxEXPAND | wxTOP | wxLEFT | wxRIGHT, 3 );
 
     m_paneLayerDisplayOptions->Bind( WX_COLLAPSIBLE_PANE_CHANGED,
                                      [&]( wxCommandEvent& aEvent )
@@ -698,8 +709,7 @@ void APPEARANCE_CONTROLS::createControls()
 
     // Create net display options
 
-    m_paneNetDisplayOptions = new WX_COLLAPSIBLE_PANE( m_panelNetsAndClasses, wxID_ANY,
-                                                       _( "Net Display Options" ) );
+    m_paneNetDisplayOptions = new WX_COLLAPSIBLE_PANE( m_panelNetsAndClasses, wxID_ANY, _( "Net Display Options" ) );
     m_paneNetDisplayOptions->Collapse();
     m_paneNetDisplayOptions->SetBackgroundColour( m_notebook->GetThemeBackgroundColour() );
 
@@ -994,7 +1004,7 @@ void APPEARANCE_CONTROLS::OnNetGridMouseEvent( wxMouseEvent& aEvent )
 
         m_hoveredCell = cell;
 
-        NET_GRID_ENTRY& net = m_netsTable->GetEntry( cell.GetRow() );
+        const NET_GRID_ENTRY& net = m_netsTable->GetEntry( cell.GetRow() );
 
         wxString name = net.name;
         wxString showOrHide = net.visible ? _( "Click to hide ratsnest for %s" )
@@ -1126,7 +1136,7 @@ void APPEARANCE_CONTROLS::OnNetVisibilityChanged( int aNetCode, bool aVisibility
 
     if( row >= 0 )
     {
-        m_netsTable->SetValueAsBool( row, NET_GRID_TABLE::COL_VISIBILITY, aVisibility );
+        m_netsTable->SetVisibilityState( row, aVisibility );
         m_netsGrid->ForceRefresh();
     }
 }
@@ -2578,6 +2588,8 @@ void APPEARANCE_CONTROLS::rebuildNets()
 
     const std::set<wxString>& hiddenClasses = m_frame->Prj().GetLocalSettings().m_HiddenNetclasses;
 
+    m_netclassSettings.clear();
+    m_netclassSettingsMap.clear();
     m_netclassOuterSizer->Clear( true );
 
     auto appendNetclass =
@@ -2791,8 +2803,13 @@ void APPEARANCE_CONTROLS::syncLayerPresetSelection()
     auto it = std::find_if( m_layerPresets.begin(), m_layerPresets.end(),
                             [&]( const std::pair<const wxString, LAYER_PRESET>& aPair )
                             {
+                                // see onLayerPresetChanged logic for built-in presets
+                                const GAL_SET& presetObjects = aPair.second.readOnly
+                                        ? m_lastBuiltinPreset.renderLayers
+                                        : aPair.second.renderLayers;
+
                                 return ( aPair.second.layers == visibleLayers
-                                         && aPair.second.renderLayers == visibleObjects
+                                         && presetObjects == visibleObjects
                                          && aPair.second.flipBoard == flipBoard );
                             } );
 
@@ -2954,10 +2971,13 @@ void APPEARANCE_CONTROLS::onLayerPresetChanged( wxCommandEvent& aEvent )
 
             if( idx != wxNOT_FOUND )
             {
-                m_layerPresets.erase( presetName );
+                if( m_lastSelectedUserPreset && m_lastSelectedUserPreset->name == presetName )
+                    m_lastSelectedUserPreset = nullptr;
+
+                if( m_currentPreset && m_currentPreset->name == presetName )
+                    m_currentPreset = nullptr;
 
                 m_cbLayerPresets->Delete( idx );
-                m_currentPreset = nullptr;
             }
 
             if( m_presetMRU.Index( presetName ) != wxNOT_FOUND )
@@ -3174,6 +3194,9 @@ void APPEARANCE_CONTROLS::onViewportChanged( wxCommandEvent& aEvent )
 
             if( idx != wxNOT_FOUND )
             {
+                if( m_lastSelectedViewport && m_lastSelectedViewport->name == viewportName )
+                    m_lastSelectedViewport = nullptr;
+
                 m_viewports.erase( viewportName );
                 m_cbViewports->Delete( idx );
             }
@@ -3264,7 +3287,7 @@ void APPEARANCE_CONTROLS::onNetContextMenu( wxCommandEvent& aEvent )
     wxASSERT( m_netsGrid->GetSelectedRows().size() == 1 );
 
     int row = m_netsGrid->GetSelectedRows()[0];
-    NET_GRID_ENTRY& net = m_netsTable->GetEntry( row );
+    const NET_GRID_ENTRY& net = m_netsTable->GetEntry( row );
 
     m_netsGrid->ClearSelection();
 
@@ -3347,7 +3370,7 @@ void APPEARANCE_CONTROLS::showNetclass( const wxString& aClassName, bool aShow )
             int row = m_netsTable->GetRowByNetcode( net->GetNetCode() );
 
             if( row >= 0 )
-                m_netsTable->SetValueAsBool( row, NET_GRID_TABLE::COL_VISIBILITY, aShow );
+                m_netsTable->SetVisibilityState( row, aShow );
         }
     }
 
@@ -3536,23 +3559,16 @@ void APPEARANCE_CONTROLS::onNetclassContextMenu( wxCommandEvent& aEvent )
         {
             if( !m_contextMenuNetclass.IsEmpty() )
             {
+                board->ResetNetHighLight();
+                rs->SetHighlight( false );
+
                 runOnNetsOfClass( m_contextMenuNetclass,
-                        [&]( NETINFO_ITEM* aItem )
+                        [&]( const NETINFO_ITEM* aItem )
                         {
-                            static bool first = true;
                             int code = aItem->GetNetCode();
 
-                            if( first )
-                            {
-                                board->SetHighLightNet( code );
-                                rs->SetHighlight( true, code );
-                                first = false;
-                            }
-                            else
-                            {
-                                board->SetHighLightNet( code, true );
-                                rs->SetHighlight( true, code, true );
-                            }
+                            board->SetHighLightNet( code, true );
+                            rs->SetHighlight( true, code, true );
                         } );
 
                 view->UpdateAllLayersColor();
@@ -3639,16 +3655,12 @@ void APPEARANCE_CONTROLS::onReadOnlySwatch()
 {
     WX_INFOBAR* infobar = m_frame->GetInfoBar();
 
-    wxHyperlinkCtrl* button = new wxHyperlinkCtrl( infobar, wxID_ANY, _( "Open Preferences" ), wxEmptyString );
-
-    button->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& aEvent )>(
+    infobar->RemoveAllButtons();
+    infobar->AddLink( _( "Open Preferences" ),
             [&]( wxHyperlinkEvent& aEvent )
             {
                  m_frame->ShowPreferences( wxEmptyString, wxEmptyString );
-            } ) );
-
-    infobar->RemoveAllButtons();
-    infobar->AddButton( button );
+            } );
     infobar->AddCloseButton();
 
     infobar->ShowMessageFor( _( "The current color theme is read-only.  Create a new theme in Preferences to "

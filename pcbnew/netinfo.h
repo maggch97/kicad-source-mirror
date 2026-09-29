@@ -22,8 +22,7 @@
  *  Classes to handle info on nets
  */
 
-#ifndef CLASS_NETINFO_
-#define CLASS_NETINFO_
+#pragma once
 
 #include <netclass.h>
 #include <board_item.h>
@@ -37,6 +36,11 @@ class BOARD_ITEM;
 class BOARD_COMMIT;
 class MSG_PANEL_ITEM;
 class PCB_BASE_FRAME;
+class REPORTER;
+
+
+#define NO_NET _( "<no net>" )
+#define CREATE_NET _( "<create net>" )
 
 
 /**
@@ -57,6 +61,12 @@ public:
     wxString GetClass() const override
     {
         return wxT( "NETINFO_ITEM" );
+    }
+
+    PCB_LAYER_ID GetLayer() const override
+    {
+        wxFAIL_MSG( wxT( "NETINFO_ITEM::GetLayer() desn't have meaning.  Don't call it." ) );
+        return UNDEFINED_LAYER;
     }
 
 #if defined(DEBUG)
@@ -153,7 +163,8 @@ public:
      * Return the information about the #NETINFO_ITEM in \a aList to display in the
      * message panel.
      *
-     * @param aList is the list in which to place the  status information.
+     * @param aFrame is the parent frame that receives the message panel information.
+     * @param aList is the list in which to place the status information.
      */
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
@@ -250,6 +261,20 @@ public:
     const NETCODES_MAP& NetsByNetcode() const   { return m_netCodes; }
 
     void RebuildDisplayNetnames() const;
+
+    /**
+     * Rename nets in place, keeping the name lookup in sync.
+     *
+     * Net codes, item connectivity and net ownership are untouched, so renaming never moves
+     * copper between nets.  Source names that no net carries are ignored.  The whole batch is
+     * rejected, leaving every net unchanged, if a target name is empty, names the unconnected
+     * net, or collides with another net.
+     *
+     * @param aNewNames maps each existing net name to the name it should carry.
+     * @param aReporter receives the reason a rejected batch was rejected.
+     * @return true if the batch was applied.
+     */
+    bool RenameNets( const std::map<wxString, wxString>& aNewNames, REPORTER& aReporter );
 
     /// Constant that holds the "unconnected net" number (typically 0)
     /// all items "connected" to this net are actually not connected items
@@ -390,5 +415,3 @@ private:
 
     int          m_newNetCode;      ///< possible value for new net code assignment
 };
-
-#endif  // CLASS_NETINFO_

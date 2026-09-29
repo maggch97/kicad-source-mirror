@@ -424,6 +424,9 @@ void WX_GRID::onGridCellSelect( wxGridEvent& aEvent )
         {
             SelectBlock( 0, col, GetNumberRows() - 1, col, false );
         }
+
+        if( m_cursorRowColumnHighlight )
+            ForceRefresh();
     }
 }
 
@@ -450,6 +453,10 @@ void WX_GRID::onIdleRefreshHighlight( wxIdleEvent& aEvent )
 
 void WX_GRID::onCellEditorShown( wxGridEvent& aEvent )
 {
+    // wxGrid slides the editor of a partially visible cell left or up until it fits, covering
+    // the neighbouring cells, so scroll the whole cell into view before the editor is placed
+    MakeCellVisible( aEvent.GetRow(), aEvent.GetCol() );
+
     if( alg::contains( m_autoEvalCols, aEvent.GetCol() ) )
     {
         int row = aEvent.GetRow();
@@ -686,6 +693,34 @@ void WX_GRID::DrawRowLabel( wxDC& dc, int row )
     }
 
     rend.DrawBorder( *this, dc, rect );
+
+    if( auto* table = dynamic_cast<WX_GRID_TABLE_BASE*>( GetTable() ); table && table->HasRowLabelExpanders() )
+    {
+        ROW_STATE state = table->GetRowState( row );
+
+        if( IsRowCollapsed( state ) || IsRowExpanded( state ) )
+        {
+            wxBitmap bitmap = m_rowIconProvider->GetIndicatorIcon( IsRowCollapsed( state ) ? ROW_ICON_PROVIDER::CLOSED
+                                                                                           : ROW_ICON_PROVIDER::OPEN );
+            bitmap.SetScaleFactor( KIPLATFORM::UI::GetPixelScaleFactor( this ) );
+
+            dc.DrawBitmap( bitmap, rect.GetLeft() + ( rect.GetWidth() - bitmap.GetLogicalWidth() ) / 2,
+                           rect.GetTop() + ( rect.GetHeight() - bitmap.GetLogicalHeight() ) / 2, true );
+        }
+        else if( state == ROW_STATE::EXPANDED_CHILD )
+        {
+            // Keep the hierarchy in the gutter so all field text stays aligned.
+            wxDCPenChanger setPen( dc, wxPen( GetLabelTextColour(), FromDIP( 1 ) ) );
+            wxPoint        center( rect.GetLeft() + rect.GetWidth() / 2, rect.GetTop() + rect.GetHeight() / 2 );
+            bool           moreChildren = row + 1 < GetNumberRows()
+                                          && table->GetRowState( row + 1 ) == ROW_STATE::EXPANDED_CHILD;
+
+            dc.DrawLine( center.x, rect.GetTop(), center.x, moreChildren ? rect.GetBottom() + 1 : center.y );
+            dc.DrawLine( center.x, center.y, rect.GetRight() - FromDIP( 4 ), center.y );
+        }
+
+        return;
+    }
 
     // Make sure fonts get scaled correctly on GTK HiDPI monitors
     dc.SetFont( GetLabelFont() );

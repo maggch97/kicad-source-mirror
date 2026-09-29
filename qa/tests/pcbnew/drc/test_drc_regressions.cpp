@@ -65,7 +65,8 @@ BOOST_FIXTURE_TEST_CASE( DRCFalsePositiveRegressions, DRC_REGRESSION_TEST_FIXTUR
         "issue18839",            // False positive board edge clearance between concentric arcs
         "unconnected-netnames/unconnected-netnames", // Raised false schematic partity error
         "net_tie_drc",                               // Net tie bridging soldermask DRC test
-        "diff_pair_uncoupled_tuning_drc"             // Tuning pattern length wrongly counted as uncoupled
+        "issue24974",                    // Net-tie graphic copper on last pad, UUID-order-independent exemption
+        "diff_pair_uncoupled_tuning_drc" // Tuning pattern length wrongly counted as uncoupled
     };
 
     for( const wxString& relPath : tests )
@@ -127,36 +128,36 @@ BOOST_FIXTURE_TEST_CASE( DRCFalseNegativeRegressions, DRC_REGRESSION_TEST_FIXTUR
 {
     // These documents at one time failed to catch DRC errors that they should have
 
-    std::map<int, SEVERITY> issue19325_ignore, issue22102_ignore;
+    std::map<int, SEVERITY> issue19325_ignore, issue22102_ignore, issue18142_ignore;
     issue19325_ignore[DRCE_DRILLED_HOLES_TOO_CLOSE] = SEVERITY::RPT_SEVERITY_IGNORE;
     issue22102_ignore[DRCE_UNCONNECTED_ITEMS] = SEVERITY::RPT_SEVERITY_IGNORE;
     issue22102_ignore[DRCE_DANGLING_TRACK] = SEVERITY::RPT_SEVERITY_IGNORE;
+    issue18142_ignore[DRCE_MICROVIA_CROSSES_CORE] = SEVERITY::RPT_SEVERITY_IGNORE;
 
-    std::vector<std::tuple<wxString, int, decltype(BOARD_DESIGN_SETTINGS::m_DRCSeverities)>> tests =
-    {
-        { "issue1358",  2, {} },
-        { "issue2512",  5, {} },
-        { "issue2528",  1, {} },
-        { "issue5750",  4, {} },   // Shorting zone fills pass DRC in some cases
-        { "issue5854",  3, {} },
-        { "issue6879",  6, {} },
-        { "issue6945",  2, {} },
-        { "issue7241",  1, {} },
-        { "issue7267",  5, {} },
-        { "issue7325",  2, {} },
-        { "issue8003",  2, {} },
-        { "issue9081",  2, {} },
-        { "issue12109", 8, {} },        // Pads fail annular width test
-        { "issue14334", 2, {} },        // Thermal spoke to otherwise unconnected island
-        { "issue16566", 6, {} },        // Pad_Shape vs Shape property
-        { "issue18142", 1, {} },        // blind/buried via to micro-via hole-to-hole
-        { "reverse_via", 3, {} },       // Via/track ordering
-        { "intersectingzones", 1, {} }, // zones are too close to each other
-        { "fill_bad",   1, {} },        // zone max BBox was too small
-        { "issue18878", 12, {} },       // Updated: fix reports all cross-net mask bridge pairs
+    std::vector<std::tuple<wxString, int, decltype( BOARD_DESIGN_SETTINGS::m_DRCSeverities )>> tests = {
+        { "issue1358", 2, {} },
+        { "issue2512", 5, {} },
+        { "issue2528", 1, {} },
+        { "issue5750", 4, {} }, // Shorting zone fills pass DRC in some cases
+        { "issue5854", 3, {} },
+        { "issue6879", 6, {} },
+        { "issue6945", 2, {} },
+        { "issue7241", 1, {} },
+        { "issue7267", 5, {} },
+        { "issue7325", 2, {} },
+        { "issue8003", 2, {} },
+        { "issue9081", 2, {} },
+        { "issue12109", 8, {} },                           // Pads fail annular width test
+        { "issue14334", 2, {} },                           // Thermal spoke to otherwise unconnected island
+        { "issue16566", 6, {} },                           // Pad_Shape vs Shape property
+        { "issue18142", 1, issue18142_ignore },            // blind/buried via to micro-via hole-to-hole
+        { "reverse_via", 3, {} },                          // Via/track ordering
+        { "intersectingzones", 1, {} },                    // zones are too close to each other
+        { "fill_bad", 1, {} },                             // zone max BBox was too small
+        { "issue18878", 12, {} },                          // Updated: fix reports all cross-net mask bridge pairs
         { "issue19325/issue19325", 4, issue19325_ignore }, // Overlapping pad annular ring calculation
-        { "issue22102", 2, issue22102_ignore },        // arc-to-rect collision; colocated arcs collision
-        { "issue11814", 2, {} },        // Teardrop clearance to pad
+        { "issue22102", 2, issue22102_ignore },            // arc-to-rect collision; colocated arcs collision
+        { "issue11814", 2, {} },                           // Teardrop clearance to pad
     };
 
     for( const auto& [testName, expectedErrors, customSeverities] : tests )
@@ -183,7 +184,7 @@ BOOST_FIXTURE_TEST_CASE( DRCFalseNegativeRegressions, DRC_REGRESSION_TEST_FIXTUR
                 {
                     markers.emplace_back( PCB_MARKER( aItem, aPos ) );
 
-                    if( bds.m_DrcExclusions.find( markers.back().SerializeToString() )
+                    if( bds.m_DrcExclusions.find( DRC_EXCLUSION::FromMarker( markers.back() ) )
                         == bds.m_DrcExclusions.end() )
                     {
                         violations.push_back( *aItem );
@@ -356,4 +357,55 @@ BOOST_FIXTURE_TEST_CASE( DRCTeardropOverCopperField, DRC_REGRESSION_TEST_FIXTURE
                          "Expected exactly one shorting-items violation involving a visible "
                          "knockout copper reference field; found "
                                  << fieldShorts );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( DRCHoleToHoleReportsRuleValue, DRC_REGRESSION_TEST_FIXTURE )
+{
+    // The hole-to-hole test relaxes its comparison by the DRC epsilon, but it also reported that
+    // relaxed value as the rule minimum, so the violation quoted a different number than the one
+    // entered in Board Setup.
+    // See https://gitlab.com/kicad/code/kicad/-/issues/22267
+
+    KI_TEST::LoadBoard( m_settingsManager, "issue22267", m_board );
+
+    std::vector<DRC_ITEM>  violations;
+    BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
+
+    bds.m_DRCSeverities[ DRCE_UNCONNECTED_ITEMS ] = SEVERITY::RPT_SEVERITY_IGNORE;
+    bds.m_DRCSeverities[ DRCE_LIB_FOOTPRINT_ISSUES ] = SEVERITY::RPT_SEVERITY_IGNORE;
+    bds.m_DRCSeverities[ DRCE_LIB_FOOTPRINT_MISMATCH ] = SEVERITY::RPT_SEVERITY_IGNORE;
+
+    bds.m_DRCEngine->SetViolationHandler(
+            [&]( const std::shared_ptr<DRC_ITEM>& aItem, const VECTOR2I&, int,
+                 const std::function<void( PCB_MARKER* )>& )
+            {
+                if( aItem->GetErrorCode() == DRCE_DRILLED_HOLES_TOO_CLOSE )
+                    violations.push_back( *aItem );
+            } );
+
+    bds.m_DRCEngine->RunTests( EDA_UNITS::MM, true, false );
+
+    BOOST_REQUIRE_MESSAGE( !violations.empty(), "Expected at least one hole-to-hole violation" );
+
+    UNITS_PROVIDER unitsProvider( pcbIUScale, EDA_UNITS::MM );
+    wxString       ruleValue = unitsProvider.MessageTextFromValue( bds.m_HoleToHoleMin );
+    wxString       relaxedValue = unitsProvider.MessageTextFromValue( bds.m_HoleToHoleMin
+                                                                     - bds.GetDRCEpsilon() );
+
+    BOOST_REQUIRE( ruleValue != relaxedValue );
+
+    // Match on the values alone; the surrounding detail text is translated at format time
+    for( const DRC_ITEM& item : violations )
+    {
+        wxString msg = item.GetErrorMessage( false );
+
+        BOOST_CHECK_MESSAGE( msg.Contains( ruleValue ),
+                             wxString::Format( "Expected the configured minimum '%s' but got: %s",
+                                               ruleValue, msg ) );
+
+        BOOST_CHECK_MESSAGE( !msg.Contains( relaxedValue ),
+                             wxString::Format( "Reported the epsilon-relaxed minimum '%s': %s",
+                                               relaxedValue, msg ) );
+    }
 }

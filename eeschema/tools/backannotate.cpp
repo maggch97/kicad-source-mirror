@@ -31,6 +31,8 @@
 #include <sch_label.h>
 #include <lib_symbol.h>
 #include <schematic.h>
+#include <advanced_config.h>
+#include <connectivity/conn_facade.h>
 #include <sch_commit.h>
 #include <string_utils.h>
 #include <kiface_base.h>
@@ -284,7 +286,7 @@ void BACK_ANNOTATE::getPcbModulesFromString( const std::string& aPayload )
     for( const std::pair<const std::string, PTREE>& item : tree )
     {
         wxString path, value, footprint;
-        bool                         dnp = false, exBOM = false, exPosFiles = false;
+        bool                         dnp = false, exBOM = false, exSim = false, exPosFiles = false;
         std::map<wxString, wxString> pinNetMap, fieldsMap;
         wxASSERT( item.first == "ref" );
         wxString ref = getStr( item.second );
@@ -329,8 +331,7 @@ void BACK_ANNOTATE::getPcbModulesFromString( const std::string& aPayload )
             }
 
 
-            // Get DNP, Exclude from BOM, and Exclude from Position Files out of the
-            // properties if they exist
+            // Get DNP and exclusion attributes out of the properties if they exist
             for( const auto& child : item.second )
             {
                 if( child.first != "property" )
@@ -346,6 +347,8 @@ void BACK_ANNOTATE::getPcbModulesFromString( const std::string& aPayload )
                     dnp = true;
                 else if( name.get().front().first == "exclude_from_bom" )
                     exBOM = true;
+                else if( name.get().front().first == "exclude_from_sim" )
+                    exSim = true;
                 else if( name.get().front().first == "exclude_from_pos_files" )
                     exPosFiles = true;
             }
@@ -382,8 +385,8 @@ void BACK_ANNOTATE::getPcbModulesFromString( const std::string& aPayload )
         else
         {
             // Add footprint to the map
-            std::shared_ptr<PCB_FP_DATA> data = std::make_shared<PCB_FP_DATA>( ref, footprint, value, dnp, exBOM,
-                                                                               exPosFiles, pinNetMap, fieldsMap );
+            std::shared_ptr<PCB_FP_DATA> data = std::make_shared<PCB_FP_DATA>(
+                    ref, footprint, value, dnp, exBOM, exSim, exPosFiles, pinNetMap, fieldsMap );
             m_pcbFootprints.insert( nearestItem, std::make_pair( path, data ) );
         }
     }
@@ -490,6 +493,9 @@ void BACK_ANNOTATE::applyChangelist()
 {
     SCH_COMMIT commit( m_frame );
     wxString   msg;
+
+    // Staged edits hide published nets on their screens; read every net from the pre-edit publication
+    std::optional<SCH_CONNECTIVITY::PUBLICATION_HOLD> hold( std::in_place, m_frame->Schematic().Connectivity() );
 
     std::set<CHANGELIST_ITEM*> unitSwapItems;
 
@@ -615,15 +621,9 @@ void BACK_ANNOTATE::applyChangelist()
                     symbolUnit.pcbNetsByPin[pinNum] = ( it != fp->m_pinMap.end() ) ? it->second : wxString();
 
                     // Schematic nets from connections
-                    if( SCH_PIN* p = symbol->GetPin( pinNum ) )
-                    {
-                        if( SCH_CONNECTION* connection = p->Connection( &sheetPath ) )
-                            symbolUnit.schNetsByPin[pinNum] = connection->Name( true );
-                        else
-                            symbolUnit.schNetsByPin[pinNum] = wxString();
-                    }
-                    else
-                        symbolUnit.schNetsByPin[pinNum] = wxString();
+                    const SCH_PIN* p = symbol->GetPin( pinNum );
+                    symbolUnit.schNetsByPin[pinNum] =
+                            p ? p->GetConnectionName( &sheetPath, false, true ).value_or( wxString() ) : wxString();
                 }
 
                 symbolUnit.pcbNetsInUnitOrder = netsInUnitOrder( symbolUnit.unitPinNumbers, symbolUnit.pcbNetsByPin );
@@ -801,6 +801,7 @@ void BACK_ANNOTATE::applyChangelist()
         wxString       oldValue = ref.GetValue();
         bool           oldDNP = ref.GetSymbol()->GetDNP();
         bool           oldExBOM = ref.GetSymbol()->GetExcludedFromBOM();
+        bool           oldExSim = ref.GetSymbol()->GetExcludedFromSim();
         bool           oldExPosFiles = ref.GetSymbol()->GetExcludedFromPosFiles();
         // Skip prevents us from re-applying label/field changes to units we just swapped
         bool skip = ( ref.GetSymbol()->GetFlags() & SKIP_STRUCT ) > 0 || unitSwapItems.count( &item ) > 0;
@@ -886,6 +887,20 @@ void BACK_ANNOTATE::applyChangelist()
             m_reporter.ReportHead( msg, RPT_SEVERITY_ACTION );
         }
 
+        if( m_processAttributes && oldExSim != fpData.m_excludeFromSim && !skip )
+        {
+            ++m_changesCount;
+            msg.Printf( _( "Change %s 'Exclude from simulation' from '%s' to '%s'." ),
+                        DescribeRef( ref.GetRef() ),
+                        boolString( oldExSim ),
+                        boolString( fpData.m_excludeFromSim ) );
+
+            if( !m_dryRun )
+                symbol->SetExcludedFromSim( fpData.m_excludeFromSim );
+
+            m_reporter.ReportHead( msg, RPT_SEVERITY_ACTION );
+        }
+
         if( m_processAttributes && oldExPosFiles != fpData.m_excludeFromPosFiles && !skip )
         {
             ++m_changesCount;
@@ -926,13 +941,10 @@ void BACK_ANNOTATE::applyChangelist()
                     continue;
                 }
 
-                SCH_CONNECTION* connection = pin->Connection( &ref.GetSheetPath() );
+                const std::optional<wxString> netName = pin->GetConnectionName( &ref.GetSheetPath(), false, true );
 
-                if( connection && connection->Name( true ) != shortNetName )
-                {
-                    processNetNameChange( &commit, ref.GetRef(), pin, connection,
-                                          connection->Name( true ), shortNetName );
-                }
+                if( netName && *netName != shortNetName )
+                    processNetNameChange( &commit, ref.GetRef(), pin, ref.GetSheetPath(), *netName, shortNetName );
             }
         }
 
@@ -946,8 +958,8 @@ void BACK_ANNOTATE::applyChangelist()
                 SCH_FIELD*      symField = symbol->GetField( fpFieldName );
 
                 // Skip fields that are individually controlled
-                if( fpFieldName == GetCanonicalFieldName( FIELD_T::REFERENCE )
-                    || fpFieldName == GetCanonicalFieldName( FIELD_T::VALUE ) )
+                if( fpFieldName == GetDefaultFieldName( FIELD_T::REFERENCE, UNTRANSLATED )
+                    || fpFieldName == GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED ) )
                 {
                     continue;
                 }
@@ -958,12 +970,12 @@ void BACK_ANNOTATE::applyChangelist()
                 // resolved value when the PCB is updated from the schematic.
                 if( symField
                     && !symField->HasTextVars()
-                    && symField->GetShownText( &ref.GetSheetPath(), false ) != fpFieldValue )
+                    && symField->GetShownText( &ref.GetSheetPath(), INTERNAL ) != fpFieldValue )
                 {
                     m_changesCount++;
                     msg.Printf( _( "Change %s field '%s' value to '%s'." ),
                                 DescribeRef( ref.GetRef() ),
-                                EscapeHTML( symField->GetCanonicalName() ),
+                                EscapeHTML( symField->GetUntranslatedName() ),
                                 EscapeHTML( fpFieldValue ) );
 
                     if( !m_dryRun )
@@ -1004,7 +1016,7 @@ void BACK_ANNOTATE::applyChangelist()
                 if( field.IsMandatory() )
                     continue;
 
-                if( fpData.m_fieldsMap.find( field.GetCanonicalName() ) == fpData.m_fieldsMap.end() )
+                if( fpData.m_fieldsMap.find( field.GetUntranslatedName() ) == fpData.m_fieldsMap.end() )
                 {
                     m_changesCount++;
                     msg.Printf( _( "Delete %s field '%s.'" ),
@@ -1030,6 +1042,8 @@ void BACK_ANNOTATE::applyChangelist()
 
         // TODO: back-annotate netclass changes?
     }
+
+    hold.reset();
 
     if( !m_dryRun )
     {
@@ -1112,11 +1126,24 @@ static SPIN_STYLE orientLabel( SCH_PIN* aPin )
 
 void addConnections( SCH_ITEM* aItem, const SCH_SHEET_PATH& aSheetPath, std::set<SCH_ITEM*>& connectedItems )
 {
-    if( connectedItems.insert( aItem ).second )
+    if( !connectedItems.insert( aItem ).second )
+        return;
+
+    std::vector<SCH_ITEM*> neighbors;
+    SCHEMATIC*             schematic = aItem->Schematic();
+
+    if( ADVANCED_CFG::GetCfg().m_ConnectivityEngine && schematic )
     {
-        for( SCH_ITEM* connectedItem : aItem->ConnectedItems( aSheetPath ) )
-            addConnections( connectedItem, aSheetPath, connectedItems );
+        if( const auto connection = schematic->Connectivity().Connection( aItem->m_Uuid, aSheetPath.PathRef() ) )
+            neighbors = connection->ConnectedItems();
     }
+    else
+    {
+        neighbors = aItem->ConnectedItems( aSheetPath );
+    }
+
+    for( SCH_ITEM* connectedItem : neighbors )
+        addConnections( connectedItem, aSheetPath, connectedItems );
 }
 
 
@@ -1167,8 +1194,8 @@ std::set<wxString> BACK_ANNOTATE::applyPinSwaps( SCH_SYMBOL* aSymbol, const SCH_
         if( !pin || pin->IsPower() || !pin->IsConnectable() )
             continue;
 
-        SCH_CONNECTION* connection = pin->Connection( &aReference.GetSheetPath() );
-        wxString        currentNet = connection ? connection->Name( true ) : wxString();
+        wxString currentNet =
+                pin->GetConnectionName( &aReference.GetSheetPath(), false, true ).value_or( wxString() );
 
         if( desiredNet.IsEmpty() || currentNet.IsEmpty() )
             continue;
@@ -1383,7 +1410,7 @@ std::set<wxString> BACK_ANNOTATE::applyPinSwaps( SCH_SYMBOL* aSymbol, const SCH_
 
 
 void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& aRef, SCH_PIN* aPin,
-                                          const SCH_CONNECTION* aConnection,
+                                          const SCH_SHEET_PATH& aSheet,
                                           const wxString& aOldName, const wxString& aNewName )
 {
     wxString msg;
@@ -1396,7 +1423,7 @@ void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& a
     SCH_ITEM*                     driver = nullptr;
     CONNECTION_SUBGRAPH::PRIORITY driverPriority = CONNECTION_SUBGRAPH::PRIORITY::NONE;
 
-    addConnections( aPin, aConnection->Sheet(), connectedItems );
+    addConnections( aPin, aSheet, connectedItems );
 
     for( SCH_ITEM* item : connectedItems )
     {
@@ -1425,7 +1452,7 @@ void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& a
 
         if( !m_dryRun )
         {
-            aCommit->Modify( driver, aConnection->Sheet().LastScreen() );
+            aCommit->Modify( driver, aSheet.LastScreen() );
             static_cast<SCH_LABEL_BASE*>( driver )->SetText( aNewName );
         }
 
@@ -1447,13 +1474,38 @@ void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& a
         // a label sits in the middle of an unsplit wire.  Fall back to the connection graph's
         // resolved driver which handles this case through subgraph merging.
         {
-            CONNECTION_GRAPH*    connGraph = m_frame->Schematic().ConnectionGraph();
-            CONNECTION_SUBGRAPH* sg = connGraph ? connGraph->GetSubgraphForItem( aPin ) : nullptr;
+            SCH_ITEM*                     resolvedDriver = nullptr;
+            SCH_SHEET_PATH                driverSheet;
+            CONNECTION_SUBGRAPH::PRIORITY resolvedPriority = CONNECTION_SUBGRAPH::PRIORITY::NONE;
+            SCHEMATIC&                    schematic = m_frame->Schematic();
 
-            if( sg && sg->GetDriver() && sg->GetDriverPriority() >= CONNECTION_SUBGRAPH::PRIORITY::LOCAL_LABEL )
+            if( ADVANCED_CFG::GetCfg().m_ConnectivityEngine )
             {
-                SCH_ITEM* resolvedDriver = const_cast<SCH_ITEM*>( sg->GetDriver() );
+                const auto net = schematic.Connectivity().GetSubgraphForItem( aPin->m_Uuid, aSheet.PathRef() );
+                const auto path = net ? schematic.Hierarchy().GetSheetPathByKIIDPath( net->Sheet() )
+                                      : std::optional<SCH_SHEET_PATH>();
 
+                if( path && net->Driver() )
+                {
+                    resolvedDriver = net->Driver();
+                    driverSheet = *path;
+                    resolvedPriority = CONNECTION_SUBGRAPH::GetDriverPriority( resolvedDriver );
+                }
+            }
+            else if( CONNECTION_GRAPH* connGraph = schematic.ConnectionGraph() )
+            {
+                CONNECTION_SUBGRAPH* sg = connGraph->GetSubgraphForItem( aPin );
+
+                if( sg && sg->GetDriver() )
+                {
+                    resolvedDriver = const_cast<SCH_ITEM*>( sg->GetDriver() );
+                    driverSheet = sg->GetSheet();
+                    resolvedPriority = sg->GetDriverPriority();
+                }
+            }
+
+            if( resolvedDriver && resolvedPriority >= CONNECTION_SUBGRAPH::PRIORITY::LOCAL_LABEL )
+            {
                 ++m_changesCount;
                 msg.Printf( _( "Change %s pin %s net label from '%s' to '%s'." ), DescribeRef( aRef ),
                             EscapeHTML( aPin->GetShownNumber() ), EscapeHTML( aOldName ), EscapeHTML( aNewName ) );
@@ -1465,12 +1517,12 @@ void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& a
                         SCH_PIN*    powerPin = static_cast<SCH_PIN*>( resolvedDriver );
                         SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( powerPin->GetParentSymbol() );
 
-                        aCommit->Modify( symbol, sg->GetSheet().LastScreen() );
+                        aCommit->Modify( symbol, driverSheet.LastScreen() );
                         symbol->GetField( FIELD_T::VALUE )->SetText( aNewName );
                     }
                     else
                     {
-                        aCommit->Modify( resolvedDriver, sg->GetSheet().LastScreen() );
+                        aCommit->Modify( resolvedDriver, driverSheet.LastScreen() );
                         static_cast<SCH_LABEL_BASE*>( resolvedDriver )->SetText( aNewName );
                     }
                 }
@@ -1495,7 +1547,7 @@ void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& a
             label->SetSpinStyle( orientLabel( static_cast<SCH_PIN*>( driver ) ) );
             label->SetFlags( IS_NEW );
 
-            SCH_SCREEN* screen = aConnection->Sheet().LastScreen();
+            SCH_SCREEN* screen = aSheet.LastScreen();
             aCommit->Add( label, screen );
         }
 

@@ -18,6 +18,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <advanced_config.h>
+#include <sch_shape.h>
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -711,8 +713,14 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
 
     refreshTraits();
 
-    if( !selection.Empty() )
+    const bool graphicsOnly = ADVANCED_CFG::GetCfg().m_ConnectivityEngine
+            && std::all_of( selection.begin(), selection.end(),
+                            []( EDA_ITEM* item )
+                            {
+                                return isGraphicItemForDrop( static_cast<SCH_ITEM*>( item ) );
+                            } );
 
+    if( !selection.Empty() && !graphicsOnly )
     {
         netCollisionMonitor = std::make_unique<SCH_DRAG_NET_COLLISION_MONITOR>( m_frame, m_view );
         netCollisionMonitor->Initialize( selection );
@@ -740,15 +748,12 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
     // Must be done after Activate() so that it gets set into the correct context
     controls->ShowCursor( true );
 
-    m_frame->PushTool( aEvent );
+    SCOPED_TOOL_PUSHER raii( m_frame, aEvent );
 
+    // Note that it's important to go through push/pop even when the selection is empty.
+    // This keeps other tools from having to special-case an empty move.
     if( selection.Empty() )
-    {
-        // Note that it's important to go through push/pop even when the selection is empty.
-        // This keeps other tools from having to special-case an empty move.
-        m_frame->PopTool( aEvent );
         return false;
-    }
 
     bool        restore_state = false;
     TOOL_EVENT  copy = aEvent;
@@ -863,7 +868,8 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
             }
             else
             {
-                m_cursor = grid.BestSnapAnchor( controls->GetCursorPosition( false ), snapLayer, selection );
+                m_cursor = grid.ResolveSnap( controls->GetCursorPosition( false ), snapLayer, selection, prevPos )
+                                .position;
             }
 
             if( axisLock == AXIS_LOCK::HORIZONTAL )
@@ -882,6 +888,12 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
 
             if( sheet != hoverSheet )
             {
+                if( hoverSheet )
+                {
+                    hoverSheet->ClearFlags( BRIGHTENED );
+                    m_frame->UpdateItem( hoverSheet, false );
+                }
+
                 hoverSheet = sheet;
 
                 if( hoverSheet )
@@ -1003,10 +1015,14 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
         //------------------------------------------------------------------------
         // Handle drop
         //
-        else if( evt->IsMouseUp( BUT_LEFT ) || evt->IsClick( BUT_LEFT ) )
+        else if( evt->IsMouseUp( BUT_LEFT )
+                || evt->IsClick( BUT_LEFT )
+                || evt->IsAction( &ACTIONS::cursorClick ) )
         {
             if( m_mode != BREAK )
+            {
                 break; // Finish
+            }
             else
             {
                 didAtLeastOneBreak = true;
@@ -1026,7 +1042,8 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
                 }
             }
         }
-        else if( evt->IsDblClick( BUT_LEFT ) )
+        else if( evt->IsDblClick( BUT_LEFT )
+                || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
             // Double click always finishes, even breaks
             break;
@@ -1072,6 +1089,9 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
 
     if( restore_state )
     {
+        for( const HIDDEN_JUNCTION& hidden : m_hiddenJunctions )
+            m_view->Hide( hidden.m_junction, false );
+
         m_selectionTool->RemoveItemsFromSel( &m_dragAdditions, QUIET_MODE );
 
         // Clear the split-segment selection that preprocessBreakOrSliceSelection() built
@@ -1102,7 +1122,6 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
 
     m_hiddenJunctions.clear();
     m_view->ClearPreview();
-    m_frame->PopTool( aEvent );
 
     return !restore_state;
 }
@@ -1321,41 +1340,7 @@ void SCH_MOVE_TOOL::initializeMoveOperation( const TOOL_EVENT& aEvent, SCH_SELEC
     setupItemsForDrag( aSelection, aCommit );
     setupItemsForMove( aSelection, aInternalPoints );
 
-    // Hide junctions connected to line endpoints that are not selected
-    m_hiddenJunctions.clear();
-
-    for( EDA_ITEM* item : aSelection )
-        item->SetFlags( STRUCT_DELETED );
-
-    for( EDA_ITEM* edaItem : aSelection )
-    {
-        if( edaItem->Type() != SCH_LINE_T )
-            continue;
-
-        SCH_LINE* line = static_cast<SCH_LINE*>( edaItem );
-
-        for( const VECTOR2I& pt : line->GetConnectionPoints() )
-        {
-            SCH_JUNCTION* jct = static_cast<SCH_JUNCTION*>( m_frame->GetScreen()->GetItem( pt, 0, SCH_JUNCTION_T ) );
-
-            if( jct && !jct->IsSelected()
-                && std::find( m_hiddenJunctions.begin(), m_hiddenJunctions.end(), jct ) == m_hiddenJunctions.end() )
-            {
-                JUNCTION_HELPERS::POINT_INFO info = JUNCTION_HELPERS::AnalyzePoint( m_frame->GetScreen()->Items(),
-                                                                                    pt, false );
-
-                if( !info.isJunction )
-                {
-                    jct->SetFlags( STRUCT_DELETED );
-                    m_frame->RemoveFromScreen( jct, m_frame->GetScreen() );
-                    aCommit->Removed( jct, m_frame->GetScreen() );
-                }
-            }
-        }
-    }
-
-    for( EDA_ITEM* item : aSelection )
-        item->ClearFlags( STRUCT_DELETED );
+    recordRedundantJunctions( aSelection );
 
     // Generic setup
     aSnapLayer = grid.GetSelectionGrid( aSelection );
@@ -1564,6 +1549,9 @@ SCH_SHEET* SCH_MOVE_TOOL::findTargetSheet( const SCH_SELECTION& aSelection, cons
         }
     }
 
+    if( sheet && dropWouldRecurse( aSelection, sheet ) )
+        sheet = nullptr;
+
     bool dropAllowedBySelection = !aHasSheetPins;
     bool dropAllowedByModifiers = !aIsGraphicsOnly || aCtrlDown;
 
@@ -1571,6 +1559,38 @@ SCH_SHEET* SCH_MOVE_TOOL::findTargetSheet( const SCH_SELECTION& aSelection, cons
         sheet = nullptr;
 
     return sheet;
+}
+
+
+bool SCH_MOVE_TOOL::dropWouldRecurse( const SCH_SELECTION& aSelection, const SCH_SHEET* aTargetSheet )
+{
+    SCH_SCREEN* destScreen = aTargetSheet->GetScreen();
+
+    if( !destScreen || destScreen->GetFileName().IsEmpty() )
+        return false;
+
+    std::vector<SCH_SHEET*> movedSheets;
+
+    for( EDA_ITEM* item : aSelection )
+    {
+        if( item->Type() == SCH_SHEET_T )
+            movedSheets.push_back( static_cast<SCH_SHEET*>( item ) );
+    }
+
+    if( movedSheets.empty() )
+        return false;
+
+    SCH_SHEET_LIST hierarchy = m_frame->Schematic().Hierarchy();
+
+    for( SCH_SHEET* movedSheet : movedSheets )
+    {
+        SCH_SHEET_LIST movedHierarchy( movedSheet );
+
+        if( hierarchy.TestForRecursion( movedHierarchy, destScreen->GetFileName() ) )
+            return true;
+    }
+
+    return false;
 }
 
 
@@ -1905,7 +1925,7 @@ bool SCH_MOVE_TOOL::handleMoveToolActions( const TOOL_EVENT* aEvent, SCH_COMMIT*
 
             if( symbol )
             {
-                m_frame->SelectUnit( symbol, unit );
+                m_frame->SelectUnit( symbol, unit, aCommit );
                 m_toolMgr->PostAction( ACTIONS::refreshPreview );
             }
         }
@@ -1917,7 +1937,7 @@ bool SCH_MOVE_TOOL::handleMoveToolActions( const TOOL_EVENT* aEvent, SCH_COMMIT*
 
             if( symbol && symbol->GetBodyStyle() != bodyStyle )
             {
-                m_frame->SelectBodyStyle( symbol, bodyStyle );
+                m_frame->SelectBodyStyle( symbol, bodyStyle, aCommit );
                 m_toolMgr->PostAction( ACTIONS::refreshPreview );
             }
         }
@@ -1988,6 +2008,75 @@ void SCH_MOVE_TOOL::updateStoredPositions( const SCH_SELECTION& aSelection )
 }
 
 
+void SCH_MOVE_TOOL::recordRedundantJunctions( SCH_SELECTION& aSelection )
+{
+    m_hiddenJunctions.clear();
+
+    for( EDA_ITEM* item : aSelection )
+        item->SetFlags( STRUCT_DELETED );
+
+    for( EDA_ITEM* edaItem : aSelection )
+    {
+        if( edaItem->Type() != SCH_LINE_T )
+            continue;
+
+        SCH_LINE* line = static_cast<SCH_LINE*>( edaItem );
+
+        for( const VECTOR2I& pt : line->GetConnectionPoints() )
+        {
+            SCH_JUNCTION* jct = static_cast<SCH_JUNCTION*>( m_frame->GetScreen()->GetItem( pt, 0, SCH_JUNCTION_T ) );
+
+            if( jct && !jct->IsSelected()
+                && std::none_of( m_hiddenJunctions.begin(), m_hiddenJunctions.end(),
+                                 [jct]( const HIDDEN_JUNCTION& aHidden )
+                                 {
+                                     return aHidden.m_junction == jct;
+                                 } ) )
+            {
+                JUNCTION_HELPERS::POINT_INFO info =
+                        JUNCTION_HELPERS::AnalyzePoint( m_frame->GetScreen()->Items(), pt, false );
+
+                if( !info.isJunction )
+                {
+                    m_hiddenJunctions.push_back( { jct, line->m_Uuid, pt == line->GetStartPoint() } );
+                    m_view->Hide( jct, true );
+                }
+            }
+        }
+    }
+
+    for( EDA_ITEM* item : aSelection )
+        item->ClearFlags( STRUCT_DELETED );
+}
+
+
+void SCH_MOVE_TOOL::migrateHiddenJunctions( SCH_COMMIT* aCommit )
+{
+    SCH_SCREEN* screen = m_frame->GetScreen();
+
+    for( const HIDDEN_JUNCTION& hidden : m_hiddenJunctions )
+    {
+        m_view->Hide( hidden.m_junction, false );
+
+        SCH_LINE* line = dynamic_cast<SCH_LINE*>( m_frame->Schematic().ResolveItem( hidden.m_lineId, nullptr, true ) );
+
+        if( !line )
+            continue;
+
+        VECTOR2I newPos = hidden.m_atLineStart ? line->GetStartPoint() : line->GetEndPoint();
+
+        if( newPos != hidden.m_junction->GetPosition()
+            && !screen->IsExplicitJunction( hidden.m_junction->GetPosition() )
+            && screen->IsExplicitJunctionNeeded( newPos ) )
+        {
+            aCommit->Modify( hidden.m_junction, screen );
+            hidden.m_junction->SetPosition( newPos );
+            m_frame->UpdateItem( hidden.m_junction, false, true );
+        }
+    }
+}
+
+
 void SCH_MOVE_TOOL::finalizeMoveOperation( SCH_SELECTION& aSelection, SCH_COMMIT* aCommit, bool aUnselect,
                                            const std::vector<DANGLING_END_ITEM>& aInternalPoints )
 {
@@ -2050,6 +2139,9 @@ void SCH_MOVE_TOOL::finalizeMoveOperation( SCH_SELECTION& aSelection, SCH_COMMIT
         selectionCopy.Add( line );
 
     lwbTool->TrimOverLappingWires( aCommit, &selectionCopy );
+
+    migrateHiddenJunctions( aCommit );
+
     lwbTool->AddJunctionsIfNeeded( aCommit, &selectionCopy );
 
     // This needs to run prior to `RecalculateConnections` because we need to identify the
@@ -2820,7 +2912,10 @@ void SCH_MOVE_TOOL::moveItem( EDA_ITEM* aItem, const VECTOR2I& aDelta )
     case SCH_HIER_LABEL_T:
     {
         SCH_LABEL_BASE* label = static_cast<SCH_LABEL_BASE*>( aItem );
-        if( !m_specialCaseLabels.count( label ) )
+
+        // Interactive dragging positions attached labels separately along their wire.
+        // Align to Grid has no such pass and must move them with the endpoint.
+        if( !m_inMoveTool || !m_specialCaseLabels.count( label ) )
             label->Move( aDelta );
 
         break;
@@ -2894,11 +2989,14 @@ int SCH_MOVE_TOOL::AlignToGrid( const TOOL_EVENT& aEvent )
                 updateItem( aItem, true );
             };
 
+    recordRedundantJunctions( selection );
+
     std::vector<EDA_ITEM*> items( selection.begin(), selection.end() );
     AlignSchematicItemsToGrid( m_frame->GetScreen(), items, grid, selectionGrid, callbacks );
 
     SCH_LINE_WIRE_BUS_TOOL* lwbTool = m_toolMgr->GetTool<SCH_LINE_WIRE_BUS_TOOL>();
     lwbTool->TrimOverLappingWires( &commit, &selection );
+    migrateHiddenJunctions( &commit );
     lwbTool->AddJunctionsIfNeeded( &commit, &selection );
 
     m_toolMgr->PostEvent( EVENTS::SelectedItemsMoved );

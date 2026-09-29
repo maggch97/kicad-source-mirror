@@ -75,7 +75,7 @@ struct THIEVING_SETTINGS
                                        // (or between crosshatch lines)
     int              line_width = 0;   // line width for crosshatch only
     bool             stagger = false;  // offset alternating rows by half the stride
-    EDA_ANGLE        orientation = ANGLE_0;
+    EDA_ORIENTATION  orientation{ ANGLE_0 };
 
     bool operator==( const THIEVING_SETTINGS& aOther ) const
     {
@@ -115,8 +115,8 @@ enum class PLACEMENT_SOURCE_T
 };
 
 /**
- * ZONE_SETTINGS
- * handles zones parameters.
+ * Handle zones parameters.
+ *
  * Because a zone can be on copper or non copper layers, and can be also
  * a keepout area, some parameters are irrelevant depending on the type of zone
  */
@@ -124,12 +124,11 @@ class ZONE_SETTINGS
 {
 public:
     // the actual zone outline shape can be slightly modified (smoothed):
-    enum {
-        SMOOTHING_UNDEFINED = -1,
-        SMOOTHING_NONE = 0,         // Zone outline is used without change
-        SMOOTHING_CHAMFER,          // Zone outline is used after chamfering corners
-        SMOOTHING_FILLET,           // Zone outline is used after rounding corners
-        SMOOTHING_LAST              // sentinel
+    enum class CORNER_SMOOTHING
+    {
+        NO_SMOOTHING = 0,  // Zone outline is used without change
+        CHAMFER,           // Zone outline is used after chamfering corners
+        FILLET             // Zone outline is used after rounding corners
     };
 
     unsigned        m_ZonePriority;          // Priority (0 ... N) of the zone
@@ -163,7 +162,8 @@ public:
 
     bool            m_Locked;
 
-    /* A zone outline can be a teardrop zone with different rules
+    /**
+     * A zone outline can be a teardrop zone with different rules
      * priority, smoothed corners, thermal relief...
      */
     TEARDROP_TYPE   m_TeardropType;
@@ -171,11 +171,11 @@ public:
     std::map<PCB_LAYER_ID, ZONE_LAYER_PROPERTIES> m_LayerProperties;
 
 private:
-    int             m_cornerSmoothingType;   // Corner smoothing type
+    CORNER_SMOOTHING m_cornerSmoothingType;   // Corner smoothing type
     unsigned int    m_cornerRadius;          // Corner chamfer distance / fillet radius
     ZONE_CONNECTION m_padConnection;
 
-    /*
+    /**
      * Keepout zones and keepout flags.
      * Note that DRC rules can set keepouts on zones whether they're a keepout or not.
      */
@@ -210,7 +210,7 @@ public:
      * copies settings from a given zone into this object.
      * @param aSource: the given zone
      */
-    ZONE_SETTINGS& operator << ( const ZONE& aSource );
+    ZONE_SETTINGS& operator<<( const ZONE& aSource );
 
     /**
      * @return Default ZONE_SETTINGS
@@ -219,14 +219,16 @@ public:
 
     /**
      * A helper routine for the various zone dialogs (copper, non-copper, keepout).
+     *
      * @param aList the wxDataViewListCtrl to populate
      * @param aFrame the parent editor frame
+     * @param aLayers is the list of layers to set up
      */
     void SetupLayersList( wxDataViewListCtrl* aList, PCB_BASE_FRAME* aFrame, LSET aLayers );
 
     /**
-     * Function ExportSetting
-     * copy settings to a given zone
+     * Copy settings to a given zone.
+     *
      * @param aTarget: the given zone
      * @param aFullExport: if false: some parameters are NOT exported
      *   because they must not be  exported when export settings from a zone to others zones
@@ -234,21 +236,8 @@ public:
      */
     void ExportSetting( ZONE& aTarget, bool aFullExport = true ) const;
 
-    /**
-     * Function CopyFrom
-     * copy settings from a different ZONE_SETTINGS object
-     *
-     * @param aOther the other ZONE_SETTINGS
-     * @param aCopyFull if false: some parameters are not copied.
-     * This option is used specifically to copy zone settings from
-     * a zone to the default zone settings.
-     * There, the layer information is not needed, plus layer specific
-     * properties should not be overridden in the zone default settings.
-     */
-    void CopyFrom( const ZONE_SETTINGS& aOther, bool aCopyFull = true );
-
-    void SetCornerSmoothingType( int aType) { m_cornerSmoothingType = aType; }
-    int GetCornerSmoothingType() const { return m_cornerSmoothingType; }
+    void SetCornerSmoothingType( CORNER_SMOOTHING aType) { m_cornerSmoothingType = aType; }
+    CORNER_SMOOTHING GetCornerSmoothingType() const { return m_cornerSmoothingType; }
 
     void SetCornerRadius( int aRadius );
     unsigned int GetCornerRadius() const { return m_cornerRadius; }

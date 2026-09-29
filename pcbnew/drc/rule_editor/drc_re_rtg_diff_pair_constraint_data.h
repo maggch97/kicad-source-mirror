@@ -53,20 +53,31 @@ public:
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
         // Positions measured from constraint_routing_diff_pair.png bitmap (~423x133)
-        // Format: { xStart, xEnd, yCenter, tabOrder }
+        // Format: { xStart, xEnd, yCenter }
         // TODO: measure actual positions from PNG
         return {
-            { 0, 55, 147, 1, wxS( "mm" ), LABEL_POSITION::RIGHT },                     // opt_width
-            { 105, 160, 147, 2, wxS( "mm" ), LABEL_POSITION::RIGHT, wxS( "\u00B1" ) }, // width_tolerance (±)
-            { 185, 240, 123, 3, wxS( "mm" ), LABEL_POSITION::RIGHT },                  // opt_gap
-            { 290, 345, 123, 4, wxS( "mm" ), LABEL_POSITION::RIGHT, wxS( "\u00B1" ) }, // gap_tolerance (±)
-            { 85, 140, 20, 5, wxS( "mm" ), LABEL_POSITION::RIGHT },                    // max_uncoupled
+            { 0, 55, 147, wxS( "mm" ), LABEL_POSITION::RIGHT,
+              _( "Optimum width of each track in the pair" ) }, // opt_width
+            { 105, 160, 147, wxS( "mm" ), LABEL_POSITION::RIGHT,
+              _( "Allowed deviation above or below the optimum width" ), wxS( "\u00B1" ) }, // width_tolerance (±)
+            { 185, 240, 123, wxS( "mm" ), LABEL_POSITION::RIGHT,
+              _( "Optimum gap between the two tracks of the pair" ) }, // opt_gap
+            { 290, 345, 123, wxS( "mm" ), LABEL_POSITION::RIGHT,
+              _( "Allowed deviation above or below the optimum gap" ), wxS( "\u00B1" ) }, // gap_tolerance (±)
+            { 85, 140, 20, wxS( "mm" ), LABEL_POSITION::RIGHT,
+              _( "Maximum length over which the pair may run uncoupled" ) }, // max_uncoupled
         };
     }
 
     VALIDATION_RESULT Validate() const override
     {
         VALIDATION_RESULT result;
+
+        if( m_optWidth < 0 )
+            result.AddError( _( "Optimum Width must be greater than or equal to 0" ) );
+
+        if( m_optGap < 0 )
+            result.AddError( _( "Optimum Gap must be greater than or equal to 0" ) );
 
         bool hasWidth = m_optWidth > 0;
 

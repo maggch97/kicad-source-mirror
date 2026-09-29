@@ -50,30 +50,36 @@ struct LIBRARY_MANAGER_INTERNALS
 };
 
 
-std::mutex& LIBRARY_MANAGER_ADAPTER::pluginMutex( const wxString& aNickname )
+std::recursive_mutex& LIBRARY_MANAGER_ADAPTER::pluginMutex( const wxString& aNickname )
 {
     // Leaked and never erased: must outlive every caller including static teardown, and stable node
     // addresses keep the returned reference valid.
-    static std::mutex&                                      registryLock = *new std::mutex;
-    static std::map<wxString, std::unique_ptr<std::mutex>>& registry =
-            *new std::map<wxString, std::unique_ptr<std::mutex>>;
+    static std::mutex&                                                registryLock = *new std::mutex;
+    static std::map<wxString, std::unique_ptr<std::recursive_mutex>>& registry =
+            *new std::map<wxString, std::unique_ptr<std::recursive_mutex>>;
 
-    std::lock_guard              guard( registryLock );
-    std::unique_ptr<std::mutex>& slot = registry[aNickname];
+    std::lock_guard                        guard( registryLock );
+    std::unique_ptr<std::recursive_mutex>& slot = registry[aNickname];
 
     if( !slot )
-        slot = std::make_unique<std::mutex>();
+        slot = std::make_unique<std::recursive_mutex>();
 
     return *slot;
 }
 
 
-LIBRARY_MANAGER::LIBRARY_MANAGER()
+LIBRARY_MANAGER::LIBRARY_MANAGER( const PROJECT* aProject ) : m_project( aProject )
 {
 }
 
 
 LIBRARY_MANAGER::~LIBRARY_MANAGER() = default;
+
+
+const PROJECT& LIBRARY_MANAGER::Project() const
+{
+    return m_project ? *m_project : Pgm().GetSettingsManager().Prj();
+}
 
 
 void LIBRARY_MANAGER::loadTables( const wxString& aTablePath, LIBRARY_TABLE_SCOPE aScope,
@@ -153,7 +159,7 @@ void LIBRARY_MANAGER::loadNestedTables( LIBRARY_TABLE& aRootTable )
                 {
                     if( row.Type() == LIBRARY_TABLE_ROW::TABLE_TYPE_NAME )
                     {
-                        wxFileName file( ExpandURI( row.URI(), Pgm().GetSettingsManager().Prj() ) );
+                        wxFileName file( ExpandEnvVarSubstitutions( row.URI(), &Project() ) );
 
                         // URI may be relative to parent
                         file.MakeAbsolute( wxFileName( aTable.Path() ).GetPath() );
@@ -291,10 +297,11 @@ void LIBRARY_MANAGER::createEmptyTable( LIBRARY_TABLE_TYPE aType, LIBRARY_TABLE_
     else if( aScope == LIBRARY_TABLE_SCOPE::PROJECT )
     {
         wxCHECK( !m_projectTables.contains( aType ), /* void */ );
-        wxFileName fn( Pgm().GetSettingsManager().Prj().GetProjectDirectory(), tableFileName( aType ) );
+        wxFileName fn( Project().GetProjectDirectory(), tableFileName( aType ) );
 
         m_projectTables[aType] = std::make_unique<LIBRARY_TABLE>( fn, LIBRARY_TABLE_SCOPE::PROJECT );
         m_projectTables[aType]->SetType( aType );
+        m_projectTables[aType]->SetOk();
     }
 }
 
@@ -385,6 +392,10 @@ private:
     void addRowIfNecessary( LIBRARY_TABLE* aTable, const wxFileName& aSource, ADD_MODE aMode,
                             int aExtensionLength )
     {
+        // No global table file yet (first run): nothing to auto-add.
+        if( !aTable )
+            return;
+
         wxString versionedPath = wxString::Format( wxS( "${%s}" ),
         ENV_VAR::GetVersionedEnvVarName( wxS( "3RD_PARTY" ) ) );
 
@@ -576,6 +587,10 @@ void LIBRARY_MANAGER::LoadGlobalTables( std::initializer_list<LIBRARY_TABLE_TYPE
 
     loadTables( PATHS::GetUserSettingsPath(), LIBRARY_TABLE_SCOPE::GLOBAL, aTablesToLoad );
 
+    // A passive load must not maintain or save the active user's library tables.
+    if( IsProjectScoped() )
+        return;
+
     SETTINGS_MANAGER& mgr = Pgm().GetSettingsManager();
     KICAD_SETTINGS*   settings = mgr.GetAppSettings<KICAD_SETTINGS>( "kicad" );
 
@@ -651,7 +666,7 @@ void LIBRARY_MANAGER::LoadGlobalTables( std::initializer_list<LIBRARY_TABLE_TYPE
 
 void LIBRARY_MANAGER::LoadProjectTables( std::initializer_list<LIBRARY_TABLE_TYPE> aTablesToLoad )
 {
-    LoadProjectTables( Pgm().GetSettingsManager().Prj().GetProjectDirectory(), aTablesToLoad );
+    LoadProjectTables( Project().GetProjectDirectory(), aTablesToLoad );
 }
 
 
@@ -662,7 +677,7 @@ void LIBRARY_MANAGER::ProjectChanged()
     // when loadTables() destroys and replaces the table objects.
     AbortAsyncLoads();
 
-    LoadProjectTables( Pgm().GetSettingsManager().Prj().GetProjectDirectory() );
+    LoadProjectTables( Project().GetProjectDirectory() );
 
     std::scoped_lock lock( m_adaptersMutex );
 
@@ -739,10 +754,9 @@ std::optional<LIBRARY_TABLE*> LIBRARY_MANAGER::Table( LIBRARY_TABLE_TYPE aType,
 
     case LIBRARY_TABLE_SCOPE::PROJECT:
     {
-        // TODO: handle multiple projects
         if( !m_projectTables.contains( aType ) )
         {
-            if( !Pgm().GetSettingsManager().Prj().IsNullProject() )
+            if( !Project().IsNullProject() )
                 createEmptyTable( aType, LIBRARY_TABLE_SCOPE::PROJECT );
             else
                 return std::nullopt;
@@ -867,7 +881,7 @@ std::optional<LIBRARY_TABLE_ROW*> LIBRARY_MANAGER::FindRowByURI( LIBRARY_TABLE_T
 {
     for( LIBRARY_TABLE_ROW* row : Rows( aType, aScope, true ) )
     {
-        if( UrisAreEquivalent( GetFullURI( row, true ), aUri ) )
+        if( UrisAreEquivalent( GetFullURI( row, true, &Project() ), aUri ) )
             return row;
     }
 
@@ -921,7 +935,16 @@ void LIBRARY_MANAGER::LoadProjectTables( const wxString& aProjectPath,
             m_rowCache.clear();
         }
 
-        m_projectTables.clear();
+        if( aTablesToLoad.size() == 0 )
+        {
+            m_projectTables.clear();
+        }
+        else
+        {
+            for( LIBRARY_TABLE_TYPE type : aTablesToLoad )
+                m_projectTables.erase( type );
+        }
+
         wxLogTrace( traceLibraries, "New project path %s is not readable, not loading project tables", aProjectPath );
     }
 
@@ -957,16 +980,17 @@ std::optional<wxString> LIBRARY_MANAGER::GetFullURI( LIBRARY_TABLE_TYPE aType, c
                                                      bool aSubstituted )
 {
     if( std::optional<const LIBRARY_TABLE_ROW*> result = GetRow( aType, aNickname ) )
-        return GetFullURI( *result, aSubstituted );
+        return GetFullURI( *result, aSubstituted, &Project() );
 
     return std::nullopt;
 }
 
 
-wxString LIBRARY_MANAGER::GetFullURI( const LIBRARY_TABLE_ROW* aRow, bool aSubstituted )
+wxString LIBRARY_MANAGER::GetFullURI( const LIBRARY_TABLE_ROW* aRow, bool aSubstituted,
+                                    const PROJECT* aProject )
 {
     if( aSubstituted )
-        return ExpandEnvVarSubstitutions( aRow->URI(), &Pgm().GetSettingsManager().Prj() );
+        return ExpandEnvVarSubstitutions( aRow->URI(), aProject ? aProject : &Pgm().GetSettingsManager().Prj() );
 
     return aRow->URI();
 }
@@ -1231,6 +1255,15 @@ void LIBRARY_MANAGER_ADAPTER::ProjectTablesReloaded(
 
 void LIBRARY_MANAGER_ADAPTER::CheckTableRow( LIBRARY_TABLE_ROW& aRow )
 {
+    // A disabled row is never used; skip validation so a disabled unreachable HTTP backend
+    // can't stall the library table dialog, and clear any stale error from an earlier check
+    if( aRow.Disabled() )
+    {
+        aRow.SetOk( true );
+        aRow.SetErrorDescription( wxEmptyString );
+        return;
+    }
+
     // Testing is expensive; skip it if we already have a library with the same
     // nickname and URI as the row under test
     if( std::optional<LIB_DATA*> libData = fetchIfLoaded( aRow.Nickname() ) )
@@ -1254,7 +1287,7 @@ void LIBRARY_MANAGER_ADAPTER::CheckTableRow( LIBRARY_TABLE_ROW& aRow )
         lib.row = &aRow;
         lib.plugin.reset( *plugin );
 
-        std::optional<LIB_STATUS> status = LoadOne( &lib );
+        std::optional<LIB_STATUS> status = CheckLibrary( &lib );
 
         if( status.has_value() )
         {
@@ -1295,7 +1328,7 @@ std::optional<wxString> LIBRARY_MANAGER_ADAPTER::FindLibraryByURI( const wxStrin
 {
     for( const LIBRARY_TABLE_ROW* row : m_manager.Rows( Type() ) )
     {
-        if( LIBRARY_MANAGER::UrisAreEquivalent( row->URI(), aURI ) )
+        if( LIBRARY_MANAGER::UrisAreEquivalent( LIBRARY_MANAGER::GetFullURI( row, true, &m_manager.Project() ), aURI ) )
             return row->Nickname();
     }
 
@@ -1500,12 +1533,14 @@ std::vector<std::pair<wxString, LIB_STATUS>> LIBRARY_MANAGER_ADAPTER::GetLibrary
         }
         else
         {
-            // This should probably never happen, but until that can be proved...
+            // The row came from the library table, so the missing entry means the async
+            // preload has not reached it yet (or was pre-empted by a project change), not
+            // that the library is absent. Reporting a load error here surfaces a spurious
+            // error indicator while background loading races schematic auto-open. Genuine
+            // failures carry their own LOAD_ERROR entry, and the library still loads on
+            // demand, so report it as not-yet-loaded instead.
             ret.emplace_back( std::make_pair( row->Nickname(),
-                                              LIB_STATUS( {
-                                                  .load_status = LOAD_STATUS::LOAD_ERROR,
-                                                  .error = LIBRARY_ERROR( _( "Library not found in library table" ) )
-                                              } ) ) );
+                                              LIB_STATUS( { .load_status = LOAD_STATUS::INVALID } ) ) );
         }
     }
 
@@ -1513,19 +1548,23 @@ std::vector<std::pair<wxString, LIB_STATUS>> LIBRARY_MANAGER_ADAPTER::GetLibrary
 }
 
 
-wxString LIBRARY_MANAGER_ADAPTER::GetLibraryLoadErrors() const
+std::vector<KI_ERROR> LIBRARY_MANAGER_ADAPTER::GetLibraryLoadErrors() const
 {
-    wxString errors;
+    std::vector<KI_ERROR> errors;
 
     for( const auto& [nickname, status] : GetLibraryStatuses() )
     {
         if( status.load_status == LOAD_STATUS::LOAD_ERROR && status.error )
         {
-            if( !errors.IsEmpty() )
-                errors += wxS( "\n" );
-
-            errors += wxString::Format( _( "Library '%s': %s" ),
-                                         nickname, status.error->message );
+            wxString title = status.error->message.BeforeFirst( '\n' );
+            title.StartsWith( wxS( "IO_ERROR: " ), &title );
+            errors.emplace_back(
+                    KI_ERROR( RPT_SEVERITY_ERROR, wxString::Format( _( "Error loading library '%s'" ), nickname ) )
+                            .SetDescription( title )
+#ifdef DEBUG
+                            .SetDebugText( status.error->details )
+#endif
+                            );
         }
     }
 
@@ -1571,7 +1610,11 @@ void LIBRARY_MANAGER_ADAPTER::ReloadLibraryEntry( const wxString& aNickname, LIB
                 {
                     LIBRARY_RESULT<LIB_DATA*> result = loadFromScope( aNickname, aScopeToReload, aTarget, aMutex );
 
-                    if( !result.has_value() )
+                    if( result.has_value() && *result )
+                    {
+                        LoadOne( *result );
+                    }
+                    else if( !result.has_value() )
                     {
                         wxLogTrace( traceLibraries, "ReloadLibraryEntry: failed to reload %s (%s): %s",
                                     aNickname, magic_enum::enum_name( aScopeToReload ),
@@ -1650,9 +1693,9 @@ bool LIBRARY_MANAGER_ADAPTER::CreateLibrary( const wxString& aNickname )
 }
 
 
-wxString LIBRARY_MANAGER_ADAPTER::getUri( const LIBRARY_TABLE_ROW* aRow )
+wxString LIBRARY_MANAGER_ADAPTER::getUri( const LIBRARY_TABLE_ROW* aRow ) const
 {
-    return LIBRARY_MANAGER::ExpandURI( aRow->URI(), Pgm().GetSettingsManager().Prj() );
+    return LIBRARY_MANAGER::ExpandURI( aRow->URI(), m_manager.Project() );
 }
 
 
@@ -1669,6 +1712,9 @@ std::optional<const LIB_DATA*> LIBRARY_MANAGER_ADAPTER::fetchIfLoaded( const wxS
             return std::nullopt;
         }
     }
+
+    if( m_manager.GetRow( Type(), aNickname, LIBRARY_TABLE_SCOPE::PROJECT ) )
+        return std::nullopt; // project row exists but is not loaded
 
     {
         std::shared_lock lock( globalLibsMutex() );
@@ -1699,6 +1745,9 @@ std::optional<LIB_DATA*> LIBRARY_MANAGER_ADAPTER::fetchIfLoaded( const wxString&
             return std::nullopt;
         }
     }
+
+    if( m_manager.GetRow( Type(), aNickname, LIBRARY_TABLE_SCOPE::PROJECT ) )
+        return std::nullopt; // project row exists but is not loaded
 
     {
         std::shared_lock lock( globalLibsMutex() );
@@ -1867,13 +1916,21 @@ void LIBRARY_MANAGER_ADAPTER::AsyncLoad()
         wxString nickname = row->Nickname();
         LIBRARY_TABLE_SCOPE scope = row->Scope();
 
+        // Disabled libraries must never be contacted; skipping here keeps a broken or slow
+        // backend (e.g. an unreachable HTTP library) from blocking startup loads
+        if( row->Disabled() )
+        {
+            m_loadTotal.fetch_sub( 1 );
+            continue;
+        }
+
         if( check( nickname, m_libraries, m_librariesMutex ) )
         {
             m_loadTotal.fetch_sub( 1 );
             continue;
         }
 
-        if( check( nickname, globalLibs(), globalLibsMutex() ) )
+        if( check( nickname, globalLibs(), globalLibsMutex() ) && scope != LIBRARY_TABLE_SCOPE::PROJECT )
         {
             m_loadTotal.fetch_sub( 1 );
             continue;
@@ -1949,7 +2006,7 @@ void LIBRARY_MANAGER_ADAPTER::AsyncLoad()
                                                 ? globalLibsMutex()
                                                 : m_librariesMutex );
                                 lib->status.load_status = LOAD_STATUS::LOAD_ERROR;
-                                lib->status.error = LIBRARY_ERROR( { e.What() } );
+                                lib->status.error = LIBRARY_ERROR( e.Problem(), e.Where() );
                                 wxLogTrace( traceLibraries, "%s: plugin threw exception: %s",
                                             work.nickname, e.What() );
                             }
@@ -1973,7 +2030,8 @@ void LIBRARY_MANAGER_ADAPTER::AsyncLoad()
 
                         ++m_loadCount;
                     }
-                }, BS::pr::lowest ) );
+                },
+                BS::pr::lowest ) );
     }
 
     wxLogTrace( traceLibraries, "Started async load of %zu libraries", workQueue->size() );

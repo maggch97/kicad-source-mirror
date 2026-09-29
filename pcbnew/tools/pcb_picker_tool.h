@@ -24,11 +24,14 @@
 #define PCB_PICKER_TOOL_H
 
 #include <layer_ids.h>
+#include <set>
+#include <snap/snap_resolver.h>
 #include <tool/picker_tool.h>
+#include <tools/pcb_selection_tool.h>
 #include <tools/pcb_tool_base.h>
 
 /**
- *Generic tool for picking an item.
+ * Generic tool for picking an item.
  */
 class PCB_PICKER_TOOL : public PCB_TOOL_BASE, public PICKER_TOOL_BASE
 {
@@ -58,10 +61,10 @@ public:
     PCB_PICKER_TOOL();
     virtual ~PCB_PICKER_TOOL() = default;
 
-    ///< @copydoc TOOL_BASE::Init()
+    /// @copydoc TOOL_BASE::Init()
     bool Init() override;
 
-    ///< Main event loop.
+    /// Main event loop.
     int Main( const TOOL_EVENT& aEvent );
 
     /**
@@ -72,19 +75,54 @@ public:
     int SelectPointInteractively( const TOOL_EVENT& aEvent );
     int SelectItemInteractively( const TOOL_EVENT& aEvent );
 
+    /**
+     * Set a handler called with the drag box each time it changes, before anything is selected.
+     *
+     * Only the rubber-band drag uses it, so it lives here rather than on the generic picker.
+     * Pairs with SetAreaHandler(), which runs once the drag is over.
+     */
+    inline void SetAreaPreviewHandler( PCB_SELECTION_TOOL::AREA_PREVIEW aHandler )
+    {
+        m_areaPreviewHandler = aHandler;
+    }
+
+    /// Whether the snap system may draw its explanatory geometry over the board this run.
+    inline void SetConstructionGeometry( bool aEnable ) { m_constructionGeometry = aEnable; }
+
+    /// Snap kinds this run never wants.  Trim reads which side of a crossing the pointer is
+    /// on, so a snap onto the crossing leaves the question no answer.
+    inline void SetSuppressedSnaps( std::set<SNAP_CANDIDATE_SUBTYPE> aSubtypes )
+    {
+        m_suppressedSnaps = std::move( aSubtypes );
+    }
+
+    /// Handlers only.  A caller sets this run's options and then clears the handlers, so
+    /// anything reset here would go before Main() read it.  reset() puts the options back.
+    inline void ClearHandlers()
+    {
+        m_areaPreviewHandler = nullptr;
+        PICKER_TOOL_BASE::ClearHandlers();
+    }
+
 protected:
-    ///< @copydoc TOOL_INTERACTIVE::setTransitions();
+    /// @copydoc TOOL_INTERACTIVE::setTransitions();
     void setTransitions() override;
 
-    ///< Applies the requested VIEW_CONTROLS settings.
+    /// Applies the requested VIEW_CONTROLS settings.
     void setControls();
 
-    ///< Reinitialize tool to its initial state.
+    /// Reinitialize tool to its initial state.
     void reset() override;
 
 private:
-    ///< The layer set to use for optional snapping.
-    LSET                  m_layerMask;
+    /// The layer set to use for optional snapping.
+    LSET                              m_layerMask;
+
+    PCB_SELECTION_TOOL::AREA_PREVIEW  m_areaPreviewHandler;
+
+    bool                              m_constructionGeometry = true;
+
+    std::set<SNAP_CANDIDATE_SUBTYPE>  m_suppressedSnaps;
 };
 
 #endif /* PCB_PICKER_TOOL_H */

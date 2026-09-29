@@ -38,6 +38,7 @@ class PCB_SELECTION_TOOL;
 class POINT_EDIT_BEHAVIOR;
 class RECT_RADIUS_TEXT_ITEM;
 class SHAPE_POLY_SET;
+class BOARD_CONSTRAINT_DRAG_SESSION;
 
 /**
  * Tool that displays edit points allowing to modify items by dragging the points.
@@ -83,21 +84,21 @@ public:
     bool CanRemoveCorner( const SELECTION& aSelection );
 
 private:
-    ///< Set up handlers for various events.
+    /// Set up handlers for various events.
     void setTransitions() override;
 
     std::shared_ptr<EDIT_POINTS> makePoints( EDA_ITEM* aItem );
 
-    ///< Update item's points with edit points.
+    /// Update item's points with edit points.
     void updateItem( BOARD_COMMIT& aCommit );
 
-    ///< Update edit points with item's points.
+    /// Update edit points with item's points.
     void updatePoints();
 
-    ///< Update which point is being edited.
+    /// Update which point is being edited.
     void updateEditedPoint( const TOOL_EVENT& aEvent );
 
-    ///< Set the current point being edited. NULL means none.
+    /// Set the current point being edited. NULL means none.
     void setEditedPoint( EDIT_POINT* aPoint );
 
     inline int getEditedPointIndex() const
@@ -111,16 +112,16 @@ private:
         return wxNOT_FOUND;
     }
 
-    ///< Return true if aPoint is the currently modified point.
+    /// Return true if aPoint is the currently modified point.
     inline bool isModified( const EDIT_POINT& aPoint ) const
     {
         return m_editedPoint == &aPoint;
     }
 
-    ///< Set up an alternative constraint (typically enabled upon a modifier key being pressed).
+    /// Set up an alternative constraint (typically enabled upon a modifier key being pressed).
     void setAltConstraint( bool aEnabled );
 
-    ///< Return a point that should be used as a constrainer for 45 degrees mode.
+    /// Return a point that should be used as a constrainer for 45 degrees mode.
     EDIT_POINT get45DegConstrainer() const;
 
     /// TOOL_ACTION handlers
@@ -130,7 +131,7 @@ private:
     int chamferCorner( const TOOL_EVENT& aEvent );
     int modifiedSelection( const TOOL_EVENT& aEvent );
 
-    ///< Change the edit method for arcs.
+    /// Change the edit method for arcs.
     int changeArcEditMode( const TOOL_EVENT& aEvent );
 
 private:
@@ -150,7 +151,7 @@ private:
     RECT_RADIUS_TEXT_ITEM*        m_radiusHelper;
 
     // Alternative constraint, enabled while a modifier key is held
-    std::shared_ptr<EDIT_CONSTRAINT<EDIT_POINT>> m_altConstraint;
+    std::unique_ptr<EDIT_RELATION> m_altConstraint;
     EDIT_POINT                                   m_altConstrainer;
 
     bool                          m_inPointEditorTool; // Re-entrancy guard
@@ -162,6 +163,7 @@ private:
     // This handles the edit process for a specific tpye of item (not
     // just C++ type, because PCB_SHAPE is one type that has many subtypes)
     std::unique_ptr<POINT_EDIT_BEHAVIOR> m_editorBehavior;
+    std::shared_ptr<BOARD_CONSTRAINT_DRAG_SESSION> m_constraintDragSession;
 
     static const unsigned int COORDS_PADDING; // Padding from coordinates limits for this tool
 };

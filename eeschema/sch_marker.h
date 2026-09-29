@@ -25,6 +25,10 @@
 #include <sch_item.h>
 #include <marker_base.h>
 
+namespace kiapi::schematic
+{
+class ErcMarker;
+}
 
 class SCH_MARKER : public SCH_ITEM, public MARKER_BASE
 {
@@ -47,9 +51,11 @@ public:
 
     const KIID GetUUID() const override { return m_Uuid; }
 
-    wxString SerializeToString() const;
-    static SCH_MARKER* DeserializeFromString( const SCH_SHEET_LIST& aSheetList,
-                                              const wxString& data );
+    void Serialize( google::protobuf::Any& aContainer ) const override;
+    bool Deserialize( const google::protobuf::Any& aContainer ) override;
+
+    static SCH_MARKER* FromProto( const kiapi::schematic::ErcMarker& aMsg,
+                                  const SCH_SHEET_LIST& aSheetList );
 
     std::vector<int> ViewGetLayers() const override;
 
@@ -84,7 +90,7 @@ public:
      * @param[in] aAuxData is the optional data required for the search or NULL if not used.
      * @return True if the DRC main or auxiliary text matches the search criteria.
      */
-    bool Matches( const EDA_SEARCH_DATA& aSearchData, void* aAuxDat ) const override;
+    bool Matches( const EDA_SEARCH_DATA& aSearchData, void* aAuxData ) const override;
 
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
@@ -101,20 +107,6 @@ public:
     bool HitTest( const VECTOR2I& aPosition, int aAccuracy = 0 ) const override;
 
     EDA_ITEM* Clone() const override;
-
-    /**
-     * Set this marker as a legacy artifact.
-     *
-     * Legacy markers are those deserialized from a file version < 20230121.
-     */
-    void SetIsLegacyMarker( bool isLegacyMarker = true ) { m_isLegacyMarker = isLegacyMarker; }
-
-    /**
-     * Determine if this marker is legacy (i.e. does not store sheet paths for specific errors).
-     *
-     * @return True if marker deserialized from a file version < 20230121
-     */
-    bool IsLegacyMarker() const { return m_isLegacyMarker; }
 
     double Similarity( const SCH_ITEM& aOther ) const override
     {
@@ -134,8 +126,6 @@ protected:
     void swapData( SCH_ITEM* aItem ) override;
 
     KIGFX::COLOR4D getColor() const override;
-
-    bool m_isLegacyMarker; ///< True if marker was deserialized from a file version < 20230121.
 };
 
 #endif // TYPE_SCH_MARKER_H_

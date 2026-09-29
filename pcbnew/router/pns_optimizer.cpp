@@ -302,6 +302,49 @@ bool CORNER_COUNT_LIMIT_CONSTRAINT::Check( int aVertex1, int aVertex2, const LIN
     return true;
 }
 
+bool OBTUSE_ONLY_CONSTRAINT::Check( int aVertex1, int aVertex2, const LINE* aOriginLine,
+                                    const SHAPE_LINE_CHAIN& aCurrentPath,
+                                    const SHAPE_LINE_CHAIN& aReplacement )
+{
+    auto isAngleOk =
+        []( const SEG& aS1, const SEG& aS2 ) -> bool
+        {
+            DIRECTION_45 d1( aS1 );
+            DIRECTION_45 d2( aS2 );
+            return d1.Angle( d2 ) & ( DIRECTION_45::ANG_OBTUSE | DIRECTION_45::ANG_STRAIGHT );
+        };
+
+    int replSegs = aReplacement.SegmentCount();
+
+    if( replSegs < 1 )
+        return true;
+
+    for( int i = 0; i < replSegs - 1; i++ )
+    {
+        if( !isAngleOk( aReplacement.CSegment( i ), aReplacement.CSegment( i + 1 ) ) )
+            return false;
+    }
+
+    int pathSegs = aCurrentPath.SegmentCount();
+
+    SEG firstReplSeg = aReplacement.CSegment( 0 );
+    SEG lastReplSeg = aReplacement.CSegment( replSegs - 1 );
+
+    if( aVertex1 > 0 )
+    {
+        if( !isAngleOk( aCurrentPath.CSegment( aVertex1 - 1 ), firstReplSeg ) )
+            return false;
+    }
+
+    if( aVertex2 < pathSegs )
+    {
+        if( !isAngleOk( lastReplSeg, aCurrentPath.CSegment( aVertex2 ) ) )
+            return false;
+    }
+
+    return true;
+}
+
 
 /**
  * Determine if a point is located within a given polygon
@@ -657,6 +700,15 @@ bool OPTIMIZER::Optimize( const LINE* aLine, LINE* aResult, LINE* aRoot )
         addConstraint( c );
     }
 
+    if( m_effortLevel & REQUIRE_OBTUSE_ANGLES )
+    {
+        auto c = new OBTUSE_ONLY_CONSTRAINT( m_world );
+        addConstraint( c );
+    }
+
+    if( m_effortLevel & REQUIRE_OBTUSE_ANGLES )
+        rv |= dragFixCorners( aResult );
+
     // TODO: Fix for arcs
     if( !hasArcs && m_effortLevel & MERGE_SEGMENTS )
         rv |= mergeFull( aResult );
@@ -677,6 +729,120 @@ bool OPTIMIZER::Optimize( const LINE* aLine, LINE* aResult, LINE* aRoot )
         rv |= fanoutCleanup( aResult );
 
     return rv;
+}
+
+
+/*
+ * Check if aVIdx is a bad corner; if so, replace it if possible with an obtuse corner
+ */
+bool OPTIMIZER::dragFixCorner( LINE* aLine, int aVIdx )
+{
+    SHAPE_LINE_CHAIN& path = aLine->Line();
+
+    if( aVIdx <= 0 || aVIdx >= path.PointCount() - 1 )
+        return false;
+
+    if( path.IsArcSegment( aVIdx - 1 ) || path.IsArcSegment( aVIdx ) )
+        return false;
+
+    const SEG s1 = path.CSegment( aVIdx - 1 );
+    const SEG s2 = path.CSegment( aVIdx );
+
+    DIRECTION_45::AngleType angle = DIRECTION_45( s1 ).Angle( DIRECTION_45( s2 ) );
+
+    if( angle != DIRECTION_45::ANG_RIGHT && angle != DIRECTION_45::ANG_ACUTE && angle != DIRECTION_45::ANG_HALF_FULL )
+        return false;
+
+    if( m_effortLevel & RESTRICT_AREA )
+    {
+        if( !m_restrictArea.Contains( path.CPoint( aVIdx ) ) )
+            return false;
+    }
+
+    SHAPE_LINE_CHAIN bestBypass;
+    double           bestArea = std::numeric_limits<double>::max();
+
+    for( int posture = 0; posture < 2; posture++ )
+    {
+        SHAPE_LINE_CHAIN bypass = DIRECTION_45().BuildInitialTrace( s1.A, s2.B, posture );
+
+        if( bypass.SegmentCount() < 1 )
+            continue;
+
+        if( checkColliding( aLine, bypass ) )
+            continue;
+
+        SHAPE_LINE_CHAIN loop;
+        loop.Append( s1.A );
+        loop.Append( path.CPoint( aVIdx ) );
+        loop.Append( s2.B );
+
+        for( int j = bypass.PointCount() - 1; j >= 0; j-- )
+            loop.Append( bypass.CPoint( j ) );
+
+        loop.SetClosed( true );
+
+        if( double area = std::abs( loop.Area() ); area < bestArea )
+        {
+            bestArea = area;
+            bestBypass = bypass;
+        }
+    }
+
+    if( bestBypass.SegmentCount() < 1 )
+        return false;
+
+    path.Replace( s1.Index(), s2.Index(), bestBypass );
+    path.Simplify2();
+    return true;
+}
+
+
+bool OPTIMIZER::dragFixCorners( LINE* aLine )
+{
+    if( !( m_effortLevel & REQUIRE_OBTUSE_ANGLES ) )
+        return false;
+
+    SHAPE_LINE_CHAIN& path = aLine->Line();
+    VECTOR2I          anchor = ( m_effortLevel & PRESERVE_VERTEX ) ? m_preservedVertex : path.CLastPoint();
+
+    int anchorIdx = path.Find( anchor );
+
+    if( anchorIdx <= 0 )
+        return false;
+
+    if( path.IsArcSegment( anchorIdx - 1 ) || path.IsArcSegment( anchorIdx ) )
+        return false;
+
+    bool changed = false;
+
+    if( anchorIdx >= path.PointCount() - 1 )
+    {
+        if( anchorIdx > 0 )
+            changed = dragFixCorner( aLine, anchorIdx - 1 );
+
+        return changed;
+    }
+
+    DIRECTION_45::AngleType angle =
+            DIRECTION_45( path.CSegment( anchorIdx - 1 ) ).Angle( DIRECTION_45( path.CSegment( anchorIdx ) ) );
+
+    if( angle == DIRECTION_45::ANG_STRAIGHT )
+    {
+        changed |= dragFixCorner( aLine, anchorIdx - 1 );
+
+        path.Split( anchor );
+        anchorIdx = path.Find( anchor );
+
+        if( anchorIdx > 0 && anchorIdx < path.PointCount() - 1 )
+            changed |= dragFixCorner( aLine, anchorIdx + 1 );
+    }
+    else
+    {
+        changed = dragFixCorner( aLine, anchorIdx );
+    }
+
+    return changed;
 }
 
 
@@ -1153,7 +1319,6 @@ bool OPTIMIZER::fanoutCleanup( LINE* aLine )
     return false;
 }
 
-
 int findCoupledVertices( const VECTOR2I& aVertex, const SEG& aOrigSeg,
                          const SHAPE_LINE_CHAIN& aCoupled, DIFF_PAIR* aPair, int* aIndices )
 {
@@ -1167,7 +1332,7 @@ int findCoupledVertices( const VECTOR2I& aVertex, const SEG& aOrigSeg,
         if( s.ApproxParallel( aOrigSeg ) )
         {
             int64_t dist =
-                    int64_t{ ( ( projOverCoupled - aVertex ).EuclideanNorm() ) } - aPair->Width();
+                    int64_t{ ( ( projOverCoupled - aVertex ).EuclideanNorm() ) } - aPair->Dimensions().Width();
 
             if( aPair->GapConstraint().Matches( dist ) )
             {
@@ -1227,7 +1392,10 @@ bool coupledBypass( NODE* aNode, DIFF_PAIR* aPair, bool aRefIsP, const SHAPE_LIN
                 SHAPE_LINE_CHAIN bypass = dir.BuildInitialTrace( vs, aCoupled.CPoint(j),
                                                                  dir.IsDiagonal() );
 
-                int64_t coupledLength = aPair->CoupledLength( aRef, bypass );
+                bool tmp;                
+                int64_t coupledLength;
+                
+                std::tie(coupledLength, tmp)= aPair->CoupledLength( aRef, bypass );
 
                 SHAPE_LINE_CHAIN newCoupled = aCoupled;
 
@@ -1274,7 +1442,9 @@ bool OPTIMIZER::mergeDpStep( DIFF_PAIR* aPair, bool aTryP, int step )
 
     int n_segs = currentPath.SegmentCount() - 1;
 
-    int64_t clenPre = aPair->CoupledLength( currentPath, coupledPath );
+    bool tmp;
+    int64_t clenPre;
+    std::tie(clenPre, tmp) = aPair->CoupledLength( currentPath, coupledPath );
     int64_t budget = clenPre / 10; // fixme: come up with something more intelligent here...
 
     while( n < n_segs - step )
@@ -1295,12 +1465,14 @@ bool OPTIMIZER::mergeDpStep( DIFF_PAIR* aPair, bool aTryP, int step )
 
             newRef = currentPath;
             newRef.Replace( s1.Index(), s2.Index(), bypass );
-
-            deltaUni = aPair->CoupledLength ( newRef, coupledPath ) - clenPre + budget;
+            bool tmp2;
+            std::tie(deltaUni, tmp2) = aPair->CoupledLength ( newRef, coupledPath );
+            deltaUni += (- clenPre + budget);
 
             if( coupledBypass( m_world, aPair, aTryP, newRef, bypass, coupledPath, newCoup ) )
             {
-                deltaCoupled = aPair->CoupledLength( newRef, newCoup ) - clenPre + budget;
+                std::tie(deltaCoupled, tmp) = aPair->CoupledLength( newRef, newCoup );
+                deltaCoupled += (- clenPre + budget);
 
                 if( deltaCoupled >= 0 )
                 {
@@ -1491,7 +1663,6 @@ bool tightenSegment( bool dir, NODE *aNode, const LINE& cur, const SHAPE_LINE_CH
     return true;
 }
 
-
 void Tighten( NODE *aNode, const SHAPE_LINE_CHAIN& aOldLine, const LINE& aNewLine,
               LINE& aOptimized )
 {
@@ -1535,5 +1706,6 @@ void Tighten( NODE *aNode, const SHAPE_LINE_CHAIN& aOldLine, const LINE& aNewLin
     //auto dbg = ROUTER::GetInstance()->GetInterface()->GetDebugDecorator();
     //dbg->AddLine ( current, 4, 100000 );
 }
+
 
 }

@@ -92,18 +92,18 @@ std::vector<FOOTPRINT*> PCB_IO_CADSTAR_ARCHIVE::GetImportedCachedLibraryFootprin
 }
 
 
-BOARD* PCB_IO_CADSTAR_ARCHIVE::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                              const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_CADSTAR_ARCHIVE::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                        const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     m_props = aProperties;
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
+    m_board = &aBoard;
     clearLoadedFootprints();
 
     // Collect the font substitution warnings (RAII - automatically reset on scope exit)
     FONTCONFIG_REPORTER_SCOPE fontconfigScope( &LOAD_INFO_REPORTER::GetInstance() );
 
-    CADSTAR_PCB_ARCHIVE_LOADER tempPCB( aFileName, m_layer_mapping_handler,
-                                        m_show_layer_mapping_warnings, m_progressReporter );
+    CADSTAR_PCB_ARCHIVE_LOADER tempPCB( aFileName, m_layer_mapping_handler, m_show_layer_mapping_warnings,
+                                        m_progressReporter, m_reporter );
     tempPCB.Load( m_board, aProject );
 
     //center the board:
@@ -138,7 +138,9 @@ BOARD* PCB_IO_CADSTAR_ARCHIVE::LoadBoard( const wxString& aFileName, BOARD* aApp
 
     m_loaded_footprints = tempPCB.GetLoadedLibraryFootpints();
 
-    return m_board;
+    // tempPCB is about to go out of scope.  Do NOT leave footprints pointing to it.
+    for( FOOTPRINT* footprint : m_loaded_footprints )
+        footprint->SetParent( nullptr );
 }
 
 
@@ -206,10 +208,9 @@ bool PCB_IO_CADSTAR_ARCHIVE::FootprintExists( const wxString&        aLibraryPat
 }
 
 
-FOOTPRINT* PCB_IO_CADSTAR_ARCHIVE::FootprintLoad( const wxString&        aLibraryPath,
-                                                      const wxString&        aFootprintName,
-                                                      bool                   aKeepUUID,
-                                                      const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_CADSTAR_ARCHIVE::FootprintLoad( const wxString& aLibraryPath,
+                                                                  const wxString& aFootprintName, bool aKeepUUID,
+                                                                  const std::map<std::string, UTF8>* aProperties )
 {
     ensureLoadedLibrary( aLibraryPath );
 
@@ -222,7 +223,8 @@ FOOTPRINT* PCB_IO_CADSTAR_ARCHIVE::FootprintLoad( const wxString&        aLibrar
     if( !m_cache.at( aLibraryPath ).at( aFootprintName ) )
         return nullptr;
 
-    return static_cast<FOOTPRINT*>( m_cache.at( aLibraryPath ).at( aFootprintName )->Duplicate( IGNORE_PARENT_GROUP ) );
+    return std::unique_ptr<FOOTPRINT>( static_cast<FOOTPRINT*>(
+            m_cache.at( aLibraryPath ).at( aFootprintName )->Duplicate( IGNORE_PARENT_GROUP ) ) );
 }
 
 
@@ -251,10 +253,11 @@ void PCB_IO_CADSTAR_ARCHIVE::ensureLoadedLibrary( const wxString& aLibraryPath )
     }
 
     CADSTAR_PCB_ARCHIVE_LOADER csLoader( aLibraryPath, m_layer_mapping_handler,
-                                         false /*don't log stackup warnings*/, nullptr );
+                                         false /*don't log stackup warnings*/, nullptr,
+                                         m_reporter );
 
     NAME_TO_FOOTPRINT_MAP                   footprintMap;
-    std::vector<std::unique_ptr<FOOTPRINT>> footprints = csLoader.LoadLibrary();
+    std::vector<std::unique_ptr<FOOTPRINT>> footprints = csLoader.LoadFpLibrary();
 
     for( std::unique_ptr<FOOTPRINT>& fp : footprints )
     {

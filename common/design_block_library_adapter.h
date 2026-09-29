@@ -17,7 +17,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
- 
+
 
 #ifndef DESIGN_BLOCK_LIBRARY_ADAPTER_H
 #define DESIGN_BLOCK_LIBRARY_ADAPTER_H
@@ -48,6 +48,7 @@ public:
     std::optional<LIB_STATUS> LoadOne( const wxString& nickname );
 
     /// @return all the design blocks in the given library, if it exists and is loaded (or an empty list)
+    /// Vector of design blocks is allocated, caller responsible for lifetime
     std::vector<DESIGN_BLOCK*> GetDesignBlocks( const wxString& aNickname );
 
     /// @return all the names of design blocks in the given library, if it exists and is loaded (or an empty list)
@@ -56,18 +57,16 @@ public:
     /**
      * Load a design block having @a aDesignBlockName from the library given by @a aNickname.
      *
-     * @param aNickname is a locator for the "library", it is a "name" in #LIB_TABLE_ROW.
+     * @param aNickname is a locator for the "library", it is a "name" in #LIBRARY_TABLE_ROW.
      * @param aDesignBlockName is the name of the design block to load.
      * @param aKeepUUID = true to keep initial items UUID, false to set new UUID
      *                   normally true if loaded in the design block editor, false
      *                   if loaded in the board editor. Used only in kicad_plugin
-     * @return  the design block if found caller owns it, else NULL if not found.
-     *
-     * @throw   IO_ERROR if the library cannot be found or read.  No exception
-     *          is thrown in the case where aDesignBlockName cannot be found.
+     * @param aErrorMsg is an optional string that receives the reason a load failed.
+     * @return  the design block if found caller owns it, else NULL.
      */
-    DESIGN_BLOCK* LoadDesignBlock( const wxString& aNickname, const wxString& aDesignBlockName,
-                                   bool aKeepUUID = false );
+    DESIGN_BLOCK* LoadDesignBlock( const wxString& aNickname, const wxString& aDesignBlockName, bool aKeepUUID = false,
+                                   wxString* aErrorMsg = nullptr );
 
     /**
      * Indicates whether or not the given design block already exists in the given library.
@@ -75,7 +74,7 @@ public:
     bool DesignBlockExists( const wxString& aNickname, const wxString& aDesignBlockName );
 
     /**
-     * A version of #DesignBlockLoad() for use after #DesignBlockEnumerate() for more efficient
+     * A version of #LoadDesignBlock() for use after #enumerateLibrary() for more efficient
      * cache management.
      *
      * The return value is const to allow it to return a reference to a cached item.
@@ -97,7 +96,7 @@ public:
      *
      * If a design block by the same name already exists, it is replaced.
      *
-     * @param aNickname is a locator for the "library", it is a "name" in #LIB_TABLE_ROW.
+     * @param aNickname is a locator for the "library", it is a "name" in #LIBRARY_TABLE_ROW.
      * @param aDesignBlock is what to store in the library. The caller continues to own the
      *                   design block after this call.
      * @param aOverwrite when true means overwrite any existing design block by the same name,
@@ -112,7 +111,7 @@ public:
     /**
      * Delete the @a aDesignBlockName from the library given by @a aNickname.
      *
-     * @param aNickname is a locator for the "library", it is a "name" in #LIB_TABLE_ROW.
+     * @param aNickname is a locator for the "library", it is a "name" in #LIBRARY_TABLE_ROW.
      * @param aDesignBlockName is the name of a design block to delete from the specified library.
      *
      * @throw IO_ERROR if there is a problem finding the design block or the library, or deleting
@@ -137,16 +136,14 @@ public:
      *                   normally true if loaded in the design block editor, false
      *                   if loaded in the board editor
      *                   used only in kicad_plugin
-     * @return  the #DESIGN_BLOCK if found caller owns it, else NULL if not found.
-     *
-     * @throw   IO_ERROR if the library cannot be found or read.  No exception is
-     *                   thrown in the case where \a aDesignBlockName cannot be found.
-     * @throw   PARSE_ERROR if @a aDesignBlockId is not parsed OK.
+     * @param aErrorMsg is an optional string that receives the reason a load failed.
+     * @return  the #DESIGN_BLOCK if found caller owns it, else NULL.
      */
-    DESIGN_BLOCK* DesignBlockLoadWithOptionalNickname( const LIB_ID& aDesignBlockId,
-                                                       bool          aKeepUUID = false );
+    DESIGN_BLOCK* DesignBlockLoadWithOptionalNickname( const LIB_ID& aDesignBlockId, bool aKeepUUID = false,
+                                                       wxString* aErrorMsg = nullptr );
 
 protected:
+    wxString libraryUnavailableMessage( const wxString& aNickname ) const;
 
     std::map<wxString, LIB_DATA>& globalLibs() override { return GlobalLibraries.Get(); }
     std::map<wxString, LIB_DATA>& globalLibs() const override { return GlobalLibraries.Get(); }

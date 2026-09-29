@@ -29,7 +29,9 @@
 #include <board.h>
 #include <footprint.h>
 #include <pcb_dimension.h>
+#include <pcb_painter.h>
 #include <pcb_text.h>
+#include <view/view.h>
 #include <board_design_settings.h>
 #include <geometry/shape_compound.h>
 #include <geometry/shape_circle.h>
@@ -44,6 +46,10 @@
 #include <api/board/board_types.pb.h>
 #include <properties/property.h>
 #include <properties/property_mgr.h>
+#include <properties/property_validators.h>
+
+#include <constraints/constraint_builder.h>
+#include <constraints/pcb_constraint.h>
 
 
 static const int INWARD_ARROW_LENGTH_TO_HEAD_RATIO = 2;
@@ -335,9 +341,7 @@ void PCB_DIMENSION_BASE::Serialize( google::protobuf::Any &aContainer ) const
     dimension.set_locked( IsLocked() ? types::LockedState::LS_LOCKED
                                      : types::LockedState::LS_UNLOCKED );
 
-    google::protobuf::Any any;
-    EDA_TEXT::Serialize( any );
-    any.UnpackTo( dimension.mutable_text() );
+    EDA_TEXT::Serialize( *dimension.mutable_text(), pcbIUScale );
 
     types::Text* text = dimension.mutable_text();
     text->set_text( GetValueText() );
@@ -355,6 +359,11 @@ void PCB_DIMENSION_BASE::Serialize( google::protobuf::Any &aContainer ) const
     dimension.set_precision( ToProtoEnum<DIM_PRECISION, DimensionPrecision>( m_precision ) );
     dimension.set_suppress_trailing_zeroes( m_suppressZeroes );
 
+    if( FOOTPRINT* parent = GetParentFootprint() )
+        dimension.mutable_parent()->set_value( parent->m_Uuid.AsStdString() );
+    else if( const BOARD* board = GetBoard() )
+        dimension.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
+
     dimension.mutable_line_thickness()->set_value_nm( m_lineThickness );
     dimension.mutable_arrow_length()->set_value_nm( m_arrowLength );
     dimension.mutable_extension_offset()->set_value_nm( m_extensionOffset );
@@ -362,6 +371,7 @@ void PCB_DIMENSION_BASE::Serialize( google::protobuf::Any &aContainer ) const
             ToProtoEnum<DIM_TEXT_POSITION, DimensionTextPosition>( m_textPosition ) );
     dimension.set_keep_text_aligned( m_keepTextAligned );
 
+    kiapi::common::PackCustomProperties( dimension.mutable_custom_properties(), *this );
     aContainer.PackFrom( dimension );
 }
 
@@ -378,9 +388,7 @@ bool PCB_DIMENSION_BASE::Deserialize( const google::protobuf::Any &aContainer )
     SetUuidDirect( KIID( dimension.id().value() ) );
     SetLocked( dimension.locked() == types::LockedState::LS_LOCKED );
 
-    google::protobuf::Any any;
-    any.PackFrom( dimension.text() );
-    EDA_TEXT::Deserialize( any );
+    EDA_TEXT::Deserialize( dimension.text(), pcbIUScale );
 
     SetOverrideTextEnabled( dimension.override_text_enabled() );
     SetOverrideText( wxString::FromUTF8( dimension.override_text() ) );
@@ -398,6 +406,8 @@ bool PCB_DIMENSION_BASE::Deserialize( const google::protobuf::Any &aContainer )
     SetExtensionOffset( dimension.extension_offset().value_nm() );
     SetTextPositionMode( FromProtoEnum<DIM_TEXT_POSITION>( dimension.text_position() ) );
     SetKeepTextAligned( dimension.keep_text_aligned() );
+
+    kiapi::common::UnpackCustomProperties( dimension.custom_properties(), *this );
 
     Update();
 
@@ -512,6 +522,60 @@ wxString PCB_DIMENSION_BASE::GetValueText() const
     }
 
     return text;
+}
+
+
+DIM_VALUE_MODE PCB_DIMENSION_BASE::GetValueMode() const
+{
+    // Read only here but shared lookup helpers require a mutable board pointer
+    BOARD* board = const_cast<BOARD*>( GetBoard() );
+
+    return DimensionValueMode( board, this );
+}
+
+
+void PCB_DIMENSION_BASE::ChangeValueMode( DIM_VALUE_MODE aMode )
+{
+    SetOverrideTextEnabled( aMode == DIM_VALUE_MODE::ARBITRARY );
+    Update();
+}
+
+
+wxString PCB_DIMENSION_BASE::GetValueFieldText() const
+{
+    switch( GetValueMode() )
+    {
+    case DIM_VALUE_MODE::DRIVING:
+    {
+        PCB_CONSTRAINT* lengthConstraint =
+                FindDimensionLengthConstraint( const_cast<BOARD*>( GetBoard() ), this );
+
+        if( lengthConstraint && lengthConstraint->GetValue() )
+        {
+            return EDA_UNIT_UTILS::UI::StringFromValue( pcbIUScale, GetUnits(),
+                                                        *lengthConstraint->GetValue() );
+        }
+
+        return GetValueText();
+    }
+
+    case DIM_VALUE_MODE::ARBITRARY:
+        return GetOverrideText();
+
+    case DIM_VALUE_MODE::DRIVEN:
+    default:
+        return GetValueText();
+    }
+}
+
+
+void PCB_DIMENSION_BASE::ChangeValueFieldText( const wxString& aText )
+{
+    if( GetValueMode() == DIM_VALUE_MODE::ARBITRARY )
+    {
+        SetOverrideText( aText );
+        Update();
+    }
 }
 
 
@@ -673,7 +737,7 @@ void PCB_DIMENSION_BASE::Mirror( const VECTOR2I& axis_pos, FLIP_DIRECTION aFlipD
 
         VECTOR2I libTextPos = EDA_TEXT::GetTextPos();
         mirrorPt( libTextPos );
-        EDA_TEXT::SetTextPos( libTextPos );
+        SetLibTextPos( libTextPos );
 
         EDA_ANGLE newLibAngle =
                 aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT ? ANGLE_180 - GetLibTextAngle() : -GetLibTextAngle();
@@ -802,7 +866,7 @@ void PCB_DIMENSION_BASE::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame,
 }
 
 
-std::shared_ptr<SHAPE> PCB_DIMENSION_BASE::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING aFlash ) const
+std::shared_ptr<SHAPE> PCB_DIMENSION_BASE::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING, DRC_CONSTRAINT_T ) const
 {
     std::shared_ptr<SHAPE_COMPOUND> effectiveShape = std::make_shared<SHAPE_COMPOUND>();
 
@@ -903,7 +967,7 @@ const BOX2I PCB_DIMENSION_BASE::GetBoundingBox() const
 wxString PCB_DIMENSION_BASE::GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const
 {
     return wxString::Format( _( "Dimension '%s' on %s" ),
-                             aFull ? GetShownText( false ) : KIUI::EllipsizeMenuText( GetText() ),
+                             aFull ? GetShownText( FOR_GUI ) : KIUI::EllipsizeMenuText( GetText() ),
                              GetLayerName() );
 }
 
@@ -916,6 +980,47 @@ const BOX2I PCB_DIMENSION_BASE::ViewBBox() const
     dimBBox.Merge( PCB_TEXT::ViewBBox() );
 
     return dimBBox;
+}
+
+
+std::vector<int> PCB_DIMENSION_BASE::ViewGetLayers() const
+{
+    std::vector<int> layers = PCB_TEXT::ViewGetLayers();
+
+    // Always advertised while ViewGetLOD gates the draw on actual constraint reference
+    layers.push_back( LAYER_CONSTRAINT_SHADOW );
+
+    return layers;
+}
+
+
+double PCB_DIMENSION_BASE::ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const
+{
+    if( aLayer == LAYER_CONSTRAINT_SHADOW && aView )
+    {
+        KIGFX::PCB_RENDER_SETTINGS& renderSettings =
+                *static_cast<KIGFX::PCB_PAINTER&>( *aView->GetPainter() ).GetSettings();
+
+        if( !renderSettings.GetConstrainedItems().count( m_Uuid ) )
+            return LOD_HIDE;
+
+        if( !aView->IsLayerVisibleCached( GetLayer() ) )
+            return LOD_HIDE;
+
+        if( renderSettings.GetHighContrast() && GetLayer() != renderSettings.GetPrimaryHighContrastLayer() )
+            return LOD_HIDE;
+
+        return LOD_SHOW;
+    }
+
+    return PCB_TEXT::ViewGetLOD( aLayer, aView );
+}
+
+
+double PCB_DIMENSION_BASE::GetCoverageArea( int aTextMargin ) const
+{
+    // A dimension covers its whole drawing, not only the value text it inherits from
+    return BOARD_ITEM::GetCoverageArea( aTextMargin );
 }
 
 
@@ -2000,6 +2105,11 @@ static struct DIMENSION_DESC
                     .Map( DIM_ARROW_DIRECTION::INWARD,  _HKI( "Inward" ) )
                     .Map( DIM_ARROW_DIRECTION::OUTWARD, _HKI( "Outward" ) );
 
+        ENUM_MAP<DIM_VALUE_MODE>::Instance()
+                    .Map( DIM_VALUE_MODE::DRIVEN,    _HKI( "Driven" ) )
+                    .Map( DIM_VALUE_MODE::DRIVING,   _HKI( "Driving" ) )
+                    .Map( DIM_VALUE_MODE::ARBITRARY, _HKI( "Arbitrary" ) );
+
         PROPERTY_MANAGER& propMgr = PROPERTY_MANAGER::Instance();
         REGISTER_TYPE( PCB_DIMENSION_BASE );
         propMgr.AddTypeCast( new TYPE_CAST<PCB_DIMENSION_BASE, PCB_TEXT> );
@@ -2032,44 +2142,131 @@ static struct DIMENSION_DESC
                 };
 
         propMgr.AddProperty( new PROPERTY<PCB_DIMENSION_BASE, wxString>( _HKI( "Prefix" ),
-                &PCB_DIMENSION_BASE::ChangePrefix, &PCB_DIMENSION_BASE::GetPrefix ),
-                groupDimension )
+                    &PCB_DIMENSION_BASE::ChangePrefix, &PCB_DIMENSION_BASE::GetPrefix ),
+                    groupDimension )
                 .SetAvailableFunc( isNotLeader );
         propMgr.AddProperty( new PROPERTY<PCB_DIMENSION_BASE, wxString>( _HKI( "Suffix" ),
-                &PCB_DIMENSION_BASE::ChangeSuffix, &PCB_DIMENSION_BASE::GetSuffix ),
-                groupDimension )
-                .SetAvailableFunc( isNotLeader );
-        propMgr.AddProperty( new PROPERTY<PCB_DIMENSION_BASE, wxString>( _HKI( "Override Text" ),
-                &PCB_DIMENSION_BASE::ChangeOverrideText, &PCB_DIMENSION_BASE::GetOverrideText ),
-                groupDimension )
+                    &PCB_DIMENSION_BASE::ChangeSuffix, &PCB_DIMENSION_BASE::GetSuffix ),
+                    groupDimension )
                 .SetAvailableFunc( isNotLeader );
 
+        auto hasValueMode =
+                []( INSPECTABLE* aItem ) -> bool
+                {
+                    return DimensionHasValueMode( dynamic_cast<PCB_DIMENSION_BASE*>( aItem ) );
+                };
+
+        // Value bearing dims use Value row instead while leaders keep Text below
+        // Override Text left for centre mark only
+        auto usesOverrideText =
+                [isLeader, hasValueMode]( INSPECTABLE* aItem ) -> bool
+                {
+                    return aItem && !isLeader( aItem ) && !hasValueMode( aItem );
+                };
+
+        // Driving needs both endpoints bound to movable geometry
+        // Dropdown always offers it so gate the transition here
+        auto valueModeValidator =
+                []( const wxAny&& aValue, EDA_ITEM* aItem ) -> VALIDATOR_RESULT
+                {
+                    PCB_DIMENSION_BASE* dim = dynamic_cast<PCB_DIMENSION_BASE*>( aItem );
+
+                    if( !dim )
+                        return std::nullopt;
+
+                    int mode = 0;
+
+                    if( aValue.CheckType<DIM_VALUE_MODE>() )
+                        mode = static_cast<int>( aValue.As<DIM_VALUE_MODE>() );
+                    else if( !aValue.GetAs( &mode ) )
+                        return std::nullopt;
+
+                    if( mode == static_cast<int>( DIM_VALUE_MODE::DRIVING )
+                            && !DimensionCanDrive( dim->GetBoard(), dim ) )
+                    {
+                        return std::make_unique<VALIDATION_ERROR_MSG>(
+                                _( "Driving requires both dimension endpoints bound to objects" ) );
+                    }
+
+                    return std::nullopt;
+                };
+
+        // Driving edits length constraint which must stay positive
+        // Catches zero and negative and stale exprs parsing to zero
+        auto drivingValueValidator =
+                []( const wxAny&& aValue, EDA_ITEM* aItem ) -> VALIDATOR_RESULT
+                {
+                    PCB_DIMENSION_BASE* dim = dynamic_cast<PCB_DIMENSION_BASE*>( aItem );
+
+                    if( !dim || dim->GetValueMode() != DIM_VALUE_MODE::DRIVING )
+                        return std::nullopt;
+
+                    wxString text;
+
+                    if( !aValue.GetAs( &text ) )
+                        return std::nullopt;
+
+                    double iu = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, dim->GetUnits(), text );
+
+                    if( !( iu > 0.0 ) )
+                    {
+                        return std::make_unique<VALIDATION_ERROR_MSG>(
+                                _( "Enter a positive length for a driving dimension" ) );
+                    }
+
+                    return std::nullopt;
+                };
+
+        propMgr.AddProperty( new PROPERTY<PCB_DIMENSION_BASE, wxString>( _HKI( "Override Text" ),
+                    &PCB_DIMENSION_BASE::ChangeOverrideText, &PCB_DIMENSION_BASE::GetOverrideText ),
+                    groupDimension )
+                .SetAvailableFunc( usesOverrideText );
+
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_DIMENSION_BASE, DIM_VALUE_MODE>( _HKI( "Value Mode" ),
+                    &PCB_DIMENSION_BASE::ChangeValueMode, &PCB_DIMENSION_BASE::GetValueMode ),
+                    groupDimension )
+                .SetAvailableFunc( hasValueMode )
+                .SetValidator( std::move( valueModeValidator ) );
+
+        propMgr.AddProperty( new PROPERTY<PCB_DIMENSION_BASE, wxString>( _HKI( "Value" ),
+                    &PCB_DIMENSION_BASE::ChangeValueFieldText, &PCB_DIMENSION_BASE::GetValueFieldText ),
+                    groupDimension )
+                .SetAvailableFunc( hasValueMode )
+                .SetWriteableFunc(
+                        []( INSPECTABLE* aItem ) -> bool
+                        {
+                            // Driven mirrors measured geometry so grey it out since edit would not stick
+                            PCB_DIMENSION_BASE* dim = dynamic_cast<PCB_DIMENSION_BASE*>( aItem );
+                            return dim && dim->GetValueMode() != DIM_VALUE_MODE::DRIVEN;
+                        } )
+                .SetValidator( std::move( drivingValueValidator ) );
+
         propMgr.AddProperty( new PROPERTY<PCB_DIMENSION_BASE, wxString>( _HKI( "Text" ),
-                &PCB_DIMENSION_BASE::ChangeOverrideText, &PCB_DIMENSION_BASE::GetOverrideText ),
-                groupDimension )
+                    &PCB_DIMENSION_BASE::ChangeOverrideText, &PCB_DIMENSION_BASE::GetOverrideText ),
+                    groupDimension )
                 .SetAvailableFunc( isLeader );
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_DIMENSION_BASE, DIM_UNITS_MODE>( _HKI( "Units" ),
-                &PCB_DIMENSION_BASE::ChangeUnitsMode, &PCB_DIMENSION_BASE::GetUnitsMode ),
-                groupDimension )
-                .SetAvailableFunc( isNotLeader );
+                    &PCB_DIMENSION_BASE::ChangeUnitsMode, &PCB_DIMENSION_BASE::GetUnitsMode ),
+                    groupDimension )
+                .SetAvailableFunc( isNotLeader ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_DIMENSION_BASE, DIM_UNITS_FORMAT>( _HKI( "Units Format" ),
-                &PCB_DIMENSION_BASE::ChangeUnitsFormat, &PCB_DIMENSION_BASE::GetUnitsFormat ),
-                groupDimension )
-                .SetAvailableFunc( isNotLeader );
+                    &PCB_DIMENSION_BASE::ChangeUnitsFormat, &PCB_DIMENSION_BASE::GetUnitsFormat ),
+                    groupDimension )
+                .SetAvailableFunc( isNotLeader ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_DIMENSION_BASE, DIM_PRECISION>( _HKI( "Precision" ),
-                &PCB_DIMENSION_BASE::ChangePrecision, &PCB_DIMENSION_BASE::GetPrecision ),
-                groupDimension )
-                .SetAvailableFunc( isNotLeader );
+                    &PCB_DIMENSION_BASE::ChangePrecision, &PCB_DIMENSION_BASE::GetPrecision ),
+                    groupDimension )
+                .SetAvailableFunc( isNotLeader ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY<PCB_DIMENSION_BASE, bool>( _HKI( "Suppress Trailing Zeroes" ),
-                &PCB_DIMENSION_BASE::ChangeSuppressZeroes, &PCB_DIMENSION_BASE::GetSuppressZeroes ),
-                groupDimension )
-                .SetAvailableFunc( isNotLeader );
+                    &PCB_DIMENSION_BASE::ChangeSuppressZeroes, &PCB_DIMENSION_BASE::GetSuppressZeroes ),
+                    groupDimension )
+                .SetAvailableFunc( isNotLeader ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_DIMENSION_BASE, DIM_ARROW_DIRECTION>( _HKI( "Arrow Direction"),
-                &PCB_DIMENSION_BASE::ChangeArrowDirection, &PCB_DIMENSION_BASE::GetArrowDirection ),
-                groupDimension )
-                .SetAvailableFunc( isMultiArrowDirection );
+                    &PCB_DIMENSION_BASE::ChangeArrowDirection, &PCB_DIMENSION_BASE::GetArrowDirection ),
+                    groupDimension )
+                .SetAvailableFunc( isMultiArrowDirection ).SetIsCopyable();
 
         const wxString groupText = _HKI( "Text Properties" );
 
@@ -2080,15 +2277,15 @@ static struct DIMENSION_DESC
                 };
 
         propMgr.AddProperty( new PROPERTY<PCB_DIMENSION_BASE, bool>( _HKI( "Keep Aligned with Dimension" ),
-                &PCB_DIMENSION_BASE::ChangeKeepTextAligned,
-                &PCB_DIMENSION_BASE::GetKeepTextAligned ),
-                groupText );
+                    &PCB_DIMENSION_BASE::ChangeKeepTextAligned,
+                    &PCB_DIMENSION_BASE::GetKeepTextAligned ),
+                    groupText );
 
         propMgr.AddProperty( new PROPERTY<PCB_DIMENSION_BASE, double>( _HKI( "Orientation" ),
-                &PCB_DIMENSION_BASE::ChangeTextAngleDegrees,
-                &PCB_DIMENSION_BASE::GetTextAngleDegreesProp,
-                PROPERTY_DISPLAY::PT_DEGREE ),
-                groupText )
+                    &PCB_DIMENSION_BASE::ChangeTextAngleDegrees,
+                    &PCB_DIMENSION_BASE::GetTextAngleDegreesProp,
+                    PROPERTY_DISPLAY::PT_DEGREE ),
+                    groupText )
                 .SetWriteableFunc( isTextOrientationWriteable );
     }
 } _DIMENSION_DESC;
@@ -2097,6 +2294,7 @@ ENUM_TO_WXANY( DIM_PRECISION )
 ENUM_TO_WXANY( DIM_UNITS_FORMAT )
 ENUM_TO_WXANY( DIM_UNITS_MODE )
 ENUM_TO_WXANY( DIM_ARROW_DIRECTION )
+ENUM_TO_WXANY( DIM_VALUE_MODE )
 
 
 static struct ALIGNED_DIMENSION_DESC

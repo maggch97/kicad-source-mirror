@@ -39,6 +39,7 @@
 
 // all outside the DSN namespace:
 class BOARD;
+class COMMIT;
 class PAD;
 class PCB_TRACK;
 class PCB_ARC;
@@ -443,7 +444,7 @@ public:
     {
     }
 
-    void SetLayerId( std::string& aLayerId )
+    void SetLayerId( const std::string& aLayerId )
     {
         layer_id = aLayerId;
     }
@@ -795,7 +796,7 @@ public:
         out->Print( 0, ")%s", newline );
     }
 
-    void SetLayerId( std::string& aLayerId )
+    void SetLayerId( const std::string& aLayerId )
     {
         layer_id = aLayerId;
     }
@@ -1267,7 +1268,7 @@ private:
     DSN_T                    layer_type; ///< one of: T_signal, T_power, T_mixed, T_jumper
     int                      direction;
 
-    ///< [forbidden | high | medium | low | free | \<positive_integer\> | -1]
+    /// [forbidden | high | medium | low | free | \<positive_integer\> | -1]
     int                      cost;
     int                      cost_type;  ///< T_length | T_way
     RULE*                    rules;
@@ -2866,6 +2867,12 @@ public:
         }
     }
 
+    void AddWindow( WINDOW* aWindow )
+    {
+        aWindow->SetParent( this );
+        m_windows.push_back( aWindow );
+    }
+
     void Format( OUTPUTFORMATTER* out, int nestLevel ) override
     {
         out->Print( nestLevel, "(%s ", Name() );
@@ -2900,6 +2907,8 @@ public:
 
             for( WINDOW& window : m_windows )
                 window.Format( out, nestLevel + 1 );
+
+            out->Indent( nestLevel );
         }
 
         if( m_connect )
@@ -3350,6 +3359,7 @@ public:
     {
         rules = nullptr;
         net_number = -1;
+        m_unassigned = false;
     }
 
     ~NET_OUT()
@@ -3363,6 +3373,9 @@ public:
 
         // cannot use Type() here, it is T_net_out and we need "(net "
         out->Print( nestLevel, "(net %s%s%s\n", quote, net_id.c_str(), quote );
+
+        if( m_unassigned )
+            out->Print( nestLevel + 1, "(unassigned)\n" );
 
         if( net_number>= 0 )
             out->Print( nestLevel+1, "(net_number %d)\n", net_number );
@@ -3387,6 +3400,7 @@ private:
 
     std::string                   net_id;
     int                           net_number;
+    bool                          m_unassigned;
     RULE*                         rules;
     boost::ptr_vector<WIRE>       wires;
     boost::ptr_vector<WIRE_VIA>   wire_vias;
@@ -3697,11 +3711,13 @@ public:
      * its components are subject to being moved.
      *
      * @param aBoard The #BOARD to merge the #SESSION information into.
+     * @param aCommit Commit used to stage removals, footprint moves, and new tracks for
+     *                undo/redo and view updates. The caller is responsible for Push().
      */
-    void FromSESSION( BOARD* aBoard );
+    void FromSESSION( BOARD* aBoard, COMMIT& aCommit );
 
     /**
-     * Write the internal #SESSION instance out as a #SPECTRA DSN format file.
+     * Write the internal #SESSION instance out as a SPECCTRA DSN format file.
      *
      * @param aFilename The file to save to.
      */
@@ -3877,7 +3893,7 @@ private:
      * @param aVia The #VIA to build the padstack from.
      * @return The padstack, which is on the heap only, user must save or delete it.
      */
-    PADSTACK* makeVia( const ::PCB_VIA* aVia );
+    PADSTACK* makeVia( const PCB_VIA* aVia );
 
     /**
      * Delete all the NETs that may be in here.
@@ -3957,11 +3973,14 @@ private:
 /**
  * @brief Helper method to import SES file to a board
  *
+ * Stages board changes into \a aCommit. The caller must Push() the commit.
+ *
  * @param aBoard board object
- * @param aFullFilename specctra file name
+ * @param fullFileName specctra session file name
+ * @param aCommit commit for undo/redo and view updates
  */
 
-bool ImportSpecctraSession( BOARD* aBoard, const wxString& fullFileName );
+bool ImportSpecctraSession( BOARD* aBoard, const wxString& fullFileName, COMMIT& aCommit );
 
 }           // namespace DSN
 

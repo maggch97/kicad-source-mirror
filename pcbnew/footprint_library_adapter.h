@@ -17,7 +17,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
- 
+
 
 #ifndef FOOTPRINT_LIBRARY_ADAPTER_H
 #define FOOTPRINT_LIBRARY_ADAPTER_H
@@ -91,12 +91,14 @@ public:
      */
     void RefreshLibraryIfChanged( const wxString& aNickname );
 
+    void RefreshChangedLibraries();
+
     bool FootprintExists( const wxString& aNickname, const wxString& aName );
 
     /**
      * Load a #FOOTPRINT having @a aName from the library given by @a aNickname.
      *
-     * @param aNickname is a locator for the "library", it is a "name" in #LIB_TABLE_ROW
+     * @param aNickname is a locator for the \"library\", it is a "name" in #LIBRARY_TABLE_ROW
      * @param aName is the name of the #FOOTPRINT to load.
      * @param aKeepUUID = true to keep initial items UUID, false to set new UUID
      *                   normally true if loaded in the footprint editor, false
@@ -202,9 +204,9 @@ private:
     static LEAK_AT_EXIT<std::map<wxString, std::vector<std::unique_ptr<FOOTPRINT>>>> PreloadedFootprints;
     static std::shared_mutex PreloadedFootprintsMutex;
 
-    /// Per-library filesystem timestamps recorded when PreloadedFootprints was last populated.
-    /// Used by RefreshLibraryIfChanged() to detect external modifications.
-    std::map<wxString, long long> m_preloadedTimestamps;
+    /// Filesystem timestamps from when PreloadedFootprints was last populated, guarded by
+    /// PreloadedFootprintsMutex.  Static so it shares the lifetime of the cache it describes.
+    static LEAK_AT_EXIT<std::map<wxString, long long>> PreloadedTimestamps;
 };
 
 #endif //FOOTPRINT_LIBRARY_ADAPTER_H

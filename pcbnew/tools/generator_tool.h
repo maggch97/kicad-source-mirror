@@ -31,6 +31,7 @@ class PCB_EDIT_FRAME;
 class PROGRESS_REPORTER;
 class WX_PROGRESS_REPORTER;
 
+#define GENERATOR_TOOL_NAME "pcbnew.Generators"
 
 /**
  * Handle actions specific to filling copper zones.
@@ -57,8 +58,11 @@ public:
     int RegenerateItem( const TOOL_EVENT& aEvent );
     int GenEditAction( const TOOL_EVENT& aEvent );
 
+    /// Wrap selected microvias and traces into a via stack.
+    int MakeViaStackFromSelection( const TOOL_EVENT& aEvent );
+
 private:
-    ///< Set up handlers for various events.
+    /// Set up handlers for various events.
     void setTransitions() override;
 
     DIALOG_GENERATORS* m_mgrDialog;

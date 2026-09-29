@@ -60,6 +60,11 @@ enum PCB_DRC_CODE
     DRCE_PADSTACK,                       // something is questionable with a pad or via stackup
     DRCE_PADSTACK_INVALID,               // something is invalid with a pad or via stackup
     DRCE_MICROVIA_DRILL_OUT_OF_RANGE,    // Too small micro via drill
+    DRCE_MALFORMED_MICROVIA_STACK_SPAN,  // Stack's hops do not tile the span it declares
+    DRCE_MICROVIA_STACK_NOT_FILLED,      // Microvia under another microvia is not filled
+    DRCE_MICROVIA_STACK_DEPTH,           // Microvia stack exceeds the maximum depth
+    DRCE_MICROVIA_ASPECT_RATIO,          // Microvia is too deep for its diameter
+    DRCE_MICROVIA_CROSSES_CORE,          // Microvia crosses core rather than build-up material
     DRCE_OVERLAPPING_FOOTPRINTS,         // footprint courtyards overlap
     DRCE_MISSING_COURTYARD,              // footprint has no courtyard defined
     DRCE_MALFORMED_COURTYARD,            // footprint has a courtyard but malformed
@@ -100,15 +105,16 @@ enum PCB_DRC_CODE
     DRCE_TEXT_THICKNESS,
 
     DRCE_LENGTH_OUT_OF_RANGE,
-    DRCE_NET_CHAIN_STUB_TOO_LONG,   // Routed stub on a net chain exceeds the (stub_length max) constraint
-    DRCE_NET_CHAIN_RETURN_PATH_BREAK,  // Net chain routed without copper on the required reference layer
+    DRCE_NET_CHAIN_STUB_TOO_LONG,     // Routed stub on a net chain exceeds the (stub_length max) constraint
+    DRCE_NET_CHAIN_RETURN_PATH_BREAK, // Net chain routed without copper on the required reference layer
+    DRCE_NET_CHAIN_TUNING_PROFILES,   // All nets in a net chain must have the same tuning profile (or none)
     DRCE_SKEW_OUT_OF_RANGE,
     DRCE_VIA_COUNT_OUT_OF_RANGE,
-    DRCE_DIFF_PAIR_GAP_OUT_OF_RANGE,
-    DRCE_DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG,
+    DRCE_DP_GAP_OUT_OF_RANGE,
+    DRCE_DP_UNCOUPLED_LENGTH_TOO_LONG,
 
     DRCE_MIRRORED_TEXT_ON_FRONT_LAYER,
-    DRCE_NONMIRRORED_TEXT_ON_BACK_LAYER,
+    DRCE_UNMIRRORED_TEXT_ON_BACK_LAYER,
 
     DRCE_MISSING_TUNING_PROFILE,        // Tuning profile used in net class is not defined
     DRCE_TUNING_PROFILE_IMPLICIT_RULES, // Pseudo-code for setting severities
@@ -119,7 +125,10 @@ enum PCB_DRC_CODE
 
     DRCE_SCHEMATIC_FIELDS_PARITY, // Mismatch with schematic fields
 
-    DRCE_LAST = DRCE_SCHEMATIC_FIELDS_PARITY
+    DRCE_VIA_STITCH_OVERLAP, // Two same-net via-stitching zones overlap — placement priority
+                             // is undefined in the overlap, leading to nondeterministic vias.
+
+    DRCE_LAST = DRCE_VIA_STITCH_OVERLAP
 };
 
 
@@ -223,6 +232,11 @@ private:
     static DRC_ITEM padstack;
     static DRC_ITEM padstackInvalid;
     static DRC_ITEM microviaDrillTooSmall;
+    static DRC_ITEM malformedMicroviaStackSpan;
+    static DRC_ITEM microviaStackNotFilled;
+    static DRC_ITEM microviaStackDepth;
+    static DRC_ITEM microviaAspectRatio;
+    static DRC_ITEM microviaCrossesCore;
     static DRC_ITEM courtyardsOverlap;
     static DRC_ITEM missingCourtyard;
     static DRC_ITEM malformedCourtyard;
@@ -252,6 +266,7 @@ private:
     static DRC_ITEM lengthOutOfRange;
     static DRC_ITEM netChainStubTooLong;
     static DRC_ITEM netChainReturnPathBreak;
+    static DRC_ITEM netChainTuningProfiles;
     static DRC_ITEM skewOutOfRange;
     static DRC_ITEM viaCountOutOfRange;
     static DRC_ITEM diffPairGapOutOfRange;
@@ -261,12 +276,13 @@ private:
     static DRC_ITEM footprintTHPadhasNoHole;
     static DRC_ITEM footprintScaledWithPads;
     static DRC_ITEM mirroredTextOnFrontLayer;
-    static DRC_ITEM nonMirroredTextOnBackLayer;
+    static DRC_ITEM unMirroredTextOnBackLayer;
     static DRC_ITEM missingTuningProfile;
     static DRC_ITEM tuningProfileImplicitRules;
     static DRC_ITEM trackOnPostMachinedLayer;
     static DRC_ITEM trackNotCenteredOnVia;
     static DRC_ITEM schematicFieldsParity;
+    static DRC_ITEM viaStitchOverlap;
 
 private:
     DRC_RULE*          m_violatingRule = nullptr;

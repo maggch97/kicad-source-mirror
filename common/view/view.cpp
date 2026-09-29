@@ -37,6 +37,7 @@
 #include <gal/painter.h>
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <core/profile.h>
 
@@ -150,17 +151,14 @@ private:
      *
      * @param aReorderMap is the mapping of old to new layer ids
      */
-    void reorderGroups( std::unordered_map<int, int> aReorderMap )
+    void reorderGroups( const std::unordered_map<int, int>& aReorderMap )
     {
         for( int i = 0; i < m_groupsSize; ++i )
         {
-            int orig_layer = m_groups[i].first;
-            int new_layer = orig_layer;
+            auto it = aReorderMap.find( m_groups[i].first );
 
-            if( aReorderMap.count( orig_layer ) )
-                new_layer = aReorderMap.at( orig_layer );
-
-            m_groups[i].first = new_layer;
+            if( it != aReorderMap.end() )
+                m_groups[i].first = it->second;
         }
     }
 
@@ -168,7 +166,6 @@ private:
      * Save layers used by the item.
      *
      * @param aLayers is an array containing layer numbers to be saved.
-     * @param aCount is the size of the array.
      */
     void saveLayers( const std::vector<int>& aLayers )
     {
@@ -227,7 +224,7 @@ void VIEW::OnDestroy( VIEW_ITEM* aItem )
     if( aItem->m_viewPrivData )
     {
         if( aItem->m_viewPrivData->m_view )
-            aItem->m_viewPrivData->m_view->VIEW::Remove( aItem );
+            aItem->m_viewPrivData->m_view->unlinkItem( aItem );
 
         delete aItem->m_viewPrivData;
         aItem->m_viewPrivData = nullptr;
@@ -305,8 +302,10 @@ void VIEW::Add( VIEW_ITEM* aItem, int aDrawPriority )
     if( !aItem->m_viewPrivData )
         aItem->m_viewPrivData = new VIEW_ITEM_DATA;
 
-    wxASSERT_MSG( aItem->m_viewPrivData->m_view == nullptr || aItem->m_viewPrivData->m_view == this,
-                  wxS( "Already in a different view!" ) );
+    // One view pointer and one index per item, so re-registering strands the first entry to
+    // dangle at free time
+    if( VIEW* previous = aItem->m_viewPrivData->m_view )
+        previous->unlinkItem( aItem );
 
     aItem->m_viewPrivData->m_view = this;
     aItem->m_viewPrivData->m_drawPriority = aDrawPriority;
@@ -344,16 +343,27 @@ void VIEW::AddBatch( const std::vector<VIEW_ITEM*>& aItems )
 {
     // Phase 1: Register all items and collect per-layer data
     std::unordered_map<int, std::vector<std::pair<VIEW_ITEM*, BOX2I>>> layerBulk;
+    std::unordered_set<VIEW_ITEM*>                                     seen;
+    std::vector<VIEW_ITEM*>                                            registered;
+
+    seen.reserve( aItems.size() );
+    registered.reserve( aItems.size() );
 
     for( VIEW_ITEM* item : aItems )
     {
-        if( !item )
+        // A repeat within the batch cannot be detached below because its layer entries are not
+        // inserted until phase 2, so it would reach BulkLoad twice
+        if( !item || !seen.insert( item ).second )
             continue;
 
         int drawPriority = m_nextDrawPriority++;
 
         if( !item->m_viewPrivData )
             item->m_viewPrivData = new VIEW_ITEM_DATA;
+
+        // Same single-registration invariant as Add()
+        if( VIEW* previous = item->m_viewPrivData->m_view )
+            previous->unlinkItem( item );
 
         item->m_viewPrivData->m_view = this;
         item->m_viewPrivData->m_drawPriority = drawPriority;
@@ -373,6 +383,7 @@ void VIEW::AddBatch( const std::vector<VIEW_ITEM*>& aItems )
 
         item->viewPrivData()->saveLayers( layers );
         m_allItems->push_back( item );
+        registered.push_back( item );
 
         for( int layer : layers )
             layerBulk[layer].emplace_back( item, bbox );
@@ -390,11 +401,8 @@ void VIEW::AddBatch( const std::vector<VIEW_ITEM*>& aItems )
     // INITIAL_ADD is required even though VIEW_ITEM_DATA defaults VISIBLE=true (making
     // SetVisible a no-op). Without it, items reused after VIEW::Clear() retain stale GAL
     // cache group IDs that point to freed memory.
-    for( VIEW_ITEM* item : aItems )
+    for( VIEW_ITEM* item : registered )
     {
-        if( !item || !item->m_viewPrivData || item->m_viewPrivData->m_view != this )
-            continue;
-
         SetVisible( item, true );
         Update( item, KIGFX::INITIAL_ADD );
     }
@@ -402,6 +410,12 @@ void VIEW::AddBatch( const std::vector<VIEW_ITEM*>& aItems )
 
 
 void VIEW::Remove( VIEW_ITEM* aItem )
+{
+    unlinkItem( aItem );
+}
+
+
+void VIEW::unlinkItem( VIEW_ITEM* aItem )
 {
     static int s_gcCounter = 0;
 
@@ -747,26 +761,49 @@ void VIEW::SortLayers( std::vector<int>& aLayers ) const
 
 void VIEW::ReorderLayerData( std::unordered_map<int, int> aReorderMap )
 {
-    std::map<int,VIEW_LAYER> new_map;
+    // GerbView's remapping is not a permutation once an image is deleted, so permute in place.
+    // Rebuilding the map can drop an id, and m_layers[] then default-constructs a null R-tree
+    std::map<int, VIEW_LAYER> moved;
+    std::unordered_set<int>   destinations;
 
-    for( auto& [_, layer] : m_layers )
+    for( const auto& [from, to] : aReorderMap )
     {
-        auto reorder_it = aReorderMap.find( layer.id );
-
-        // If the layer is not in the reorder map or if it is mapped to itself,
-        // just copy the layer to the new map.
-        if( reorder_it == aReorderMap.end() || reorder_it->second == layer.id )
-        {
-            new_map.emplace( layer.id, layer );
+        if( from == to )
             continue;
+
+        auto source = m_layers.find( from );
+
+        if( source == m_layers.end() || !m_layers.count( to ) )
+            continue;
+
+        // Every caller permutes or compacts, so two sources landing on one destination means the
+        // caller built a bad map and the loser's items are about to be discarded
+        if( destinations.count( to ) )
+        {
+            wxLogDebug( wxT( "VIEW::ReorderLayerData: layer %d also maps to %d, which already "
+                             "takes a layer; its items will be lost" ), from, to );
         }
 
-        auto [new_it,__] = new_map.emplace( reorder_it->second, layer );
-        new_it->second.id = reorder_it->second;
+        moved.emplace( from, source->second );
+        destinations.insert( to );
     }
 
-    // Transfer reordered data (using the copy assignment operator ):
-    m_layers = new_map;
+    // Every mover was copied before any of them was overwritten, so these can run in any order
+    for( const auto& [from, layer] : moved )
+    {
+        auto destination = m_layers.find( aReorderMap.at( from ) );
+
+        destination->second = layer;
+        destination->second.id = destination->first;
+    }
+
+    // A source nothing moves onto keeps its settings but must own an empty tree rather than the
+    // one it just handed to its destination
+    for( const auto& [from, _] : moved )
+    {
+        if( !destinations.count( from ) )
+            m_layers.find( from )->second.items = std::make_shared<VIEW_RTREE>();
+    }
 
     SortOrderedLayers();
 
@@ -834,9 +871,12 @@ void VIEW::UpdateLayerColor( int aLayer )
     {
         GAL_UPDATE_CONTEXT ctx( m_gal );
 
-        UPDATE_COLOR_VISITOR visitor( aLayer, m_painter, m_gal );
-        m_layers[aLayer].items->Query( r, visitor );
-        MarkTargetDirty( m_layers[aLayer].target );
+        if( ctx.IsUpdating() )
+        {
+            UPDATE_COLOR_VISITOR visitor( aLayer, m_painter, m_gal );
+            m_layers[aLayer].items->Query( r, visitor );
+            MarkTargetDirty( m_layers[aLayer].target );
+        }
     }
 }
 
@@ -847,23 +887,25 @@ void VIEW::UpdateAllLayersColor()
     {
         GAL_UPDATE_CONTEXT ctx( m_gal );
 
-        for( VIEW_ITEM* item : *m_allItems )
+        if( ctx.IsUpdating() )
         {
-            if( !item )
-                continue;
-
-            VIEW_ITEM_DATA* viewData = item->viewPrivData();
-
-            if( !viewData )
-                continue;
-
-            for( int layer : viewData->m_layers )
+            for( VIEW_ITEM* item : *m_allItems )
             {
-                const COLOR4D color = m_painter->GetSettings()->GetColor( item, layer );
-                int           group = viewData->getGroup( layer );
+                if( !item )
+                    continue;
 
-                if( group >= 0 )
-                    m_gal->ChangeGroupColor( group, color );
+                VIEW_ITEM_DATA* viewData = item->viewPrivData();
+
+                if( !viewData )
+                    continue;
+
+                for( int layer : viewData->m_layers )
+                {
+                    int group = viewData->getGroup( layer );
+
+                    if( group >= 0 )
+                        recolorGroup( item, layer, group );
+                }
             }
         }
     }
@@ -980,22 +1022,25 @@ void VIEW::UpdateAllLayersOrder()
     {
         GAL_UPDATE_CONTEXT ctx( m_gal );
 
-        for( VIEW_ITEM* item : *m_allItems )
+        if( ctx.IsUpdating() )
         {
-            if( !item )
-                continue;
-
-            VIEW_ITEM_DATA* viewData = item->viewPrivData();
-
-            if( !viewData )
-                continue;
-
-            for( int layer : viewData->m_layers )
+            for( VIEW_ITEM* item : *m_allItems )
             {
-                int group = viewData->getGroup( layer );
+                if( !item )
+                    continue;
 
-                if( group >= 0 )
-                    m_gal->ChangeGroupDepth( group, m_layers[layer].renderingOrder );
+                VIEW_ITEM_DATA* viewData = item->viewPrivData();
+
+                if( !viewData )
+                    continue;
+
+                for( int layer : viewData->m_layers )
+                {
+                    int group = viewData->getGroup( layer );
+
+                    if( group >= 0 )
+                        m_gal->ChangeGroupDepth( group, m_layers[layer].renderingOrder );
+                }
             }
         }
     }
@@ -1078,8 +1123,7 @@ struct VIEW::DRAW_ITEM_VISITOR
 
 void VIEW::redrawRect( const BOX2I& aRect )
 {
-
-    syncLayerVisibilityCache();
+    SyncLayerVisibilityCache();
 
     for( VIEW_LAYER* l : m_orderedLayers )
     {
@@ -1326,21 +1370,16 @@ void VIEW::clearGroupCache()
 
 void VIEW::invalidateItem( VIEW_ITEM* aItem, int aUpdateFlags )
 {
+    // updateLayers updates geometry too, so we do not have to update both of them at the
+    // same time
+    if( aUpdateFlags & LAYERS )
+        updateLayers( aItem );
+    else if( aUpdateFlags & GEOMETRY )
+        updateBbox( aItem );
+
+    // Now that we have initialized, set flags to ALL for the code below
     if( aUpdateFlags & INITIAL_ADD )
-    {
-        // Don't update layers or bbox, since it was done in VIEW::Add()
-        // Now that we have initialized, set flags to ALL for the code below
         aUpdateFlags = ALL;
-    }
-    else
-    {
-        // updateLayers updates geometry too, so we do not have to update both of them at the
-        // same time
-        if( aUpdateFlags & LAYERS )
-            updateLayers( aItem );
-        else if( aUpdateFlags & GEOMETRY )
-            updateBbox( aItem );
-    }
 
     std::vector<int> layers = aItem->ViewGetLayers();
 
@@ -1378,6 +1417,15 @@ void VIEW::SortOrderedLayers()
 }
 
 
+void VIEW::recolorGroup( VIEW_ITEM* aItem, int aLayer, int aGroup )
+{
+    if( m_painter->HasUniformColor( aItem, aLayer ) )
+        m_gal->ChangeGroupColor( aGroup, m_painter->GetSettings()->GetColor( aItem, aLayer ) );
+    else
+        updateItemGeometry( aItem, aLayer );
+}
+
+
 void VIEW::updateItemColor( VIEW_ITEM* aItem, int aLayer )
 {
     VIEW_ITEM_DATA* viewData = aItem->viewPrivData();
@@ -1386,13 +1434,10 @@ void VIEW::updateItemColor( VIEW_ITEM* aItem, int aLayer )
     if( !viewData )
         return;
 
-    // Obtain the color that should be used for coloring the item on the specific layerId
-    const COLOR4D color = m_painter->GetSettings()->GetColor( aItem, aLayer );
     int group = viewData->getGroup( aLayer );
 
-    // Change the color, only if it has group assigned
     if( group >= 0 )
-        m_gal->ChangeGroupColor( group, color );
+        recolorGroup( aItem, aLayer, group );
 }
 
 
@@ -1660,17 +1705,28 @@ void VIEW::UpdateItems()
         }
     }
 
+    // Skipping the loop below leaves m_requiredUpdate and m_hasPendingItemUpdates set so the
+    // work is redone once the canvas has a valid context again
+    bool updatesProcessed = true;
+
     if( anyUpdated )
     {
         GAL_UPDATE_CONTEXT ctx( m_gal );
 
-        for( VIEW_ITEM* item : *m_allItems.get() )
+        if( ctx.IsUpdating() )
         {
-            if( item && item->viewPrivData() && item->viewPrivData()->m_requiredUpdate != NONE )
+            for( VIEW_ITEM* item : *m_allItems.get() )
             {
-                invalidateItem( item, item->viewPrivData()->m_requiredUpdate );
-                item->viewPrivData()->m_requiredUpdate = NONE;
+                if( item && item->viewPrivData() && item->viewPrivData()->m_requiredUpdate != NONE )
+                {
+                    invalidateItem( item, item->viewPrivData()->m_requiredUpdate );
+                    item->viewPrivData()->m_requiredUpdate = NONE;
+                }
             }
+        }
+        else
+        {
+            updatesProcessed = false;
         }
     }
 
@@ -1679,7 +1735,8 @@ void VIEW::UpdateItems()
               cntTotal, cntGeomUpdate, (unsigned) anyUpdated );
 #endif
 
-    m_hasPendingItemUpdates = false;
+    if( updatesProcessed )
+        m_hasPendingItemUpdates = false;
 }
 
 
@@ -1896,7 +1953,8 @@ void VIEW::ShowPreview( bool aShow )
    SetVisible( m_preview.get(), aShow );
 }
 
-void VIEW::syncLayerVisibilityCache()
+
+void VIEW::SyncLayerVisibilityCache()
 {
     for( const auto& layer : m_layers )
     {

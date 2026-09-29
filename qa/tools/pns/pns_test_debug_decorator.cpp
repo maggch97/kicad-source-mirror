@@ -24,7 +24,6 @@
 #include <router/pns_item.h>
 
 
-#define VERBOSE     // Sends PSN_DBG message output to the console
 
 
 PNS_DEBUG_SHAPE::PNS_DEBUG_SHAPE( PNS_DEBUG_SHAPE* aParent )
@@ -64,6 +63,25 @@ void PNS_DEBUG_SHAPE::AddChild( PNS_DEBUG_SHAPE* ent )
     m_children.push_back( ent );
 }
 
+
+bool PNS_DEBUG_SHAPE::IsSelected() const
+{
+     if( m_selected )
+        return true;
+
+    PNS_DEBUG_SHAPE* parent = m_parent;
+
+    while( parent )
+    {
+        if( parent->m_selected )
+            return true;
+
+        parent = parent->m_parent;
+    }
+
+    return false;
+}
+    
 
 bool PNS_DEBUG_SHAPE::IsVisible() const
 {
@@ -242,17 +260,8 @@ void PNS_TEST_DEBUG_DECORATOR::Message( const wxString& msg, const SRC_LOCATION_
     ent->m_srcLoc = aSrcLoc;
     addEntry( ent );
 
-    printf("PNS: %s\n", msg.c_str().AsChar() );
-
-#ifdef VERBOSE
-    static wxString lastMsg;
-
-    if( msg != lastMsg )
-    {
+    if( m_reporter )
         m_reporter->Report( msg );
-        lastMsg = msg;
-    }
-#endif
 }
 
 

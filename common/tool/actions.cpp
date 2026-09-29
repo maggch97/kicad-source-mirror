@@ -395,11 +395,8 @@ TOOL_ACTION ACTIONS::duplicate( TOOL_ACTION_ARGS()
 TOOL_ACTION ACTIONS::doDelete( TOOL_ACTION_ARGS()
         .Name( "common.Interactive.delete" )
         .Scope( AS_GLOBAL )
-#if defined( __WXMAC__ )
-        .DefaultHotkey( WXK_BACK )
-#else
         .DefaultHotkey( WXK_DELETE )
-#endif
+        .DefaultHotkeyAlt( WXK_BACK )
         .LegacyHotkeyName( "Delete Item" )
         .FriendlyName( _( "Delete" ) )
         .Tooltip( _( "Delete selected item(s)" ) )  // differentiation from deleteTool, below
@@ -602,6 +599,29 @@ TOOL_ACTION ACTIONS::pointEditorArcKeepRadius( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Keep Arc Radius and Center, adjust angle" ) )
         .Tooltip( _( "Switch arc editing mode to maintaining radius when endpoint are moved" ) )
         .Parameter( ARC_EDIT_MODE::KEEP_CENTER_ENDS_ADJUST_ANGLE ) );
+
+TOOL_ACTION ACTIONS::arcPosture( TOOL_ACTION_ARGS()
+        .Name( "common.InteractiveDrawing.arcPosture" )
+        .Scope( AS_GLOBAL )
+        .DefaultHotkey( '/' )
+        .LegacyHotkeyName( "Switch Track Posture" )
+        .FriendlyName( _( "Switch Arc Posture" ) )
+        .Tooltip( _( "Switch arc posture between clockwise and counter-clockwise" ) ) );
+
+TOOL_ACTION ACTIONS::cycleArcDrawMode( TOOL_ACTION_ARGS()
+        .Name( "common.InteractiveDrawing.cycleArcDrawMode" )
+        .Scope( AS_GLOBAL )
+        .DefaultHotkey( MD_ALT + '/' )
+        .FriendlyName( _( "Cycle Arc Drawing Mode" ) )
+        .Tooltip( _( "Switch to the next method of drawing arcs" ) ) );
+
+TOOL_ACTION ACTIONS::deleteLastPoint( TOOL_ACTION_ARGS()
+        .Name( "common.InteractiveDrawing.deleteLastPoint" )
+        .Scope( AS_GLOBAL )
+        .DefaultHotkey( WXK_BACK )
+        .FriendlyName( _( "Delete Last Point" ) )
+        .Tooltip( _( "Delete the last point added to the current item" ) )
+        .Icon( BITMAPS::undo ) );
 
 TOOL_ACTION ACTIONS::cycleArcEditMode( TOOL_ACTION_ARGS()
         .Name( "common.Interactive.cycleArcEditMode" )
@@ -1442,6 +1462,18 @@ TOOL_ACTION ACTIONS::pluginsReload( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Refresh Plugins" ) )
         .Tooltip( _( "Reload all python plugins and refresh plugin menus" ) )
         .Icon( BITMAPS::reload ) );
+
+TOOL_ACTION ACTIONS::pluginsShowFolder( TOOL_ACTION_ARGS()
+        .Name( "common.API.pluginsShowFolder" )
+        .Scope( AS_GLOBAL )
+#ifdef __WXMAC__
+        .FriendlyName( _( "Reveal Plugin Folder in Finder" ) )
+        .Tooltip( _( "Reveals the plugins folder in a Finder window" ) )
+#else
+        .FriendlyName( _( "Open Plugin Directory" ) )
+        .Tooltip( _( "Opens the directory in the default system file manager" ) )
+#endif
+        .Icon( BITMAPS::directory_open ) );
 
 // Embedding Files
 

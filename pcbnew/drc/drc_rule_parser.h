@@ -53,14 +53,15 @@ private:
     std::shared_ptr<COMPONENT_CLASS_ASSIGNMENT_RULE> parseComponentClassAssignment();
 
     void parseConstraint( DRC_RULE* aRule );
-    void parseValueWithUnits( int aOffset, const wxString& aExpr, int& aResult, EDA_UNITS& aUnits,
-                              bool aUnitless = false );
+    void     parseValueWithUnits( int aOffset, const wxString& aExpr, int& aResult, EDA_UNITS& aUnits,
+                                  bool aUnitless = false, bool aRatio = false );
     LSET parseLayer( wxString* aSource );
     SEVERITY parseSeverity();
     void parseUnknown();
     wxString parseExpression();
 
     void reportError( const wxString& aMessage, int aOffset = 0 );
+    void reportErrorAt( const wxString& aMessage, int aLine, int aOffset, const char* aSourceLine );
     void reportDeprecation( const wxString& oldToken, const wxString& newToken );
     bool checkUnresolvedTextVariable();
     void expected( const wxString& expectedTokens );

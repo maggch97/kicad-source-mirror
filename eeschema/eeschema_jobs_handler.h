@@ -86,13 +86,14 @@ public:
      * @param aTheme The theme to take color data from to stick into render settings, can be
      *        left blank for default.
      * @param aSch The schematic to further copy settings from to be put into aRenderSettings.
+     * @param aDrawingSheetOverride
      */
     void InitRenderSettings( SCH_RENDER_SETTINGS* aRenderSettings, const wxString& aTheme,
                              SCHEMATIC* aSch,
                              const wxString& aDrawingSheetOverride = wxEmptyString );
 
 private:
-    SCHEMATIC* getSchematic( const wxString& aPath );
+    SCHEMATIC* getSchematic( const wxString& aPath, bool aRequireRoot = true );
 
     int doSymExportSvg( JOB_SYM_EXPORT_SVG* aSvgJob, SCH_RENDER_SETTINGS* aRenderSettings,
                         LIB_SYMBOL* symbol );
@@ -100,6 +101,7 @@ private:
     DS_PROXY_VIEW_ITEM* getDrawingSheetProxyView( SCHEMATIC* aSch );
 
     SCHEMATIC* m_cliSchematic;
+    bool       m_cliSchematicRootValidated = false;
 };
 
 #endif

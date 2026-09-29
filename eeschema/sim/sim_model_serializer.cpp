@@ -21,10 +21,9 @@
 #include "sim/sim_model_serializer.h"
 
 #include <ki_exception.h>
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <pegtl.hpp>
 #include <pegtl/contrib/parse_tree.hpp>
-#include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 #include <string_utils.h>
@@ -87,11 +86,8 @@ std::string SIM_MODEL_SERIALIZER::GenerateParams() const
 
         const SIM_MODEL::PARAM& param = m_model.GetParamOverride( i );
 
-        if( param.value == ""
-            && !( i == 0 && m_model.HasPrimaryValue() && !m_model.IsStoredInValue() ) )
-        {
+        if( param.value == "" && !( i == 0 && m_model.HasPrimaryValue() && !m_model.IsStoredInValue() ) )
             continue;
-        }
 
         if( m_model.GetBaseModel() && m_model.GetBaseModel()->GetParam( i ).value == param.value )
             continue;
@@ -132,16 +128,16 @@ std::string SIM_MODEL_SERIALIZER::GeneratePins() const
                    return StrNumCmp( lhs.symbolPinNumber, rhs.symbolPinNumber, true ) < 0;
                } );
 
-    for( const SIM_MODEL_PIN& pin : pins )
+    for( const std::reference_wrapper<const SIM_MODEL_PIN>& pin : pins )
     {
-        std::string symbolPinNumber( pin.symbolPinNumber.ToUTF8() );
+        std::string symbolPinNumber( pin.get().symbolPinNumber.ToUTF8() );
 
         if( symbolPinNumber != "" )
         {
             if( !result.empty() )
                 result.append( " " );
 
-            result.append( fmt::format( "{}={}", symbolPinNumber, pin.modelPinName ) );
+            result.append( fmt::format( "{}={}", symbolPinNumber, pin.get().modelPinName ) );
         }
     }
 
@@ -160,18 +156,16 @@ void SIM_MODEL_SERIALIZER::ParseValue( const std::string& aValue )
     try
     {
         tao::pegtl::string_input<> in( aValue, "Value field" );
-        auto root =
-                tao::pegtl::parse_tree::parse<SIM_MODEL_SERIALIZER_PARSER::fieldInferValueGrammar,
-                                              SIM_MODEL_SERIALIZER_PARSER::fieldInferValueSelector,
-                                              tao::pegtl::nothing,
-                                              SIM_MODEL_SERIALIZER_PARSER::control>
-                ( in );
+        auto root = tao::pegtl::parse_tree::parse<SIM_MODEL_SERIALIZER_PARSER::fieldInferValueGrammar,
+                                                  SIM_MODEL_SERIALIZER_PARSER::fieldInferValueSelector,
+                                                  tao::pegtl::nothing,
+                                                  SIM_MODEL_SERIALIZER_PARSER::control>
+                        ( in );
 
         for( const auto& node : root->children )
         {
-            if( node->is_type<SIM_MODEL_SERIALIZER_PARSER::number<SIM_VALUE::TYPE_FLOAT,
-                                                                  SIM_VALUE::NOTATION::SI>>()
-                && node->string() != "" )
+            if( node->is_type<SIM_MODEL_SERIALIZER_PARSER::number<SIM_VALUE::TYPE_FLOAT, SIM_VALUE::NOTATION::SI>>()
+                    && node->string() != "" )
             {
                 m_model.SetParamValue( 0, node->string() );
             }
@@ -209,14 +203,44 @@ bool SIM_MODEL_SERIALIZER::ParseParams( const std::string& aParams )
     std::string paramName;
     bool        isPrimaryValueSet = false;
 
+    auto unescapeQuoted =
+            []( const std::string& aString ) -> std::string
+            {
+                std::string result;
+                result.reserve( aString.size() );
+
+                for( size_t i = 0; i < aString.size(); ++i )
+                {
+                    if( aString[i] == '\\' && i + 1 < aString.size()
+                            && ( aString[i + 1] == '"' || aString[i + 1] == '\\' ) )
+                    {
+                        result.push_back( aString[++i] );
+                    }
+                    else
+                    {
+                        result.push_back( aString[i] );
+                    }
+                }
+
+                return result;
+            };
+
     for( const auto& node : root->children )
     {
         if( node->is_type<SIM_MODEL_SERIALIZER_PARSER::param>() )
         {
             paramName = node->string();
         }
-        else if( node->is_type<SIM_MODEL_SERIALIZER_PARSER::quotedStringContent>()
-            || node->is_type<SIM_MODEL_SERIALIZER_PARSER::unquotedString>() )
+        else if( node->is_type<SIM_MODEL_SERIALIZER_PARSER::quotedStringContent>() )
+        {
+            wxASSERT( paramName != "" );
+
+            m_model.SetParamValue( paramName, unescapeQuoted( node->string() ), SIM_VALUE_GRAMMAR::NOTATION::SI );
+
+            if( m_model.GetParam( 0 ).Matches( paramName ) )
+                isPrimaryValueSet = true;
+        }
+        else if( node->is_type<SIM_MODEL_SERIALIZER_PARSER::unquotedString>() )
         {
             wxASSERT( paramName != "" );
 
@@ -224,15 +248,6 @@ bool SIM_MODEL_SERIALIZER::ParseParams( const std::string& aParams )
 
             if( m_model.GetParam( 0 ).Matches( paramName ) )
                 isPrimaryValueSet = true;
-        }
-        else if( node->is_type<SIM_MODEL_SERIALIZER_PARSER::quotedString>() )
-        {
-            std::string str = node->string();
-
-            // Unescape quotes.
-            boost::replace_all( str, "\\\"", "\"" );
-
-            m_model.SetParamValue( paramName, str, SIM_VALUE_GRAMMAR::NOTATION::SI );
         }
         else if( node->is_type<SIM_MODEL_SERIALIZER_PARSER::flagParam>() )
         {
@@ -306,8 +321,24 @@ std::string SIM_MODEL_SERIALIZER::generateParamValuePair( const SIM_MODEL::PARAM
     if( aParam.info.category == SIM_MODEL::PARAM::CATEGORY::FLAGS )
         return value == "1" ? name : "";
 
-    if( value == "" || value.find( ' ' ) != std::string::npos )
-        value = fmt::format( "\"{}\"", value );
+    if( value.empty()
+            || value.find( ' ' ) != std::string::npos
+            || value.find( '"' ) != std::string::npos
+            || value.find( '\\' ) != std::string::npos )
+    {
+        std::string escaped;
+        escaped.reserve( value.size() + 8 );
+
+        for( char c : value )
+        {
+            if( c == '\\' || c == '"' )
+                escaped.push_back( '\\' );
+
+            escaped.push_back( c );
+        }
+
+        value = fmt::format( "\"{}\"", escaped );
+    }
 
     return fmt::format( "{}={}", name, value );
 }

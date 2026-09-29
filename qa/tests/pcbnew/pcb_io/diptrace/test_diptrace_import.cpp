@@ -107,13 +107,10 @@ BOOST_AUTO_TEST_CASE( InvalidComponentHeaderFailsDeterministically )
         wxFFile file( tempPath, wxS( "r+b" ) );
         BOOST_REQUIRE( file.IsOpened() );
         BOOST_REQUIRE( file.Seek( FIRST_COMPONENT_FLAGS_OFFSET ) );
-        BOOST_REQUIRE_EQUAL( file.Write( invalidFlags, sizeof( invalidFlags ) ),
-                             sizeof( invalidFlags ) );
+        BOOST_REQUIRE_EQUAL( file.Write( invalidFlags, sizeof( invalidFlags ) ), sizeof( invalidFlags ) );
     }
 
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    BOOST_CHECK_THROW( m_plugin.LoadBoard( tempPath.ToStdString(), board.get() ), IO_ERROR );
+    BOOST_CHECK_THROW( m_plugin.LoadBoard( tempPath.ToStdString() ), IO_ERROR );
 
     wxRemoveFile( tempPath );
 }
@@ -135,13 +132,10 @@ BOOST_AUTO_TEST_CASE( InvalidRouteChainNodeCountFailsDeterministically )
         wxFFile file( tempPath, wxS( "r+b" ) );
         BOOST_REQUIRE( file.IsOpened() );
         BOOST_REQUIRE( file.Seek( FIRST_ROUTE_CHAIN_NODE_COUNT_OFFSET ) );
-        BOOST_REQUIRE_EQUAL( file.Write( invalidNodeCount, sizeof( invalidNodeCount ) ),
-                             sizeof( invalidNodeCount ) );
+        BOOST_REQUIRE_EQUAL( file.Write( invalidNodeCount, sizeof( invalidNodeCount ) ), sizeof( invalidNodeCount ) );
     }
 
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    BOOST_CHECK_THROW( m_plugin.LoadBoard( tempPath.ToStdString(), board.get() ), IO_ERROR );
+    BOOST_CHECK_THROW( m_plugin.LoadBoard( tempPath.ToStdString() ), IO_ERROR );
 
     wxRemoveFile( tempPath );
 }
@@ -167,9 +161,7 @@ BOOST_AUTO_TEST_CASE( InvalidNetNameLengthFailsDeterministically )
                              sizeof( invalidNameLength ) );
     }
 
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    BOOST_CHECK_THROW( m_plugin.LoadBoard( tempPath.ToStdString(), board.get() ), IO_ERROR );
+    BOOST_CHECK_THROW( m_plugin.LoadBoard( tempPath.ToStdString() ), IO_ERROR );
 
     wxRemoveFile( tempPath );
 }
@@ -191,13 +183,10 @@ BOOST_AUTO_TEST_CASE( InvalidZoneMinWidthFailsDeterministically )
         wxFFile file( tempPath, wxS( "r+b" ) );
         BOOST_REQUIRE( file.IsOpened() );
         BOOST_REQUIRE( file.Seek( FIRST_ZONE_MIN_WIDTH_OFFSET ) );
-        BOOST_REQUIRE_EQUAL( file.Write( zeroMinWidth, sizeof( zeroMinWidth ) ),
-                             sizeof( zeroMinWidth ) );
+        BOOST_REQUIRE_EQUAL( file.Write( zeroMinWidth, sizeof( zeroMinWidth ) ), sizeof( zeroMinWidth ) );
     }
 
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    BOOST_CHECK_THROW( m_plugin.LoadBoard( tempPath.ToStdString(), board.get() ), IO_ERROR );
+    BOOST_CHECK_THROW( m_plugin.LoadBoard( tempPath.ToStdString() ), IO_ERROR );
 
     wxRemoveFile( tempPath );
 }
@@ -210,9 +199,7 @@ BOOST_AUTO_TEST_CASE( InvalidZoneMinWidthFailsDeterministically )
  */
 BOOST_AUTO_TEST_CASE( LoadKeyboard )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "keyboard.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "keyboard.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -240,7 +227,11 @@ BOOST_AUTO_TEST_CASE( LoadKeyboard )
 BOOST_AUTO_TEST_CASE( ObjectsAreFieldLocatedNotScanned )
 {
     const std::vector<std::string> files = {
-        "keyboard.dip", "156bus_narrow.dip", "logic_probe.dip", "project4.dip", "z80_board.dip"
+        "keyboard.dip",
+        "156bus_narrow.dip",
+        "logic_probe.dip",
+        "project4.dip",
+        "z80_board.dip"
     };
 
     for( const std::string& name : files )
@@ -257,29 +248,28 @@ BOOST_AUTO_TEST_CASE( ObjectsAreFieldLocatedNotScanned )
         // header; mount holes carry no scan in this corpus.
         BOOST_CHECK_MESSAGE( parser.PadLocatorScans() == 0,
                              name + ": pad located by scan (" + std::to_string( parser.PadLocatorScans() )
-                                     + ")" );
+                                  + ")" );
         BOOST_CHECK_MESSAGE( parser.MountHoleLocatorScans() == 0,
                              name + ": mount hole located by scan ("
-                                     + std::to_string( parser.MountHoleLocatorScans() ) + ")" );
+                                  + std::to_string( parser.MountHoleLocatorScans() ) + ")" );
         BOOST_CHECK_MESSAGE( parser.ShapeLocatorScans() == 0,
                              name + ": shape located by scan ("
-                                     + std::to_string( parser.ShapeLocatorScans() ) + ")" );
+                                  + std::to_string( parser.ShapeLocatorScans() ) + ")" );
         BOOST_CHECK_MESSAGE( parser.ComponentLocatorScans() == 0,
                              name + ": component located by scan ("
-                                     + std::to_string( parser.ComponentLocatorScans() ) + ")" );
+                                  + std::to_string( parser.ComponentLocatorScans() ) + ")" );
         BOOST_CHECK_MESSAGE( parser.SectionLocatorScans() == 0,
                              name + ": section located by scan ("
-                                     + std::to_string( parser.SectionLocatorScans() ) + ")" );
+                                  + std::to_string( parser.SectionLocatorScans() ) + ")" );
 
-        BOOST_CHECK_MESSAGE(
-                parser.ScanLocatorUseCount() == 0,
-                name + ": object/section located by byte-pattern scan (total="
-                        + std::to_string( parser.ScanLocatorUseCount() )
-                        + " components=" + std::to_string( parser.ComponentLocatorScans() )
-                        + " pads=" + std::to_string( parser.PadLocatorScans() )
-                        + " shapes=" + std::to_string( parser.ShapeLocatorScans() )
-                        + " holes=" + std::to_string( parser.MountHoleLocatorScans() )
-                        + " sections=" + std::to_string( parser.SectionLocatorScans() ) + ")" );
+        BOOST_CHECK_MESSAGE( parser.ScanLocatorUseCount() == 0,
+                             name + ": object/section located by byte-pattern scan (total="
+                                  + std::to_string( parser.ScanLocatorUseCount() )
+                                  + " components=" + std::to_string( parser.ComponentLocatorScans() )
+                                  + " pads=" + std::to_string( parser.PadLocatorScans() )
+                                  + " shapes=" + std::to_string( parser.ShapeLocatorScans() )
+                                  + " holes=" + std::to_string( parser.MountHoleLocatorScans() )
+                                  + " sections=" + std::to_string( parser.SectionLocatorScans() ) + ")" );
     }
 }
 
@@ -290,9 +280,7 @@ BOOST_AUTO_TEST_CASE( ObjectsAreFieldLocatedNotScanned )
  */
 BOOST_AUTO_TEST_CASE( Load156Bus )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "156bus_narrow.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "156bus_narrow.dip" );
 
     BOOST_REQUIRE( board );
     BOOST_CHECK_GT( board->Footprints().size(), 0 );
@@ -319,9 +307,7 @@ BOOST_AUTO_TEST_CASE( Load156Bus )
  */
 BOOST_AUTO_TEST_CASE( LoadV37 )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "project4.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "project4.dip" );
 
     BOOST_REQUIRE( board );
     BOOST_CHECK_GT( board->Footprints().size(), 0 );
@@ -333,9 +319,7 @@ BOOST_AUTO_TEST_CASE( LoadV37 )
  */
 BOOST_AUTO_TEST_CASE( LoadLogicProbe )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "logic_probe.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "logic_probe.dip" );
 
     BOOST_REQUIRE( board );
     BOOST_CHECK_GT( board->Footprints().size(), 0 );
@@ -348,9 +332,7 @@ BOOST_AUTO_TEST_CASE( LoadLogicProbe )
  */
 BOOST_AUTO_TEST_CASE( LoadZ80Board )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -382,9 +364,7 @@ BOOST_AUTO_TEST_CASE( LoadZ80Board )
  */
 BOOST_AUTO_TEST_CASE( LoadV37Pads )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "project4.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "project4.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -403,9 +383,7 @@ BOOST_AUTO_TEST_CASE( LoadV37Pads )
  */
 BOOST_AUTO_TEST_CASE( LoadKeyboardPads )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "keyboard.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "keyboard.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -426,9 +404,7 @@ BOOST_AUTO_TEST_CASE( LoadKeyboardPads )
  */
 BOOST_AUTO_TEST_CASE( KeyboardFootprintGraphics )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "keyboard.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "keyboard.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -455,9 +431,7 @@ BOOST_AUTO_TEST_CASE( KeyboardFootprintGraphics )
  */
 BOOST_AUTO_TEST_CASE( LogicProbeFootprintGraphics )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "logic_probe.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "logic_probe.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -482,9 +456,7 @@ BOOST_AUTO_TEST_CASE( LogicProbeFootprintGraphics )
  */
 BOOST_AUTO_TEST_CASE( Z80FootprintGraphics )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -512,9 +484,7 @@ BOOST_AUTO_TEST_CASE( Z80FootprintGraphics )
  */
 BOOST_AUTO_TEST_CASE( LogicProbeTextPositioning )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "logic_probe.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "logic_probe.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -546,9 +516,7 @@ BOOST_AUTO_TEST_CASE( LogicProbeTextPositioning )
  */
 BOOST_AUTO_TEST_CASE( Z80TextPositioning )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -578,9 +546,7 @@ BOOST_AUTO_TEST_CASE( Z80TextPositioning )
  */
 BOOST_AUTO_TEST_CASE( KeyboardTextPositioning )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "keyboard.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "keyboard.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -604,9 +570,7 @@ BOOST_AUTO_TEST_CASE( KeyboardTextPositioning )
  */
 BOOST_AUTO_TEST_CASE( V37TextPositioning )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "project4.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "project4.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -632,7 +596,8 @@ BOOST_AUTO_TEST_CASE( V37TextPositioning )
  */
 BOOST_AUTO_TEST_CASE( FootprintGraphicShapeTypes )
 {
-    std::vector<std::string> files = { "logic_probe.dip", "keyboard.dip" };
+    std::vector<std::string> files = { "logic_probe.dip",
+                                       "keyboard.dip" };
 
     int totalSegments = 0;
     int totalCircles  = 0;
@@ -640,9 +605,7 @@ BOOST_AUTO_TEST_CASE( FootprintGraphicShapeTypes )
 
     for( const std::string& file : files )
     {
-        std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-        m_plugin.LoadBoard( GetTestDataDir() + file, board.get() );
+        std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + file );
 
         BOOST_REQUIRE( board );
 
@@ -692,9 +655,7 @@ BOOST_AUTO_TEST_CASE( FootprintGraphicShapeTypes )
  */
 BOOST_AUTO_TEST_CASE( Z80PolygonPads )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -719,9 +680,7 @@ BOOST_AUTO_TEST_CASE( Z80PolygonPads )
  */
 BOOST_AUTO_TEST_CASE( Z80RectangularPads )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -747,9 +706,7 @@ BOOST_AUTO_TEST_CASE( Z80RectangularPads )
  */
 BOOST_AUTO_TEST_CASE( KeyboardPadShapes )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "keyboard.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "keyboard.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -766,7 +723,7 @@ BOOST_AUTO_TEST_CASE( KeyboardPadShapes )
             case PAD_SHAPE::CIRCLE:    circlePads++; break;
             case PAD_SHAPE::OVAL:      ovalPads++;   break;
             case PAD_SHAPE::RECTANGLE: rectPads++;   break;
-            default:                                  break;
+            default:                                 break;
             }
         }
     }
@@ -785,9 +742,7 @@ BOOST_AUTO_TEST_CASE( KeyboardPadShapes )
  */
 BOOST_AUTO_TEST_CASE( LogicProbeBoardSettings )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "logic_probe.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "logic_probe.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -812,9 +767,7 @@ BOOST_AUTO_TEST_CASE( LogicProbeBoardSettings )
  */
 BOOST_AUTO_TEST_CASE( Z80BoardSettings )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -841,8 +794,7 @@ BOOST_AUTO_TEST_CASE( Z80BoardSettings )
  */
 BOOST_AUTO_TEST_CASE( ReArmPlacementRotationsMatchDipTrace )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-    m_plugin.LoadBoard( GetTestDataDir() + "re-arm_pub.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + "re-arm_pub.dip" );
 
     std::map<wxString, int> orient;
 

@@ -90,6 +90,7 @@
         "extra_footprint": "warning",
         "footprint": "error",
         "footprint_filters_mismatch": "ignore",
+        "footprint_scaled_with_pads": "warning",
         "footprint_symbol_field_mismatch": "warning",
         "footprint_symbol_mismatch": "warning",
         "footprint_type_mismatch": "ignore",
@@ -111,6 +112,7 @@
         "missing_tuning_profile": "warning",
         "net_chain_return_path": "error",
         "net_chain_stub_length": "error",
+        "net_chain_tuning_profiles": "error",
         "net_conflict": "warning",
         "nonmirrored_text_on_back_layer": "warning",
         "npth_inside_courtyard": "error",
@@ -522,6 +524,7 @@
       "version": 5
     },
     "net_chain_classes": {},
+    "net_chain_netclasses": {},
     "net_colors": null,
     "netclass_assignments": null,
     "netclass_patterns": []
@@ -535,6 +538,7 @@
       "netlist": "",
       "plot": "",
       "specctra_dsn": "",
+      "step": "",
       "vrml": ""
     },
     "page_layout_descr_file": ""
@@ -669,7 +673,7 @@
   "text_variables": {},
   "tuning_profiles": {
     "meta": {
-      "version": 1
+      "version": 2
     },
     "tuning_profiles_impedance_geometric": []
   }

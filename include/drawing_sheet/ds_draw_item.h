@@ -396,8 +396,9 @@ private:
 class DS_DRAW_ITEM_LIST
 {
 public:
-    DS_DRAW_ITEM_LIST( const EDA_IU_SCALE& aIuScale, int aFlags = 0 ) :
-        m_iuScale( aIuScale )
+    DS_DRAW_ITEM_LIST( const EDA_IU_SCALE& aIuScale, RESOLUTION_CONTEXT aContext = INTERNAL ) :
+        m_iuScale( aIuScale ),
+        m_context( aContext )
     {
         m_idx = 0;
         m_plotterMilsToIu = 0.0;
@@ -407,7 +408,6 @@ public:
         m_titleBlock = nullptr;
         m_project = nullptr;
         m_isFirstPage = true;
-        m_flags = aFlags;
         m_properties = nullptr;
     }
 
@@ -549,8 +549,6 @@ public:
      *
      * @param aPageInfo The PAGE_INFO, for page size, margins...
      * @param aTitleBlock The sheet title block, for basic inscriptions.
-     * @param aColor The color for drawing.
-     * @param aAltColor The color for items which need to be "highlighted".
      */
     void BuildDrawItemsList( const PAGE_INFO& aPageInfo, const TITLE_BLOCK& aTitleBlock );
 
@@ -583,7 +581,7 @@ protected:
     wxString           m_variantName;     // for ${VARIANT} text variable reference
     wxString           m_variantDesc;     // for ${VARIANT_DESC} text variable reference
     const PROJECT*     m_project;         // for project-based text variable references
-    int                m_flags;
+    RESOLUTION_CONTEXT m_context;
 
     const std::map<wxString, wxString>* m_properties;    // for text variable references
 };

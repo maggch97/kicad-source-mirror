@@ -31,13 +31,8 @@
 
 #include <font/fontconfig.h>
 #include <kiplatform/environment.h>
-#include <libraries/library_table.h>
-#include <libraries/symbol_library_adapter.h>
-#include <project_sch.h>
 #include <reporter.h>
 #include <schematic.h>
-#include <sch_io/kicad_sexpr/sch_io_kicad_sexpr.h>
-#include <sch_io/sch_io_mgr.h>
 #include <sch_screen.h>
 #include <sch_sheet.h>
 #include <string_utils.h>
@@ -121,7 +116,6 @@ static LIB_SYMBOL* LoadV3LibrarySymbolItem( const EASYEDAPRO::V3_DOC_PARSER&    
 SCH_IO_EASYEDAPRO_V3::SCH_IO_EASYEDAPRO_V3() :
         SCH_IO( wxS( "EasyEDA Pro (JLCEDA) Schematic v3" ) )
 {
-    m_reporter = &WXLOG_REPORTER::GetInstance();
 }
 
 
@@ -156,6 +150,19 @@ bool SCH_IO_EASYEDAPRO_V3::CanReadLibrary( const wxString& aFileName ) const
         return false;
 
     return EASYEDAPRO::V3_DOC_PARSER::IsV3Library( aFileName, wxS( "SYMBOL" ) );
+}
+
+
+std::vector<LIB_SYMBOL*> SCH_IO_EASYEDAPRO_V3::GetImportedCachedLibrarySymbols()
+{
+    std::vector<LIB_SYMBOL*> result;
+
+    result.reserve( m_importedLibSymbols.size() );
+
+    for( const std::unique_ptr<LIB_SYMBOL>& symbol : m_importedLibSymbols )
+        result.push_back( new LIB_SYMBOL( *symbol ) );
+
+    return result;
 }
 
 
@@ -195,9 +202,9 @@ void SCH_IO_EASYEDAPRO_V3::EnumerateSymbolLib( std::vector<LIB_SYMBOL*>& aSymbol
         }
         catch( nlohmann::json::exception& e )
         {
-            wxLogWarning(
-                    wxString::Format( _( "EasyEDA Pro v3 symbol '%s' in '%s' was skipped due to parse error: %s" ),
-                                      symbolName, aLibraryPath, e.what() ) );
+            Report(
+              wxString::Format( _( "EasyEDA Pro v3 symbol '%s' in '%s' was skipped due to parse error: %s" ),
+                                symbolName, aLibraryPath, e.what() ) , RPT_SEVERITY_WARNING );
         }
     }
 }
@@ -227,8 +234,7 @@ LIB_SYMBOL* SCH_IO_EASYEDAPRO_V3::LoadSymbol( const wxString& aLibraryPath, cons
     }
     catch( nlohmann::json::exception& e )
     {
-        THROW_IO_ERROR(
-                wxString::Format( _( "Cannot load symbol '%s' from '%s': %s" ), aAliasName, aLibraryPath, e.what() ) );
+        THROW_IO_ERRORF( _( "Cannot load symbol '%s' from '%s': %s" ), aAliasName, aLibraryPath, e.what() );
     }
 }
 
@@ -263,7 +269,7 @@ SCH_SHEET* SCH_IO_EASYEDAPRO_V3::LoadSchematicFile( const wxString& aFileName, S
         screen->SetFileName( aFileName );
         rootSheet->SetScreen( screen );
 
-        const_cast<KIID&>( rootSheet->m_Uuid ) = screen->GetUuid();
+        rootSheet->SyncUuidToScreen();
     }
 
     EASYEDAPRO::V3_DOC_PARSER v3( aFileName );
@@ -302,15 +308,10 @@ SCH_SHEET* SCH_IO_EASYEDAPRO_V3::LoadSchematicFile( const wxString& aFileName, S
     auto prjSchIt = prjSchematics.find( schematicToLoad );
 
     if( prjSchIt == prjSchematics.end() )
-    {
-        THROW_IO_ERROR(
-                wxString::Format( _( "Schematic document '%s' not found in '%s'" ), schematicToLoad, aFileName ) );
-    }
+        THROW_IO_ERRORF( _( "Schematic document '%s' not found in '%s'" ), schematicToLoad, aFileName );
 
     wxFileName sourceName( aFileName );
     wxString   libName = EASYEDAPRO::ShortenLibName( sourceName.GetName() );
-
-    wxFileName libFileName( sourceName.GetPath(), libName, FILEEXT::KiCadSymbolLibFileExtension );
 
     wxString rootBaseName = EscapeString( prjSchIt->second.name, CTX_FILENAME );
 
@@ -340,8 +341,7 @@ SCH_SHEET* SCH_IO_EASYEDAPRO_V3::LoadSchematicFile( const wxString& aFileName, S
     }
     catch( nlohmann::json::exception& e )
     {
-        THROW_IO_ERROR(
-                wxString::Format( _( "Failed to parse EasyEDA Pro v3 symbol/device metadata: %s" ), e.what() ) );
+        THROW_IO_ERRORF( _( "Failed to parse EasyEDA Pro v3 symbol/device metadata: %s" ), e.what() );
     }
 
     // Schematic components reference Symbol (geometry) and Device (BOM attrs) separately.
@@ -369,8 +369,8 @@ SCH_SHEET* SCH_IO_EASYEDAPRO_V3::LoadSchematicFile( const wxString& aFileName, S
         }
         catch( nlohmann::json::exception& e )
         {
-            wxLogWarning( wxString::Format( _( "EasyEDA Pro v3 symbol '%s' was skipped due to parse error: %s" ),
-                                            symbolUuid, e.what() ) );
+            Report( wxString::Format( _( "EasyEDA Pro v3 symbol '%s' was skipped due to parse error: %s" ),
+                                      symbolUuid, e.what() ) , RPT_SEVERITY_WARNING );
             continue;
         }
 
@@ -402,8 +402,8 @@ SCH_SHEET* SCH_IO_EASYEDAPRO_V3::LoadSchematicFile( const wxString& aFileName, S
 
         if( !pageRawDoc )
         {
-            wxLogWarning( wxString::Format( _( "EasyEDA Pro v3 schematic page '%s' was not found and was skipped." ),
-                                            prjSheet.uuid ) );
+            Report( wxString::Format( _( "EasyEDA Pro v3 schematic page '%s' was not found and was skipped." ),
+                                      prjSheet.uuid ) , RPT_SEVERITY_WARNING );
             continue;
         }
 
@@ -424,9 +424,9 @@ SCH_SHEET* SCH_IO_EASYEDAPRO_V3::LoadSchematicFile( const wxString& aFileName, S
             }
             catch( nlohmann::json::exception& e )
             {
-                wxLogWarning(
-                        wxString::Format( _( "EasyEDA Pro v3 schematic page '%s' was skipped due to parse error: %s" ),
-                                          prjSheet.uuid, e.what() ) );
+                Report(
+                  wxString::Format( _( "EasyEDA Pro v3 schematic page '%s' was skipped due to parse error: %s" ),
+                                    prjSheet.uuid, e.what() ) , RPT_SEVERITY_WARNING );
                 continue;
             }
 
@@ -472,9 +472,9 @@ SCH_SHEET* SCH_IO_EASYEDAPRO_V3::LoadSchematicFile( const wxString& aFileName, S
         }
         catch( nlohmann::json::exception& e )
         {
-            wxLogWarning(
-                    wxString::Format( _( "EasyEDA Pro v3 schematic page '%s' was skipped due to parse error: %s" ),
-                                      prjSheet.uuid, e.what() ) );
+            Report(
+              wxString::Format( _( "EasyEDA Pro v3 schematic page '%s' was skipped due to parse error: %s" ),
+                                prjSheet.uuid, e.what() ) , RPT_SEVERITY_WARNING );
             continue;
         }
 
@@ -482,30 +482,10 @@ SCH_SHEET* SCH_IO_EASYEDAPRO_V3::LoadSchematicFile( const wxString& aFileName, S
         subSheetIndex++;
     }
 
-    IO_RELEASER<SCH_IO> schPlugin( SCH_IO_MGR::FindPlugin( SCH_IO_MGR::SCH_KICAD ) );
+    // Loading a schematic must not write to disk, so the project library is left to the reconciler
+    m_importedLibSymbols.clear();
 
-    SYMBOL_LIBRARY_ADAPTER* symAdapter = PROJECT_SCH::SymbolLibAdapter( &aSchematic->Project() );
-    LIBRARY_TABLE*          table = symAdapter->ProjectTable().value_or( nullptr );
-    wxCHECK_MSG( table, nullptr, "Could not load symbol lib table." );
-
-    if( !table->HasRow( libName ) )
-    {
-        schPlugin->CreateLibrary( libFileName.GetFullPath() );
-        wxString libTableUri = wxS( "${KIPRJMOD}/" ) + libFileName.GetFullName();
-
-        LIBRARY_TABLE_ROW& row = table->InsertRow();
-        row.SetNickname( libName );
-        row.SetURI( libTableUri );
-        row.SetType( "KiCad" );
-
-        table->Save();
-        symAdapter->LoadOne( libName );
-    }
-
-    std::map<std::string, UTF8> properties;
-    properties.emplace( SCH_IO_KICAD_SEXPR::PropBuffering, wxEmptyString );
-
-    std::set<wxString> symbolsSavedViaDevices;
+    std::set<wxString> symbolsFromDevices;
 
     // Project library entries are devices: geometry from Symbol + BOM fields from Device.
     for( const auto& [devUuid, device] : prjDevices )
@@ -528,8 +508,8 @@ SCH_SHEET* SCH_IO_EASYEDAPRO_V3::LoadSchematicFile( const wxString& aFileName, S
         }
         catch( nlohmann::json::exception& e )
         {
-            wxLogWarning( wxString::Format( _( "EasyEDA Pro v3 device '%s' was skipped due to parse error: %s" ),
-                                            device.title, e.what() ) );
+            Report( wxString::Format( _( "EasyEDA Pro v3 device '%s' was skipped due to parse error: %s" ),
+                                      device.title, e.what() ) , RPT_SEVERITY_WARNING );
             continue;
         }
 
@@ -565,14 +545,14 @@ SCH_SHEET* SCH_IO_EASYEDAPRO_V3::LoadSchematicFile( const wxString& aFileName, S
         if( !keywords.empty() )
             deviceSymInfo.libSymbol->SetKeyWords( keywords );
 
-        schPlugin->SaveSymbol( libFileName.GetFullPath(), deviceSymInfo.libSymbol.release(), &properties );
-        symbolsSavedViaDevices.insert( *symbolAttr );
+        m_importedLibSymbols.emplace_back( std::move( deviceSymInfo.libSymbol ) );
+        symbolsFromDevices.insert( *symbolAttr );
     }
 
     // Keep geometry-only entries for symbols not referenced by any device (e.g. some helpers).
     for( auto& [symbolUuid, symInfo] : symbols )
     {
-        if( !symInfo.libSymbol || symbolsSavedViaDevices.contains( symbolUuid ) )
+        if( !symInfo.libSymbol || symbolsFromDevices.contains( symbolUuid ) )
             continue;
 
         wxString itemName = EASYEDAPRO::MakeUniqueLibName( usedLibNames, symInfo.libSymbol->GetName(),
@@ -581,18 +561,16 @@ SCH_SHEET* SCH_IO_EASYEDAPRO_V3::LoadSchematicFile( const wxString& aFileName, S
         symInfo.libSymbol->SetLibId( libID );
         symInfo.libSymbol->SetName( itemName );
 
-        schPlugin->SaveSymbol( libFileName.GetFullPath(), symInfo.libSymbol.release(), &properties );
+        m_importedLibSymbols.emplace_back( std::move( symInfo.libSymbol ) );
     }
-
-    schPlugin->SaveLibrary( libFileName.GetFullPath() );
 
     aSchematic->CurrentSheet().UpdateAllScreenReferences();
     aSchematic->FixupJunctionsAfterImport();
 
     if( v3.GetSkippedCount() > 0 )
     {
-        wxLogWarning( wxString::Format( _( "EasyEDA (JLCEDA) Pro v3 import skipped %d unsupported object(s)." ),
-                                        v3.GetSkippedCount() ) );
+        Report( wxString::Format( _( "EasyEDA (JLCEDA) Pro v3 import skipped %d unsupported object(s)." ),
+                                  v3.GetSkippedCount() ) , RPT_SEVERITY_WARNING );
     }
 
     return rootSheet;

@@ -36,6 +36,8 @@ using namespace std::placeholders;
 #include <board.h>
 #include <board_design_settings.h>
 #include <board_item.h>
+#include <netclass.h>
+#include <netinfo.h>
 #include <collectors.h>
 #include <footprint.h>
 #include <geometry/geometry_utils.h>
@@ -68,6 +70,9 @@ using namespace std::placeholders;
 #include <tool/tool_menu.h>
 #include <tools/pcb_actions.h>
 #include <tools/pcb_selection_tool.h>
+#include <board_commit.h>
+#include <generators/pcb_via_stack.h>
+#include <tools/drawing_tool.h>
 #include <tools/pcb_grid_helper.h>
 #include <tools/drc_tool.h>
 #include <tools/zone_filler_tool.h>
@@ -83,10 +88,14 @@ using namespace std::placeholders;
 #include "router_status_view_item.h"
 #include "pns_router.h"
 #include "pns_itemset.h"
+#include "pns_line.h"
+#include "pns_linked_item.h"
 #include "pns_logger.h"
+#include "pns_node.h"
+#include "pns_optimizer.h"
 #include "pns_placement_algo.h"
+#include "pns_segment.h"
 #include "pns_drag_algo.h"
-
 #include "pns_kicad_iface.h"
 
 #include <ratsnest/ratsnest_data.h>
@@ -94,6 +103,49 @@ using namespace std::placeholders;
 #include <pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.h>
 
 using namespace KIGFX;
+
+
+const VIA_STACK_PRESET* MatchPendingStackExpansion( PCB_VIA* aVia, const std::set<KIID>& aPreRoute,
+                                                    const std::vector<PENDING_STACK_EXPANSION>& aPending )
+{
+    if( aPreRoute.count( aVia->m_Uuid ) )
+        return nullptr;
+
+    for( const PENDING_STACK_EXPANSION& exp : aPending )
+    {
+        // Net and span alone cannot tell the drop's via from any other the route left behind.
+        if( !exp.m_Pos || *exp.m_Pos != aVia->GetPosition() )
+            continue;
+
+        if( aVia->GetNetCode() != exp.m_Net )
+            continue;
+
+        if( ( aVia->TopLayer() == exp.m_Start && aVia->BottomLayer() == exp.m_End )
+            || ( aVia->TopLayer() == exp.m_End && aVia->BottomLayer() == exp.m_Start ) )
+        {
+            return &exp.m_Preset;
+        }
+    }
+
+    return nullptr;
+}
+
+
+PCB_LAYER_ID ViaStackTargetLayer( PCB_LAYER_ID aStart, PCB_LAYER_ID aEnd, PCB_LAYER_ID aCurrent )
+{
+    if( aStart == aEnd )
+        return UNDEFINED_LAYER;
+
+    if( aCurrent == aStart )
+        return aEnd;
+
+    // From the end layer the stack goes back the way it came.
+    if( aCurrent == aEnd )
+        return aStart;
+
+    return UNDEFINED_LAYER;
+}
+
 
 namespace
 {
@@ -177,6 +229,17 @@ static const TOOL_ACTION ACT_PlaceMicroVia( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::via_microvia )
         .Flags( AF_NONE )
         .Parameter<int>( VIA_ACTION_FLAGS::MICROVIA ) );
+
+static const TOOL_ACTION ACT_PlaceViaStack(
+        TOOL_ACTION_ARGS()
+                .Name( "pcbnew.InteractiveRouter.PlaceViaStack" )
+                .Scope( AS_CONTEXT )
+                .DefaultHotkey( MD_CTRL + MD_SHIFT + 'V' )
+                .FriendlyName( _( "Place Microvia Stack at Track End" ) )
+                .Tooltip( _( "Drops the active microvia stack preset at the end of the currently routed track "
+                             "and continues on the target layer." ) )
+                .Icon( BITMAPS::add_via_stack )
+                .Flags( AF_NONE ) );
 
 static const TOOL_ACTION ACT_SelLayerAndPlaceThroughVia( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveRouter.SelLayerAndPlaceVia" )
@@ -273,6 +336,7 @@ ROUTER_TOOL::ROUTER_TOOL() :
         TOOL_BASE( "pcbnew.InteractiveRouter" ),
         m_lastTargetLayer( UNDEFINED_LAYER ),
         m_originalActiveLayer( UNDEFINED_LAYER ),
+        m_viaStackResumeLayer( UNDEFINED_LAYER ),
         m_inRouterTool( false ),
         m_inRouteSelected( false ),
         m_startWithVia( false )
@@ -604,6 +668,8 @@ bool ROUTER_TOOL::Init()
     menu.AddItem( PCB_ACTIONS::routerAttemptFinish,   hasOtherEnd );
     menu.AddItem( PCB_ACTIONS::routerAutorouteSelected, notRoutingCond
                                                             && SELECTION_CONDITIONS::NotEmpty );
+    menu.AddItem( PCB_ACTIONS::routerOptimizeSelected, notRoutingCond
+                                                            && SELECTION_CONDITIONS::NotEmpty );
     menu.AddItem( PCB_ACTIONS::breakTrack,            notRoutingCond );
 
     menu.AddItem( PCB_ACTIONS::drag45Degree,          notRoutingCond );
@@ -612,6 +678,7 @@ bool ROUTER_TOOL::Init()
     menu.AddItem( ACT_PlaceThroughVia,                SELECTION_CONDITIONS::ShowAlways );
     menu.AddItem( ACT_PlaceBlindVia,                  SELECTION_CONDITIONS::ShowAlways );
     menu.AddItem( ACT_PlaceMicroVia,                  SELECTION_CONDITIONS::ShowAlways );
+    menu.AddItem( ACT_PlaceViaStack, SELECTION_CONDITIONS::ShowAlways );
     menu.AddItem( ACT_SelLayerAndPlaceThroughVia,     SELECTION_CONDITIONS::ShowAlways );
     menu.AddItem( ACT_SelLayerAndPlaceBlindVia,       SELECTION_CONDITIONS::ShowAlways );
     menu.AddItem( ACT_SelLayerAndPlaceMicroVia,       SELECTION_CONDITIONS::ShowAlways );
@@ -740,7 +807,7 @@ void ROUTER_TOOL::saveRouterDebugLog()
         {
             lastLoggerSize = logger->GetEvents().size(); // prevent re-entry
             return;
-        }        
+        }
     }
     else
     {
@@ -793,7 +860,7 @@ void ROUTER_TOOL::saveRouterDebugLog()
 
     PCB_IO_KICAD_SEXPR  pcb_io;
 
-    pcb_io.SaveBoard( fname_dump.GetAbsolutePath(), m_iface->GetBoard(), nullptr );
+    pcb_io.SaveBoard( fname_dump.GetAbsolutePath(), *m_iface->GetBoard(), nullptr );
 
     PROJECT* prj = m_iface->GetBoard()->GetProject();
     prj->GetProjectFile().SaveAs( fname_dump.GetPath(), fname_dump.GetName() );
@@ -833,7 +900,7 @@ void ROUTER_TOOL::saveRouterDebugLog()
     if( !logData.m_BoardHash ) // should never happen...
         return;
 
-    logData.m_Mode = m_router->Mode();    
+    logData.m_Mode = m_router->Mode();
     logData.m_Events = logger->GetEvents();
 
     FILE*    log_f = wxFopen( fname_log.GetAbsolutePath(), "wb" );
@@ -1131,6 +1198,202 @@ int ROUTER_TOOL::onViaCommand( const TOOL_EVENT& aEvent )
 }
 
 
+int ROUTER_TOOL::onViaStackCommand( const TOOL_EVENT& aEvent )
+{
+    if( !IsToolActive() )
+        return 0;
+
+    if( !m_router->RoutingInProgress() || !m_router->Placer() )
+        return 0;
+
+    m_iface->SetBoard( board() );
+
+    BOARD_DESIGN_SETTINGS&               bds = board()->GetDesignSettings();
+    const std::vector<VIA_STACK_PRESET>& presets = bds.m_ViaStackPresets;
+
+    if( presets.empty() )
+    {
+        frame()->GetInfoBar()->ShowMessageFor(
+                _( "No microvia stack presets defined. Add one in Board Setup, Microvia Stacks." ), 3000,
+                wxICON_INFORMATION );
+        return 0;
+    }
+
+    int                     idx = std::clamp( bds.GetViaStackIndex(), 0, (int) presets.size() - 1 );
+    const VIA_STACK_PRESET& preset = presets[idx];
+
+    PCB_LAYER_ID currentLayer = m_iface->GetBoardLayerFromPNSLayer( m_router->GetCurrentLayer() );
+
+    if( currentLayer == UNDEFINED_LAYER )
+        return 0;
+
+    const LSET enabled = board()->GetEnabledLayers();
+
+    if( !enabled.Contains( preset.m_StartLayer ) || !enabled.Contains( preset.m_EndLayer ) )
+    {
+        frame()->GetInfoBar()->ShowMessageFor( _( "The microvia stack preset layers are not present on this board." ),
+                                               3000, wxICON_ERROR );
+        return 0;
+    }
+
+    PCB_LAYER_ID targetLayer = ViaStackTargetLayer( preset.m_StartLayer, preset.m_EndLayer, currentLayer );
+
+    if( targetLayer == UNDEFINED_LAYER )
+    {
+        frame()->GetInfoBar()->ShowMessageFor(
+                wxString::Format( _( "The microvia stack runs between %s and %s. Route on one of those layers "
+                                     "to place it." ),
+                                  board()->GetLayerName( preset.m_StartLayer ),
+                                  board()->GetLayerName( preset.m_EndLayer ) ),
+                3000, wxICON_ERROR );
+        return 0;
+    }
+
+    if( preset.m_Staggered )
+    {
+        if( m_router->IsPlacingVia() )
+            m_router->ToggleViaPlacement();
+
+        // The router cannot route through a staggered stack (lateral walk + connecting traces).
+        // Fix the track here and REMEMBER the stack, but build it only after routing tears down.
+        // Committing to the board while the PNS world is live invalidates its nodes (crash).
+        VECTOR2I            head = m_endSnapPoint;
+        const PNS::ITEM_SET traces = m_router->Placer()->Traces();
+
+        if( traces.Size() > 0 )
+        {
+            if( PNS::LINE* line = dynamic_cast<PNS::LINE*>( traces[0] ) )
+            {
+                if( line->PointCount() > 0 )
+                    head = line->CLine().CLastPoint();
+            }
+        }
+
+        if( !m_router->FixRoute( head, m_endItem, true, false ) )
+        {
+            frame()->GetInfoBar()->ShowMessageFor( _( "Could not end the track here for a microvia stack." ), 3000,
+                                                   wxICON_ERROR );
+            UpdateMessagePanel();
+            return 0;
+        }
+
+        m_pendingViaStack = true;
+        m_pendingStackHead = head;
+        m_pendingStackStart = currentLayer;
+        m_pendingStackEnd = targetLayer;
+
+        UpdateMessagePanel();
+        return 0;
+    }
+
+    // A via the route places with no net reports UNCONNECTED, not ORPHANED.
+    int net = NETINFO_LIST::UNCONNECTED;
+
+    if( !m_router->GetCurrentNets().empty() )
+    {
+        if( NETINFO_ITEM* ni = static_cast<NETINFO_ITEM*>( m_router->GetCurrentNets()[0] ) )
+            net = ni->GetNetCode();
+    }
+
+    int viaSize;
+    int viaDrill;
+
+    if( preset.m_UseNetclass )
+    {
+        NETINFO_ITEM* ni = board()->FindNet( net );
+        NETCLASS*     nc = ni ? ni->GetNetClass() : nullptr;
+
+        viaSize = ( nc && nc->HasuViaDiameter() ) ? nc->GetuViaDiameter() : bds.GetCurrentViaSize();
+        viaDrill = ( nc && nc->HasuViaDrill() ) ? nc->GetuViaDrill() : bds.GetCurrentViaDrill();
+
+        // Route with the size the stack's hops will resolve to from the via rules
+        PCB_VIA dummyVia( board() );
+        dummyVia.SetFlags( ROUTER_TRANSIENT );
+        dummyVia.SetViaType( VIATYPE::MICROVIA );
+        dummyVia.SetLayerPair( currentLayer, targetLayer );
+        dummyVia.SetNetCode( net );
+        dummyVia.SetPosition( m_endSnapPoint );
+        dummyVia.SetSizeFromRules( viaSize, viaDrill );
+
+        viaSize = dummyVia.GetWidth( PADSTACK::ALL_LAYERS );
+        viaDrill = dummyVia.GetDrillValue();
+    }
+    else
+    {
+        viaSize = preset.m_ViaSize > 0 ? preset.m_ViaSize : bds.GetCurrentViaSize();
+        viaDrill = preset.m_ViaDrill > 0 ? preset.m_ViaDrill : bds.GetCurrentViaDrill();
+    }
+
+    // Routing to a non-adjacent layer leaves one multi-hop microvia that finishInteractive()
+    // expands into a stack.
+    if( m_pendingStackedExpansions.empty() )
+    {
+        m_preRouteExpandableVias = PCB_VIA_STACK::CollectExpandableMicrovias( board() );
+    }
+
+    m_pendingStackedExpansions.push_back( { currentLayer, targetLayer, net, preset, std::nullopt } );
+    m_stackDropAwaitingVia = true;
+
+    PNS::SIZES_SETTINGS sizes = m_router->Sizes();
+    sizes.ClearLayerPairs();
+
+    sizes.SetViaDiameter( viaSize );
+    sizes.SetViaDrill( viaDrill );
+    sizes.SetViaType( VIATYPE::MICROVIA );
+    sizes.AddLayerPair( m_iface->GetPNSLayerFromBoardLayer( currentLayer ),
+                        m_iface->GetPNSLayerFromBoardLayer( targetLayer ) );
+
+    m_router->UpdateSizes( sizes );
+
+    if( !m_router->IsPlacingVia() )
+        m_router->ToggleViaPlacement();
+
+    if( m_router->RoutingInProgress() )
+    {
+        updateEndItem( aEvent );
+        m_router->Move( m_endSnapPoint, m_endItem );
+    }
+
+    UpdateMessagePanel();
+    return 0;
+}
+
+
+void ROUTER_TOOL::recordPendingStackViaPos()
+{
+    if( !m_stackDropAwaitingVia || !m_router->IsPlacingVia() )
+        return;
+
+    const PNS::ITEM_SET traces = m_router->Placer()->Traces();
+
+    if( traces.Size() == 0 )
+        return;
+
+    // The via lands where the placer's trace ends, which is not where the cursor is once
+    // the router has walked around or shoved.
+    if( PNS::LINE* line = dynamic_cast<PNS::LINE*>( traces[0] ) )
+    {
+        if( line->EndsWithVia() )
+            m_pendingStackedExpansions.back().m_Pos = line->Via().Pos();
+    }
+}
+
+
+void ROUTER_TOOL::commitPendingViaStack()
+{
+    m_pendingViaStack = false;
+
+    // Hand off to the interactive microvia stack placement, pre-anchored at the routed head, so
+    // the user steers each staggered hop exactly like free-standing placement. Running this only
+    // after the route has fully torn down keeps the board edit clear of the PNS world.
+    if( DRAWING_TOOL* drawingTool = m_toolMgr->GetTool<DRAWING_TOOL>() )
+    {
+        drawingTool->SeedViaStackStart( m_pendingStackHead, m_pendingStackStart, m_pendingStackEnd );
+        m_toolMgr->RunAction( PCB_ACTIONS::placeViaStack );
+    }
+}
+
+
 int ROUTER_TOOL::handleLayerSwitch( const TOOL_EVENT& aEvent, bool aForceVia )
 {
     wxCHECK( m_router, 0 );
@@ -1398,8 +1661,7 @@ int ROUTER_TOOL::handleLayerSwitch( const TOOL_EVENT& aEvent, bool aForceVia )
             if( currentLayer == targetLayer )
             {
                 WX_INFOBAR* infobar = frame()->GetInfoBar();
-                infobar->ShowMessageFor( _( "Via needs 2 different layers." ),
-                                         2000, wxICON_ERROR,
+                infobar->ShowMessageFor( _( "Via needs 2 different layers." ), 5000, wxICON_ERROR,
                                          WX_INFOBAR::MESSAGE_TYPE::DRC_VIOLATION );
                 return 0;
             }
@@ -1424,13 +1686,13 @@ int ROUTER_TOOL::handleLayerSwitch( const TOOL_EVENT& aEvent, bool aForceVia )
                                                  currentLayer );
 
         if( !constraint.IsNull() )
-            sizes.SetViaDiameter( constraint.m_Value.Opt() );
+            sizes.SetViaDiameter( constraint.m_Value.PinnedOpt() );
 
         constraint = bds.m_DRCEngine->EvalRules( HOLE_SIZE_CONSTRAINT, &dummyVia, nullptr,
                                                  currentLayer );
 
         if( !constraint.IsNull() )
-            sizes.SetViaDrill( constraint.m_Value.Opt() );
+            sizes.SetViaDrill( constraint.m_Value.PinnedOpt() );
     }
     else
     {
@@ -1465,6 +1727,14 @@ bool ROUTER_TOOL::prepareInteractive( VECTOR2D aStartPosition )
 {
     PCB_EDIT_FRAME* editFrame = getEditFrame<PCB_EDIT_FRAME>();
     PCB_LAYER_ID    pcbLayer = getStartLayer( m_startItem );
+
+    // The stack handoff names the resume layer so snapping does not guess it from nearby copper.
+    if( m_viaStackResumeLayer != UNDEFINED_LAYER )
+    {
+        pcbLayer = m_viaStackResumeLayer;
+        m_viaStackResumeLayer = UNDEFINED_LAYER;
+    }
+
     int             pnsLayer = m_iface->GetPNSLayerFromBoardLayer( pcbLayer );
 
     if( !::IsCopperLayer( pcbLayer ) )
@@ -1540,6 +1810,24 @@ bool ROUTER_TOOL::finishInteractive()
 {
     m_router->StopRouting();
 
+    m_stackDropAwaitingVia = false;
+
+    if( !m_pendingStackedExpansions.empty() )
+    {
+        BOARD_COMMIT commit( frame() );
+
+        auto matcher = [&]( PCB_VIA* aVia ) -> const VIA_STACK_PRESET*
+        {
+            return MatchPendingStackExpansion( aVia, m_preRouteExpandableVias, m_pendingStackedExpansions );
+        };
+
+        if( PCB_VIA_STACK::ExpandMultiHopMicrovias( board(), &commit, matcher ) > 0 )
+            commit.Push( _( "Expand Microvia Stacks" ), APPEND_UNDO );
+
+        m_pendingStackedExpansions.clear();
+        m_preRouteExpandableVias.clear();
+    }
+
     m_startItem = nullptr;
     m_endItem   = nullptr;
 
@@ -1558,6 +1846,8 @@ bool ROUTER_TOOL::finishInteractive()
 void ROUTER_TOOL::performRouting( VECTOR2D aStartPosition )
 {
     m_router->ClearViewDecorations();
+
+    bool startWithVia = std::exchange( m_startWithVia, false );
 
     if( !prepareInteractive( aStartPosition ) )
         return;
@@ -1587,10 +1877,13 @@ void ROUTER_TOOL::performRouting( VECTOR2D aStartPosition )
     // Set initial cursor
     setCursor();
 
+    // A via or through pad already reaching the layer 'V' switched to must not gain a second via
+    int  viaTargetLayer = m_iface->GetPNSLayerFromBoardLayer( m_originalActiveLayer );
+    bool startReachesViaTarget = m_startItem && m_startItem->Layers().Overlaps( viaTargetLayer );
+
     // If the user pressed 'V' before starting to route, enable via placement now
-    if( m_startWithVia )
+    if( startWithVia && !startReachesViaTarget )
     {
-        m_startWithVia = false;
         handleLayerSwitch( ACT_PlaceThroughVia.MakeEvent(), true );
     }
 
@@ -1600,6 +1893,10 @@ void ROUTER_TOOL::performRouting( VECTOR2D aStartPosition )
 
     while( TOOL_EVENT* evt = Wait() )
     {
+        // Snapping uses ViewGetLOD(), which uses the layerVisibilityCache.  Catch any visibility
+        // changes while routing.
+        m_toolMgr->GetView()->SyncLayerVisibilityCache();
+
         setCursor();
 
         // Don't crash if we missed an operation that canceled routing.
@@ -1613,7 +1910,7 @@ void ROUTER_TOOL::performRouting( VECTOR2D aStartPosition )
 
         handleCommonEvents( *evt );
 
-        if( evt->IsMotion() )
+        if( evt->IsMotion() || evt->IsAction( &ACTIONS::refreshPreview ) )
         {
             updateEndItem( *evt );
             m_router->Move( m_endSnapPoint, m_endItem );
@@ -1684,6 +1981,7 @@ void ROUTER_TOOL::performRouting( VECTOR2D aStartPosition )
             }
         }
         else if( evt->IsClick( BUT_LEFT )
+                     || evt->IsAction( &ACTIONS::cursorClick )
                      || evt->IsDrag( BUT_LEFT )
                      || evt->IsAction( &PCB_ACTIONS::routeSingleTrack ) )
         {
@@ -1691,8 +1989,13 @@ void ROUTER_TOOL::performRouting( VECTOR2D aStartPosition )
             bool needLayerSwitch = m_router->IsPlacingVia();
             bool forceCommit = false;
 
+            recordPendingStackViaPos();
+
             if( m_router->FixRoute( m_endSnapPoint, m_endItem, false, forceCommit ) )
                 break;
+
+            if( !m_router->IsPlacingVia() )
+                m_stackDropAwaitingVia = false;
 
             if( needLayerSwitch )
             {
@@ -1709,6 +2012,19 @@ void ROUTER_TOOL::performRouting( VECTOR2D aStartPosition )
             updateEndItem( *evt );
             m_router->Move( m_endSnapPoint, m_endItem );
             m_startItem = nullptr;
+        }
+        else if( evt->IsAction( &ACT_PlaceViaStack ) )
+        {
+            onViaStackCommand( *evt );
+
+            // A staggered drop fixes the track and queues the stack, break so the normal
+            // teardown runs (restores the cursor) and the generator is committed after the
+            // PNS world is gone.
+            if( m_pendingViaStack || !m_router->RoutingInProgress() )
+                break;
+
+            updateEndItem( *evt );
+            m_router->Move( m_endSnapPoint, m_endItem );
         }
         else if( evt->IsAction( &ACT_SwitchPosture ) )
         {
@@ -1727,7 +2043,9 @@ void ROUTER_TOOL::performRouting( VECTOR2D aStartPosition )
             setCursor();
             UpdateMessagePanel();
         }
-        else if( evt->IsAction( &ACTIONS::finishInteractive ) || evt->IsDblClick( BUT_LEFT )  )
+        else if( evt->IsAction( &ACTIONS::finishInteractive )
+                    || evt->IsDblClick( BUT_LEFT )
+                    || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
             // Stop current routing:
             bool forceFinish = true;
@@ -1745,6 +2063,8 @@ void ROUTER_TOOL::performRouting( VECTOR2D aStartPosition )
 
             if( evt->IsActivate() && !evt->IsMoveTool() )
                 m_cancelled = true;
+
+            m_router->AbortPlacement();
 
             break;
         }
@@ -1775,6 +2095,10 @@ void ROUTER_TOOL::performRouting( VECTOR2D aStartPosition )
     m_iface->SetCommitFlags( 0 );
 
     finishInteractive();
+
+    // The PNS world is now torn down, so it is safe to add a queued staggered stack to the board.
+    if( m_pendingViaStack )
+        commitPendingViaStack();
 }
 
 
@@ -1858,6 +2182,17 @@ void ROUTER_TOOL::breakTrack()
     if( !m_startItem )
         return;
 
+    // Never split a via stack's connecting trace. The stack manages it as a unit, and a
+    // split fragment would drop out of the group. Other generators still allow splitting.
+    if( BOARD_ITEM* parent = m_startItem->Parent() )
+    {
+        if( PCB_GENERATOR* generator = dynamic_cast<PCB_GENERATOR*>( parent->GetParentGroup() ) )
+        {
+            if( generator->GetGeneratorType() == PCB_VIA_STACK::GENERATOR_TYPE )
+                return;
+        }
+    }
+
     if( m_startItem->OfKind( PNS::ITEM::SEGMENT_T | PNS::ITEM::ARC_T ) )
         m_router->BreakSegmentOrArc( m_startItem, m_startSnapPoint );
 }
@@ -1883,8 +2218,7 @@ int ROUTER_TOOL::RouteSelected( const TOOL_EVENT& aEvent )
 
     m_toolMgr->RunAction( ACTIONS::selectionClear );
 
-    TOOL_EVENT pushedEvent = aEvent;
-    frame->PushTool( aEvent );
+    SCOPED_TOOL_PUSHER raii( frame, aEvent );
 
     auto setCursor =
             [&]()
@@ -1999,8 +2333,104 @@ int ROUTER_TOOL::RouteSelected( const TOOL_EVENT& aEvent )
     }
 
     m_iface->SetCommitFlags( 0 );
-    frame->PopTool( pushedEvent );
     m_inRouteSelected = false;
+    return 0;
+}
+
+
+int ROUTER_TOOL::OptimizeSelected( const TOOL_EVENT& aEvent )
+{
+    PCB_EDIT_FRAME* frame = getEditFrame<PCB_EDIT_FRAME>();
+    const PCB_SELECTION& selection = m_toolMgr->GetTool<PCB_SELECTION_TOOL>()->GetSelection();
+
+    if( selection.Size() == 0 )
+        return 0;
+
+    std::vector<BOARD_CONNECTED_ITEM*> trackItems;
+
+    for( EDA_ITEM* item : selection.GetItemsSortedBySelectionOrder() )
+    {
+        if( item->Type() == PCB_TRACE_T || item->Type() == PCB_ARC_T )
+            trackItems.push_back( static_cast<BOARD_CONNECTED_ITEM*>( item ) );
+    }
+
+    if( trackItems.empty() )
+        return 0;
+
+    m_toolMgr->RunAction( ACTIONS::selectionClear );
+    Activate();
+
+    PNS::NODE* world = m_router->GetWorld();
+
+    // Differential pairs can't be optimized as individual lines
+    // TODO once we have a differential pair line primitive, we could handle them...
+    int dpSkipped = std::erase_if( trackItems,
+                                   [&]( BOARD_CONNECTED_ITEM* aItem )
+                                   {
+                                       PNS::RULE_RESOLVER* rr = world->GetRuleResolver();
+                                       return rr && rr->DpCoupledNet( aItem->GetNet() );
+                                   } );
+
+    if( dpSkipped > 0 )
+        frame->ShowInfoBarMsg( _( "Differential pair members cannot be optimized." ) );
+
+    bool groupStart = true;
+
+    for( BOARD_CONNECTED_ITEM* trackItem : trackItems )
+    {
+        PNS::ITEM* pnsItem = world->FindItemByParent( trackItem );
+
+        if( !pnsItem || !pnsItem->OfKind( PNS::ITEM::SEGMENT_T | PNS::ITEM::ARC_T ) )
+            continue;
+
+        PNS::LINKED_ITEM* linkedItem = static_cast<PNS::LINKED_ITEM*>( pnsItem );
+
+        PNS::LINE originalLine = world->AssembleLine( linkedItem );
+
+        // TODO: could allow these once we have arc-aware drag/optimize
+        if( originalLine.ArcCount() > 0 )
+            continue;
+
+        PNS::NODE* branch = world->Branch();
+        branch->Remove( originalLine );
+
+        PNS::LINE optimizedLine( originalLine );
+        optimizedLine.ClearLinks();
+
+        int effort = PNS::OPTIMIZER::MERGE_SEGMENTS
+                     | PNS::OPTIMIZER::MERGE_OBTUSE
+                     | PNS::OPTIMIZER::MERGE_COLINEAR
+                     | PNS::OPTIMIZER::SMART_PADS
+                     | PNS::OPTIMIZER::FANOUT_CLEANUP;
+
+        if( m_router->Settings().GetRestrictAngles() )
+            effort |= PNS::OPTIMIZER::REQUIRE_OBTUSE_ANGLES;
+
+        bool optimized = PNS::OPTIMIZER::Optimize( &optimizedLine, effort, branch );
+
+        if( !optimized || optimizedLine.CompareGeometry( originalLine ) )
+        {
+            delete branch;
+            continue;
+        }
+
+        if( branch->CheckColliding( &optimizedLine ) )
+        {
+            delete branch;
+            continue;
+        }
+
+        if( groupStart )
+            groupStart = false;
+        else
+            m_iface->SetCommitFlags( APPEND_UNDO );
+
+        branch->Add( optimizedLine );
+        m_router->CommitRouting( branch );
+    }
+
+    m_iface->SetCommitFlags( 0 );
+
     return 0;
 }
 
@@ -2027,8 +2457,8 @@ int ROUTER_TOOL::MainLoop( const TOOL_EVENT& aEvent )
     // Deselect all items
     m_toolMgr->RunAction( ACTIONS::selectionClear );
 
-    TOOL_EVENT pushedEvent = aEvent;
-    frame->PushTool( aEvent );
+    TOOL_EVENT         originalEvent = aEvent;          // This can change out from under us when the event loop runs
+    SCOPED_TOOL_PUSHER raii( frame, originalEvent );
 
     auto setCursor =
             [&]()
@@ -2053,26 +2483,26 @@ int ROUTER_TOOL::MainLoop( const TOOL_EVENT& aEvent )
     // Main loop: keep receiving events
     while( TOOL_EVENT* evt = Wait() )
     {
+        // Snapping uses ViewGetLOD(), which uses the layerVisibilityCache.  Catch any visibility
+        // changes while routing.
+        m_toolMgr->GetView()->SyncLayerVisibilityCache();
+
         if( !evt->IsDrag() )
             setCursor();
 
         if( evt->IsCancelInteractive() )
         {
-            frame->PopTool( pushedEvent );
             break;
         }
         else if( evt->IsActivate() )
         {
             if( evt->IsMoveTool() || evt->IsEditorTool() )
             {
-                // leave ourselves on the stack so we come back after the move
-                break;
+                // Make sure we come back after the move tool runs
+                frame->PushTool( originalEvent );
             }
-            else
-            {
-                frame->PopTool( pushedEvent );
-                break;
-            }
+
+            break;
         }
         else if( evt->Action() == TA_UNDO_REDO_PRE )
         {
@@ -2082,7 +2512,7 @@ int ROUTER_TOOL::MainLoop( const TOOL_EVENT& aEvent )
         {
             m_router->SyncWorld();
         }
-        else if( evt->IsMotion() )
+        else if( evt->IsMotion() || evt->IsAction( &ACTIONS::refreshPreview ) )
         {
             updateStartItem( *evt );
         }
@@ -2103,6 +2533,7 @@ int ROUTER_TOOL::MainLoop( const TOOL_EVENT& aEvent )
             evt->SetPassEvent( false );
         }
         else if( evt->IsClick( BUT_LEFT )
+              || evt->IsAction( &ACTIONS::cursorClick )
               || evt->IsAction( &PCB_ACTIONS::routeSingleTrack )
               || evt->IsAction( &PCB_ACTIONS::routeDiffPair ) )
         {
@@ -2139,10 +2570,7 @@ int ROUTER_TOOL::MainLoop( const TOOL_EVENT& aEvent )
         }
 
         if( m_cancelled )
-        {
-            frame->PopTool( pushedEvent );
             break;
-        }
     }
 
     // Store routing settings till the next invocation
@@ -2194,9 +2622,13 @@ void ROUTER_TOOL::performDragging( int aMode )
 
     while( TOOL_EVENT* evt = Wait() )
     {
+        // Snapping uses ViewGetLOD(), which uses the layerVisibilityCache.  Catch any visibility
+        // changes while dragging.
+        m_toolMgr->GetView()->SyncLayerVisibilityCache();
+
         ctls->ForceCursorPosition( false );
 
-        if( evt->IsMotion() )
+        if( evt->IsMotion() || evt->IsAction( &ACTIONS::refreshPreview ) )
         {
             updateEndItem( *evt );
             m_router->Move( m_endSnapPoint, m_endItem );
@@ -2224,7 +2656,7 @@ void ROUTER_TOOL::performDragging( int aMode )
                 }
             }
         }
-        else if( evt->IsClick( BUT_LEFT ) )
+        else if( evt->IsClick( BUT_LEFT ) || evt->IsAction( &ACTIONS::cursorClick ) )
         {
             bool forceFinish = false;
             bool forceCommit = evt->Modifier( MD_CTRL );
@@ -2464,8 +2896,7 @@ int ROUTER_TOOL::InlineDrag( const TOOL_EVENT& aEvent )
 
     m_toolMgr->RunAction( ACTIONS::selectionClear );
 
-    TOOL_EVENT pushedEvent = aEvent;
-    frame()->PushTool( aEvent );
+    SCOPED_TOOL_PUSHER raii( frame(), aEvent );
     Activate();
 
     m_startItem = nullptr;
@@ -2487,6 +2918,9 @@ int ROUTER_TOOL::InlineDrag( const TOOL_EVENT& aEvent )
     // The PNS world may be stale if the board has been modified since the last sync (e.g. by
     // a Move operation). Sync it now so that FindItemByParent and joint lookups work correctly.
     m_router->SyncWorld();
+
+    // Snapping uses ViewGetLOD(), which uses the layerVisibilityCache.  Make sure it's up-to-date.
+    m_toolMgr->GetView()->SyncLayerVisibilityCache();
 
     if( !footprints.empty() )
     {
@@ -2533,8 +2967,7 @@ int ROUTER_TOOL::InlineDrag( const TOOL_EVENT& aEvent )
                 courtyardClearanceDRC.m_FpInMove.push_back( footprint );
         }
 
-        dynamicData = std::make_unique<CONNECTIVITY_DATA>( board()->GetConnectivity(),
-                                                           dynamicItems, true );
+        dynamicData = std::make_unique<CONNECTIVITY_DATA>( board()->GetConnectivity(), dynamicItems, true );
         connectivityData->BlockRatsnestItems( dynamicItems );
     }
     else
@@ -2646,7 +3079,6 @@ int ROUTER_TOOL::InlineDrag( const TOOL_EVENT& aEvent )
 
         restoreSelection( selection );
         controls()->ForceCursorPosition( false );
-        frame()->PopTool( pushedEvent );
         highlightNets( false );
         return 0;
     }
@@ -2682,9 +3114,14 @@ int ROUTER_TOOL::InlineDrag( const TOOL_EVENT& aEvent )
 
     while( TOOL_EVENT* evt = Wait() )
     {
+        // Snapping uses ViewGetLOD(), which uses the layerVisibilityCache.  Catch any visibility
+        // changes while dragging.
+        m_toolMgr->GetView()->SyncLayerVisibilityCache();
+
         setCursor();
 
-        if( evt->IsCancelInteractive() || evt->IsAction( &PCB_ACTIONS::cancelCurrentItem )
+        if( evt->IsCancelInteractive()
+                || evt->IsAction( &PCB_ACTIONS::cancelCurrentItem )
                 || evt->IsActivate() )
         {
             if( wasLocked )
@@ -2694,7 +3131,9 @@ int ROUTER_TOOL::InlineDrag( const TOOL_EVENT& aEvent )
 
             break;
         }
-        else if( evt->IsMotion() || evt->IsDrag( BUT_LEFT ) )
+        else if( evt->IsMotion()
+                || evt->IsAction( &ACTIONS::refreshPreview )
+                || evt->IsDrag( BUT_LEFT ) )
         {
             hasMouseMoved = true;
             updateEndItem( *evt );
@@ -2774,8 +3213,7 @@ int ROUTER_TOOL::InlineDrag( const TOOL_EVENT& aEvent )
                     if( !dragStatus )
                     {
                         wxString hint;
-                        hint.Printf( _( "(%s to commit anyway.)" ),
-                                    KeyNameFromKeyCode( MD_CTRL + PSEUDO_WXK_CLICK ) );
+                        hint.Printf( _( "(%s to commit anyway.)" ), KeyNameFromKeyCode( MD_CTRL + PSEUDO_WXK_CLICK ) );
 
                         ROUTER_STATUS_VIEW_ITEM* statusItem = new ROUTER_STATUS_VIEW_ITEM();
                         statusItem->SetMessage( _( "Track violates DRC." ) );
@@ -2786,7 +3224,9 @@ int ROUTER_TOOL::InlineDrag( const TOOL_EVENT& aEvent )
                 }
             }
         }
-        else if( hasMouseMoved && ( evt->IsMouseUp( BUT_LEFT ) || evt->IsClick( BUT_LEFT ) ) )
+        else if( hasMouseMoved && (   evt->IsMouseUp( BUT_LEFT )
+                                   || evt->IsClick( BUT_LEFT )
+                                   || evt->IsAction( &ACTIONS::cursorClick ) ) )
         {
             bool forceFinish = false;
             bool forceCommit = evt->Modifier( MD_CTRL );
@@ -2871,7 +3311,7 @@ int ROUTER_TOOL::InlineDrag( const TOOL_EVENT& aEvent )
     {
         std::vector<EDA_ITEM*> newItems;
 
-        for( auto lseg : leaderSegments )
+        for( PNS::ITEM* lseg : leaderSegments )
             newItems.push_back( lseg->Parent() );
 
         m_toolMgr->RunAction<EDA_ITEMS*>( ACTIONS::selectItems, &newItems );
@@ -2881,7 +3321,6 @@ int ROUTER_TOOL::InlineDrag( const TOOL_EVENT& aEvent )
     controls()->SetAutoPan( false );
     controls()->ForceCursorPosition( false );
     frame()->UndoRedoBlock( false );
-    frame()->PopTool( pushedEvent );
     highlightNets( false );
     view()->ClearPreview();
     view()->ShowPreview( false );
@@ -2897,8 +3336,7 @@ int ROUTER_TOOL::InlineBreakTrack( const TOOL_EVENT& aEvent )
     if( selection.Size() != 1 )
         return 0;
 
-    const BOARD_CONNECTED_ITEM* item =
-            static_cast<const BOARD_CONNECTED_ITEM*>( selection.Front() );
+    const BOARD_CONNECTED_ITEM* item = static_cast<const BOARD_CONNECTED_ITEM*>( selection.Front() );
 
     if( item->Type() != PCB_TRACE_T && item->Type() != PCB_ARC_T )
         return 0;
@@ -2906,6 +3344,9 @@ int ROUTER_TOOL::InlineBreakTrack( const TOOL_EVENT& aEvent )
     m_toolMgr->RunAction( ACTIONS::selectionClear );
 
     Activate();
+
+    // Snapping uses ViewGetLOD(), which uses the layerVisibilityCache.  Make sure it's up-to-date.
+    m_toolMgr->GetView()->SyncLayerVisibilityCache();
 
     m_startItem = m_router->GetWorld()->FindItemByParent( item );
 
@@ -3146,6 +3587,7 @@ void ROUTER_TOOL::setTransitions()
     Go( &ROUTER_TOOL::RouteSelected,          PCB_ACTIONS::routerRouteSelected.MakeEvent() );
     Go( &ROUTER_TOOL::RouteSelected,          PCB_ACTIONS::routerRouteSelectedFromEnd.MakeEvent() );
     Go( &ROUTER_TOOL::RouteSelected,          PCB_ACTIONS::routerAutorouteSelected.MakeEvent() );
+    Go( &ROUTER_TOOL::OptimizeSelected,       PCB_ACTIONS::routerOptimizeSelected.MakeEvent() );
     Go( &ROUTER_TOOL::DpDimensionsDialog,     PCB_ACTIONS::routerDiffPairDialog.MakeEvent() );
     Go( &ROUTER_TOOL::SettingsDialog,         PCB_ACTIONS::routerSettingsDialog.MakeEvent() );
     Go( &ROUTER_TOOL::ChangeRouterMode,       PCB_ACTIONS::routerHighlightMode.MakeEvent() );
@@ -3158,6 +3600,7 @@ void ROUTER_TOOL::setTransitions()
     Go( &ROUTER_TOOL::onViaCommand,           ACT_PlaceThroughVia.MakeEvent() );
     Go( &ROUTER_TOOL::onViaCommand,           ACT_PlaceBlindVia.MakeEvent() );
     Go( &ROUTER_TOOL::onViaCommand,           ACT_PlaceMicroVia.MakeEvent() );
+    Go( &ROUTER_TOOL::onViaStackCommand, ACT_PlaceViaStack.MakeEvent() );
     Go( &ROUTER_TOOL::onViaCommand,           ACT_SelLayerAndPlaceThroughVia.MakeEvent() );
     Go( &ROUTER_TOOL::onViaCommand,           ACT_SelLayerAndPlaceBlindVia.MakeEvent() );
     Go( &ROUTER_TOOL::onViaCommand,           ACT_SelLayerAndPlaceMicroVia.MakeEvent() );

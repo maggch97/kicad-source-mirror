@@ -29,6 +29,17 @@
 #include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
 #include <tools/pcb_selection_tool.h>
+#include <tools/edit_tool.h>
+#include <tools/constraint_edit_tool.h>
+#include <constraints/board_constraint_adapter.h>
+#include <constraints/constraint_builder.h>
+#include <constraints/pcb_constraint.h>
+#include <drill/drill_chart_model.h>
+#include <math/util.h>
+#include <base_units.h>
+#include <pcb_generated_table.h>
+#include <pcb_drill_map.h>
+#include <pcb_shape.h>
 #include <eda_units.h>
 #include <properties/property_mgr.h>
 #include <properties/pg_editors.h>
@@ -38,11 +49,13 @@
 #include <board.h>
 #include <properties/pg_properties.h>
 #include <properties/property.h>
+#include <pcb_dimension.h>
 #include <pcb_shape.h>
 #include <pcb_text.h>
 #include <pcb_track.h>
 #include <pcb_generator.h>
 #include <generators/pcb_tuning_pattern.h>
+#include <generators/pcb_via_stitch.h>
 #include <pad.h>
 #include <footprint.h>
 #include <pcb_field.h>
@@ -60,98 +73,6 @@
 #include <wx/msgdlg.h>
 
 #include <cmath>
-
-static const wxString MISSING_FIELD_SENTINEL = wxS( "\uE000" );
-
-class PCB_FOOTPRINT_FIELD_PROPERTY : public PROPERTY_BASE
-{
-public:
-    PCB_FOOTPRINT_FIELD_PROPERTY( const wxString& aName ) :
-            PROPERTY_BASE( aName ),
-            m_name( aName )
-    {
-    }
-
-    size_t OwnerHash() const override { return TYPE_HASH( FOOTPRINT ); }
-    size_t BaseHash() const override { return TYPE_HASH( FOOTPRINT ); }
-    size_t TypeHash() const override { return TYPE_HASH( wxString ); }
-
-    bool Writeable( INSPECTABLE* aObject ) const override
-    {
-        return PROPERTY_BASE::Writeable( aObject );
-    }
-
-    void setter( void* obj, wxAny& v ) override
-    {
-        wxString value;
-
-        if( !v.GetAs( &value ) )
-            return;
-
-        FOOTPRINT* footprint = reinterpret_cast<FOOTPRINT*>( obj );
-        PCB_FIELD* field = footprint->GetField( m_name );
-
-        wxString variantName;
-
-        if( footprint->GetBoard() )
-            variantName = footprint->GetBoard()->GetCurrentVariant();
-
-        if( !variantName.IsEmpty() )
-        {
-            // Store the value as a variant override
-            FOOTPRINT_VARIANT* variant = footprint->AddVariant( variantName );
-
-            if( variant )
-                variant->SetFieldValue( m_name, value );
-        }
-        else
-        {
-            // Set the base field value
-            if( !field )
-            {
-                PCB_FIELD* newField = new PCB_FIELD( footprint, FIELD_T::USER, m_name );
-                newField->SetText( value );
-                footprint->Add( newField );
-            }
-            else
-            {
-                field->SetText( value );
-            }
-        }
-    }
-
-    wxAny getter( const void* obj ) const override
-    {
-        const FOOTPRINT* footprint = reinterpret_cast<const FOOTPRINT*>( obj );
-        PCB_FIELD* field = footprint->GetField( m_name );
-
-        if( field )
-        {
-            wxString variantName;
-
-            if( footprint->GetBoard() )
-                variantName = footprint->GetBoard()->GetCurrentVariant();
-
-            wxString text;
-
-            if( !variantName.IsEmpty() )
-                text = footprint->GetFieldValueForVariant( variantName, m_name );
-            else
-                text = field->GetText();
-
-            return wxAny( text );
-        }
-        else
-        {
-            return wxAny( MISSING_FIELD_SENTINEL );
-        }
-    }
-
-private:
-    wxString m_name;
-};
-
-std::set<wxString> PCB_PROPERTIES_PANEL::m_currentFieldNames;
 
 
 class PG_NET_SELECTOR_EDITOR : public wxPGEditor
@@ -292,9 +213,9 @@ public:
 
         std::shared_ptr<bool> popupShown = std::make_shared<bool>( false );
         auto commitValue =
-                [this, aGrid, aProperty]()
+                [this, aGrid, aProperty, editor]()
                 {
-                    if( !m_unitBinder )
+                    if( !m_unitBinder || editor->GetValue() == INDETERMINATE_STATE )
                         return;
 
                     wxVariant val( static_cast<long>( m_unitBinder->GetValue() ) );
@@ -330,7 +251,7 @@ public:
                       } );
 
         editor->Bind( wxEVT_CHAR_HOOK,
-                      [commitValue, popupShown]( wxKeyEvent& aEvent )
+                      [commitValue, editor, popupShown]( wxKeyEvent& aEvent )
                       {
                           // Pressing Enter after typing a custom value should apply the typed value,
                           // not the first preset in the dropdown.
@@ -338,8 +259,13 @@ public:
                                 || aEvent.GetKeyCode() == WXK_NUMPAD_ENTER )
                               && !*popupShown )
                           {
-                              commitValue();
-                              return;
+                              if( editor->GetValue() != INDETERMINATE_STATE )
+                              {
+                                  commitValue();
+                                  return;
+                              }
+
+                              // Let the property grid accept an unchanged mixed value.
                           }
 
                           aEvent.Skip();
@@ -367,7 +293,7 @@ public:
         wxCHECK( editor, /* void */ );
 
         if( aProperty->IsValueUnspecified() )
-            m_unitBinder->ChangeValue( INDETERMINATE_STATE );
+            editor->ChangeValue( INDETERMINATE_STATE );
         else
             m_unitBinder->ChangeValue( aProperty->GetValue().GetLong() );
     }
@@ -431,6 +357,18 @@ PCB_PROPERTIES_PANEL::PCB_PROPERTIES_PANEL( wxWindow* aParent, PCB_BASE_EDIT_FRA
         m_propMgr( PROPERTY_MANAGER::Instance() ),
         m_scaleConfirmPending( false )
 {
+    addCategoryButton( _HKI( "Custom Properties" ), _( "Add Custom Property" ), BITMAPS::small_plus,
+                       [this]()
+                       {
+                           addBlankCustomProperty();
+                       } );
+
+    addCategoryButton( _HKI( "Fields" ), _( "Add Field" ), BITMAPS::small_plus,
+                       [this]()
+                       {
+                           addBlankField();
+                       } );
+
     m_propMgr.Rebuild();
     bool found = false;
 
@@ -532,6 +470,11 @@ PCB_PROPERTIES_PANEL::PCB_PROPERTIES_PANEL( wxWindow* aParent, PCB_BASE_EDIT_FRA
         PG_URL_EDITOR* urlEditor = new PG_URL_EDITOR( m_frame );
         m_urlEditorInstance = static_cast<PG_URL_EDITOR*>( wxPropertyGrid::RegisterEditorClass( urlEditor ) );
     }
+
+    Bind( wxEVT_MENU, &PCB_PROPERTIES_PANEL::onContextMenu, this, ID_CTX_ADD_FIELD );
+    Bind( wxEVT_MENU, &PCB_PROPERTIES_PANEL::onContextMenu, this, ID_CTX_ADD_CUSTOM_PROPERTY );
+    Bind( wxEVT_MENU, &PCB_PROPERTIES_PANEL::onContextMenu, this, ID_CTX_REMOVE_FIELD );
+    Bind( wxEVT_MENU, &PCB_PROPERTIES_PANEL::onContextMenu, this, ID_CTX_REMOVE_CUSTOM_PROPERTY );
 }
 
 
@@ -609,47 +552,344 @@ void PCB_PROPERTIES_PANEL::AfterCommit()
 }
 
 
-void PCB_PROPERTIES_PANEL::rebuildProperties( const SELECTION& aSelection )
+bool PCB_PROPERTIES_PANEL::isKeyEditable( const wxPGProperty* aPGProp ) const
 {
-    m_currentFieldNames.clear();
+    PROPERTY_BASE* prop = static_cast<PROPERTY_BASE*>( aPGProp->GetClientData() );
 
-    for( EDA_ITEM* item : aSelection )
+    if( !prop )
+        return false;
+
+    EDA_ITEM* item = const_cast<PCB_PROPERTIES_PANEL*>( this )->getFrontItem();
+
+    if( !item )
+        return false;
+
+    if( prop->Group() == _HKI( "Custom Properties" ) )
+        return true;
+
+    if( item->Type() != PCB_FOOTPRINT_T )
+        return false;
+
+    PCB_FIELD* field = static_cast<FOOTPRINT*>( item )->GetField( prop->Name() );
+
+    return field && !field->IsMandatory() && !field->IsPrivate();
+}
+
+
+bool PCB_PROPERTIES_PANEL::isKeyNameInUse( const wxString& aName ) const
+{
+    EDA_ITEM* item = const_cast<PCB_PROPERTIES_PANEL*>( this )->getFrontItem();
+
+    if( !item )
+        return false;
+
+    return m_propMgr.GetProperty( item, aName ) != nullptr;
+}
+
+
+void PCB_PROPERTIES_PANEL::onKeyRenamed( const wxString& aOldName, const wxString& aNewName )
+{
+    SELECTION fallbackSelection;
+    const SELECTION& selection = getSelection( fallbackSelection );
+
+    BOARD_COMMIT changes( m_frame );
+    PROPERTY_COMMIT_HANDLER handler( &changes );
+
+    for( EDA_ITEM* item : selection )
+    {
+        if( !item->IsBOARD_ITEM() )
+            continue;
+
+        BOARD_ITEM* boardItem = static_cast<BOARD_ITEM*>( item );
+
+        if( boardItem->Type() == PCB_FOOTPRINT_T )
+        {
+            FOOTPRINT* footprint = static_cast<FOOTPRINT*>( boardItem );
+            PCB_FIELD* field     = footprint->GetField( aOldName );
+
+            if( field && !field->IsMandatory() )
+            {
+                changes.Modify( footprint, nullptr, RECURSE_MODE::NO_RECURSE );
+                field->SetName( aNewName );
+                continue;
+            }
+        }
+
+        wxString value;
+
+        if( boardItem->GetCustomProperty( aOldName, value ) )
+        {
+            changes.Modify( boardItem, nullptr, RECURSE_MODE::NO_RECURSE );
+            boardItem->RemoveCustomProperty( aOldName );
+            boardItem->SetCustomProperty( aNewName, value );
+        }
+    }
+
+    changes.Push( _( "Rename Property" ) );
+
+    AfterCommit();
+}
+
+
+bool PCB_PROPERTIES_PANEL::buildContextMenu( wxMenu& aMenu, wxPGProperty* aPGProp )
+{
+    if( aPGProp->IsCategory() )
+    {
+        if( aPGProp->GetLabel() == wxGetTranslation( _HKI( "Fields" ) ) )
+            aMenu.Append( ID_CTX_ADD_FIELD, _( "Add Field" ) );
+        else if( aPGProp->GetLabel() == wxGetTranslation( _HKI( "Custom Properties" ) ) )
+            aMenu.Append( ID_CTX_ADD_CUSTOM_PROPERTY, _( "Add Custom Property" ) );
+    }
+    else
+    {
+        PROPERTY_BASE* prop = static_cast<PROPERTY_BASE*>( aPGProp->GetClientData() );
+
+        if( !prop )
+            return false;
+
+        if( prop->Group() == _HKI( "Fields" ) )
+        {
+            if( isKeyEditable( aPGProp ) )
+                aMenu.Append( ID_CTX_REMOVE_FIELD, _( "Remove Field" ) );
+
+            aMenu.Append( ID_CTX_ADD_FIELD, _( "Add Field" ) );
+        }
+        else if( prop->Group() == _HKI( "Custom Properties" ) )
+        {
+            aMenu.Append( ID_CTX_REMOVE_CUSTOM_PROPERTY, _( "Remove Custom Property" ) );
+            aMenu.Append( ID_CTX_ADD_CUSTOM_PROPERTY, _( "Add Custom Property" ) );
+        }
+    }
+
+    return aMenu.GetMenuItemCount() > 0;
+}
+
+
+void PCB_PROPERTIES_PANEL::onContextMenu( wxCommandEvent& aEvent )
+{
+    switch( aEvent.GetId() )
+    {
+    case ID_CTX_ADD_FIELD:              addBlankField();                                    break;
+    case ID_CTX_ADD_CUSTOM_PROPERTY:    addBlankCustomProperty();                           break;
+    case ID_CTX_REMOVE_FIELD:           removeField( m_contextMenuPropertyName );           break;
+    case ID_CTX_REMOVE_CUSTOM_PROPERTY: removeCustomProperty( m_contextMenuPropertyName );  break;
+    default:
+        break;
+    }
+}
+
+
+void PCB_PROPERTIES_PANEL::addBlankField()
+{
+    SELECTION fallbackSelection;
+    const SELECTION& selection = getSelection( fallbackSelection );
+
+    settlePendingLabelEdit();
+
+    if( selection.Empty() )
+        return;
+
+    // Pick a unique untranslated placeholder name that doesn't collide with an existing field.
+    wxString name;
+
+    for( int n = 0; ; ++n )
+    {
+        name   = GetUserFieldName( n, UNTRANSLATED );
+        bool used = false;
+
+        for( EDA_ITEM* item : selection )
+        {
+            if( item->Type() == PCB_FOOTPRINT_T && static_cast<FOOTPRINT*>( item )->HasField( name ) )
+            {
+                used = true;
+                break;
+            }
+        }
+
+        if( !used )
+            break;
+    }
+
+    BOARD_COMMIT changes( m_frame );
+    PROPERTY_COMMIT_HANDLER handler( &changes );
+
+    for( EDA_ITEM* item : selection )
     {
         if( item->Type() != PCB_FOOTPRINT_T )
             continue;
 
         FOOTPRINT* footprint = static_cast<FOOTPRINT*>( item );
+        PCB_FIELD* field     = new PCB_FIELD( footprint, FIELD_T::USER, name );
 
-        for( PCB_FIELD* field : footprint->GetFields() )
-        {
-            wxCHECK2( field, continue );
-
-            m_currentFieldNames.insert( field->GetCanonicalName() );
-        }
+        field->SetText( wxEmptyString );
+        field->SetVisible( false );
+        changes.Modify( footprint, nullptr, RECURSE_MODE::NO_RECURSE );
+        footprint->Add( field );
     }
 
-    const wxString groupFields = _HKI( "Fields" );
+    changes.Push( _( "Add Field" ) );
+    AfterCommit();
 
-    // Make sure value comes immediately after reference.  (Reference is invariant, so was added by
-    // FOOTPRINT_DESC().  We *could* still add it here, but then the whole Fields section comes at
-    // the end, which isn't ideal.)
-    if( !m_propMgr.GetProperty( TYPE_HASH( FOOTPRINT ), _HKI( "Value" ) ) )
-        m_propMgr.AddProperty( new PCB_FOOTPRINT_FIELD_PROPERTY( _HKI( "Value" ) ), groupFields );
+    m_pendingNewKey = name;
 
-    for( const wxString& name : m_currentFieldNames )
+    beginLabelEdit( name, true );
+}
+
+
+void PCB_PROPERTIES_PANEL::addBlankCustomProperty()
+{
+    SELECTION fallbackSelection;
+    const SELECTION& selection = getSelection( fallbackSelection );
+
+    settlePendingLabelEdit();
+
+    if( selection.Empty() )
+        return;
+
+    wxString name;
+
+    for( int n = 0; ; ++n )
     {
-        if( !m_propMgr.GetProperty( TYPE_HASH( FOOTPRINT ), name ) )
+        name   = wxString::Format( wxS( "Property%d" ), n );
+        bool used = false;
+
+        for( EDA_ITEM* item : selection )
         {
-            m_propMgr.AddProperty( new PCB_FOOTPRINT_FIELD_PROPERTY( name ), groupFields )
-                    .SetAvailableFunc(
-                            [name]( INSPECTABLE* )
-                            {
-                                return PCB_PROPERTIES_PANEL::m_currentFieldNames.count( name );
-                            } );
+            wxString dummy;
+
+            if( item->GetCustomProperty( name, dummy ) )
+            {
+                used = true;
+                break;
+            }
+        }
+
+        if( !used )
+            break;
+    }
+
+    BOARD_COMMIT changes( m_frame );
+    PROPERTY_COMMIT_HANDLER handler( &changes );
+
+    for( EDA_ITEM* item : selection )
+    {
+        if( item->IsBOARD_ITEM() )
+        {
+            changes.Modify( item, nullptr, RECURSE_MODE::NO_RECURSE );
+            item->SetCustomProperty( name, wxEmptyString );
         }
     }
+
+    changes.Push( _( "Add Custom Property" ) );
+    AfterCommit();
+
+    m_pendingNewKey = name;
+
+    beginLabelEdit( name, true );
+}
+
+
+void PCB_PROPERTIES_PANEL::removeField( const wxString& aName )
+{
+    SELECTION fallbackSelection;
+    const SELECTION& selection = getSelection( fallbackSelection );
+
+    BOARD_COMMIT changes( m_frame );
+    PROPERTY_COMMIT_HANDLER handler( &changes );
+
+    for( EDA_ITEM* item : selection )
+    {
+        if( item->Type() != PCB_FOOTPRINT_T )
+            continue;
+
+        FOOTPRINT* footprint = static_cast<FOOTPRINT*>( item );
+        PCB_FIELD* field     = footprint->GetField( aName );
+
+        if( field && !field->IsMandatory() )
+        {
+            // BOARD_COMMIT's own field removal path only hides the field (e.g. when a user presses the delete key),
+            // we want to actually delete a custom field from this explicit menu action
+            changes.Modify( footprint, nullptr, RECURSE_MODE::NO_RECURSE );
+            footprint->Remove( field );
+        }
+    }
+
+    changes.Push( _( "Remove Field" ) );
+    AfterCommit();
+}
+
+
+void PCB_PROPERTIES_PANEL::removeCustomProperty( const wxString& aName )
+{
+    SELECTION fallbackSelection;
+    const SELECTION& selection = getSelection( fallbackSelection );
+
+    BOARD_COMMIT changes( m_frame );
+    PROPERTY_COMMIT_HANDLER handler( &changes );
+
+    for( EDA_ITEM* item : selection )
+    {
+        if( item->IsBOARD_ITEM() )
+        {
+            changes.Modify( item, nullptr, RECURSE_MODE::NO_RECURSE );
+            item->RemoveCustomProperty( aName );
+        }
+    }
+
+    changes.Push( _( "Remove Custom Property" ) );
+    AfterCommit();
+}
+
+
+void PCB_PROPERTIES_PANEL::onNewItemLeftBlank( const wxString& aKey )
+{
+    // Note: currently assuming that any newly-created item from the panel is either a field or
+    // a custom property because those are the types we currently support.
+    if( EDA_ITEM* item = getFrontItem();
+        item && item->Type() == PCB_FOOTPRINT_T && static_cast<FOOTPRINT*>( item )->HasField( aKey ) )
+    {
+        removeField( aKey );
+    }
+    else
+    {
+        removeCustomProperty( aKey );
+    }
+}
+
+
+SELECTION PCB_PROPERTIES_PANEL::filterOutReadOnlyGenChildren( const SELECTION& aSelection )
+{
+    SELECTION filtered;
+    filtered.SetIsHover( aSelection.IsHover() );
+
+    for( EDA_ITEM* item : aSelection )
+    {
+        if( item->IsBOARD_ITEM() )
+        {
+            EDA_GROUP* parent = static_cast<BOARD_ITEM*>( item )->GetParentGroup();
+
+            if( parent && parent->AsEdaItem()->Type() == PCB_GENERATOR_T
+                && static_cast<PCB_GENERATOR*>( parent->AsEdaItem() )->ChildrenAreReadOnly() )
+            {
+                continue;
+            }
+        }
+
+        filtered.Add( item );
+    }
+
+    return filtered;
+}
+
+
+void PCB_PROPERTIES_PANEL::rebuildProperties( const SELECTION& aRawSelection )
+{
+    // Strip read-only generator children (like stitch vias)
+    SELECTION        editableSelection = filterOutReadOnlyGenChildren( aRawSelection );
+    const SELECTION& aSelection = editableSelection;
 
     PROPERTIES_PANEL::rebuildProperties( aSelection );
+
 }
 
 
@@ -689,9 +929,9 @@ wxPGProperty* PCB_PROPERTIES_PANEL::createPGProperty( const PROPERTY_BASE* aProp
 
     wxPGProperty* prop = PGPropertyFactory( aProperty, m_frame );
 
-    if( aProperty->Name() == GetCanonicalFieldName( FIELD_T::FOOTPRINT ) )
+    if( aProperty->Name() == GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED ) )
         prop->SetEditor( PG_FPID_EDITOR::BuildEditorName( m_frame ) );
-    else if( aProperty->Name() == GetCanonicalFieldName( FIELD_T::DATASHEET ) )
+    else if( aProperty->Name() == GetDefaultFieldName( FIELD_T::DATASHEET, UNTRANSLATED ) )
         prop->SetEditor( PG_URL_EDITOR::BuildEditorName( m_frame ) );
     // OwnerHash is the class that registered the property.  Routed PCB_ARC items inherit
     // PCB_TRACK::Width, so this catches track arcs without changing unrelated "Width" properties.
@@ -713,7 +953,7 @@ PROPERTY_BASE* PCB_PROPERTIES_PANEL::getPropertyFromEvent( const wxPropertyGridE
 
     wxCHECK_MSG( firstItem, nullptr, wxT( "getPropertyFromEvent for a property with nothing selected!") );
 
-    PROPERTY_BASE* property = m_propMgr.GetProperty( TYPE_HASH( *firstItem ), aEvent.GetPropertyName() );
+    PROPERTY_BASE* property = m_propMgr.GetProperty( firstItem, aEvent.GetPropertyName() );
     wxCHECK_MSG( property, nullptr, wxT( "getPropertyFromEvent for a property not found on the selected item!" ) );
 
     return property;
@@ -832,7 +1072,18 @@ void PCB_PROPERTIES_PANEL::valueChanged( wxPropertyGridEvent& aEvent )
         return;
 
     SELECTION fallbackSelection;
-    const SELECTION& selection = getSelection( fallbackSelection );
+    SELECTION rawSelection = getSelection( fallbackSelection );
+
+    // Strip read-only generator children, last ditch sanity check
+    SELECTION filtered = filterOutReadOnlyGenChildren( rawSelection );
+
+    if( filtered.Empty() )
+    {
+        aEvent.Veto();
+        return;
+    }
+
+    const SELECTION& selection = filtered;
 
     wxCHECK( getPropertyFromEvent( aEvent ), /* void */ );
 
@@ -865,13 +1116,16 @@ void PCB_PROPERTIES_PANEL::valueChanged( wxPropertyGridEvent& aEvent )
     const bool     useSelectionCenter = fpInSelection > 1;
     const VECTOR2I selectionCenter = useSelectionCenter ? selectionBBox.GetCenter() : VECTOR2I( 0, 0 );
 
+    // Driving length constraints touched by this edit solved again after commit lands
+    std::vector<PCB_CONSTRAINT*> drivingConstraints;
+
     for( EDA_ITEM* edaItem : selection )
     {
         if( !edaItem->IsBOARD_ITEM() )
             continue;
 
         BOARD_ITEM* item = static_cast<BOARD_ITEM*>( edaItem );
-        PROPERTY_BASE* property = m_propMgr.GetProperty( TYPE_HASH( *item ), aEvent.GetPropertyName() );
+        PROPERTY_BASE* property = m_propMgr.GetProperty( item, aEvent.GetPropertyName() );
         wxCHECK( property, /* void */ );
 
         if( item->Type() == PCB_TABLECELL_T )
@@ -926,6 +1180,7 @@ void PCB_PROPERTIES_PANEL::valueChanged( wxPropertyGridEvent& aEvent )
             {
                 if( propName == _HKI( "Do not Populate" )
                     || propName == _HKI( "Exclude From Bill of Materials" )
+                    || propName == _HKI( "Exclude From Simulation" )
                     || propName == _HKI( "Exclude From Position Files" ) )
                 {
                     FOOTPRINT_VARIANT* variant = footprint->GetVariant( variantName );
@@ -941,6 +1196,8 @@ void PCB_PROPERTIES_PANEL::valueChanged( wxPropertyGridEvent& aEvent )
                             variant->SetDNP( boolValue );
                         else if( propName == _HKI( "Exclude From Bill of Materials" ) )
                             variant->SetExcludedFromBOM( boolValue );
+                        else if( propName == _HKI( "Exclude From Simulation" ) )
+                            variant->SetExcludedFromSim( boolValue );
                         else if( propName == _HKI( "Exclude From Position Files" ) )
                             variant->SetExcludedFromPosFiles( boolValue );
 
@@ -961,10 +1218,106 @@ void PCB_PROPERTIES_PANEL::valueChanged( wxPropertyGridEvent& aEvent )
             continue;
         }
 
+        // Value mode and Driving value live partly in a board level constraint not item scoped
+        // so route them through this commit for a shared undo step
+        if( BaseType( item->Type() ) == PCB_DIMENSION_T )
+        {
+            PCB_DIMENSION_BASE* dim = static_cast<PCB_DIMENSION_BASE*>( item );
+            BOARD*              board = m_frame->GetBoard();
+
+            if( propName == _HKI( "Value Mode" ) )
+            {
+                DIM_VALUE_MODE mode = static_cast<DIM_VALUE_MODE>( newValue.GetLong() );
+
+                // Seed from current display value so a mode switch alone does not move geometry
+                std::optional<int> length;
+
+                if( mode == DIM_VALUE_MODE::DRIVING )
+                {
+                    PCB_CONSTRAINT* existing = FindDimensionLengthConstraint( board, dim );
+
+                    if( existing && existing->GetValue() )
+                        length = KiROUND( *existing->GetValue() );
+                    else
+                        length = dim->GetMeasuredValue();
+                }
+
+                // Arbitrary keeps measured text until edited
+                std::optional<wxString> overrideText;
+
+                if( mode == DIM_VALUE_MODE::ARBITRARY && !dim->GetOverrideTextEnabled() )
+                    overrideText = dim->GetValueText();
+
+                PCB_CONSTRAINT* driving = SetDimensionValueMode(
+                        board, dim, mode, length, overrideText,
+                        [&]( BOARD_ITEM* aItem ) { changes.Modify( aItem ); },
+                        [&]( BOARD_ITEM* aItem ) { changes.Add( aItem ); },
+                        [&]( BOARD_ITEM* aItem ) { changes.Remove( aItem ); } );
+
+                if( driving )
+                    drivingConstraints.push_back( driving );
+
+                continue;
+            }
+
+            if( propName == _HKI( "Value" ) && dim->GetValueMode() == DIM_VALUE_MODE::DRIVING )
+            {
+                // Parsed in dimension own units to match display validator already blocked
+                // non positive entries other selected dims failing parse left unchanged
+                double iu = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, dim->GetUnits(),
+                                                                       newValue.GetString() );
+
+                if( iu > 0.0 )
+                {
+                    if( PCB_CONSTRAINT* driving = FindDimensionLengthConstraint( board, dim ) )
+                    {
+                        changes.Modify( driving );
+                        driving->SetValue( KiROUND( iu ) );
+                        drivingConstraints.push_back( driving );
+                    }
+                }
+
+                continue;
+            }
+        }
+
         item->Set( property, newValue );
+
+        // A generated table's cells come from the settings just changed, so they say nothing
+        // about the edit until the table has been laid out again
+        if( IsGeneratedTableType( item->Type() ) && item->GetBoard() )
+            static_cast<PCB_GENERATED_TABLE*>( item )->RebuildCells( *item->GetBoard() );
     }
 
     changes.Push( _( "Edit Properties" ) );
+
+    // Edit is authoritative so hold shapes fixed while solving neighbors and fold into this
+    // undo with a no op if nothing was touched
+    if( CONSTRAINT_EDIT_TOOL* constraintTool = m_frame->GetToolManager()->GetTool<CONSTRAINT_EDIT_TOOL>() )
+    {
+        std::vector<PCB_SHAPE*> shapes;
+        EDIT_TOOL::collectConstraintShapes( selection, shapes );
+        constraintTool->SolveAfterEdit( shapes );
+    }
+
+    // Driving length now on board so solve bound geometry to it and APPEND_UNDO folds follow
+    // up moves into one undo
+    if( !drivingConstraints.empty() )
+    {
+        BOARD_COMMIT solveCommit( m_frame );
+
+        for( PCB_CONSTRAINT* constraint : drivingConstraints )
+        {
+            ApplyConstraintImmediately( m_frame->GetBoard(), constraint, nullptr,
+                                        [&]( BOARD_ITEM* aItem )
+                                        {
+                                            solveCommit.Modify( aItem );
+                                        } );
+        }
+
+        if( !solveCommit.Empty() )
+            solveCommit.Push( _( "Apply Dimension Length" ), APPEND_UNDO );
+    }
 
     m_frame->Refresh();
 
@@ -1028,6 +1381,35 @@ void PCB_PROPERTIES_PANEL::updateLists( const BOARD* aBoard )
 
     auto tuningNet = m_propMgr.GetProperty( TYPE_HASH( PCB_TUNING_PATTERN ), _HKI( "Net" ) );
     tuningNet->SetChoices( nets );
+
+    auto stitchNet = m_propMgr.GetProperty( TYPE_HASH( PCB_VIA_STITCH ), _HKI( "Net" ) );
+    stitchNet->SetChoices( nets );
+
+    auto stitchGuardedNet = m_propMgr.GetProperty( TYPE_HASH( PCB_VIA_STITCH ), _HKI( "Guarded Net" ) );
+    stitchGuardedNet->SetChoices( nets );
+
+    // Drill spans come from the stackup rather than from an enum, and enumerating them costs a
+    // walk of the board, so only a board that actually has a map pays for it
+    if( aBoard->DrillSymbolLayers().any() )
+    {
+        wxPGChoices spans;
+        spans.Add( _( "All spans" ), -1 );
+
+        int index = 0;
+
+        for( const DRILL_SPAN& span : EnumerateDrillSpans( *aBoard ) )
+        {
+            spans.Add( wxString::Format( wxT( "%s - %s%s" ),
+                                         aBoard->GetLayerName( span.TopLayer() ),
+                                         aBoard->GetLayerName( span.BottomLayer() ),
+                                         span.m_IsBackdrill ? _( " (backdrill)" )
+                                                            : wxString( wxEmptyString ) ),
+                       index++ );
+        }
+
+        m_propMgr.GetProperty( TYPE_HASH( PCB_DRILL_MAP ), _HKI( "Hole Span" ) )
+                ->SetChoices( spans );
+    }
 }
 
 
@@ -1051,6 +1433,11 @@ bool PCB_PROPERTIES_PANEL::getItemValue( EDA_ITEM* aItem, PROPERTY_BASE* aProper
         else if( propName == _HKI( "Exclude From Bill of Materials" ) )
         {
             aValue = wxVariant( footprint->GetExcludedFromBOMForVariant( variantName ) );
+            return true;
+        }
+        else if( propName == _HKI( "Exclude From Simulation" ) )
+        {
+            aValue = wxVariant( footprint->GetExcludedFromSimForVariant( variantName ) );
             return true;
         }
         else if( propName == _HKI( "Exclude From Position Files" ) )

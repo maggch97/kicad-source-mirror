@@ -46,7 +46,7 @@ public:
         /// Filter used for file pickers if m_IsFile is true.
         std::vector<std::string> m_FileExtensions;
 
-        ///< In case of folders: extensions of files inside.
+        /// In case of folders: extensions of files inside.
         std::vector<std::string> m_ExtensionsInDir;
         bool                     m_IsFile;          ///< Whether the library is a folder or a file
         bool                     m_CanRead;         ///< Whether the IO can read this file type
@@ -212,7 +212,8 @@ public:
      */
     virtual DIALOG_SHIM* CreateConfigurationDialog( wxWindow* aParent ) { return nullptr; }
 
-    virtual void Report( const wxString& aText, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED );
+    virtual void Report( const wxString& aText,
+                         SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) const;
 
     virtual void AdvanceProgressPhase();
 
