@@ -111,7 +111,6 @@ target_link_libraries( pns_debug_tool
     dxflib_qcad
     tinyspline_lib
     nanosvg
-    idf3
     pcbcommon
     markdown_lib
     3d-viewer
@@ -135,7 +134,6 @@ target_link_libraries( qa_pns_regressions
     dxflib_qcad
     tinyspline_lib
     nanosvg
-    idf3
     pcbcommon
     markdown_lib
     3d-viewer
@@ -165,4 +163,4 @@ include_directories(
     ${INC_AFTER}
 )
 
-# kicad_add_boost_test( qa_pns_regressions qa_pns_regressions )
+kicad_add_boost_test( qa_pns_regressions qa_pns_regressions )

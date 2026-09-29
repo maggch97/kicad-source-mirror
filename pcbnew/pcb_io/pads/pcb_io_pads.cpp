@@ -19,6 +19,7 @@
 
 #include "pcb_io_pads.h"
 #include "pads_layer_mapper.h"
+#include "pads_pcb_shapes.h"
 
 #include <algorithm>
 #include <climits>
@@ -28,7 +29,6 @@
 
 #include <board.h>
 #include <pcb_track.h>
-#include <pcb_text.h>
 #include <footprint.h>
 #include <zone.h>
 
@@ -38,15 +38,11 @@
 
 #include <netinfo.h>
 #include <wx/log.h>
-#include <wx/file.h>
-#include <wx/filename.h>
 #include <core/mirror.h>
 #include <pad.h>
 #include <pcb_shape.h>
-#include <pcb_dimension.h>
 #include <board_design_settings.h>
 #include <project/net_settings.h>
-#include <board_stackup_manager/board_stackup.h>
 #include <netclass.h>
 #include <convert_basic_shapes_to_polygon.h>
 #include <geometry/eda_angle.h>
@@ -115,12 +111,10 @@ bool PCB_IO_PADS::CanReadBoard( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_PADS::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                               const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_PADS::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                             const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     LOCALE_IO setlocale;
-
-    std::unique_ptr<BOARD> board( aAppendToMe ? aAppendToMe : new BOARD() );
 
     if( m_reporter )
         m_reporter->Report( _( "Starting PADS PCB import" ), RPT_SEVERITY_INFO );
@@ -136,11 +130,12 @@ BOARD* PCB_IO_PADS::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
     }
     catch( const std::exception& e )
     {
-        THROW_IO_ERROR( wxString::Format( "Error parsing PADS file: %s", e.what() ) );
+        THROW_IO_ERRORF( wxT( "Error parsing PADS file: %s" ), e.what() );
     }
 
-    m_loadBoard = board.get();
+    m_loadBoard = &aBoard;
     m_parser = &parser;
+    m_converter = std::make_unique<PADS_PCB_CONVERTER>( m_loadBoard, m_reporter );
     m_testPointIndex = 1;
     m_minObjectSize = ADVANCED_CFG::GetCfg().m_PcbImportMinObjectSizeNm;
 
@@ -158,7 +153,7 @@ BOARD* PCB_IO_PADS::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
         loadFootprints();
         loadReuseBlockGroups();
         loadTestPoints();
-        loadTexts();
+        m_converter->LoadTexts( m_parser->GetTexts() );
 
         if( m_progressReporter )
             m_progressReporter->BeginPhase( 3 );
@@ -168,11 +163,11 @@ BOARD* PCB_IO_PADS::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
         loadClusterGroups();
         loadZones();
         loadBoardOutline();
-        loadDimensions();
-        loadKeepouts();
+        m_converter->LoadDimensions( m_parser->GetDimensions() );
+        m_converter->LoadKeepouts( m_parser->GetKeepouts() );
         loadGraphicLines();
-        generateDrcRules( aFileName );
-        reportStatistics();
+        m_converter->WriteDiffPairRules( aFileName, m_parser->GetDiffPairs() );
+        m_converter->ReportStatistics();
     }
     catch( ... )
     {
@@ -181,7 +176,6 @@ BOARD* PCB_IO_PADS::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
     }
 
     clearLoadingState();
-    return board.release();
 }
 
 
@@ -190,7 +184,7 @@ void PCB_IO_PADS::loadNets()
     const auto& nets = m_parser->GetNets();
 
     for( const auto& pads_net : nets )
-        ensureNet( pads_net.name );
+        m_converter->EnsureNet( pads_net.name );
 
     for( const auto& pads_net : nets )
     {
@@ -215,15 +209,15 @@ void PCB_IO_PADS::loadNets()
     }
 
     for( const auto& route : route_nets )
-        ensureNet( route.net_name );
+        m_converter->EnsureNet( route.net_name );
 
     for( const auto& pour_def : m_parser->GetPours() )
-        ensureNet( pour_def.net_name );
+        m_converter->EnsureNet( pour_def.net_name );
 
     for( const auto& copper : m_parser->GetCopperShapes() )
     {
         if( !copper.net_name.empty() && IsCopperLayer( getMappedLayer( copper.layer ) ) )
-            ensureNet( copper.net_name );
+            m_converter->EnsureNet( copper.net_name );
     }
 
     const auto& reuse_blocks = m_parser->GetReuseBlocks();
@@ -317,7 +311,7 @@ void PCB_IO_PADS::loadFootprints()
         }
 
         LIB_ID fpid;
-        fpid.SetLibItemName( wxString::FromUTF8( decal_name ) );
+        fpid.SetLibItemName( PADS_COMMON::ConvertText( decal_name ) );
         footprint->SetFPID( fpid );
 
         footprint->SetValue( pads_part.decal );
@@ -331,7 +325,7 @@ void PCB_IO_PADS::loadFootprints()
                 if( i > 0 )
                     alternates += wxT( ", " );
 
-                alternates += wxString::FromUTF8( pads_part.alternate_decals[i] );
+                alternates += PADS_COMMON::ConvertText( pads_part.alternate_decals[i] );
             }
 
             PCB_FIELD* field = new PCB_FIELD( footprint, FIELD_T::USER, wxT( "PADS_Alternate_Decals" ) );
@@ -341,29 +335,32 @@ void PCB_IO_PADS::loadFootprints()
             footprint->Add( field );
         }
 
-        auto partCoordScaler = [&]( double val, bool is_x ) {
-            double origin = is_x ? m_originX : m_originY;
+        auto partCoordScaler =
+                [&]( double val, bool is_x )
+                {
+                    double origin = is_x ? m_converter->GetOriginX() : m_converter->GetOriginY();
 
-            double part_factor = m_scaleFactor;
+                    double part_factor = m_converter->GetScaleFactor();
 
-            if( !m_parser->IsBasicUnits() )
-            {
-                if( pads_part.units == "M" ) part_factor = PADS_UNIT_CONVERTER::MILS_TO_NM;
-                else if( pads_part.units == "MM" ) part_factor = PADS_UNIT_CONVERTER::MM_TO_NM;
-                else if( pads_part.units == "I" ) part_factor = PADS_UNIT_CONVERTER::INCHES_TO_NM;
-                else if( pads_part.units == "D" ) part_factor = PADS_UNIT_CONVERTER::MILS_TO_NM;
-            }
+                    if( !m_parser->IsBasicUnits() )
+                    {
+                        if( pads_part.units == "M" ) part_factor = PADS_UNIT_CONVERTER::MILS_TO_NM;
+                        else if( pads_part.units == "MM" ) part_factor = PADS_UNIT_CONVERTER::MM_TO_NM;
+                        else if( pads_part.units == "I" ) part_factor = PADS_UNIT_CONVERTER::INCHES_TO_NM;
+                        else if( pads_part.units == "D" ) part_factor = PADS_UNIT_CONVERTER::MILS_TO_NM;
+                    }
 
-            long long origin_nm = static_cast<long long>( std::round( origin * m_scaleFactor ) );
-            long long val_nm = static_cast<long long>( std::round( val * part_factor ) );
+                    long long origin_nm =
+                            static_cast<long long>( std::round( origin * m_converter->GetScaleFactor() ) );
+                    long long val_nm = static_cast<long long>( std::round( val * part_factor ) );
 
-            long long res_nm = val_nm - origin_nm;
+                    long long res_nm = val_nm - origin_nm;
 
-            if( !is_x )
-                res_nm = -res_nm;
+                    if( !is_x )
+                        res_nm = -res_nm;
 
-            return static_cast<int>( std::clamp<long long>( res_nm, INT_MIN, INT_MAX ) );
-        };
+                    return static_cast<int>( std::clamp<long long>( res_nm, INT_MIN, INT_MAX ) );
+                };
 
         footprint->SetPosition( VECTOR2I( partCoordScaler( pads_part.location.x, true ),
                                            partCoordScaler( pads_part.location.y, false ) ) );
@@ -391,145 +388,151 @@ void PCB_IO_PADS::loadFootprints()
         if( iaIt != partInstanceAttrs.end() )
             instanceAttrs = &iaIt->second;
 
-        auto applyAttributes = [&]( const std::vector<PADS_IO::ATTRIBUTE>& attrs,
-                                    std::function<int(double)> scaler )
-        {
-            for( const auto& attr : attrs )
-            {
-                PCB_FIELD* field = nullptr;
-                bool ownsField = false;
-
-                if( attr.name == "Ref.Des." )
+        auto applyAttributes =
+                [&]( const std::vector<PADS_IO::ATTRIBUTE>& attrs, std::function<int(double)> scaler )
                 {
-                    field = &footprint->Reference();
-                }
-                else if( attr.name == "Part Type" || attr.name == "VALUE" )
-                {
-                    field = &footprint->Value();
-                }
-                else
-                {
-                    std::string attrValue;
-
-                    if( instanceAttrs )
+                    for( const auto& attr : attrs )
                     {
-                        auto valIt = instanceAttrs->find( attr.name );
+                        PCB_FIELD* field = nullptr;
+                        bool ownsField = false;
 
-                        if( valIt != instanceAttrs->end() )
-                            attrValue = valIt->second;
+                        if( attr.name == "Ref.Des." )
+                        {
+                            field = &footprint->Reference();
+                        }
+                        else if( attr.name == "Part Type" || attr.name == "VALUE" )
+                        {
+                            field = &footprint->Value();
+                        }
+                        else
+                        {
+                            std::string attrValue;
+
+                            if( instanceAttrs )
+                            {
+                                auto valIt = instanceAttrs->find( attr.name );
+
+                                if( valIt != instanceAttrs->end() )
+                                    attrValue = valIt->second;
+                            }
+
+                            if( attrValue.empty() && partType )
+                            {
+                                auto valIt = partType->attributes.find( attr.name );
+
+                                if( valIt != partType->attributes.end() )
+                                    attrValue = valIt->second;
+                            }
+
+                            if( !attrValue.empty() )
+                            {
+                                field = new PCB_FIELD( footprint, FIELD_T::USER,
+                                                       PADS_COMMON::ConvertText( attr.name ) );
+                                field->SetText( PADS_COMMON::ConvertText( attrValue ) );
+
+                                // Footprint text fields on copper layers are almost always documentation
+                                // labels. Redirect to the corresponding silkscreen layer.
+                                PCB_LAYER_ID fieldLayer = getMappedLayer( attr.level );
+
+                                if( fieldLayer == UNDEFINED_LAYER )
+                                    fieldLayer = Cmts_User;
+                                else if( IsCopperLayer( fieldLayer ) )
+                                    fieldLayer = IsBackLayer( fieldLayer ) ? B_SilkS : F_SilkS;
+
+                                field->SetLayer( fieldLayer );
+                                ownsField = true;
+                            }
+                        }
+
+                        if( !field )
+                            continue;
+
+                        int scaledSize = scaler( attr.height );
+                        int charHeight =
+                                static_cast<int>( scaledSize * ADVANCED_CFG::GetCfg().m_PadsPcbTextHeightScale );
+                        int charWidth =
+                                static_cast<int>( scaledSize * ADVANCED_CFG::GetCfg().m_PadsPcbTextWidthScale );
+                        field->SetTextSize( VECTOR2I( charWidth, charHeight ) );
+
+                        if( attr.width > 0 )
+                            field->SetTextThickness( scaler( attr.width ) );
+
+                        // Position is relative to part origin, rotated by part orientation.
+                        // Y is negated for coordinate system conversion.
+                        VECTOR2I offset( scaler( attr.x ), -scaler( attr.y ) );
+                        EDA_ANGLE part_orient( pads_part.rotation, DEGREES_T );
+                        RotatePoint( offset, part_orient );
+
+                        // PADS text anchor differs from KiCad by a small offset along the
+                        // reading direction. Shift left (toward text start) to compensate.
+                        EDA_ANGLE textAngle = EDA_ANGLE( attr.orientation, DEGREES_T ) + part_orient;
+                        VECTOR2I textShift( -ADVANCED_CFG::GetCfg().m_PadsTextAnchorOffsetNm, 0 );
+                        RotatePoint( textShift, textAngle );
+                        offset += textShift;
+
+                        field->SetPosition( footprint->GetPosition() + offset );
+                        field->SetTextAngle( textAngle );
+                        field->SetKeepUpright( false );
+                        field->SetVisible( attr.visible );
+
+                        if( attr.hjust == "LEFT" )
+                            field->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
+                        else if( attr.hjust == "RIGHT" )
+                            field->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
+                        else
+                            field->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
+
+                        if( attr.vjust == "UP" )
+                            field->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
+                        else if( attr.vjust == "DOWN" )
+                            field->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
+                        else
+                            field->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
+
+                        if( ownsField )
+                            footprint->Add( field );
                     }
-
-                    if( attrValue.empty() && partType )
-                    {
-                        auto valIt = partType->attributes.find( attr.name );
-
-                        if( valIt != partType->attributes.end() )
-                            attrValue = valIt->second;
-                    }
-
-                    if( !attrValue.empty() )
-                    {
-                        field = new PCB_FIELD( footprint, FIELD_T::USER,
-                                               wxString::FromUTF8( attr.name ) );
-                        field->SetText( wxString::FromUTF8( attrValue ) );
-
-                        // Footprint text fields on copper layers are almost always documentation
-                        // labels. Redirect to the corresponding silkscreen layer.
-                        PCB_LAYER_ID fieldLayer = getMappedLayer( attr.level );
-
-                        if( fieldLayer == UNDEFINED_LAYER )
-                            fieldLayer = Cmts_User;
-                        else if( IsCopperLayer( fieldLayer ) )
-                            fieldLayer = IsBackLayer( fieldLayer ) ? B_SilkS : F_SilkS;
-
-                        field->SetLayer( fieldLayer );
-                        ownsField = true;
-                    }
-                }
-
-                if( !field )
-                    continue;
-
-                int scaledSize = scaler( attr.height );
-                int charHeight =
-                        static_cast<int>( scaledSize * ADVANCED_CFG::GetCfg().m_PadsPcbTextHeightScale );
-                int charWidth =
-                        static_cast<int>( scaledSize * ADVANCED_CFG::GetCfg().m_PadsPcbTextWidthScale );
-                field->SetTextSize( VECTOR2I( charWidth, charHeight ) );
-
-                if( attr.width > 0 )
-                    field->SetTextThickness( scaler( attr.width ) );
-
-                // Position is relative to part origin, rotated by part orientation.
-                // Y is negated for coordinate system conversion.
-                VECTOR2I offset( scaler( attr.x ), -scaler( attr.y ) );
-                EDA_ANGLE part_orient( pads_part.rotation, DEGREES_T );
-                RotatePoint( offset, part_orient );
-
-                // PADS text anchor differs from KiCad by a small offset along the
-                // reading direction. Shift left (toward text start) to compensate.
-                EDA_ANGLE textAngle = EDA_ANGLE( attr.orientation, DEGREES_T ) + part_orient;
-                VECTOR2I textShift( -ADVANCED_CFG::GetCfg().m_PadsTextAnchorOffsetNm, 0 );
-                RotatePoint( textShift, textAngle );
-                offset += textShift;
-
-                field->SetPosition( footprint->GetPosition() + offset );
-                field->SetTextAngle( textAngle );
-                field->SetKeepUpright( false );
-                field->SetVisible( attr.visible );
-
-                if( attr.hjust == "LEFT" )
-                    field->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-                else if( attr.hjust == "RIGHT" )
-                    field->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-                else
-                    field->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-
-                if( attr.vjust == "UP" )
-                    field->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-                else if( attr.vjust == "DOWN" )
-                    field->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-                else
-                    field->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
-
-                if( ownsField )
-                    footprint->Add( field );
-            }
-        };
+                };
 
         auto decal_it = decals.find( decal_name );
 
-        double decalScale = ( decal_it != decals.end() )
-                                    ? decalUnitScale( decal_it->second.units )
-                                    : 0.0;
+        double decalScale = ( decal_it != decals.end() ) ? decalUnitScale( decal_it->second.units )
+                                                         : 0.0;
 
-        auto decalScaler = [&, decalScale]( double val ) {
-            return decalScale > 0.0 ? KiROUND( val * decalScale ) : scaleSize( val );
-        };
+        auto decalScaler =
+                [&, decalScale]( double val )
+                {
+                    return decalScale > 0.0 ? KiROUND( val * decalScale ) : scaleSize( val );
+                };
 
         if( decal_it != decals.end() )
+        {
             applyAttributes( decal_it->second.attributes, decalScaler );
+        }
         else
         {
              if( m_reporter )
              {
-                 m_reporter->Report(
-                         wxString::Format( _( "Footprint '%s' not found in decal list, part skipped" ),
-                                           decal_name ),
-                         RPT_SEVERITY_WARNING );
+                 m_reporter->Report( wxString::Format( _( "Footprint '%s' not found in decal list, part skipped" ),
+                                                       decal_name ),
+                                     RPT_SEVERITY_WARNING );
              }
         }
 
-        auto partScaler = [&]( double val ) {
-            if( !m_parser->IsBasicUnits() )
-            {
-                if( pads_part.units == "M" ) return KiROUND( val * PADS_UNIT_CONVERTER::MILS_TO_NM );
-            }
+        auto partScaler =
+                [&]( double val )
+                {
+                    if( !m_parser->IsBasicUnits() )
+                    {
+                        if( pads_part.units == "M" )
+                            return KiROUND( val * PADS_UNIT_CONVERTER::MILS_TO_NM );
+                    }
 
-            if( pads_part.units == "M" ) return KiROUND( val );
+                    if( pads_part.units == "M" )
+                        return KiROUND( val );
 
-            return scaleSize( val );
-        };
+                    return scaleSize( val );
+                };
 
         applyAttributes( pads_part.attributes, partScaler );
 
@@ -543,18 +546,15 @@ void PCB_IO_PADS::loadFootprints()
 
         if( blockIt != m_partToBlockMap.end() )
         {
-            PCB_FIELD* blockField =
-                    new PCB_FIELD( footprint, FIELD_T::USER, wxT( "PADS_Reuse_Block" ) );
+            PCB_FIELD* blockField = new PCB_FIELD( footprint, FIELD_T::USER, wxT( "PADS_Reuse_Block" ) );
             blockField->SetLayer( Cmts_User );
             blockField->SetVisible( false );
-            blockField->SetText( wxString::FromUTF8( blockIt->second ) );
+            blockField->SetText( PADS_COMMON::ConvertText( blockIt->second ) );
             footprint->Add( blockField );
         }
 
         if( decal_it == decals.end() )
-        {
             continue;
-        }
 
         // Add Pads and Graphics from Decal
         {
@@ -563,97 +563,95 @@ void PCB_IO_PADS::loadFootprints()
             // Turn a rectangular pad into a roundrect or chamfered rect from the PADS corner
             // radius.  aDefaultRound keeps the shape rounded (0.25 ratio) when the decal gives
             // no radius, as PADS RC/OC pads are rounded by definition; S and RF stay square.
-            auto applyCornerRadius = [&]( const PADS_IO::PAD_STACK_LAYER& layer_def, PAD* pad,
-                                          PCB_LAYER_ID kicad_layer, const VECTOR2I& aSize,
-                                          bool aDefaultRound )
-            {
-                if( layer_def.corner_radius > 0 )
-                {
-                    int    min_dim = std::min( aSize.x, aSize.y );
-                    double radius = decalScaler( layer_def.corner_radius );
-                    double ratio = ( min_dim > 0 ) ? std::min( radius / min_dim, 0.5 ) : 0.25;
-
-                    if( layer_def.chamfered )
+            auto applyCornerRadius =
+                    [&]( const PADS_IO::PAD_STACK_LAYER& layer_def, PAD* pad, PCB_LAYER_ID kicad_layer,
+                         const VECTOR2I& aSize, bool aDefaultRound )
                     {
-                        pad->SetShape( kicad_layer, PAD_SHAPE::CHAMFERED_RECT );
-                        pad->SetRoundRectRadiusRatio( kicad_layer, 0.0 );
-                        pad->SetChamferRectRatio( kicad_layer, ratio );
-                        pad->SetChamferPositions( kicad_layer, RECT_CHAMFER_ALL );
-                    }
-                    else
+                        if( layer_def.corner_radius > 0 )
+                        {
+                            int    min_dim = std::min( aSize.x, aSize.y );
+                            double radius = decalScaler( layer_def.corner_radius );
+                            double ratio = ( min_dim > 0 ) ? std::min( radius / min_dim, 0.5 ) : 0.25;
+
+                            if( layer_def.chamfered )
+                            {
+                                pad->SetShape( kicad_layer, PAD_SHAPE::CHAMFERED_RECT );
+                                pad->SetRoundRectRadiusRatio( kicad_layer, 0.0 );
+                                pad->SetChamferRectRatio( kicad_layer, ratio );
+                                pad->SetChamferPositions( kicad_layer, RECT_CHAMFER_ALL );
+                            }
+                            else
+                            {
+                                pad->SetShape( kicad_layer, PAD_SHAPE::ROUNDRECT );
+                                pad->SetRoundRectRadiusRatio( kicad_layer, ratio );
+                            }
+                        }
+                        else if( aDefaultRound )
+                        {
+                            pad->SetShape( kicad_layer, PAD_SHAPE::ROUNDRECT );
+                            pad->SetRoundRectRadiusRatio( kicad_layer, 0.25 );
+                        }
+                        else
+                        {
+                            pad->SetShape( kicad_layer, PAD_SHAPE::RECTANGLE );
+                        }
+                    };
+
+            auto convertPadShape =
+                    [&]( const PADS_IO::PAD_STACK_LAYER& layer_def, PAD* pad, PCB_LAYER_ID kicad_layer )
                     {
-                        pad->SetShape( kicad_layer, PAD_SHAPE::ROUNDRECT );
-                        pad->SetRoundRectRadiusRatio( kicad_layer, ratio );
-                    }
-                }
-                else if( aDefaultRound )
-                {
-                    pad->SetShape( kicad_layer, PAD_SHAPE::ROUNDRECT );
-                    pad->SetRoundRectRadiusRatio( kicad_layer, 0.25 );
-                }
-                else
-                {
-                    pad->SetShape( kicad_layer, PAD_SHAPE::RECTANGLE );
-                }
-            };
+                        const std::string& shape = layer_def.shape;
+                        // In PADS, sizeA is height (Y) and sizeB is width (X), opposite of KiCad convention
+                        VECTOR2I size( std::max( decalScaler( layer_def.sizeB ), m_minObjectSize ),
+                                       std::max( decalScaler( layer_def.sizeA ), m_minObjectSize ) );
 
-            auto convertPadShape = [&]( const PADS_IO::PAD_STACK_LAYER& layer_def,
-                                        PAD* pad, PCB_LAYER_ID kicad_layer ) {
-                const std::string& shape = layer_def.shape;
-                // In PADS, sizeA is height (Y) and sizeB is width (X), opposite of KiCad convention
-                VECTOR2I size( std::max( decalScaler( layer_def.sizeB ), m_minObjectSize ),
-                               std::max( decalScaler( layer_def.sizeA ), m_minObjectSize ) );
+                        pad->SetShape( kicad_layer, PADS_PCB::PadsShapeToKiCad( shape ) );
 
-                if( shape == "R" || shape == "C" || shape == "A" || shape == "RT" )
-                {
-                    pad->SetShape( kicad_layer, PAD_SHAPE::CIRCLE );
-                    pad->SetSize( kicad_layer, VECTOR2I( size.x, size.x ) );
-                }
-                else if( shape == "S" || shape == "ST" )
-                {
-                    // The via pad-stack parser leaves sizeB unset for square pads, so take
-                    // the single populated dimension for both sides of the square.
-                    int      side = ( layer_def.sizeB > 0 ) ? size.x : size.y;
-                    VECTOR2I sq_size( side, side );
-                    applyCornerRadius( layer_def, pad, kicad_layer, sq_size, false );
-                    pad->SetSize( kicad_layer, sq_size );
-                }
-                else if( shape == "O" || shape == "OT" )
-                {
-                    pad->SetShape( kicad_layer, PAD_SHAPE::OVAL );
-                    pad->SetSize( kicad_layer, size );
-                }
-                else if( shape == "RF" )
-                {
-                    applyCornerRadius( layer_def, pad, kicad_layer, size, false );
-                    pad->SetSize( kicad_layer, size );
-                }
-                else if( shape == "OF" )
-                {
-                    pad->SetShape( kicad_layer, PAD_SHAPE::OVAL );
-                    pad->SetSize( kicad_layer, size );
-                }
-                else if( shape == "RC" || shape == "OC" )
-                {
-                    applyCornerRadius( layer_def, pad, kicad_layer, size, true );
-                    pad->SetSize( kicad_layer, size );
-                }
-                else
-                {
-                    pad->SetShape( kicad_layer, PAD_SHAPE::CIRCLE );
-                    pad->SetSize( kicad_layer, VECTOR2I( size.x, size.x ) );
-                }
+                        if( shape == "R" || shape == "C" || shape == "A" || shape == "RT" )
+                        {
+                            pad->SetSize( kicad_layer, VECTOR2I( size.x, size.x ) );
+                        }
+                        else if( shape == "S" || shape == "ST" )
+                        {
+                            // The via pad-stack parser leaves sizeB unset for square pads, so take
+                            // the single populated dimension for both sides of the square.
+                            int      side = ( layer_def.sizeB > 0 ) ? size.x : size.y;
+                            VECTOR2I sq_size( side, side );
+                            applyCornerRadius( layer_def, pad, kicad_layer, sq_size, false );
+                            pad->SetSize( kicad_layer, sq_size );
+                        }
+                        else if( shape == "O" || shape == "OT" )
+                        {
+                            pad->SetSize( kicad_layer, size );
+                        }
+                        else if( shape == "RF" )
+                        {
+                            applyCornerRadius( layer_def, pad, kicad_layer, size, false );
+                            pad->SetSize( kicad_layer, size );
+                        }
+                        else if( shape == "OF" )
+                        {
+                            pad->SetSize( kicad_layer, size );
+                        }
+                        else if( shape == "RC" || shape == "OC" )
+                        {
+                            applyCornerRadius( layer_def, pad, kicad_layer, size, true );
+                            pad->SetSize( kicad_layer, size );
+                        }
+                        else
+                        {
+                            pad->SetSize( kicad_layer, VECTOR2I( size.x, size.x ) );
+                        }
 
-                if( layer_def.finger_offset != 0 )
-                {
-                    // finger_offset runs along the finger's long axis (pad-local X before
-                    // rotation).  PAD::ShapePos() rotates the offset by GetOrientation(), so
-                    // store it unrotated; pre-rotating by layer_def.rotation here would
-                    // double-apply the rotation.
-                    pad->SetOffset( kicad_layer,
-                                    VECTOR2I( decalScaler( layer_def.finger_offset ), 0 ) );
-                }
-            };
+                        if( layer_def.finger_offset != 0 )
+                        {
+                            // finger_offset runs along the finger's long axis (pad-local X before
+                            // rotation).  PAD::ShapePos() rotates the offset by GetOrientation(), so
+                            // store it unrotated; pre-rotating by layer_def.rotation here would
+                            // double-apply the rotation.
+                            pad->SetOffset( kicad_layer, VECTOR2I( decalScaler( layer_def.finger_offset ), 0 ) );
+                        }
+                    };
 
             EDA_ANGLE part_orient( pads_part.rotation, DEGREES_T );
 
@@ -683,12 +681,12 @@ void PCB_IO_PADS::loadFootprints()
                     const std::vector<PADS_IO::PAD_STACK_LAYER>& stack = stack_it->second;
 
                     double drill = 0.0;
-                    bool plated = true;
+                    bool   plated = true;
                     double slot_length = 0.0;
                     double slot_orientation = 0.0;
                     double pad_rotation = 0.0;
 
-                    for( const auto& layer_def : stack )
+                    for( const PADS_IO::PAD_STACK_LAYER& layer_def : stack )
                     {
                         if( layer_def.drill > 0 )
                         {
@@ -703,27 +701,31 @@ void PCB_IO_PADS::loadFootprints()
 
                     LSET layer_set;
 
-                    auto mapPadsLayer = [&]( int pads_layer ) -> PCB_LAYER_ID {
-                        if( pads_layer == -2 || pads_layer == 1 )
-                            return F_Cu;
-                        else if( pads_layer == -1
-                                 || pads_layer == m_parser->GetParameters().layer_count )
-                            return B_Cu;
-                        else if( pads_layer > 1
-                                 && pads_layer < m_parser->GetParameters().layer_count )
-                        {
-                            int inner_idx = pads_layer - 2;
+                    auto mapPadsLayer =
+                            [&]( int pads_layer ) -> PCB_LAYER_ID
+                            {
+                                if( pads_layer == -2 || pads_layer == 1 )
+                                {
+                                    return F_Cu;
+                                }
+                                else if( pads_layer == -1 || pads_layer == m_parser->GetParameters().layer_count )
+                                {
+                                    return B_Cu;
+                                }
+                                else if( pads_layer > 1 && pads_layer < m_parser->GetParameters().layer_count )
+                                {
+                                    int inner_idx = pads_layer - 2;
 
-                            if( inner_idx >= 0 && inner_idx < 30 )
-                                return static_cast<PCB_LAYER_ID>( In1_Cu + inner_idx * 2 );
-                        }
+                                    if( inner_idx >= 0 && inner_idx < 30 )
+                                        return static_cast<PCB_LAYER_ID>( In1_Cu + inner_idx * 2 );
+                                }
 
-                        return UNDEFINED_LAYER;
-                    };
+                                return UNDEFINED_LAYER;
+                            };
 
                     bool has_explicit_layers = false;
 
-                    for( const auto& layer_def : stack )
+                    for( const PADS_IO::PAD_STACK_LAYER& layer_def : stack )
                     {
                         if( layer_def.layer == -2 || layer_def.layer == -1
                             || layer_def.layer == 1
@@ -740,34 +742,31 @@ void PCB_IO_PADS::loadFootprints()
                     double shape_rotation = 0.0;
                     bool   shape_rotation_set = false;
 
-                    auto convertGeometry = [&]( const PADS_IO::PAD_STACK_LAYER& aLayerDef,
-                                                PCB_LAYER_ID aKicadLayer )
-                    {
-                        convertPadShape( aLayerDef, pad, aKicadLayer );
+                    auto convertGeometry =
+                            [&]( const PADS_IO::PAD_STACK_LAYER& aLayerDef, PCB_LAYER_ID aKicadLayer )
+                            {
+                                convertPadShape( aLayerDef, pad, aKicadLayer );
 
-                        if( !shape_rotation_set )
-                        {
-                            shape_rotation = aLayerDef.rotation;
-                            shape_rotation_set = true;
-                        }
-                    };
+                                if( !shape_rotation_set )
+                                {
+                                    shape_rotation = aLayerDef.rotation;
+                                    shape_rotation_set = true;
+                                }
+                            };
 
                     // Track mask/paste layers explicitly present in the stack regardless
                     // of size. A zero-size entry means "intentionally no pad on this layer"
                     // and must suppress the SMD fallback for that layer.
                     LSET explicitly_seen_tech;
 
-                    for( const auto& layer_def : stack )
+                    for( const PADS_IO::PAD_STACK_LAYER& layer_def : stack )
                     {
                         if( layer_def.layer > 0 )
                         {
                             PCB_LAYER_ID check = getMappedLayer( layer_def.layer );
 
-                            if( check == F_Mask || check == B_Mask
-                                || check == F_Paste || check == B_Paste )
-                            {
+                            if( check == F_Mask || check == B_Mask || check == F_Paste || check == B_Paste )
                                 explicitly_seen_tech.set( check );
-                            }
                         }
                     }
 
@@ -784,25 +783,23 @@ void PCB_IO_PADS::loadFootprints()
                         // shape, so fold them into the comparison key; otherwise two
                         // same-code entries differing only in corner would stay NORMAL and
                         // leak the front rounding onto the back copper.
-                        auto shapeKey = []( const PADS_IO::PAD_STACK_LAYER& aLayerDef )
-                        {
-                            return aLayerDef.shape + "|" + std::to_string( aLayerDef.corner_radius )
-                                   + "|" + std::to_string( aLayerDef.chamfered );
-                        };
+                        auto shapeKey =
+                                []( const PADS_IO::PAD_STACK_LAYER& aLayerDef )
+                                {
+                                    return aLayerDef.shape + "|" + std::to_string( aLayerDef.corner_radius )
+                                           + "|" + std::to_string( aLayerDef.chamfered );
+                                };
 
                         std::string front_shape;
                         std::string back_shape;
 
-                        for( const auto& layer_def : stack )
+                        for( const PADS_IO::PAD_STACK_LAYER& layer_def : stack )
                         {
                             if( layer_def.sizeA <= 0 )
                                 continue;
 
-                            if( layer_def.shape == "RT" || layer_def.shape == "ST"
-                                || layer_def.shape == "RA" || layer_def.shape == "SA" )
-                            {
+                            if( !PADS_IO::IsCopperPadRow( layer_def ) )
                                 continue;
-                            }
 
                             PCB_LAYER_ID mapped = mapPadsLayer( layer_def.layer );
 
@@ -817,11 +814,8 @@ void PCB_IO_PADS::loadFootprints()
                         // (e.g. different annular ring diameters) are represented in
                         // NORMAL mode using the primary (front/component-side) shape, which
                         // keeps mirrored placements visually consistent with the original.
-                        if( !front_shape.empty() && !back_shape.empty()
-                            && front_shape != back_shape )
-                        {
+                        if( !front_shape.empty() && !back_shape.empty() && front_shape != back_shape )
                             pad->Padstack().SetMode( PADSTACK::MODE::FRONT_INNER_BACK );
-                        }
                     }
 
                     // Tracks whether convertPadShape has already been called for a copper
@@ -830,7 +824,7 @@ void PCB_IO_PADS::loadFootprints()
                     // The primary (layer -2, component-side) entry must win.
                     bool normal_copper_set = false;
 
-                    for( const auto& layer_def : stack )
+                    for( const PADS_IO::PAD_STACK_LAYER& layer_def : stack )
                     {
                         if( layer_def.layer == 0 )
                         {
@@ -862,15 +856,12 @@ void PCB_IO_PADS::loadFootprints()
                         // these to avoid overwriting the actual pad shape.  However,
                         // the presence of RT/ST indicates this pad should have thermal
                         // relief rather than a solid connection to copper pours.
-                        if( layer_def.shape == "RT" || layer_def.shape == "ST" )
+                        if( PADS_IO::IsThermalReliefPadRow( layer_def ) )
                         {
                             pad->SetLocalZoneConnection( ZONE_CONNECTION::THERMAL );
 
                             if( layer_def.thermal_spoke_width > 0 )
-                            {
-                                pad->SetLocalThermalSpokeWidthOverride(
-                                        decalScaler( layer_def.thermal_spoke_width ) );
-                            }
+                                pad->SetLocalThermalSpokeWidthOverride( decalScaler( layer_def.thermal_spoke_width ) );
 
                             if( layer_def.thermal_outer_diameter > layer_def.sizeA )
                             {
@@ -884,18 +875,13 @@ void PCB_IO_PADS::loadFootprints()
                             }
 
                             if( layer_def.thermal_spoke_orientation != 0.0 )
-                            {
-                                pad->SetThermalSpokeAngleDegrees(
-                                        layer_def.thermal_spoke_orientation );
-                            }
+                                pad->SetThermalSpokeAngleDegrees( layer_def.thermal_spoke_orientation );
 
                             continue;
                         }
 
-                        if( layer_def.shape == "RA" || layer_def.shape == "SA" )
-                        {
+                        if( PADS_IO::IsAntiPadRow( layer_def ) )
                             continue;
-                        }
 
                         PCB_LAYER_ID kicad_layer = mapPadsLayer( layer_def.layer );
 
@@ -1006,8 +992,7 @@ void PCB_IO_PADS::loadFootprints()
                     }
                     else
                     {
-                        pad->SetDrillSize( VECTOR2I( decalScaler( drill ),
-                                                     decalScaler( drill ) ) );
+                        pad->SetDrillSize( VECTOR2I( decalScaler( drill ), decalScaler( drill ) ) );
                     }
 
                     if( drill == 0 )
@@ -1016,16 +1001,22 @@ void PCB_IO_PADS::loadFootprints()
                     }
                     else
                     {
-                        if( plated )
-                            pad->SetAttribute( PAD_ATTRIB::PTH );
-                        else
-                            pad->SetAttribute( PAD_ATTRIB::NPTH );
-
                         // Preserve any explicit mask/paste layer bits accumulated
                         // during stack iteration before expanding to all copper layers.
-                        LSET mask_paste_bits =
-                                layer_set & LSET( { F_Mask, B_Mask, F_Paste, B_Paste } );
-                        layer_set = LSET::AllCuMask() | mask_paste_bits;
+                        LSET mask_paste_bits = layer_set & LSET( { F_Mask, B_Mask, F_Paste, B_Paste } );
+
+                        // A stack with no mask row still opens the mask; only an unplated hole
+                        // is mechanical, and it carries no inner copper
+                        if( plated )
+                        {
+                            pad->SetAttribute( PAD_ATTRIB::PTH );
+                            layer_set = PAD::PTHMask() | mask_paste_bits;
+                        }
+                        else
+                        {
+                            pad->SetAttribute( PAD_ATTRIB::NPTH );
+                            layer_set = PAD::UnplatedHoleMask() | mask_paste_bits;
+                        }
                     }
 
                     pad->SetLayerSet( layer_set );
@@ -1036,23 +1027,28 @@ void PCB_IO_PADS::loadFootprints()
                     pad->SetSize( F_Cu, VECTOR2I( fallbackSize, fallbackSize ) );
                     pad->SetShape( F_Cu, PAD_SHAPE::CIRCLE );
                     pad->SetAttribute( PAD_ATTRIB::PTH );
-                    pad->SetLayerSet( LSET::AllCuMask() );
+                    pad->SetLayerSet( PAD::PTHMask() );
                 }
 
-                std::string pinKey = pads_part.name + "." + term.name;
-                auto netIt = m_pinToNetMap.find( pinKey );
-
-                if( netIt != m_pinToNetMap.end() )
+                // An unplated hole is mechanical; joining it to a net pulls ratsnest to a
+                // mounting hole
+                if( pad->GetAttribute() != PAD_ATTRIB::NPTH )
                 {
-                    NETINFO_ITEM* net =
-                            m_loadBoard->FindNet( PADS_COMMON::ConvertInvertedNetName( netIt->second ) );
+                    std::string pinKey = pads_part.name + "." + term.name;
+                    auto        netIt = m_pinToNetMap.find( pinKey );
 
-                    if( net )
-                        pad->SetNet( net );
+                    if( netIt != m_pinToNetMap.end() )
+                    {
+                        NETINFO_ITEM* net =
+                                m_loadBoard->FindNet( PADS_COMMON::ConvertInvertedNetName( netIt->second ) );
+
+                        if( net )
+                            pad->SetNet( net );
+                    }
                 }
             }
 
-            for( const auto& item : decal.items )
+            for( const PADS_IO::DECAL_ITEM& item : decal.items )
             {
                 if( item.points.empty() )
                     continue;
@@ -1086,9 +1082,9 @@ void PCB_IO_PADS::loadFootprints()
                 {
                     if( m_reporter )
                     {
-                        m_reporter->Report( wxString::Format(
-                                _( "Skipping decal item on unmapped layer %d" ), item.layer ),
-                                RPT_SEVERITY_WARNING );
+                        m_reporter->Report( wxString::Format( _( "Skipping decal item on unmapped layer %d" ),
+                                                              item.layer ),
+                                            RPT_SEVERITY_WARNING );
                     }
                     continue;
                 }
@@ -1125,8 +1121,7 @@ void PCB_IO_PADS::loadFootprints()
                     VECTOR2I fp_pos = footprint->GetPosition();
                     shape->SetCenter( fp_pos + center );
                     shape->SetEnd( fp_pos + pt_on_circle );
-                    shape->SetStroke(
-                            STROKE_PARAMS( decalScaler( item.width ), LINE_STYLE::SOLID ) );
+                    shape->SetStroke( STROKE_PARAMS( decalScaler( item.width ), LINE_STYLE::SOLID ) );
 
                     footprint->Add( shape );
 
@@ -1143,8 +1138,7 @@ void PCB_IO_PADS::loadFootprints()
 
                     PCB_SHAPE* shape = new PCB_SHAPE( footprint );
                     shape->SetLayer( shape_layer );
-                    shape->SetStroke(
-                            STROKE_PARAMS( decalScaler( item.width ), LINE_STYLE::SOLID ) );
+                    shape->SetStroke( STROKE_PARAMS( decalScaler( item.width ), LINE_STYLE::SOLID ) );
 
                     if( p2.is_arc )
                     {
@@ -1190,14 +1184,12 @@ void PCB_IO_PADS::loadFootprints()
 
                     PCB_SHAPE* shape = new PCB_SHAPE( footprint );
                     shape->SetLayer( shape_layer );
-                    shape->SetStroke(
-                            STROKE_PARAMS( decalScaler( item.width ), LINE_STYLE::SOLID ) );
+                    shape->SetStroke( STROKE_PARAMS( decalScaler( item.width ), LINE_STYLE::SOLID ) );
 
                     if( pFirst.is_arc )
                     {
                         shape->SetShape( SHAPE_T::ARC );
-                        VECTOR2I center( decalScaler( pFirst.arc.cx ),
-                                         -decalScaler( pFirst.arc.cy ) );
+                        VECTOR2I center( decalScaler( pFirst.arc.cx ), -decalScaler( pFirst.arc.cy ) );
                         VECTOR2I start( decalScaler( pLast.x ), -decalScaler( pLast.y ) );
                         VECTOR2I end( decalScaler( pFirst.x ), -decalScaler( pFirst.y ) );
 
@@ -1233,9 +1225,7 @@ void PCB_IO_PADS::loadFootprints()
         }
 
         if( pads_part.bottom_layer )
-        {
             footprint->Flip( footprint->GetPosition(), FLIP_DIRECTION::LEFT_RIGHT );
-        }
     }
 }
 
@@ -1254,7 +1244,7 @@ void PCB_IO_PADS::loadReuseBlockGroups()
         if( !block.instances.empty() || !block.part_names.empty() )
         {
             PCB_GROUP* group = new PCB_GROUP( m_loadBoard );
-            group->SetName( wxString::FromUTF8( blockName ) );
+            group->SetName( PADS_COMMON::ConvertText( blockName ) );
             m_loadBoard->Add( group );
             blockGroups[blockName] = group;
         }
@@ -1270,9 +1260,7 @@ void PCB_IO_PADS::loadReuseBlockGroups()
                 auto groupIt = blockGroups.find( blockName );
 
                 if( groupIt != blockGroups.end() )
-                {
                     groupIt->second->AddItem( fp );
-                }
 
                 break;
             }
@@ -1283,16 +1271,16 @@ void PCB_IO_PADS::loadReuseBlockGroups()
 
 void PCB_IO_PADS::loadTestPoints()
 {
-    const auto& test_points = m_parser->GetTestPoints();
-    const auto& via_defs = m_parser->GetViaDefs();
+    const std::vector<PADS_IO::TEST_POINT>&        test_points = m_parser->GetTestPoints();
+    const std::map<std::string, PADS_IO::VIA_DEF>& via_defs = m_parser->GetViaDefs();
 
-    for( const auto& tp : test_points )
+    for( const PADS_IO::TEST_POINT& tp : test_points )
     {
         FOOTPRINT* footprint = new FOOTPRINT( m_loadBoard );
 
         wxString refDes = wxString::Format( wxT( "TP%d" ), m_testPointIndex++ );
         footprint->SetReference( refDes );
-        footprint->SetValue( wxString::FromUTF8( tp.symbol_name ) );
+        footprint->SetValue( PADS_COMMON::ConvertText( tp.symbol_name ) );
 
         VECTOR2I pos( scaleCoord( tp.x, true ), scaleCoord( tp.y, false ) );
         footprint->SetPosition( pos );
@@ -1319,7 +1307,7 @@ void PCB_IO_PADS::loadTestPoints()
             bool   hasMaskTop   = false;
             bool   hasMaskBot   = false;
 
-            for( const auto& stackLayer : def.stack )
+            for( const PADS_IO::PAD_STACK_LAYER& stackLayer : def.stack )
             {
                 if( def.size <= 0.0 && stackLayer.sizeA > stackSize )
                     stackSize = stackLayer.sizeA;
@@ -1360,6 +1348,7 @@ void PCB_IO_PADS::loadTestPoints()
         footprint->SetLayer( layer );
 
         PAD* pad = new PAD( footprint );
+        pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
         pad->SetNumber( wxT( "1" ) );
         pad->SetPosition( pos );
         pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
@@ -1382,7 +1371,7 @@ void PCB_IO_PADS::loadTestPoints()
         PCB_FIELD* tpField = new PCB_FIELD( footprint, FIELD_T::USER, wxT( "Test_Point" ) );
         tpField->SetLayer( Cmts_User );
         tpField->SetVisible( false );
-        tpField->SetText( wxString::FromUTF8( tp.type ) );
+        tpField->SetText( PADS_COMMON::ConvertText( tp.type ) );
         footprint->Add( tpField );
 
         m_loadBoard->Add( footprint );
@@ -1390,102 +1379,29 @@ void PCB_IO_PADS::loadTestPoints()
 }
 
 
-void PCB_IO_PADS::loadTexts()
-{
-    const auto& texts = m_parser->GetTexts();
-
-    for( const auto& pads_text : texts )
-    {
-        PCB_LAYER_ID textLayer = getMappedLayer( pads_text.layer );
-
-        if( textLayer == UNDEFINED_LAYER )
-        {
-            if( m_reporter )
-            {
-                m_reporter->Report( wxString::Format(
-                        _( "Text on unmapped layer %d assigned to Comments layer" ),
-                        pads_text.layer ), RPT_SEVERITY_WARNING );
-            }
-            textLayer = Cmts_User;
-        }
-
-        PCB_TEXT* text = new PCB_TEXT( m_loadBoard );
-        text->SetText( PADS_COMMON::ConvertText( pads_text.content ) );
-
-        // PADS text cell height includes internal leading and descender space.
-        // Scale factors calibrated to match PADS rendered character dimensions.
-        int scaledSize = scaleSize( pads_text.height );
-        int charHeight =
-                static_cast<int>( scaledSize * ADVANCED_CFG::GetCfg().m_PadsPcbTextHeightScale );
-        int charWidth =
-                static_cast<int>( scaledSize * ADVANCED_CFG::GetCfg().m_PadsPcbTextWidthScale );
-        text->SetTextSize( VECTOR2I( charWidth, charHeight ) );
-
-        if( pads_text.width > 0 )
-            text->SetTextThickness( scaleSize( pads_text.width ) );
-
-        EDA_ANGLE textAngle( pads_text.rotation, DEGREES_T );
-        text->SetTextAngle( textAngle );
-
-        // PADS text anchor differs from KiCad by a small offset along the
-        // reading direction. Shift left (toward text start) to compensate.
-        VECTOR2I pos( scaleCoord( pads_text.location.x, true ),
-                      scaleCoord( pads_text.location.y, false ) );
-        VECTOR2I textShift( -ADVANCED_CFG::GetCfg().m_PadsTextAnchorOffsetNm, 0 );
-        RotatePoint( textShift, textAngle );
-        text->SetPosition( pos + textShift );
-
-        if( pads_text.hjust == "LEFT" )
-            text->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
-        else if( pads_text.hjust == "RIGHT" )
-            text->SetHorizJustify( GR_TEXT_H_ALIGN_RIGHT );
-        else
-            text->SetHorizJustify( GR_TEXT_H_ALIGN_CENTER );
-
-        if( pads_text.vjust == "UP" )
-            text->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
-        else if( pads_text.vjust == "DOWN" )
-            text->SetVertJustify( GR_TEXT_V_ALIGN_BOTTOM );
-        else
-            text->SetVertJustify( GR_TEXT_V_ALIGN_CENTER );
-
-        text->SetKeepUpright( false );
-        text->SetLayer( textLayer );
-
-        // Honor the PADS back-side mirror flag.
-        text->SetMirrored( pads_text.mirrored );
-
-        m_loadBoard->Add( text );
-    }
-}
-
-
 void PCB_IO_PADS::loadTracksAndVias()
 {
-    const auto& routes = m_parser->GetRoutes();
-    std::set<std::pair<int, int>> placedThroughVias;
+    const std::vector<PADS_IO::ROUTE>& routes = m_parser->GetRoutes();
+    std::set<std::pair<int, int>>      placedThroughVias;
 
     // Build a position set for test-point vias so we don't also place a bare
     // PCB_VIA at those locations; loadTestPoints() already creates footprints.
     std::set<std::pair<int, int>> testPointPositions;
 
-    for( const auto& tp : m_parser->GetTestPoints() )
+    for( const PADS_IO::TEST_POINT& tp : m_parser->GetTestPoints() )
     {
         if( tp.type == "VIA" )
-        {
-            testPointPositions.emplace( scaleCoord( tp.x, true ),
-                                        scaleCoord( tp.y, false ) );
-        }
+            testPointPositions.emplace( scaleCoord( tp.x, true ), scaleCoord( tp.y, false ) );
     }
 
-    for( const auto& route : routes )
+    for( const PADS_IO::ROUTE& route : routes )
     {
         NETINFO_ITEM* net = m_loadBoard->FindNet( PADS_COMMON::ConvertInvertedNetName( route.net_name ) );
 
         if( !net )
             continue;
 
-        for( const auto& track_def : route.tracks )
+        for( const PADS_IO::TRACK& track_def : route.tracks )
         {
             if( track_def.points.size() < 2 )
                 continue;
@@ -1496,10 +1412,11 @@ void PCB_IO_PADS::loadTracksAndVias()
             {
                 if( m_reporter )
                 {
-                    m_reporter->Report( wxString::Format(
-                            _( "Skipping track on non-copper layer %d" ), track_def.layer ),
-                            RPT_SEVERITY_WARNING );
+                    m_reporter->Report( wxString::Format( _( "Skipping track on non-copper layer %d" ),
+                                                          track_def.layer ),
+                                        RPT_SEVERITY_WARNING );
                 }
+
                 continue;
             }
 
@@ -1521,7 +1438,7 @@ void PCB_IO_PADS::loadTracksAndVias()
 
                 if( p2.is_arc )
                 {
-                    SHAPE_ARC shapeArc = makeMidpointArc( p1, p2, track_width );
+                    SHAPE_ARC shapeArc = m_converter->MakeMidpointArc( p1, p2, track_width );
 
                     PCB_ARC* arc = new PCB_ARC( m_loadBoard, &shapeArc );
                     arc->SetNet( net );
@@ -1542,10 +1459,9 @@ void PCB_IO_PADS::loadTracksAndVias()
             }
         }
 
-        for( const auto& via_def : route.vias )
+        for( const PADS_IO::VIA& via_def : route.vias )
         {
-            VECTOR2I pos( scaleCoord( via_def.location.x, true ),
-                          scaleCoord( via_def.location.y, false ) );
+            VECTOR2I pos( scaleCoord( via_def.location.x, true ), scaleCoord( via_def.location.y, false ) );
 
             // Test-point vias are imported as footprints by loadTestPoints().
             if( testPointPositions.count( { pos.x, pos.y } ) )
@@ -1580,20 +1496,20 @@ void PCB_IO_PADS::loadTracksAndVias()
             PCB_VIA* via = new PCB_VIA( m_loadBoard );
             via->SetNet( net );
             via->SetPosition( pos );
+            via->SetPadstackMode( PADSTACK::MODE::NORMAL );
+            via->Padstack().SetShape( PAD_SHAPE::CIRCLE, PADSTACK::ALL_LAYERS );
 
             if( it != m_parser->GetViaDefs().end() )
             {
                 const PADS_IO::VIA_DEF& def = it->second;
 
-                via->SetWidth( std::max( scaleSize( def.size ), m_minObjectSize ) );
+                via->SetWidth( PADSTACK::ALL_LAYERS, std::max( scaleSize( def.size ), m_minObjectSize ) );
                 via->SetDrill( std::max( scaleSize( def.drill ), m_minObjectSize ) );
 
-                PCB_LAYER_ID startLayer = ( def.start_layer > 0 )
-                                                 ? getMappedLayer( def.start_layer )
-                                                 : UNDEFINED_LAYER;
-                PCB_LAYER_ID endLayer = ( def.end_layer > 0 )
-                                                ? getMappedLayer( def.end_layer )
-                                                : UNDEFINED_LAYER;
+                PCB_LAYER_ID startLayer = ( def.start_layer > 0 ) ? getMappedLayer( def.start_layer )
+                                                                  : UNDEFINED_LAYER;
+                PCB_LAYER_ID endLayer = ( def.end_layer > 0 ) ? getMappedLayer( def.end_layer )
+                                                              : UNDEFINED_LAYER;
 
                 if( startLayer != UNDEFINED_LAYER && endLayer != UNDEFINED_LAYER )
                 {
@@ -1611,11 +1527,10 @@ void PCB_IO_PADS::loadTracksAndVias()
 
                 if( !def.has_mask_back )
                     via->SetBackTentingMode( TENTING_MODE::TENTED );
-
             }
             else
             {
-                via->SetWidth( std::max( scaleSize( 20.0 ), m_minObjectSize ) );
+                via->SetWidth( PADSTACK::ALL_LAYERS, std::max( scaleSize( 20.0 ), m_minObjectSize ) );
                 via->SetDrill( std::max( scaleSize( 10.0 ), m_minObjectSize ) );
                 via->SetLayerPair( F_Cu, B_Cu );
                 via->SetViaType( VIATYPE::THROUGH );
@@ -1629,97 +1544,96 @@ void PCB_IO_PADS::loadTracksAndVias()
 
 void PCB_IO_PADS::loadCopperShapes()
 {
-    const auto& copperShapes = m_parser->GetCopperShapes();
+    const std::vector<PADS_IO::COPPER_SHAPE>& copperShapes = m_parser->GetCopperShapes();
 
     // Check if a COPPER_SHAPE is a non-copper straight-line segment suitable for
     // rectangle grouping (2 outline points, no arcs, not filled, not cutout).
-    auto isRectCandidate = []( const PADS_IO::COPPER_SHAPE& cs )
-    {
-        return cs.outline.size() == 2 && !cs.outline[1].is_arc
-               && !cs.filled && !cs.is_cutout;
-    };
+    auto isRectCandidate =
+            []( const PADS_IO::COPPER_SHAPE& cs )
+            {
+                return cs.outline.size() == 2 && !cs.outline[1].is_arc
+                       && !cs.filled && !cs.is_cutout;
+            };
 
     // Check if 4 consecutive entries at idx form a closed axis-aligned rectangle.
     // Each entry must have the same net_name and layer, and consecutive segment
     // endpoints must connect to form a closed cycle with only horizontal/vertical edges.
-    auto tryFormRectangle = [&]( size_t idx, VECTOR2I& minCorner, VECTOR2I& maxCorner ) -> bool
-    {
-        if( idx + 3 >= copperShapes.size() )
-            return false;
+    auto tryFormRectangle =
+            [&]( size_t idx, VECTOR2I& minCorner, VECTOR2I& maxCorner ) -> bool
+            {
+                if( idx + 3 >= copperShapes.size() )
+                    return false;
 
-        const auto& c0 = copperShapes[idx];
-        const auto& c1 = copperShapes[idx + 1];
-        const auto& c2 = copperShapes[idx + 2];
-        const auto& c3 = copperShapes[idx + 3];
+                const PADS_IO::COPPER_SHAPE& c0 = copperShapes[idx];
+                const PADS_IO::COPPER_SHAPE& c1 = copperShapes[idx + 1];
+                const PADS_IO::COPPER_SHAPE& c2 = copperShapes[idx + 2];
+                const PADS_IO::COPPER_SHAPE& c3 = copperShapes[idx + 3];
 
-        if( !isRectCandidate( c0 ) || !isRectCandidate( c1 )
-            || !isRectCandidate( c2 ) || !isRectCandidate( c3 ) )
-        {
-            return false;
-        }
+                if( !isRectCandidate( c0 ) || !isRectCandidate( c1 )
+                    || !isRectCandidate( c2 ) || !isRectCandidate( c3 ) )
+                {
+                    return false;
+                }
 
-        if( c1.net_name != c0.net_name || c2.net_name != c0.net_name
-            || c3.net_name != c0.net_name )
-        {
-            return false;
-        }
+                if( c1.net_name != c0.net_name || c2.net_name != c0.net_name || c3.net_name != c0.net_name )
+                    return false;
 
-        if( c1.layer != c0.layer || c2.layer != c0.layer || c3.layer != c0.layer )
-            return false;
+                if( c1.layer != c0.layer || c2.layer != c0.layer || c3.layer != c0.layer )
+                    return false;
 
-        // Get the 4 segment start/end pairs in scaled coordinates
-        VECTOR2I pts[8];
-        const PADS_IO::COPPER_SHAPE* segs[4] = { &c0, &c1, &c2, &c3 };
+                // Get the 4 segment start/end pairs in scaled coordinates
+                VECTOR2I pts[8];
+                const PADS_IO::COPPER_SHAPE* segs[4] = { &c0, &c1, &c2, &c3 };
 
-        for( int i = 0; i < 4; ++i )
-        {
-            pts[i * 2] = VECTOR2I( scaleCoord( segs[i]->outline[0].x, true ),
-                                    scaleCoord( segs[i]->outline[0].y, false ) );
-            pts[i * 2 + 1] = VECTOR2I( scaleCoord( segs[i]->outline[1].x, true ),
-                                        scaleCoord( segs[i]->outline[1].y, false ) );
-        }
+                for( int i = 0; i < 4; ++i )
+                {
+                    pts[i * 2] = VECTOR2I( scaleCoord( segs[i]->outline[0].x, true ),
+                                           scaleCoord( segs[i]->outline[0].y, false ) );
+                    pts[i * 2 + 1] = VECTOR2I( scaleCoord( segs[i]->outline[1].x, true ),
+                                               scaleCoord( segs[i]->outline[1].y, false ) );
+                }
 
-        // Each segment must be axis-aligned
-        for( int i = 0; i < 4; ++i )
-        {
-            VECTOR2I s = pts[i * 2];
-            VECTOR2I e = pts[i * 2 + 1];
+                // Each segment must be axis-aligned
+                for( int i = 0; i < 4; ++i )
+                {
+                    VECTOR2I s = pts[i * 2];
+                    VECTOR2I e = pts[i * 2 + 1];
 
-            if( s.x != e.x && s.y != e.y )
-                return false;
-        }
+                    if( s.x != e.x && s.y != e.y )
+                        return false;
+                }
 
-        // Consecutive segments must connect (end of N == start of N+1)
-        for( int i = 0; i < 3; ++i )
-        {
-            if( pts[i * 2 + 1] != pts[( i + 1 ) * 2] )
-                return false;
-        }
+                // Consecutive segments must connect (end of N == start of N+1)
+                for( int i = 0; i < 3; ++i )
+                {
+                    if( pts[i * 2 + 1] != pts[( i + 1 ) * 2] )
+                        return false;
+                }
 
-        // Cycle must close (end of last == start of first)
-        if( pts[7] != pts[0] )
-            return false;
+                // Cycle must close (end of last == start of first)
+                if( pts[7] != pts[0] )
+                    return false;
 
-        // Compute bounding box from the 4 corner points
-        int minX = pts[0].x, maxX = pts[0].x;
-        int minY = pts[0].y, maxY = pts[0].y;
+                // Compute bounding box from the 4 corner points
+                int minX = pts[0].x, maxX = pts[0].x;
+                int minY = pts[0].y, maxY = pts[0].y;
 
-        for( int i = 0; i < 8; ++i )
-        {
-            minX = std::min( minX, pts[i].x );
-            maxX = std::max( maxX, pts[i].x );
-            minY = std::min( minY, pts[i].y );
-            maxY = std::max( maxY, pts[i].y );
-        }
+                for( int i = 0; i < 8; ++i )
+                {
+                    minX = std::min( minX, pts[i].x );
+                    maxX = std::max( maxX, pts[i].x );
+                    minY = std::min( minY, pts[i].y );
+                    maxY = std::max( maxY, pts[i].y );
+                }
 
-        minCorner = VECTOR2I( minX, minY );
-        maxCorner = VECTOR2I( maxX, maxY );
-        return true;
-    };
+                minCorner = VECTOR2I( minX, minY );
+                maxCorner = VECTOR2I( maxX, maxY );
+                return true;
+            };
 
     for( size_t idx = 0; idx < copperShapes.size(); ++idx )
     {
-        const auto& copper = copperShapes[idx];
+        const PADS_IO::COPPER_SHAPE& copper = copperShapes[idx];
 
         if( copper.outline.size() < 2 )
             continue;
@@ -1733,10 +1647,9 @@ void PCB_IO_PADS::loadCopperShapes()
         {
             if( m_reporter )
             {
-                m_reporter->Report( wxString::Format(
-                        _( "COPPER item on unmapped layer %d defaulting to F.Cu" ),
-                        copper.layer ),
-                        RPT_SEVERITY_WARNING );
+                m_reporter->Report( wxString::Format( _( "COPPER item on unmapped layer %d defaulting to F.Cu" ),
+                                                      copper.layer ),
+                                    RPT_SEVERITY_WARNING );
             }
 
             layer = F_Cu;
@@ -1768,8 +1681,8 @@ void PCB_IO_PADS::loadCopperShapes()
             // graphics on their actual layer rather than forcing them onto copper.
             for( size_t i = 0; i < copper.outline.size() - 1; ++i )
             {
-                const auto& p1 = copper.outline[i];
-                const auto& p2 = copper.outline[i + 1];
+                const PADS_IO::ARC_POINT& p1 = copper.outline[i];
+                const PADS_IO::ARC_POINT& p2 = copper.outline[i + 1];
 
                 VECTOR2I start( scaleCoord( p1.x, true ), scaleCoord( p1.y, false ) );
                 VECTOR2I end( scaleCoord( p2.x, true ), scaleCoord( p2.y, false ) );
@@ -1816,7 +1729,7 @@ void PCB_IO_PADS::loadCopperShapes()
                 zone->SetNet( net );
 
             SHAPE_LINE_CHAIN outline;
-            appendArcPoints( outline, copper.outline );
+            m_converter->AppendArcPoints( outline, copper.outline );
             outline.SetClosed( true );
             zone->Outline()->AddOutline( outline );
             zone->SetBorderDisplayStyle( ZONE_BORDER_DISPLAY_STYLE::DIAGONAL_EDGE, ZONE::GetDefaultHatchPitch(), true );
@@ -1827,8 +1740,8 @@ void PCB_IO_PADS::loadCopperShapes()
         {
             for( size_t i = 0; i < copper.outline.size() - 1; ++i )
             {
-                const auto& p1 = copper.outline[i];
-                const auto& p2 = copper.outline[i + 1];
+                const PADS_IO::ARC_POINT& p1 = copper.outline[i];
+                const PADS_IO::ARC_POINT& p2 = copper.outline[i + 1];
 
                 VECTOR2I start( scaleCoord( p1.x, true ), scaleCoord( p1.y, false ) );
                 VECTOR2I end( scaleCoord( p2.x, true ), scaleCoord( p2.y, false ) );
@@ -1838,7 +1751,7 @@ void PCB_IO_PADS::loadCopperShapes()
 
                 if( p2.is_arc )
                 {
-                    SHAPE_ARC shapeArc = makeMidpointArc( p1, p2, width );
+                    SHAPE_ARC shapeArc = m_converter->MakeMidpointArc( p1, p2, width );
 
                     PCB_ARC* arc = new PCB_ARC( m_loadBoard, &shapeArc );
 
@@ -1870,14 +1783,14 @@ void PCB_IO_PADS::loadCopperShapes()
 
 void PCB_IO_PADS::loadClusterGroups()
 {
-    const auto& clusters = m_parser->GetClusters();
+    const std::vector<PADS_IO::CLUSTER>& clusters = m_parser->GetClusters();
 
     if( clusters.empty() )
         return;
 
     std::map<std::string, const PADS_IO::CLUSTER*> netToClusterMap;
 
-    for( const auto& cluster : clusters )
+    for( const PADS_IO::CLUSTER& cluster : clusters )
     {
         for( const std::string& netName : cluster.net_names )
         {
@@ -1888,10 +1801,10 @@ void PCB_IO_PADS::loadClusterGroups()
 
     std::map<int, PCB_GROUP*> clusterGroups;
 
-    for( const auto& cluster : clusters )
+    for( const PADS_IO::CLUSTER& cluster : clusters )
     {
         PCB_GROUP* group = new PCB_GROUP( m_loadBoard );
-        group->SetName( wxString::FromUTF8( cluster.name ) );
+        group->SetName( PADS_COMMON::ConvertText( cluster.name ) );
         m_loadBoard->Add( group );
         clusterGroups[cluster.id] = group;
     }
@@ -1911,9 +1824,7 @@ void PCB_IO_PADS::loadClusterGroups()
                 auto groupIt = clusterGroups.find( clusterId );
 
                 if( groupIt != clusterGroups.end() )
-                {
                     groupIt->second->AddItem( track );
-                }
             }
         }
     }
@@ -1922,30 +1833,28 @@ void PCB_IO_PADS::loadClusterGroups()
 
 void PCB_IO_PADS::loadZones()
 {
-    const auto& pours = m_parser->GetPours();
-    const auto& params = m_parser->GetParameters();
+    const std::vector<PADS_IO::POUR>& pours = m_parser->GetPours();
+    const PADS_IO::PARAMETERS&        params = m_parser->GetParameters();
 
     // Returns true if the points can produce a valid polygon (at least 3 vertices
     // for a regular polygon, or a single full-circle point).
-    auto isValidPoly = []( const std::vector<PADS_IO::ARC_POINT>& pts )
-    {
-        if( pts.size() >= 3 )
-            return true;
+    auto isValidPoly =
+            []( const std::vector<PADS_IO::ARC_POINT>& pts )
+            {
+                if( pts.size() >= 3 )
+                    return true;
 
-        if( pts.size() == 1 && pts[0].is_arc
-            && std::abs( pts[0].arc.delta_angle ) >= 359.0 )
-        {
-            return true;
-        }
+                if( pts.size() == 1 && pts[0].is_arc && std::abs( pts[0].arc.delta_angle ) >= 359.0 )
+                    return true;
 
-        return false;
-    };
+                return false;
+            };
 
     // PADS uses lower numbers = higher priority (priority 1 fills on top),
     // while KiCad uses higher numbers = higher priority.
     int maxPriority = 0;
 
-    for( const auto& pour_def : pours )
+    for( const PADS_IO::POUR& pour_def : pours )
     {
         if( pour_def.priority > maxPriority )
             maxPriority = pour_def.priority;
@@ -1958,7 +1867,7 @@ void PCB_IO_PADS::loadZones()
     std::map<std::string, std::string> hatoutToParent;
 
     // First pass: create zones from POUROUT records and build lookup maps
-    for( const auto& pour_def : pours )
+    for( const PADS_IO::POUR& pour_def : pours )
     {
         if( pour_def.style == PADS_IO::POUR_STYLE::HATCHED )
         {
@@ -1972,7 +1881,7 @@ void PCB_IO_PADS::loadZones()
             continue;
         }
 
-        if( pour_def.points.size() < 3 )
+        if( !isValidPoly( pour_def.points ) )
             continue;
 
         PCB_LAYER_ID pourLayer = getMappedLayer( pour_def.layer );
@@ -1981,9 +1890,8 @@ void PCB_IO_PADS::loadZones()
         {
             if( m_reporter )
             {
-                m_reporter->Report( wxString::Format(
-                        _( "Skipping pour on unmapped layer %d" ), pour_def.layer ),
-                        RPT_SEVERITY_WARNING );
+                m_reporter->Report( wxString::Format( _( "Skipping pour on unmapped layer %d" ), pour_def.layer ),
+                                    RPT_SEVERITY_WARNING );
             }
 
             continue;
@@ -1993,43 +1901,17 @@ void PCB_IO_PADS::loadZones()
         zone->SetLayer( pourLayer );
 
         zone->Outline()->NewOutline();
-        appendArcPoints( zone->Outline()->Outline( 0 ), pour_def.points );
+        m_converter->AppendArcPoints( zone->Outline()->Outline( 0 ), pour_def.points );
         zone->SetBorderDisplayStyle( ZONE_BORDER_DISPLAY_STYLE::DIAGONAL_EDGE, ZONE::GetDefaultHatchPitch(), true );
 
-        if( pour_def.is_cutout )
-        {
-            zone->SetIsRuleArea( true );
-            zone->SetDoNotAllowZoneFills( true );
-            zone->SetDoNotAllowTracks( false );
-            zone->SetDoNotAllowVias( false );
-            zone->SetDoNotAllowPads( false );
-            zone->SetDoNotAllowFootprints( false );
-            zone->SetZoneName( wxString::Format( wxT( "Cutout_%s" ), pour_def.owner_pour ) );
-        }
-        else
-        {
-            NETINFO_ITEM* net = m_loadBoard->FindNet(
-                    PADS_COMMON::ConvertInvertedNetName( pour_def.net_name ) );
-
-            if( net )
-                zone->SetNet( net );
-
-            int kicadPriority = maxPriority - pour_def.priority + 1;
-            zone->SetAssignedPriority( kicadPriority );
-            zone->SetMinThickness( scaleSize( pour_def.width ) );
-
-            zone->SetThermalReliefGap( scaleSize( params.thermal_min_clearance ) );
-            zone->SetThermalReliefSpokeWidth( scaleSize( params.thermal_line_width ) );
-
-            zone->SetPadConnection( ZONE_CONNECTION::FULL );
-        }
+        m_converter->ApplyPourSettings( zone, pour_def, maxPriority, params );
 
         pourZoneMap[pour_def.name] = zone;
         m_loadBoard->Add( zone );
     }
 
     // Second pass: build fill polygons from HATOUT records with VOIDOUT holes
-    for( const auto& pour_def : pours )
+    for( const PADS_IO::POUR& pour_def : pours )
     {
         if( pour_def.style != PADS_IO::POUR_STYLE::HATCHED )
             continue;
@@ -2047,17 +1929,14 @@ void PCB_IO_PADS::loadZones()
 
         SHAPE_POLY_SET fillPoly;
         fillPoly.NewOutline();
-        appendArcPoints( fillPoly.Outline( 0 ), pour_def.points );
+        m_converter->AppendArcPoints( fillPoly.Outline( 0 ), pour_def.points );
 
         // PADS HATOUT fill data can contain self-intersecting vertices where
         // narrow corridors route between pads. Run Clipper2 union on the
         // outline before subtracting holes, since Simplify can introduce
         // micro-artifacts in clean complex polygons.
-        if( fillPoly.Outline( 0 ).PointCount() >= 3
-            && fillPoly.IsPolygonSelfIntersecting( 0 ) )
-        {
+        if( fillPoly.Outline( 0 ).PointCount() >= 3 && fillPoly.IsPolygonSelfIntersecting( 0 ) )
             fillPoly.Simplify();
-        }
 
         fillPoly.Inflate( scaleSize( pour_def.width ) / 2, CORNER_STRATEGY::ROUND_ALL_CORNERS, ARC_HIGH_DEF );
 
@@ -2069,7 +1948,7 @@ void PCB_IO_PADS::loadZones()
         // from repeated sequential operations.
         SHAPE_POLY_SET allVoids;
 
-        for( const auto& void_def : pours )
+        for( const PADS_IO::POUR& void_def : pours )
         {
             if( void_def.style != PADS_IO::POUR_STYLE::VOIDOUT )
                 continue;
@@ -2089,7 +1968,7 @@ void PCB_IO_PADS::loadZones()
 
             SHAPE_POLY_SET voidPoly;
             voidPoly.NewOutline();
-            appendArcPoints( voidPoly.Outline( 0 ), void_def.points );
+            m_converter->AppendArcPoints( voidPoly.Outline( 0 ), void_def.points );
             voidPoly.Inflate( scaleSize( void_def.width ) / 2, CORNER_STRATEGY::ROUND_ALL_CORNERS, ARC_HIGH_DEF );
 
             allVoids.Append( voidPoly );
@@ -2130,10 +2009,8 @@ void PCB_IO_PADS::loadBoardOutline()
             else
             {
                 shape->SetShape( SHAPE_T::SEGMENT );
-                shape->SetStart( VECTOR2I( scaleCoord( p1.x, true ),
-                                           scaleCoord( p1.y, false ) ) );
-                shape->SetEnd( VECTOR2I( scaleCoord( p2.x, true ),
-                                         scaleCoord( p2.y, false ) ) );
+                shape->SetStart( VECTOR2I( scaleCoord( p1.x, true ), scaleCoord( p1.y, false ) ) );
+                shape->SetEnd( VECTOR2I( scaleCoord( p2.x, true ), scaleCoord( p2.y, false ) ) );
             }
 
             shape->SetWidth( scaleSize( polyline.width ) );
@@ -2162,10 +2039,8 @@ void PCB_IO_PADS::loadBoardOutline()
                 else
                 {
                     shape->SetShape( SHAPE_T::SEGMENT );
-                    shape->SetStart( VECTOR2I( scaleCoord( pLast.x, true ),
-                                               scaleCoord( pLast.y, false ) ) );
-                    shape->SetEnd( VECTOR2I( scaleCoord( pFirst.x, true ),
-                                             scaleCoord( pFirst.y, false ) ) );
+                    shape->SetStart( VECTOR2I( scaleCoord( pLast.x, true ), scaleCoord( pLast.y, false ) ) );
+                    shape->SetEnd( VECTOR2I( scaleCoord( pFirst.x, true ), scaleCoord( pFirst.y, false ) ) );
                 }
 
                 shape->SetWidth( scaleSize( polyline.width ) );
@@ -2177,205 +2052,22 @@ void PCB_IO_PADS::loadBoardOutline()
 }
 
 
-void PCB_IO_PADS::loadDimensions()
-{
-    const auto& dimensions = m_parser->GetDimensions();
-
-    for( const auto& dim : dimensions )
-    {
-        if( dim.points.size() < 2 )
-            continue;
-
-        PCB_DIM_ALIGNED* dimension = new PCB_DIM_ALIGNED( m_loadBoard, PCB_DIM_ALIGNED_T );
-
-        VECTOR2I start( scaleCoord( dim.points[0].x, true ),
-                        scaleCoord( dim.points[0].y, false ) );
-        VECTOR2I end( scaleCoord( dim.points[1].x, true ),
-                      scaleCoord( dim.points[1].y, false ) );
-
-        // PADS horizontal/vertical dimensions measure only the X or Y projection.
-        // PCB_DIM_ALIGNED measures along the start→end direction, so if the base
-        // points differ on the non-measured axis the line becomes skewed.
-        // Project the end point onto the measurement axis.
-        if( dim.is_horizontal )
-            end.y = start.y;
-        else
-            end.x = start.x;
-
-        dimension->SetStart( start );
-        dimension->SetEnd( end );
-
-        // The crossbar_pos is the absolute coordinate of the crossbar. We compute
-        // height as the offset from the start point to the crossbar.
-        if( dim.is_horizontal )
-        {
-            double heightOffset = dim.crossbar_pos - dim.points[0].y;
-            int height = -scaleSize( heightOffset );
-            dimension->SetHeight( height );
-        }
-        else
-        {
-            double heightOffset = dim.crossbar_pos - dim.points[0].x;
-            int height = scaleSize( heightOffset );
-            dimension->SetHeight( height );
-        }
-
-        PCB_LAYER_ID dimLayer = getMappedLayer( dim.layer );
-
-        if( dimLayer == UNDEFINED_LAYER || IsCopperLayer( dimLayer ) )
-            dimLayer = Cmts_User;
-
-        dimension->SetLayer( dimLayer );
-
-        // PADS text_width is stroke thickness, not character width.
-        // Calculate character dimensions from height.
-        if( dim.text_height > 0 )
-        {
-            int scaledSize = scaleSize( dim.text_height );
-            int charHeight =
-                    static_cast<int>( scaledSize * ADVANCED_CFG::GetCfg().m_PadsPcbTextHeightScale );
-            int charWidth =
-                    static_cast<int>( scaledSize * ADVANCED_CFG::GetCfg().m_PadsPcbTextWidthScale );
-            dimension->SetTextSize( VECTOR2I( charWidth, charHeight ) );
-
-            if( dim.text_width > 0 )
-                dimension->SetTextThickness( scaleSize( dim.text_width ) );
-        }
-
-        if( !dim.text.empty() )
-        {
-            dimension->SetOverrideTextEnabled( true );
-            dimension->SetOverrideText( wxString::FromUTF8( dim.text ) );
-        }
-
-        dimension->SetLineThickness( scaleSize( 5.0 ) );
-
-        if( dim.rotation != 0.0 )
-            dimension->SetTextAngle( EDA_ANGLE( dim.rotation, DEGREES_T ) );
-
-        dimension->Update();
-        m_loadBoard->Add( dimension );
-    }
-}
-
-
-void PCB_IO_PADS::loadKeepouts()
-{
-    const auto& keepouts = m_parser->GetKeepouts();
-    int keepoutIndex = 0;
-
-    for( const auto& ko : keepouts )
-    {
-        if( ko.outline.size() < 3 )
-            continue;
-
-        ZONE* zone = new ZONE( m_loadBoard );
-        zone->SetIsRuleArea( true );
-
-        if( ko.layers.empty() )
-        {
-            zone->SetLayerSet( LSET::AllCuMask() );
-        }
-        else if( ko.layers.size() == 1 )
-        {
-            PCB_LAYER_ID koLayer = getMappedLayer( ko.layers[0] );
-
-            if( koLayer == UNDEFINED_LAYER )
-            {
-                if( m_reporter )
-                {
-                    m_reporter->Report( wxString::Format(
-                            _( "Skipping keepout on unmapped layer %d" ), ko.layers[0] ),
-                            RPT_SEVERITY_WARNING );
-                }
-                delete zone;
-                continue;
-            }
-
-            zone->SetLayer( koLayer );
-        }
-        else
-        {
-            LSET layerSet;
-
-            for( int layer : ko.layers )
-            {
-                PCB_LAYER_ID mappedLayer = getMappedLayer( layer );
-
-                if( mappedLayer != UNDEFINED_LAYER )
-                    layerSet.set( mappedLayer );
-            }
-
-            if( layerSet.none() )
-            {
-                if( m_reporter )
-                    m_reporter->Report( _( "Skipping keepout with no valid layers" ), RPT_SEVERITY_WARNING );
-                delete zone;
-                continue;
-            }
-
-            zone->SetLayerSet( layerSet );
-        }
-
-        zone->SetDoNotAllowTracks( ko.no_traces );
-        zone->SetDoNotAllowVias( ko.no_vias );
-        zone->SetDoNotAllowZoneFills( ko.no_copper );
-        zone->SetDoNotAllowFootprints( ko.no_components );
-        zone->SetDoNotAllowPads( false );
-
-        wxString typeName;
-
-        switch( ko.type )
-        {
-        case PADS_IO::KEEPOUT_TYPE::ALL:       typeName = wxT( "Keepout" ); break;
-        case PADS_IO::KEEPOUT_TYPE::ROUTE:     typeName = wxT( "RouteKeepout" ); break;
-        case PADS_IO::KEEPOUT_TYPE::VIA:       typeName = wxT( "ViaKeepout" ); break;
-        case PADS_IO::KEEPOUT_TYPE::COPPER:    typeName = wxT( "CopperKeepout" ); break;
-        case PADS_IO::KEEPOUT_TYPE::PLACEMENT: typeName = wxT( "PlacementKeepout" ); break;
-        }
-
-        zone->SetZoneName( wxString::Format( wxT( "%s_%d" ), typeName, ++keepoutIndex ) );
-
-        SHAPE_LINE_CHAIN koChain;
-        appendArcPoints( koChain, ko.outline );
-
-        // Close the outline if first and last points don't match
-        if( ko.outline.size() > 2 )
-        {
-            const auto& first = ko.outline.front();
-            const auto& last = ko.outline.back();
-
-            if( std::abs( first.x - last.x ) > 0.001 || std::abs( first.y - last.y ) > 0.001 )
-                koChain.Append( scaleCoord( first.x, true ), scaleCoord( first.y, false ) );
-        }
-
-        koChain.SetClosed( true );
-        zone->Outline()->AddOutline( koChain );
-        zone->SetBorderDisplayStyle( ZONE_BORDER_DISPLAY_STYLE::DIAGONAL_EDGE, ZONE::GetDefaultHatchPitch(), true );
-
-        m_loadBoard->Add( zone );
-    }
-}
-
-
 void PCB_IO_PADS::loadGraphicLines()
 {
     for( const PADS_IO::GRAPHIC_LINE& graphic : m_parser->GetGraphicLines() )
     {
-        const auto& pts = graphic.points;
+        const std::vector<PADS_IO::ARC_POINT>& pts = graphic.points;
 
         PCB_LAYER_ID graphicLayer = getMappedLayer( graphic.layer );
 
         if( graphicLayer == UNDEFINED_LAYER )
             continue;
 
-        if( pts.size() == 1 && pts[0].is_arc
-            && std::abs( pts[0].arc.delta_angle - 360.0 ) < 0.1 )
+        if( pts.size() == 1 && pts[0].is_arc && std::abs( pts[0].arc.delta_angle - 360.0 ) < 0.1 )
         {
             PCB_SHAPE* shape = new PCB_SHAPE( m_loadBoard );
             shape->SetShape( SHAPE_T::CIRCLE );
-            VECTOR2I center( scaleCoord( pts[0].arc.cx, true ),
-                             scaleCoord( pts[0].arc.cy, false ) );
+            VECTOR2I center( scaleCoord( pts[0].arc.cx, true ), scaleCoord( pts[0].arc.cy, false ) );
             int radius = std::max( scaleSize( pts[0].arc.radius ), m_minObjectSize );
             shape->SetCenter( center );
             shape->SetEnd( VECTOR2I( center.x + radius, center.y ) );
@@ -2405,10 +2097,8 @@ void PCB_IO_PADS::loadGraphicLines()
             else
             {
                 shape->SetShape( SHAPE_T::SEGMENT );
-                shape->SetStart( VECTOR2I( scaleCoord( p1.x, true ),
-                                           scaleCoord( p1.y, false ) ) );
-                shape->SetEnd( VECTOR2I( scaleCoord( p2.x, true ),
-                                         scaleCoord( p2.y, false ) ) );
+                shape->SetStart( VECTOR2I( scaleCoord( p1.x, true ), scaleCoord( p1.y, false ) ) );
+                shape->SetEnd( VECTOR2I( scaleCoord( p2.x, true ), scaleCoord( p2.y, false ) ) );
             }
 
             shape->SetWidth( scaleSize( graphic.width ) );
@@ -2435,10 +2125,8 @@ void PCB_IO_PADS::loadGraphicLines()
                 else
                 {
                     shape->SetShape( SHAPE_T::SEGMENT );
-                    shape->SetStart( VECTOR2I( scaleCoord( pLast.x, true ),
-                                               scaleCoord( pLast.y, false ) ) );
-                    shape->SetEnd( VECTOR2I( scaleCoord( pFirst.x, true ),
-                                             scaleCoord( pFirst.y, false ) ) );
+                    shape->SetStart( VECTOR2I( scaleCoord( pLast.x, true ), scaleCoord( pLast.y, false ) ) );
+                    shape->SetEnd( VECTOR2I( scaleCoord( pFirst.x, true ), scaleCoord( pFirst.y, false ) ) );
                 }
 
                 shape->SetWidth( scaleSize( graphic.width ) );
@@ -2450,91 +2138,15 @@ void PCB_IO_PADS::loadGraphicLines()
 }
 
 
-void PCB_IO_PADS::generateDrcRules( const wxString& aFileName )
-{
-    wxFileName fn( aFileName );
-    fn.SetExt( wxT( "kicad_dru" ) );
-
-    wxString customRules = wxT( "(version 2)\n" );
-
-    const auto& diffPairs = m_parser->GetDiffPairs();
-
-    for( const auto& dp : diffPairs )
-    {
-        if( dp.name.empty() || ( dp.gap <= 0 && dp.width <= 0 ) )
-            continue;
-
-        wxString ruleName = wxString::Format( wxT( "DiffPair_%s" ), wxString::FromUTF8( dp.name ) );
-
-        if( dp.gap > 0 && !dp.positive_net.empty() && !dp.negative_net.empty() )
-        {
-            wxString posNet = PADS_COMMON::ConvertInvertedNetName( dp.positive_net );
-            wxString negNet = PADS_COMMON::ConvertInvertedNetName( dp.negative_net );
-            double gapMm = dp.gap * m_scaleFactor / PADS_UNIT_CONVERTER::MM_TO_NM;
-            wxString gapStr = wxString::FromUTF8( FormatDouble2Str( gapMm ) ) + wxT( "mm" );
-
-            customRules += wxString::Format(
-                wxT( "\n(rule \"%s_gap\"\n" )
-                wxT( "  (condition \"A.NetName == '%s' && B.NetName == '%s'\")\n" )
-                wxT( "  (constraint clearance (min %s)))\n" ),
-                ruleName, posNet, negNet, gapStr );
-        }
-    }
-
-    if( customRules.length() > 15 )
-    {
-        wxFile rulesFile( fn.GetFullPath(), wxFile::write );
-
-        if( rulesFile.IsOpened() )
-            rulesFile.Write( customRules );
-    }
-}
-
-
-void PCB_IO_PADS::reportStatistics()
-{
-    if( !m_reporter )
-        return;
-
-    size_t trackCount = 0;
-    size_t viaCount = 0;
-
-    for( PCB_TRACK* track : m_loadBoard->Tracks() )
-    {
-        if( track->Type() == PCB_VIA_T )
-            viaCount++;
-        else
-            trackCount++;
-    }
-
-    m_reporter->Report( wxString::Format( _( "Imported %zu footprints, %d nets, %zu tracks,"
-                                              " %zu vias, %zu zones" ),
-                                           m_loadBoard->Footprints().size(),
-                                           m_loadBoard->GetNetCount(),
-                                           trackCount, viaCount,
-                                           m_loadBoard->Zones().size() ),
-                         RPT_SEVERITY_INFO );
-}
-
-
 std::map<wxString, PCB_LAYER_ID> PCB_IO_PADS::DefaultLayerMappingCallback(
         const std::vector<INPUT_LAYER_DESC>& aInputLayerDescriptionVector )
 {
     std::map<wxString, PCB_LAYER_ID> layer_map;
 
     for( const INPUT_LAYER_DESC& layer : aInputLayerDescriptionVector )
-    {
         layer_map[layer.Name] = layer.AutoMapLayer;
-    }
 
     return layer_map;
-}
-
-
-int PCB_IO_PADS::scaleSize( double aVal ) const
-{
-    int64_t nm = m_unitConverter.ToNanometersSize( aVal );
-    return static_cast<int>( std::clamp<int64_t>( nm, INT_MIN, INT_MAX ) );
 }
 
 
@@ -2556,119 +2168,19 @@ double PCB_IO_PADS::decalUnitScale( const std::string& aUnits ) const
 }
 
 
-int PCB_IO_PADS::scaleCoord( double aVal, bool aIsX ) const
-{
-    double origin = aIsX ? m_originX : m_originY;
-
-    long long origin_nm = static_cast<long long>( std::round( origin * m_scaleFactor ) );
-    long long val_nm = static_cast<long long>( std::round( aVal * m_scaleFactor ) );
-
-    long long result = aIsX ? ( val_nm - origin_nm ) : ( origin_nm - val_nm );
-    return static_cast<int>( std::clamp<long long>( result, INT_MIN, INT_MAX ) );
-}
-
-
-PCB_LAYER_ID PCB_IO_PADS::getMappedLayer( int aPadsLayer ) const
-{
-    for( const auto& info : m_layerInfos )
-    {
-        if( info.padsLayerNum == aPadsLayer )
-        {
-            auto it = m_layer_map.find( wxString::FromUTF8( info.name ) );
-
-            if( it != m_layer_map.end() && it->second != UNDEFINED_LAYER )
-                return it->second;
-
-            return m_layerMapper.GetAutoMapLayer( aPadsLayer, info.type );
-        }
-    }
-
-    return m_layerMapper.GetAutoMapLayer( aPadsLayer );
-}
-
-
-void PCB_IO_PADS::ensureNet( const std::string& aNetName )
-{
-    if( aNetName.empty() )
-        return;
-
-    wxString wxName = PADS_COMMON::ConvertInvertedNetName( aNetName );
-
-    if( m_loadBoard->FindNet( wxName ) == nullptr )
-    {
-        NETINFO_ITEM* net = new NETINFO_ITEM( m_loadBoard, wxName,
-                                               m_loadBoard->GetNetCount() + 1 );
-        m_loadBoard->Add( net );
-    }
-}
-
-
 void PCB_IO_PADS::clearLoadingState()
 {
     m_loadBoard = nullptr;
     m_parser = nullptr;
-    m_unitConverter = PADS_UNIT_CONVERTER();
-    m_layerMapper = PADS_LAYER_MAPPER();
-    m_layerInfos.clear();
-    m_scaleFactor = 0.0;
-    m_originX = 0.0;
-    m_originY = 0.0;
+    m_converter.reset();
     m_pinToNetMap.clear();
     m_partToBlockMap.clear();
     m_testPointIndex = 1;
 }
 
 
-void PCB_IO_PADS::appendArcPoints( SHAPE_LINE_CHAIN& aChain,
-                                    const std::vector<PADS_IO::ARC_POINT>& aPts )
-{
-    if( aPts.empty() )
-        return;
-
-    // Single full-circle entry becomes a 36-segment polygon
-    if( aPts.size() == 1 && aPts[0].is_arc
-        && std::abs( aPts[0].arc.delta_angle ) >= 359.0 )
-    {
-        VECTOR2I center( scaleCoord( aPts[0].arc.cx, true ),
-                         scaleCoord( aPts[0].arc.cy, false ) );
-        int radius = scaleSize( aPts[0].arc.radius );
-
-        constexpr int NUM_SEGS = 36;
-
-        for( int i = 0; i < NUM_SEGS; i++ )
-        {
-            double angle = 2.0 * M_PI * i / NUM_SEGS;
-            aChain.Append( center.x + KiROUND( radius * cos( angle ) ),
-                           center.y + KiROUND( radius * sin( angle ) ) );
-        }
-
-        return;
-    }
-
-    aChain.Append( scaleCoord( aPts[0].x, true ), scaleCoord( aPts[0].y, false ) );
-
-    for( size_t i = 1; i < aPts.size(); i++ )
-    {
-        const auto& pt = aPts[i];
-
-        if( pt.is_arc )
-        {
-            SHAPE_ARC arc = makeMidpointArc( aPts[i - 1], pt, 0 );
-            const SHAPE_LINE_CHAIN arcPoly = arc.ConvertToPolyline();
-
-            for( int j = 1; j < arcPoly.PointCount(); j++ )
-                aChain.Append( arcPoly.CPoint( j ).x, arcPoly.CPoint( j ).y );
-        }
-        else
-        {
-            aChain.Append( scaleCoord( pt.x, true ), scaleCoord( pt.y, false ) );
-        }
-    }
-}
-
-
 void PCB_IO_PADS::setPcbShapeArc( PCB_SHAPE* aShape, const PADS_IO::ARC_POINT& aPrev,
-                                   const PADS_IO::ARC_POINT& aCurr )
+                                  const PADS_IO::ARC_POINT& aCurr )
 {
     aShape->SetShape( SHAPE_T::ARC );
 
@@ -2686,169 +2198,37 @@ void PCB_IO_PADS::setPcbShapeArc( PCB_SHAPE* aShape, const PADS_IO::ARC_POINT& a
 }
 
 
-SHAPE_ARC PCB_IO_PADS::makeMidpointArc( const PADS_IO::ARC_POINT& aPrev,
-                                          const PADS_IO::ARC_POINT& aCurr, int aWidth )
-{
-    VECTOR2I start( scaleCoord( aPrev.x, true ), scaleCoord( aPrev.y, false ) );
-    VECTOR2I end( scaleCoord( aCurr.x, true ), scaleCoord( aCurr.y, false ) );
-
-    double midX, midY;
-
-    if( aCurr.arc.radius == 0.0 )
-    {
-        // Route arcs specify only CW/CCW direction without explicit geometry.
-        // They are semicircles between the two endpoints. Compute the midpoint
-        // on the perpendicular bisector of the chord, at distance radius from
-        // the chord center (where radius = half the chord length).
-        double dx = aCurr.x - aPrev.x;
-        double dy = aCurr.y - aPrev.y;
-
-        if( aCurr.arc.delta_angle < 0 )
-        {
-            // CW: arc bulges to the left of the start-to-end direction
-            midX = ( aPrev.x + aCurr.x ) / 2.0 - dy / 2.0;
-            midY = ( aPrev.y + aCurr.y ) / 2.0 + dx / 2.0;
-        }
-        else
-        {
-            // CCW: arc bulges to the right of the start-to-end direction
-            midX = ( aPrev.x + aCurr.x ) / 2.0 + dy / 2.0;
-            midY = ( aPrev.y + aCurr.y ) / 2.0 - dx / 2.0;
-        }
-    }
-    else
-    {
-        // Full arc with explicit center and radius (pours, decals, board outlines).
-        // Compute the arc midpoint in PADS coordinate space (before the Y-axis
-        // flip in scaleCoord) so the 3-point constructor gets the correct winding.
-        double startAngleRad = atan2( aPrev.y - aCurr.arc.cy, aPrev.x - aCurr.arc.cx );
-        double midAngleRad = startAngleRad + ( aCurr.arc.delta_angle * M_PI / 180.0 ) / 2.0;
-
-        midX = aCurr.arc.cx + aCurr.arc.radius * cos( midAngleRad );
-        midY = aCurr.arc.cy + aCurr.arc.radius * sin( midAngleRad );
-    }
-
-    VECTOR2I mid( scaleCoord( midX, true ), scaleCoord( midY, false ) );
-
-    return SHAPE_ARC( start, mid, end, aWidth );
-}
-
-
 void PCB_IO_PADS::loadBoardSetup()
 {
-    m_layerMapper.SetCopperLayerCount( m_parser->GetParameters().layer_count );
-
     std::vector<PADS_IO::LAYER_INFO> padsLayerInfos = m_parser->GetLayerInfos();
 
-    auto convertLayerType = []( PADS_IO::PADS_LAYER_FUNCTION func ) -> PADS_LAYER_TYPE {
-        switch( func )
-        {
-        case PADS_IO::PADS_LAYER_FUNCTION::ROUTING:
-        case PADS_IO::PADS_LAYER_FUNCTION::PLANE:
-        case PADS_IO::PADS_LAYER_FUNCTION::MIXED:
-            return PADS_LAYER_TYPE::COPPER_INNER;
-        case PADS_IO::PADS_LAYER_FUNCTION::SOLDER_MASK:
-            return PADS_LAYER_TYPE::SOLDERMASK_TOP;
-        case PADS_IO::PADS_LAYER_FUNCTION::PASTE_MASK:
-            return PADS_LAYER_TYPE::PASTE_TOP;
-        case PADS_IO::PADS_LAYER_FUNCTION::SILK_SCREEN:
-            return PADS_LAYER_TYPE::SILKSCREEN_TOP;
-        case PADS_IO::PADS_LAYER_FUNCTION::ASSEMBLY:
-            return PADS_LAYER_TYPE::ASSEMBLY_TOP;
-        case PADS_IO::PADS_LAYER_FUNCTION::DOCUMENTATION:
-            return PADS_LAYER_TYPE::DOCUMENTATION;
-        case PADS_IO::PADS_LAYER_FUNCTION::DRILL:
-            return PADS_LAYER_TYPE::DRILL_DRAWING;
-        default:
-            return PADS_LAYER_TYPE::UNKNOWN;
-        }
-    };
-
-    for( const auto& padsInfo : padsLayerInfos )
-    {
-        PADS_LAYER_INFO info;
-        info.padsLayerNum = padsInfo.number;
-        info.name = padsInfo.name;
-
-        if( padsInfo.layer_type != PADS_IO::PADS_LAYER_FUNCTION::UNKNOWN
-            && padsInfo.layer_type != PADS_IO::PADS_LAYER_FUNCTION::UNASSIGNED )
-        {
-            info.type = convertLayerType( padsInfo.layer_type );
-
-            std::string lowerName = padsInfo.name;
-            std::transform( lowerName.begin(), lowerName.end(), lowerName.begin(),
-                            []( unsigned char c ){ return std::tolower( c ); } );
-
-            bool isBottom = lowerName.find( "bottom" ) != std::string::npos
-                            || lowerName.find( "bot" ) != std::string::npos;
-
-            if( info.type == PADS_LAYER_TYPE::SOLDERMASK_TOP && isBottom )
-                info.type = PADS_LAYER_TYPE::SOLDERMASK_BOTTOM;
-            else if( info.type == PADS_LAYER_TYPE::PASTE_TOP && isBottom )
-                info.type = PADS_LAYER_TYPE::PASTE_BOTTOM;
-            else if( info.type == PADS_LAYER_TYPE::SILKSCREEN_TOP && isBottom )
-                info.type = PADS_LAYER_TYPE::SILKSCREEN_BOTTOM;
-            else if( info.type == PADS_LAYER_TYPE::ASSEMBLY_TOP && isBottom )
-                info.type = PADS_LAYER_TYPE::ASSEMBLY_BOTTOM;
-            else if( info.type == PADS_LAYER_TYPE::COPPER_INNER )
-            {
-                if( padsInfo.number == 1 )
-                    info.type = PADS_LAYER_TYPE::COPPER_TOP;
-                else if( padsInfo.number == m_parser->GetParameters().layer_count )
-                    info.type = PADS_LAYER_TYPE::COPPER_BOTTOM;
-            }
-        }
-        else
-        {
-            info.type = m_layerMapper.GetLayerType( padsInfo.number );
-        }
-
-        info.required = padsInfo.required;
-        m_layerInfos.push_back( info );
-    }
-
-    std::vector<INPUT_LAYER_DESC> inputDescs =
-            m_layerMapper.BuildInputLayerDescriptions( m_layerInfos );
-
-    if( m_layer_mapping_handler )
-        m_layer_map = m_layer_mapping_handler( inputDescs );
-
-    int copperLayerCount = m_parser->GetParameters().layer_count;
-
-    if( copperLayerCount < 1 )
-        copperLayerCount = 2;
-
-    m_loadBoard->SetCopperLayerCount( copperLayerCount );
+    // The ASCII layer table always declares a function, so an unresolved layer type means
+    // the file said nothing useful and the layer name is no better a guess.
+    m_converter->SetupLayers( padsLayerInfos, m_parser->GetParameters().layer_count, m_layer_mapping_handler, false );
 
     if( m_parser->IsBasicUnits() )
     {
-        m_unitConverter.SetBasicUnitsMode( true );
+        m_converter->UnitConverter().SetBasicUnitsMode( true );
     }
     else
     {
         switch( m_parser->GetParameters().units )
         {
-        case PADS_IO::UNIT_TYPE::MILS:
-            m_unitConverter.SetBaseUnits( PADS_UNIT_TYPE::MILS );
-            break;
-        case PADS_IO::UNIT_TYPE::METRIC:
-            m_unitConverter.SetBaseUnits( PADS_UNIT_TYPE::METRIC );
-            break;
-        case PADS_IO::UNIT_TYPE::INCHES:
-            m_unitConverter.SetBaseUnits( PADS_UNIT_TYPE::INCHES );
-            break;
+        case PADS_IO::UNIT_TYPE::MILS:   m_converter->UnitConverter().SetBaseUnits( PADS_UNIT_TYPE::MILS );   break;
+        case PADS_IO::UNIT_TYPE::METRIC: m_converter->UnitConverter().SetBaseUnits( PADS_UNIT_TYPE::METRIC ); break;
+        case PADS_IO::UNIT_TYPE::INCHES: m_converter->UnitConverter().SetBaseUnits( PADS_UNIT_TYPE::INCHES ); break;
         }
     }
 
-    m_scaleFactor = m_parser->IsBasicUnits()
+    m_converter->SetScaleFactor( m_parser->IsBasicUnits()
             ? PADS_UNIT_CONVERTER::BASIC_TO_NM
             : ( m_parser->GetParameters().units == PADS_IO::UNIT_TYPE::MILS
                     ? PADS_UNIT_CONVERTER::MILS_TO_NM
                     : m_parser->GetParameters().units == PADS_IO::UNIT_TYPE::METRIC
                             ? PADS_UNIT_CONVERTER::MM_TO_NM
-                            : PADS_UNIT_CONVERTER::INCHES_TO_NM );
+                            : PADS_UNIT_CONVERTER::INCHES_TO_NM ) );
 
-    const auto& designRules = m_parser->GetDesignRules();
+    const PADS_IO::DESIGN_RULES& designRules = m_parser->GetDesignRules();
     BOARD_DESIGN_SETTINGS& bds = m_loadBoard->GetDesignSettings();
 
     bds.m_MinClearance = scaleSize( designRules.min_clearance );
@@ -2879,7 +2259,7 @@ void PCB_IO_PADS::loadBoardSetup()
         defaultNetclass->SetViaDrill( scaleSize( designRules.default_via_drill ) );
     }
 
-    const auto& viaDefs = m_parser->GetViaDefs();
+    const std::map<std::string, PADS_IO::VIA_DEF>& viaDefs = m_parser->GetViaDefs();
 
     if( !viaDefs.empty() )
     {
@@ -2907,14 +2287,14 @@ void PCB_IO_PADS::loadBoardSetup()
             bds.m_ViasDimensionsList.emplace_back( scaleSize( def.size ), scaleSize( def.drill ) );
     }
 
-    const auto& netClasses = m_parser->GetNetClasses();
+    const std::vector<PADS_IO::NET_CLASS_DEF>& netClasses = m_parser->GetNetClasses();
 
-    for( const auto& nc : netClasses )
+    for( const PADS_IO::NET_CLASS_DEF& nc : netClasses )
     {
         if( nc.name.empty() )
             continue;
 
-        wxString ncName = wxString::FromUTF8( nc.name );
+        wxString ncName = PADS_COMMON::ConvertText( nc.name );
         std::shared_ptr<NETCLASS> netclass = std::make_shared<NETCLASS>( ncName );
 
         if( nc.clearance > 0 )
@@ -2944,15 +2324,14 @@ void PCB_IO_PADS::loadBoardSetup()
         }
     }
 
-    const auto& diffPairs = m_parser->GetDiffPairs();
+    const std::vector<PADS_IO::DIFF_PAIR_DEF>& diffPairs = m_parser->GetDiffPairs();
 
-    for( const auto& dp : diffPairs )
+    for( const PADS_IO::DIFF_PAIR_DEF& dp : diffPairs )
     {
         if( dp.name.empty() )
             continue;
 
-        wxString dpClassName =
-                wxString::Format( wxT( "DiffPair_%s" ), wxString::FromUTF8( dp.name ) );
+        wxString dpClassName = wxString::Format( wxT( "DiffPair_%s" ), PADS_COMMON::ConvertText( dp.name ) );
         std::shared_ptr<NETCLASS> dpNetclass = std::make_shared<NETCLASS>( dpClassName );
 
         if( dp.gap > 0 )
@@ -2979,114 +2358,8 @@ void PCB_IO_PADS::loadBoardSetup()
         }
     }
 
-    m_originX = m_parser->GetParameters().origin.x;
-    m_originY = m_parser->GetParameters().origin.y;
+    m_converter->SetOrigin( m_parser->GetParameters().origin.x, m_parser->GetParameters().origin.y );
+    m_converter->SetOriginFromOutlines( m_parser->GetBoardOutlines() );
 
-    const auto& boardOutlines = m_parser->GetBoardOutlines();
-
-    if( !boardOutlines.empty() )
-    {
-        double min_x = std::numeric_limits<double>::max();
-        double max_x = std::numeric_limits<double>::lowest();
-        double min_y = std::numeric_limits<double>::max();
-        double max_y = std::numeric_limits<double>::lowest();
-
-        for( const auto& outline : boardOutlines )
-        {
-            for( const auto& pt : outline.points )
-            {
-                min_x = std::min( min_x, pt.x );
-                max_x = std::max( max_x, pt.x );
-                min_y = std::min( min_y, pt.y );
-                max_y = std::max( max_y, pt.y );
-            }
-        }
-
-        if( min_x < max_x && min_y < max_y )
-        {
-            m_originX = ( min_x + max_x ) / 2.0;
-            m_originY = ( min_y + max_y ) / 2.0;
-        }
-    }
-
-    // Build board stackup from LAYER DATA if meaningful data exists.
-    // Collect copper layer infos ordered by PADS layer number.
-    std::vector<const PADS_IO::LAYER_INFO*> copperLayerInfos;
-
-    for( const auto& li : padsLayerInfos )
-    {
-        if( li.is_copper )
-            copperLayerInfos.push_back( &li );
-    }
-
-    bool hasStackupData = false;
-
-    for( const auto* li : copperLayerInfos )
-    {
-        if( li->layer_thickness > 0.0 || li->dielectric_constant > 0.0 )
-        {
-            hasStackupData = true;
-            break;
-        }
-    }
-
-    if( hasStackupData )
-    {
-        BOARD_STACKUP& stackup = bds.GetStackupDescriptor();
-        stackup.RemoveAll();
-        stackup.BuildDefaultStackupList( &bds, copperLayerCount );
-
-        // Build a map from KiCad PCB_LAYER_ID to PADS LAYER_INFO for copper layers
-        std::map<PCB_LAYER_ID, const PADS_IO::LAYER_INFO*> copperInfoMap;
-
-        for( const auto* li : copperLayerInfos )
-        {
-            PCB_LAYER_ID kicadLayer = getMappedLayer( li->number );
-
-            if( kicadLayer != UNDEFINED_LAYER )
-                copperInfoMap[kicadLayer] = li;
-        }
-
-        // Track the previous copper layer's info for dielectric assignment
-        const PADS_IO::LAYER_INFO* prevCopperInfo = nullptr;
-
-        for( BOARD_STACKUP_ITEM* item : stackup.GetList() )
-        {
-            if( item->GetType() == BOARD_STACKUP_ITEM_TYPE::BS_ITEM_TYPE_COPPER )
-            {
-                auto it = copperInfoMap.find( item->GetBrdLayerId() );
-
-                if( it != copperInfoMap.end() )
-                {
-                    prevCopperInfo = it->second;
-
-                    if( it->second->copper_thickness > 0.0 )
-                        item->SetThickness( scaleSize( it->second->copper_thickness ) );
-                }
-            }
-            else if( item->GetType() == BOARD_STACKUP_ITEM_TYPE::BS_ITEM_TYPE_DIELECTRIC )
-            {
-                if( prevCopperInfo )
-                {
-                    if( prevCopperInfo->layer_thickness > 0.0 )
-                        item->SetThickness( scaleSize( prevCopperInfo->layer_thickness ) );
-
-                    if( prevCopperInfo->dielectric_constant > 0.0 )
-                        item->SetEpsilonR( prevCopperInfo->dielectric_constant );
-                }
-            }
-            else if( item->GetType() == BOARD_STACKUP_ITEM_TYPE::BS_ITEM_TYPE_SILKSCREEN )
-            {
-                item->SetColor( wxT( "White" ) );
-            }
-            else if( item->GetType() == BOARD_STACKUP_ITEM_TYPE::BS_ITEM_TYPE_SOLDERMASK )
-            {
-                item->SetColor( wxT( "Green" ) );
-            }
-        }
-
-        int thickness = stackup.BuildBoardThicknessFromStackup();
-        bds.SetBoardThickness( thickness );
-        bds.m_HasStackup = true;
-    }
+    m_converter->BuildStackup( padsLayerInfos );
 }

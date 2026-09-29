@@ -33,6 +33,8 @@
 #include <length_delay_calculation/length_delay_calculation.h>
 #include <lset.h>
 #include <cstdlib>
+#include <map>
+#include <set>
 #include <string_utils.h>
 #include <view/view.h>
 #include <settings/color_settings.h>
@@ -118,8 +120,7 @@ PCB_VIA::PCB_VIA( BOARD_ITEM* aParent ) :
     // For now, vias are always circles
     m_padStack.SetShape( PAD_SHAPE::CIRCLE, PADSTACK::ALL_LAYERS );
 
-    for( PCB_LAYER_ID layer : LAYER_RANGE( F_Cu, B_Cu, BoardCopperLayerCount() ) )
-        m_zoneLayerOverrides[layer] = ZLO_NONE;
+    ClearZoneLayerOverrides();
 
     m_isFree = false;
 }
@@ -132,7 +133,12 @@ PCB_VIA::PCB_VIA( const PCB_VIA& aOther ) :
     PCB_VIA::operator=( aOther );
 
     SetUuidDirect( aOther.m_Uuid );
-    m_zoneLayerOverrides = aOther.m_zoneLayerOverrides;
+
+    for( size_t ii = 0; ii < m_zoneLayerOverrides.size(); ++ii )
+    {
+        m_zoneLayerOverrides[ii].store( aOther.m_zoneLayerOverrides[ii].load( std::memory_order_relaxed ),
+                                        std::memory_order_relaxed );
+    }
 }
 
 
@@ -336,7 +342,22 @@ bool PCB_VIA::operator==( const PCB_VIA& aOther ) const
             && m_layer == aOther.m_layer
             && m_padStack == aOther.m_padStack
             && m_viaType == aOther.m_viaType
-            && m_zoneLayerOverrides == aOther.m_zoneLayerOverrides;
+            && sameZoneLayerOverrides( aOther );
+}
+
+
+bool PCB_VIA::sameZoneLayerOverrides( const PCB_VIA& aOther ) const
+{
+    for( size_t ii = 0; ii < m_zoneLayerOverrides.size(); ++ii )
+    {
+        if( m_zoneLayerOverrides[ii].load( std::memory_order_relaxed )
+                != aOther.m_zoneLayerOverrides[ii].load( std::memory_order_relaxed ) )
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 
@@ -364,7 +385,7 @@ double PCB_VIA::Similarity( const BOARD_ITEM& aOther ) const
     if( m_viaType != other.m_viaType )
         similarity *= 0.9;
 
-    if( m_zoneLayerOverrides != other.m_zoneLayerOverrides )
+    if( !sameZoneLayerOverrides( other ) )
         similarity *= 0.9;
 
     return similarity;
@@ -374,13 +395,15 @@ double PCB_VIA::Similarity( const BOARD_ITEM& aOther ) const
 void PCB_VIA::SetWidth( int aWidth )
 {
     m_padStack.SetSize( { aWidth, aWidth }, PADSTACK::ALL_LAYERS );
+    wxFAIL_MSG( wxT( "Warning: PCB_VIA::SetWidth() called without a layer argument" ) );
 }
 
 
 int PCB_VIA::GetWidth() const
 {
     // This is present because of the parent class.  It should never be actually called on a via.
-    wxCHECK_MSG( false, m_padStack.Size( PADSTACK::ALL_LAYERS ).x, "Warning: PCB_VIA::GetWidth called without a layer argument" );
+    wxCHECK_MSG( false, m_padStack.Size( PADSTACK::ALL_LAYERS ).x,
+                 wxT( "Warning: PCB_VIA::GetWidth() called without a layer argument" ) );
 }
 
 
@@ -410,8 +433,20 @@ void PCB_TRACK::Serialize( google::protobuf::Any &aContainer ) const
     track.set_locked( IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
                                  : kiapi::common::types::LockedState::LS_UNLOCKED );
     PackNet( track.mutable_net() );
-    // TODO m_hasSolderMask and m_solderMaskMargin
 
+    if( const BOARD* board = GetBoard() )
+        track.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
+
+    if( HasSolderMask() )
+    {
+        kiapi::board::types::SolderMaskOverrides* sm = track.mutable_solder_mask();
+        sm->set_expose_copper( true );
+
+        if( GetLocalSolderMaskMargin().has_value() )
+            sm->mutable_solder_mask_margin()->set_value_nm( GetLocalSolderMaskMargin().value() );
+    }
+
+    kiapi::common::PackCustomProperties( track.mutable_custom_properties(), *this );
     aContainer.PackFrom( track );
 }
 
@@ -430,7 +465,22 @@ bool PCB_TRACK::Deserialize( const google::protobuf::Any &aContainer )
     SetLayer( FromProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( track.layer() ) );
     UnpackNet( track.net() );
     SetLocked( track.locked() == kiapi::common::types::LockedState::LS_LOCKED );
-    // TODO m_hasSolderMask and m_solderMaskMargin
+    kiapi::common::UnpackCustomProperties( track.custom_properties(), *this );
+
+    if( track.has_solder_mask() )
+    {
+        SetHasSolderMask( track.solder_mask().expose_copper() );
+
+        if( track.solder_mask().has_solder_mask_margin() )
+            SetLocalSolderMaskMargin( track.solder_mask().solder_mask_margin().value_nm() );
+        else
+            SetLocalSolderMaskMargin( {} );
+    }
+    else
+    {
+        SetHasSolderMask( false );
+        SetLocalSolderMaskMargin( {} );
+    }
 
     return true;
 }
@@ -452,8 +502,20 @@ void PCB_ARC::Serialize( google::protobuf::Any &aContainer ) const
     arc.set_locked( IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
                                : kiapi::common::types::LockedState::LS_UNLOCKED );
     PackNet( arc.mutable_net() );
-    // TODO m_hasSolderMask and m_solderMaskMargin
 
+    if( const BOARD* board = GetBoard() )
+        arc.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
+
+    if( HasSolderMask() )
+    {
+        kiapi::board::types::SolderMaskOverrides* sm = arc.mutable_solder_mask();
+        sm->set_expose_copper( true );
+
+        if( GetLocalSolderMaskMargin().has_value() )
+            sm->mutable_solder_mask_margin()->set_value_nm( GetLocalSolderMaskMargin().value() );
+    }
+
+    kiapi::common::PackCustomProperties( arc.mutable_custom_properties(), *this );
     aContainer.PackFrom( arc );
 }
 
@@ -473,7 +535,22 @@ bool PCB_ARC::Deserialize( const google::protobuf::Any &aContainer )
     SetLayer( FromProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( arc.layer() ) );
     UnpackNet( arc.net() );
     SetLocked( arc.locked() == kiapi::common::types::LockedState::LS_LOCKED );
-    // TODO m_hasSolderMask and m_solderMaskMargin
+    kiapi::common::UnpackCustomProperties( arc.custom_properties(), *this );
+
+    if( arc.has_solder_mask() )
+    {
+        SetHasSolderMask( arc.solder_mask().expose_copper() );
+
+        if( arc.solder_mask().has_solder_mask_margin() )
+            SetLocalSolderMaskMargin( arc.solder_mask().solder_mask_margin().value_nm() );
+        else
+            SetLocalSolderMaskMargin( {} );
+    }
+    else
+    {
+        SetHasSolderMask( false );
+        SetLocalSolderMaskMargin( {} );
+    }
 
     return true;
 }
@@ -482,27 +559,48 @@ bool PCB_ARC::Deserialize( const google::protobuf::Any &aContainer )
 void PCB_VIA::Serialize( google::protobuf::Any &aContainer ) const
 {
     kiapi::board::types::Via via;
+    Serialize( via );
+    aContainer.PackFrom( via );
+}
 
-    via.mutable_id()->set_value( m_Uuid.AsStdString() );
-    via.mutable_position()->set_x_nm( GetPosition().x );
-    via.mutable_position()->set_y_nm( GetPosition().y );
+
+void PCB_VIA::Serialize( kiapi::board::types::Via& aVia ) const
+{
+    aVia.mutable_id()->set_value( m_Uuid.AsStdString() );
+    aVia.mutable_position()->set_x_nm( GetPosition().x );
+    aVia.mutable_position()->set_y_nm( GetPosition().y );
 
     PADSTACK padstack = Padstack();
 
-    google::protobuf::Any padStackWrapper;
-    padstack.Serialize( padStackWrapper );
-    padStackWrapper.UnpackTo( via.mutable_pad_stack() );
+    padstack.Serialize( *aVia.mutable_pad_stack() );
 
     // PADSTACK::m_layerSet is not used by vias
-    via.mutable_pad_stack()->clear_layers();
-    kiapi::board::PackLayerSet( *via.mutable_pad_stack()->mutable_layers(), GetLayerSet() );
+    aVia.mutable_pad_stack()->clear_layers();
+    kiapi::board::PackLayerSet( *aVia.mutable_pad_stack()->mutable_layers(), GetLayerSet() );
 
-    via.set_type( ToProtoEnum<VIATYPE, kiapi::board::types::ViaType>( GetViaType() ) );
-    via.set_locked( IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
+    aVia.set_type( ToProtoEnum<VIATYPE, kiapi::board::types::ViaType>( GetViaType() ) );
+    aVia.set_locked( IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
                                : kiapi::common::types::LockedState::LS_UNLOCKED );
-    PackNet( via.mutable_net() );
+    PackNet( aVia.mutable_net() );
 
-    aContainer.PackFrom( via );
+    if( const BOARD* board = GetBoard() )
+        aVia.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
+
+    kiapi::board::PackTeardropSettings( *aVia.mutable_teardrop(), GetTeardropParams() );
+
+    aVia.set_is_free( GetIsFree() );
+
+    {
+        // Pack drops ZLO_NONE, so walking every copper layer emits only the overridden ones
+        std::map<PCB_LAYER_ID, ZONE_LAYER_OVERRIDE> overrides;
+
+        for( PCB_LAYER_ID layer : LAYER_RANGE( F_Cu, B_Cu, MAX_CU_LAYERS ) )
+            overrides[layer] = GetZoneLayerOverride( layer );
+
+        kiapi::board::PackZoneLayerOverrides( aVia.mutable_zone_layer_overrides(), overrides );
+    }
+
+    kiapi::common::PackCustomProperties( aVia.mutable_custom_properties(), *this );
 }
 
 
@@ -513,12 +611,18 @@ bool PCB_VIA::Deserialize( const google::protobuf::Any &aContainer )
     if( !aContainer.UnpackTo( &via ) )
         return false;
 
-    SetUuidDirect( KIID( via.id().value() ) );
-    SetStart( VECTOR2I( via.position().x_nm(), via.position().y_nm() ) );
+    return Deserialize( via );
+}
+
+
+bool PCB_VIA::Deserialize( const kiapi::board::types::Via& aVia )
+{
+    SetUuidDirect( KIID( aVia.id().value() ) );
+    SetStart( VECTOR2I( aVia.position().x_nm(), aVia.position().y_nm() ) );
     SetEnd( GetStart() );
 
     google::protobuf::Any padStackWrapper;
-    padStackWrapper.PackFrom( via.pad_stack() );
+    padStackWrapper.PackFrom( aVia.pad_stack() );
 
     if( !m_padStack.Deserialize( padStackWrapper ) )
         return false;
@@ -526,9 +630,27 @@ bool PCB_VIA::Deserialize( const google::protobuf::Any &aContainer )
     // PADSTACK::m_layerSet is not used by vias
     m_padStack.LayerSet().reset();
 
-    SetViaType( FromProtoEnum<VIATYPE>( via.type() ) );
-    UnpackNet( via.net() );
-    SetLocked( via.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+    SetViaType( FromProtoEnum<VIATYPE>( aVia.type() ) );
+    UnpackNet( aVia.net() );
+    SetLocked( aVia.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+    kiapi::common::UnpackCustomProperties( aVia.custom_properties(), *this );
+
+    if( aVia.has_teardrop() )
+        kiapi::board::UnpackTeardropSettings( GetTeardropParams(), aVia.teardrop() );
+    else
+        SetTeardropsEnabled( false );
+
+    SetIsFree( aVia.is_free() );
+
+    ClearZoneLayerOverrides();
+
+    {
+        std::map<PCB_LAYER_ID, ZONE_LAYER_OVERRIDE> overrides;
+        kiapi::board::UnpackZoneLayerOverrides( overrides, aVia.zone_layer_overrides() );
+
+        for( const auto& [layer, value] : overrides )
+            SetZoneLayerOverride( layer, value );
+    }
 
     return true;
 }
@@ -586,13 +708,36 @@ MINOPTMAX<int> PCB_VIA::GetDrillConstraint( wxString* aSource ) const
     {
         BOARD_DESIGN_SETTINGS& bds = GetBoard()->GetDesignSettings();
 
-        constraint = bds.m_DRCEngine->EvalRules( HOLE_SIZE_CONSTRAINT, this, nullptr, m_layer );
+        // Holes are not layer-specific, as in the hole size test
+        constraint = bds.m_DRCEngine->EvalRules( HOLE_SIZE_CONSTRAINT, this, nullptr, UNDEFINED_LAYER );
     }
 
     if( aSource )
         *aSource = constraint.GetName();
 
     return constraint.Value();
+}
+
+
+void PCB_VIA::SetSizeFromRules( int aDiameter, int aDrill )
+{
+    // Area rules test the via's shape, so evaluate them at the preferred size
+    SetPadstackMode( PADSTACK::MODE::NORMAL );
+    SetWidth( PADSTACK::ALL_LAYERS, aDiameter );
+    SetDrill( aDrill );
+
+    // Callers size vias that may still move, so keep them out of the pointer-keyed rule caches
+    bool wasTransient = HasFlag( ROUTER_TRANSIENT );
+    SetFlags( ROUTER_TRANSIENT );
+
+    int diameter = GetWidthConstraint().PinnedOpt( aDiameter );
+    int drill = GetDrillConstraint().PinnedOpt( aDrill );
+
+    if( !wasTransient )
+        ClearFlags( ROUTER_TRANSIENT );
+
+    SetWidth( PADSTACK::ALL_LAYERS, diameter );
+    SetDrill( drill );
 }
 
 
@@ -684,6 +829,141 @@ void PCB_VIA::SetPrimaryDrillCapped( const std::optional<bool>& aCapped )
 void PCB_VIA::SetPrimaryDrillCappedFlag( bool aCapped )
 {
     m_padStack.Drill().is_capped = aCapped;
+}
+
+
+// Two microvias belong to one structure when the upper one lands on the lower one. Exact
+// concentricity is only the extreme case of that, so the test is hole overlap.
+std::vector<std::vector<PCB_VIA*>> PCB_VIA::CollectMicroviaColumns( BOARD* aBoard )
+{
+    std::map<int, int> ordinals;
+    int                n = 0;
+
+    for( PCB_LAYER_ID layer : LAYER_RANGE( F_Cu, B_Cu, aBoard->GetCopperLayerCount() ) )
+        ordinals[layer] = n++;
+
+    std::vector<PCB_VIA*> microvias;
+
+    for( PCB_TRACK* track : aBoard->Tracks() )
+    {
+        if( track->Type() != PCB_VIA_T )
+            continue;
+
+        PCB_VIA* via = static_cast<PCB_VIA*>( track );
+
+        if( via->GetViaType() != VIATYPE::MICROVIA )
+            continue;
+
+        // A via on a single layer lands on nothing.
+        if( via->TopLayer() == via->BottomLayer() )
+            continue;
+
+        if( ordinals.count( via->TopLayer() ) && ordinals.count( via->BottomLayer() ) )
+            microvias.push_back( via );
+    }
+
+    auto upper = [&]( PCB_VIA* aVia )
+    {
+        return std::min( ordinals[aVia->TopLayer()], ordinals[aVia->BottomLayer()] );
+    };
+
+    auto lower = [&]( PCB_VIA* aVia )
+    {
+        return std::max( ordinals[aVia->TopLayer()], ordinals[aVia->BottomLayer()] );
+    };
+
+    // Touching holes have no wall between them, so they count as one column too.
+    auto overlaps = []( PCB_VIA* aFirst, PCB_VIA* aSecond )
+    {
+        double reach = ( aFirst->GetDrillValue() + aSecond->GetDrillValue() ) / 2.0;
+
+        return ( aFirst->GetPosition() - aSecond->GetPosition() ).EuclideanNorm() <= reach;
+    };
+
+    // Overlap needs the centres closer than the largest hole, so bucket the vias by landing
+    // layer and position and only the neighbouring buckets have to be looked at.
+    int cellSize = 1;
+
+    for( PCB_VIA* via : microvias )
+        cellSize = std::max( cellSize, via->GetDrillValue() );
+
+    auto cellOf = [&]( int aCoord )
+    {
+        return (int) std::floor( (double) aCoord / cellSize );
+    };
+
+    std::map<std::tuple<int, int, int>, std::vector<PCB_VIA*>> byCell;
+
+    for( PCB_VIA* via : microvias )
+    {
+        VECTOR2I pos = via->GetPosition();
+        byCell[{ upper( via ), cellOf( pos.x ), cellOf( pos.y ) }].push_back( via );
+    }
+
+    // The via a given one lands on, if any.
+    auto below = [&]( PCB_VIA* aVia ) -> PCB_VIA*
+    {
+        VECTOR2I pos = aVia->GetPosition();
+
+        for( int dx = -1; dx <= 1; ++dx )
+        {
+            for( int dy = -1; dy <= 1; ++dy )
+            {
+                auto it = byCell.find( { lower( aVia ), cellOf( pos.x ) + dx, cellOf( pos.y ) + dy } );
+
+                if( it == byCell.end() )
+                    continue;
+
+                for( PCB_VIA* other : it->second )
+                {
+                    if( other != aVia && overlaps( aVia, other ) )
+                        return other;
+                }
+            }
+        }
+
+        return nullptr;
+    };
+
+    std::set<PCB_VIA*> carried;
+
+    for( PCB_VIA* via : microvias )
+    {
+        if( PCB_VIA* under = below( via ) )
+            carried.insert( under );
+    }
+
+    std::vector<std::vector<PCB_VIA*>> columns;
+    std::set<PCB_VIA*>                 taken;
+
+    for( PCB_VIA* via : microvias )
+    {
+        // Walk down from the top of each structure so every one is built once.
+        if( carried.count( via ) )
+            continue;
+
+        std::vector<PCB_VIA*> column;
+        bool                  landsOnAnother = false;
+
+        for( PCB_VIA* step = via; step; step = below( step ) )
+        {
+            if( !taken.insert( step ).second )
+            {
+                landsOnAnother = true;
+                break;
+            }
+
+            column.push_back( step );
+
+            if( column.size() > ordinals.size() )
+                break;
+        }
+
+        if( column.size() > 1 || landsOnAnother )
+            columns.push_back( std::move( column ) );
+    }
+
+    return columns;
 }
 
 
@@ -978,15 +1258,7 @@ const BOX2I PCB_TRACK::GetBoundingBox() const
     int radius = ( m_width + 1 ) / 2;
     int ymax, xmax, ymin, xmin;
 
-    if( Type() == PCB_VIA_T )
-    {
-        ymax = m_Start.y;
-        xmax = m_Start.x;
-
-        ymin = m_Start.y;
-        xmin = m_Start.x;
-    }
-    else if( Type() == PCB_ARC_T )
+    if( Type() == PCB_ARC_T )
     {
         std::shared_ptr<SHAPE> arc = GetEffectiveShape();
         BOX2I bbox = arc->BBox();
@@ -1019,16 +1291,21 @@ const BOX2I PCB_TRACK::GetBoundingBox() const
 
 const BOX2I PCB_VIA::GetBoundingBox() const
 {
-    int radius = 0;
+    int diameter = 0;
 
     Padstack().ForEachUniqueLayer(
             [&]( PCB_LAYER_ID aLayer )
             {
-                radius = std::max( radius, GetWidth( aLayer ) );
+                if( IsGhostLayer( aLayer ) )
+                    return;
+
+                diameter = std::max( diameter, GetWidth( aLayer ) );
             } );
 
+    diameter = std::max( diameter, Padstack().GetMaxHoleSize() );
+
     // via is round, this is its radius, rounded up
-    radius = ( radius + 1 ) / 2;
+    int radius = ( diameter + 1 ) / 2;
 
     int ymax = m_Start.y + radius;
     int xmax = m_Start.x + radius;
@@ -1044,10 +1321,13 @@ const BOX2I PCB_VIA::GetBoundingBox() const
 
 const BOX2I PCB_VIA::GetBoundingBox( PCB_LAYER_ID aLayer ) const
 {
-    int radius = GetWidth( aLayer );
+    int diameter = GetWidth( aLayer );
+
+    if( IsBackdrilledOrPostMachined( aLayer ) )
+        diameter = std::max( diameter, Padstack().GetMaxHoleSize() );
 
     // via is round, this is its radius, rounded up
-    radius = ( radius + 1 ) / 2;
+    int radius = ( diameter + 1 ) / 2;
 
     int ymax = m_Start.y + radius;
     int xmax = m_Start.x + radius;
@@ -1202,9 +1482,22 @@ INSPECT_RESULT PCB_TRACK::Visit( INSPECTOR inspector, void* testData, const std:
 }
 
 
-std::shared_ptr<SHAPE_SEGMENT> PCB_VIA::GetEffectiveHoleShape() const
+std::shared_ptr<SHAPE_SEGMENT> PCB_VIA::GetEffectiveHoleShape( PCB_LAYER_ID aLayer, DRC_CONSTRAINT_T aUsage ) const
 {
-    return std::make_shared<SHAPE_SEGMENT>( SEG( m_Start, m_Start ), Padstack().Drill().size.x );
+    // An unset padstack drill falls back to the netclass value
+    int holeSize = GetDrillValue();
+
+    // See if we want to include a larger backdrill or post-machining hole
+    if( aUsage == HOLE_TO_HOLE_CONSTRAINT
+            || ( aUsage == HOLE_CLEARANCE_CONSTRAINT && IsBackdrilledOrPostMachined( aLayer ) )
+            || ( aUsage == ANNULAR_WIDTH_CONSTRAINT && IsBackdrilledOrPostMachined( aLayer ) )
+            || ( aUsage == PHYSICAL_CLEARANCE_CONSTRAINT && IsBackdrilledOrPostMachined( aLayer ) )
+            || ( aUsage == SILK_CLEARANCE_CONSTRAINT && IsBackdrilledOrPostMachined( aLayer ) ) )
+    {
+        holeSize = std::max( holeSize, Padstack().GetMaxHoleSize() );
+    }
+
+    return std::make_shared<SHAPE_SEGMENT>( SEG( m_Start, m_Start ), holeSize );
 }
 
 // clang-format off: the suggestion is slightly less readable
@@ -1474,10 +1767,6 @@ bool PCB_TRACK::IsOnLayer( PCB_LAYER_ID aLayer ) const
 
 bool PCB_VIA::IsOnLayer( PCB_LAYER_ID aLayer ) const
 {
-#if 0
-    // Nice and simple, but raises its ugly head in performance profiles....
-    return GetLayerSet().test( aLayer );
-#endif
     if( IsCopperLayer( aLayer ) &&
         LAYER_RANGE::Contains( Padstack().Drill().start, Padstack().Drill().end, aLayer ) )
     {
@@ -1495,7 +1784,13 @@ bool PCB_VIA::IsOnLayer( PCB_LAYER_ID aLayer ) const
 }
 
 
-bool PCB_VIA::HasValidLayerPair( int aCopperLayerCount )
+bool PCB_VIA::IsOnCopperLayer() const
+{
+    return true;
+}
+
+
+bool PCB_VIA::HasValidLayerPair( int aCopperLayerCount ) const
 {
     // return true if top and bottom layers are valid, depending on the copper layer count
     // aCopperLayerCount is expected >= 2
@@ -1934,6 +2229,40 @@ bool PCB_VIA::IsBuriedVia() const
 }
 
 
+bool PCB_VIA::IsGhostLayer( PCB_LAYER_ID aLayer ) const
+{
+    if( ( m_viaType == VIATYPE::MICROVIA || m_viaType == VIATYPE::BLIND || m_viaType == VIATYPE::BURIED )
+            && m_padStack.Mode() == PADSTACK::MODE::FRONT_INNER_BACK )
+    {
+        switch( aLayer )
+        {
+        case F_Cu:
+            if( Padstack().Drill().start != F_Cu )
+                return true;
+
+            break;
+
+        case B_Cu:
+            if( Padstack().Drill().end !=  B_Cu )
+                return true;
+
+            break;
+
+        case PADSTACK::INNER_LAYERS:
+            if( GetBoard() && GetBoard()->GetCopperLayerCount() == 2 )
+                return true;
+
+            break;
+
+        default:
+            wxFAIL_MSG( wxT( "Unsupported layer for FRONT_INNER_BACK" ) );
+        }
+    }
+
+    return false;
+}
+
+
 bool PCB_VIA::FlashLayer( const LSET& aLayers ) const
 {
     for( PCB_LAYER_ID layer : aLayers )
@@ -1999,27 +2328,36 @@ bool PCB_VIA::FlashLayer( int aLayer ) const
 }
 
 
-void PCB_VIA::ClearZoneLayerOverrides()
+// IsCopperLayer() accepts any even id below PCB_LAYER_ID_COUNT, but only F_Cu..In30_Cu carry a
+// distinct ordinal.  Anything above aliases B_Cu or indexes past the override array
+static bool hasLayerOrdinal( PCB_LAYER_ID aLayer )
 {
-    std::unique_lock<std::mutex> cacheLock( m_zoneLayerOverridesMutex );
-
-    for( PCB_LAYER_ID layer : LAYER_RANGE( F_Cu, B_Cu, BoardCopperLayerCount() ) )
-        m_zoneLayerOverrides[layer] = ZLO_NONE;
+    return IsCopperLayer( aLayer ) && aLayer <= In30_Cu;
 }
 
 
-const ZONE_LAYER_OVERRIDE& PCB_VIA::GetZoneLayerOverride( PCB_LAYER_ID aLayer ) const
+void PCB_VIA::ClearZoneLayerOverrides()
 {
-    static const ZONE_LAYER_OVERRIDE defaultOverride = ZLO_NONE;
-    auto it = m_zoneLayerOverrides.find( aLayer );
-    return it != m_zoneLayerOverrides.end() ? it->second : defaultOverride;
+    for( std::atomic<ZONE_LAYER_OVERRIDE>& entry : m_zoneLayerOverrides )
+        entry.store( ZLO_NONE, std::memory_order_relaxed );
+}
+
+
+ZONE_LAYER_OVERRIDE PCB_VIA::GetZoneLayerOverride( PCB_LAYER_ID aLayer ) const
+{
+    if( !hasLayerOrdinal( aLayer ) )
+        return ZLO_NONE;
+
+    return m_zoneLayerOverrides[CopperLayerToOrdinal( aLayer )].load( std::memory_order_relaxed );
 }
 
 
 void PCB_VIA::SetZoneLayerOverride( PCB_LAYER_ID aLayer, ZONE_LAYER_OVERRIDE aOverride )
 {
-    std::unique_lock<std::mutex> cacheLock( m_zoneLayerOverridesMutex );
-    m_zoneLayerOverrides[aLayer] = aOverride;
+    if( !hasLayerOrdinal( aLayer ) )
+        return;
+
+    m_zoneLayerOverrides[CopperLayerToOrdinal( aLayer )].store( aOverride, std::memory_order_relaxed );
 }
 
 
@@ -2148,9 +2486,17 @@ const BOX2I PCB_TRACK::ViewBBox() const
     BOX2I bbox = GetBoundingBox();
 
     if( const BOARD* board = GetBoard() )
+    {
         bbox.Inflate( 2 * board->GetDesignSettings().GetBiggestClearanceValue() );
+
+        // Only a via drills, so a plain segment would just be given an oversized box
+        if( HasHole() )
+            bbox = board->ExpandBoundingBoxForDrillSymbols( bbox );
+    }
     else
+    {
         bbox.Inflate( GetWidth() );     // Add a bit extra for safety
+    }
 
     return bbox;
 }
@@ -2161,6 +2507,14 @@ std::vector<int> PCB_VIA::ViewGetLayers() const
     LAYER_RANGE layers( Padstack().Drill().start, Padstack().Drill().end, MAX_CU_LAYERS );
     std::vector<int> ret_layers{ LAYER_VIA_HOLES, LAYER_VIA_HOLEWALLS, LAYER_VIA_NETNAMES };
     ret_layers.reserve( MAX_CU_LAYERS + 6 );
+
+    // A drill map on a layer asks the holes to draw their symbols there, so the symbols stay
+    // in the view index and one hole edit repaints one hole
+    if( const BOARD* drillBoard = GetBoard() )
+    {
+        for( PCB_LAYER_ID mapLayer : drillBoard->DrillSymbolLayers().Seq() )
+            ret_layers.push_back( DRILL_SYMBOL_LAYER_FOR( mapLayer ) );
+    }
 
     // TODO(JE) Rendering order issue
 #if 0
@@ -2207,6 +2561,14 @@ double PCB_VIA::ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const
     PCB_PAINTER*         painter = static_cast<PCB_PAINTER*>( aView->GetPainter() );
     PCB_RENDER_SETTINGS* renderSettings = painter->GetSettings();
     const BOARD*         board = GetBoard();
+
+    // Reviewing a drill drawing with vias hidden is normal, so the symbols answer to the
+    // map's own layer rather than to the vias meta control
+    if( IsDrillSymbolLayer( aLayer ) )
+    {
+        return aView->IsLayerVisibleCached( aLayer - LAYER_DRILL_SYMBOL_START ) ? LOD_SHOW
+                                                                                : LOD_HIDE;
+    }
 
     // Meta control for hiding all vias
     if( !aView->IsLayerVisibleCached( LAYER_VIAS ) )
@@ -2438,8 +2800,22 @@ void PCB_VIA::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITE
     GetMsgPanelInfoBase_Common( aFrame, aList );
 
     aList.emplace_back( _( "Layer" ), LayerMaskDescribe() );
-    // TODO(JE) padstacks
-    aList.emplace_back( _( "Diameter" ), aFrame->MessageTextFromValue( GetWidth( PADSTACK::ALL_LAYERS ) ) );
+
+    std::set<int> widths;
+    m_padStack.ForEachUniqueLayer(
+            [&]( PCB_LAYER_ID aLayer )
+            {
+                if( IsGhostLayer( aLayer ) )
+                    return;
+
+                widths.insert( GetWidth( aLayer ) );
+            } );
+
+    if( widths.size() == 1 )
+        aList.emplace_back( _( "Diameter" ), aFrame->MessageTextFromValue( *widths.begin() ) );
+    else
+        aList.emplace_back( _( "Diameter" ), _( "(mixed)" ) );
+
     aList.emplace_back( _( "Hole" ), aFrame->MessageTextFromValue( GetDrillValue() ) );
 
     wxString  source;
@@ -2497,6 +2873,14 @@ wxString PCB_VIA::LayerMaskDescribe() const
 }
 
 
+double PCB_TRACK::GetCoverageArea( int aTextMargin ) const
+{
+    // Width squared, so a long track does not outrank a short one it happens to cross
+    const double width = GetWidth();
+    return width * width;
+}
+
+
 bool PCB_TRACK::HitTest( const VECTOR2I& aPosition, int aAccuracy ) const
 {
     return TestSegmentHit( aPosition, m_Start, m_End, aAccuracy + ( m_width / 2 ) );
@@ -2538,6 +2922,13 @@ bool PCB_ARC::HitTest( const VECTOR2I& aPosition, int aAccuracy ) const
 }
 
 
+double PCB_VIA::GetCoverageArea( int aTextMargin ) const
+{
+    // A via covers its pad, so the width rule it inherits from tracks does not apply
+    return BOARD_ITEM::GetCoverageArea( aTextMargin );
+}
+
+
 bool PCB_VIA::HitTest( const VECTOR2I& aPosition, int aAccuracy ) const
 {
     bool hit = false;
@@ -2546,6 +2937,9 @@ bool PCB_VIA::HitTest( const VECTOR2I& aPosition, int aAccuracy ) const
             [&]( PCB_LAYER_ID aLayer )
             {
                 if( hit )
+                    return;
+
+                if( IsGhostLayer( aLayer ) )
                     return;
 
                 int max_dist = aAccuracy + ( GetWidth( aLayer ) / 2 );
@@ -2603,6 +2997,9 @@ bool PCB_VIA::HitTest( const BOX2I& aRect, bool aContained, int aAccuracy ) cons
             [&]( PCB_LAYER_ID aLayer )
             {
                 if( hit )
+                    return;
+
+                if( IsGhostLayer( aLayer ) )
                     return;
 
                 BOX2I box( GetStart() );
@@ -2740,7 +3137,7 @@ bool PCB_TRACK::cmp_tracks::operator() ( const PCB_TRACK* a, const PCB_TRACK* b 
 }
 
 
-std::shared_ptr<SHAPE> PCB_TRACK::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING aFlash ) const
+std::shared_ptr<SHAPE> PCB_TRACK::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING, DRC_CONSTRAINT_T ) const
 {
     int width = m_width;
 
@@ -2751,71 +3148,47 @@ std::shared_ptr<SHAPE> PCB_TRACK::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHI
 }
 
 
-std::shared_ptr<SHAPE> PCB_VIA::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING aFlash ) const
+std::shared_ptr<SHAPE> PCB_VIA::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING aFlash,
+                                                   DRC_CONSTRAINT_T aUsage ) const
 {
-    // Check if this layer has copper removed by backdrill or post-machining
-    if( aLayer != UNDEFINED_LAYER && IsBackdrilledOrPostMachined( aLayer ) )
+    int diameter = 0;
+
+    if( aFlash == FLASHING::ALWAYS_FLASHED || ( aFlash == FLASHING::DEFAULT && FlashLayer( aLayer ) ) )
     {
-        // Return the larger of the backdrill or post-machining hole
-        int holeSize = 0;
-
-        const PADSTACK::POST_MACHINING_PROPS& frontPM = Padstack().FrontPostMachining();
-        const PADSTACK::POST_MACHINING_PROPS& backPM = Padstack().BackPostMachining();
-
-        if( frontPM.mode != PAD_DRILL_POST_MACHINING_MODE::NOT_POST_MACHINED
-            && frontPM.mode != PAD_DRILL_POST_MACHINING_MODE::UNKNOWN )
-        {
-            holeSize = std::max( holeSize, frontPM.size );
-        }
-
-        if( backPM.mode != PAD_DRILL_POST_MACHINING_MODE::NOT_POST_MACHINED
-            && backPM.mode != PAD_DRILL_POST_MACHINING_MODE::UNKNOWN )
-        {
-            holeSize = std::max( holeSize, backPM.size );
-        }
-
-        const PADSTACK::DRILL_PROPS& secDrill = Padstack().SecondaryDrill();
-
-        if( secDrill.start != UNDEFINED_LAYER && secDrill.end != UNDEFINED_LAYER )
-            holeSize = std::max( holeSize, secDrill.size.x );
-
-        if( holeSize > 0 )
-            return std::make_shared<SHAPE_CIRCLE>( m_Start, holeSize / 2 );
-        else
-            return std::make_shared<SHAPE_CIRCLE>( m_Start, GetDrillValue() / 2 );
-    }
-
-    if( aFlash == FLASHING::ALWAYS_FLASHED
-            || ( aFlash == FLASHING::DEFAULT && FlashLayer( aLayer ) ) )
-    {
-        int width = 0;
-
         if( aLayer == UNDEFINED_LAYER )
         {
             Padstack().ForEachUniqueLayer(
-                [&]( PCB_LAYER_ID layer )
-                {
-                    width = std::max( width, GetWidth( layer ) );
-                } );
+                    [&]( PCB_LAYER_ID layer )
+                    {
+                        if( IsGhostLayer( layer ) )
+                            return;
 
-            width /= 2;
+                        diameter = std::max( diameter, GetWidth( layer ) );
+                    } );
         }
         else
         {
             PCB_LAYER_ID cuLayer = m_padStack.EffectiveLayerFor( aLayer );
-            width = GetWidth( cuLayer ) / 2;
+            diameter = GetWidth( cuLayer );
         }
-
-        return std::make_shared<SHAPE_CIRCLE>( m_Start, width );
     }
     else
     {
-        return std::make_shared<SHAPE_CIRCLE>( m_Start, GetDrillValue() / 2 );
+        diameter = GetDrillValue();
     }
+
+    // In some cases we want to add in any backdrill or post-machining
+    if( ( aUsage == PHYSICAL_CLEARANCE_CONSTRAINT && IsBackdrilledOrPostMachined( aLayer ) )
+            || ( aUsage == SILK_CLEARANCE_CONSTRAINT && IsBackdrilledOrPostMachined( aLayer ) ) )
+    {
+        diameter = std::max( diameter, Padstack().GetMaxHoleSize() );
+    }
+
+    return std::make_shared<SHAPE_CIRCLE>( m_Start, diameter / 2 );
 }
 
 
-std::shared_ptr<SHAPE> PCB_ARC::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING aFlash ) const
+std::shared_ptr<SHAPE> PCB_ARC::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING, DRC_CONSTRAINT_T ) const
 {
     int width = GetWidth();
 
@@ -2831,12 +3204,10 @@ std::shared_ptr<SHAPE> PCB_ARC::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING
 }
 
 
-void PCB_TRACK::TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer,
-                                         int aClearance, int aError, ERROR_LOC aErrorLoc,
-                                         bool ignoreLineWidth ) const
+void PCB_TRACK::TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance,
+                                         int aError, ERROR_LOC aErrorLoc, bool ignoreLineWidth ) const
 {
     wxASSERT_MSG( !ignoreLineWidth, wxT( "IgnoreLineWidth has no meaning for tracks." ) );
-
 
     switch( Type() )
     {
@@ -2855,8 +3226,7 @@ void PCB_TRACK::TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID a
         if( IsSolderMaskLayer( aLayer ) )
             width += 2 * GetSolderMaskExpansion();
 
-        TransformArcToPolygon( aBuffer, arc->GetStart(), arc->GetMid(), arc->GetEnd(), width,
-                               aError, aErrorLoc );
+        TransformArcToPolygon( aBuffer, arc->GetStart(), arc->GetMid(), arc->GetEnd(), width, aError, aErrorLoc );
         break;
     }
 
@@ -2918,6 +3288,28 @@ static struct TRACK_VIA_DESC
                 .Map( FILLING_MODE::NOT_FILLED, _HKI( "Not filled" ) );
 
         // clang-format on: the suggestion is less readable
+
+        // Pad and via registration can run in either order across translation units.
+        ENUM_MAP<PAD_DRILL_POST_MACHINING_MODE>& pmMap = ENUM_MAP<PAD_DRILL_POST_MACHINING_MODE>::Instance();
+
+        if( pmMap.Choices().GetCount() == 0 )
+        {
+            pmMap.Undefined( PAD_DRILL_POST_MACHINING_MODE::UNKNOWN )
+                .Map( PAD_DRILL_POST_MACHINING_MODE::NOT_POST_MACHINED, _HKI( "Not post-machined" ) )
+                .Map( PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE,       _HKI( "Counterbore" ) )
+                .Map( PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK,       _HKI( "Countersink" ) );
+        }
+
+        ENUM_MAP<BACKDRILL_MODE>& bdMap = ENUM_MAP<BACKDRILL_MODE>::Instance();
+
+        if( bdMap.Choices().GetCount() == 0 )
+        {
+            bdMap.Undefined( BACKDRILL_MODE::NO_BACKDRILL )
+                .Map( BACKDRILL_MODE::NO_BACKDRILL,     _HKI( "No backdrill" ) )
+                .Map( BACKDRILL_MODE::BACKDRILL_BOTTOM, _HKI( "Backdrill bottom" ) )
+                .Map( BACKDRILL_MODE::BACKDRILL_TOP,    _HKI( "Backdrill top" ) )
+                .Map( BACKDRILL_MODE::BACKDRILL_BOTH,   _HKI( "Backdrill both" ) );
+        }
 
         ENUM_MAP<PCB_LAYER_ID>& layerEnum = ENUM_MAP<PCB_LAYER_ID>::Instance();
 
@@ -3138,21 +3530,21 @@ static struct TRACK_VIA_DESC
         propMgr.InheritsAfter( TYPE_HASH( PCB_TRACK ), TYPE_HASH( BOARD_CONNECTED_ITEM ) );
 
         propMgr.AddProperty( new PROPERTY<PCB_TRACK, int>( _HKI( "Width" ),
-            &PCB_TRACK::SetWidth, &PCB_TRACK::GetWidth, PROPERTY_DISPLAY::PT_SIZE ) );
+                    &PCB_TRACK::SetWidth, &PCB_TRACK::GetWidth, PROPERTY_DISPLAY::PT_SIZE ) ).SetIsCopyable();
         propMgr.ReplaceProperty( TYPE_HASH( BOARD_ITEM ), _HKI( "Position X" ),
-            new PROPERTY<PCB_TRACK, int>( _HKI( "Start X" ),
-            &PCB_TRACK::SetStartX, &PCB_TRACK::GetStartX, PROPERTY_DISPLAY::PT_COORD,
-            ORIGIN_TRANSFORMS::ABS_X_COORD) );
+                    new PROPERTY<PCB_TRACK, int>( _HKI( "Start X" ),
+                                &PCB_TRACK::SetStartX, &PCB_TRACK::GetStartX, PROPERTY_DISPLAY::PT_COORD,
+                                ORIGIN_TRANSFORMS::ABS_X_COORD) );
         propMgr.ReplaceProperty( TYPE_HASH( BOARD_ITEM ), _HKI( "Position Y" ),
-            new PROPERTY<PCB_TRACK, int>( _HKI( "Start Y" ),
-            &PCB_TRACK::SetStartY, &PCB_TRACK::GetStartY, PROPERTY_DISPLAY::PT_COORD,
-            ORIGIN_TRANSFORMS::ABS_Y_COORD ) );
+                    new PROPERTY<PCB_TRACK, int>( _HKI( "Start Y" ),
+                                &PCB_TRACK::SetStartY, &PCB_TRACK::GetStartY, PROPERTY_DISPLAY::PT_COORD,
+                                ORIGIN_TRANSFORMS::ABS_Y_COORD ) );
         propMgr.AddProperty( new PROPERTY<PCB_TRACK, int>( _HKI( "End X" ),
-            &PCB_TRACK::SetEndX, &PCB_TRACK::GetEndX, PROPERTY_DISPLAY::PT_COORD,
-            ORIGIN_TRANSFORMS::ABS_X_COORD) );
+                    &PCB_TRACK::SetEndX, &PCB_TRACK::GetEndX, PROPERTY_DISPLAY::PT_COORD,
+                    ORIGIN_TRANSFORMS::ABS_X_COORD) );
         propMgr.AddProperty( new PROPERTY<PCB_TRACK, int>( _HKI( "End Y" ),
-            &PCB_TRACK::SetEndY, &PCB_TRACK::GetEndY, PROPERTY_DISPLAY::PT_COORD,
-            ORIGIN_TRANSFORMS::ABS_Y_COORD) );
+                    &PCB_TRACK::SetEndY, &PCB_TRACK::GetEndY, PROPERTY_DISPLAY::PT_COORD,
+                    ORIGIN_TRANSFORMS::ABS_Y_COORD) );
 
         const wxString groupTechLayers = _HKI( "Technical Layers" );
 
@@ -3166,12 +3558,13 @@ static struct TRACK_VIA_DESC
             };
 
         propMgr.AddProperty( new PROPERTY<PCB_TRACK, bool>( _HKI( "Soldermask" ),
-            &PCB_TRACK::SetHasSolderMask, &PCB_TRACK::HasSolderMask ), groupTechLayers )
-            .SetAvailableFunc( isExternalLayerTrack );
+                    &PCB_TRACK::SetHasSolderMask, &PCB_TRACK::HasSolderMask ), groupTechLayers )
+                .SetAvailableFunc( isExternalLayerTrack ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY<PCB_TRACK, std::optional<int>>( _HKI( "Soldermask Margin Override" ),
-            &PCB_TRACK::SetLocalSolderMaskMargin, &PCB_TRACK::GetLocalSolderMaskMargin,
-            PROPERTY_DISPLAY::PT_SIZE ), groupTechLayers )
-            .SetAvailableFunc( isExternalLayerTrack );
+                    &PCB_TRACK::SetLocalSolderMaskMargin, &PCB_TRACK::GetLocalSolderMaskMargin,
+                    PROPERTY_DISPLAY::PT_SIZE ),
+                    groupTechLayers )
+                .SetAvailableFunc( isExternalLayerTrack ).SetIsCopyable();
 
         // Arc
         REGISTER_TYPE( PCB_ARC );
@@ -3181,209 +3574,252 @@ static struct TRACK_VIA_DESC
         REGISTER_TYPE( PCB_VIA );
         propMgr.InheritsAfter( TYPE_HASH( PCB_VIA ), TYPE_HASH( BOARD_CONNECTED_ITEM ) );
 
-        // TODO test drill, use getdrillvalue?
         const wxString groupVia = _HKI( "Via Properties" );
         const wxString groupBackdrill = _HKI( "Backdrill" );
         const wxString groupPostMachining = _HKI( "Post-machining" );
 
         propMgr.Mask( TYPE_HASH( PCB_VIA ), TYPE_HASH( BOARD_CONNECTED_ITEM ), _HKI( "Layer" ) );
 
+        propMgr.AddProperty( new PROPERTY<PCB_VIA, bool>( _HKI( "Automatically Update Net" ),
+                    &PCB_VIA::SetIsNotFree, &PCB_VIA::GetIsNotFree ) );
+
         // clang-format off: the suggestion is less readable
         propMgr.AddProperty( new PROPERTY<PCB_VIA, int>( _HKI( "Diameter" ),
-            &PCB_VIA::SetFrontWidth, &PCB_VIA::GetFrontWidth, PROPERTY_DISPLAY::PT_SIZE ), groupVia )
-                .SetValidator( viaDiameterPropertyValidator );
+                    &PCB_VIA::SetFrontWidth, &PCB_VIA::GetFrontWidth, PROPERTY_DISPLAY::PT_SIZE ),
+                    groupVia )
+                .SetValidator( viaDiameterPropertyValidator ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY<PCB_VIA, int>( _HKI( "Hole" ),
-            &PCB_VIA::SetDrill, &PCB_VIA::GetDrillValue, PROPERTY_DISPLAY::PT_SIZE ), groupVia )
-                .SetValidator( viaDrillPropertyValidator );
+                    &PCB_VIA::SetDrill, &PCB_VIA::GetDrillValue, PROPERTY_DISPLAY::PT_SIZE ),
+                    groupVia )
+                .SetValidator( viaDrillPropertyValidator ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PCB_LAYER_ID>( _HKI( "Layer Top" ),
-            &PCB_VIA::SetTopLayer, &PCB_VIA::GetLayer ), groupVia )
+                    &PCB_VIA::SetTopLayer, &PCB_VIA::GetLayer ),
+                    groupVia )
                 .SetValidator( viaStartLayerPropertyValidator );
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PCB_LAYER_ID>( _HKI( "Layer Bottom" ),
-            &PCB_VIA::SetBottomLayer, &PCB_VIA::BottomLayer ), groupVia )
+                    &PCB_VIA::SetBottomLayer, &PCB_VIA::BottomLayer ),
+                    groupVia )
                 .SetValidator( viaEndLayerPropertyValidator );
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, VIATYPE>( _HKI( "Via Type" ),
-            &PCB_VIA::SetViaType, &PCB_VIA::GetViaType ), groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, TENTING_MODE>( _HKI( "Front tenting" ),
-            &PCB_VIA::SetFrontTentingMode, &PCB_VIA::GetFrontTentingMode ), groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, TENTING_MODE>( _HKI( "Back tenting" ),
-            &PCB_VIA::SetBackTentingMode, &PCB_VIA::GetBackTentingMode ), groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, COVERING_MODE>( _HKI( "Front covering" ),
-            &PCB_VIA::SetFrontCoveringMode, &PCB_VIA::GetFrontCoveringMode ), groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, COVERING_MODE>( _HKI( "Back covering" ),
-            &PCB_VIA::SetBackCoveringMode, &PCB_VIA::GetBackCoveringMode ), groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PLUGGING_MODE>( _HKI( "Front plugging" ),
-            &PCB_VIA::SetFrontPluggingMode, &PCB_VIA::GetFrontPluggingMode ), groupVia );
-        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PLUGGING_MODE>( _HKI( "Back plugging" ),
-            &PCB_VIA::SetBackPluggingMode, &PCB_VIA::GetBackPluggingMode ), groupVia );
+                    &PCB_VIA::SetViaType, &PCB_VIA::GetViaType ),
+                    groupVia );
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, TENTING_MODE>( _HKI( "Front Tenting" ),
+                    &PCB_VIA::SetFrontTentingMode, &PCB_VIA::GetFrontTentingMode ),
+                    groupVia ).SetIsCopyable();
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, TENTING_MODE>( _HKI( "Back Tenting" ),
+                    &PCB_VIA::SetBackTentingMode, &PCB_VIA::GetBackTentingMode ),
+                    groupVia ).SetIsCopyable();
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, COVERING_MODE>( _HKI( "Front Covering" ),
+                    &PCB_VIA::SetFrontCoveringMode, &PCB_VIA::GetFrontCoveringMode ),
+                    groupVia ).SetIsCopyable();
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, COVERING_MODE>( _HKI( "Back Covering" ),
+                    &PCB_VIA::SetBackCoveringMode, &PCB_VIA::GetBackCoveringMode ),
+                    groupVia ).SetIsCopyable();
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PLUGGING_MODE>( _HKI( "Front Plugging" ),
+                    &PCB_VIA::SetFrontPluggingMode, &PCB_VIA::GetFrontPluggingMode ),
+                    groupVia ).SetIsCopyable();
+        propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PLUGGING_MODE>( _HKI( "Back Plugging" ),
+                    &PCB_VIA::SetBackPluggingMode, &PCB_VIA::GetBackPluggingMode ),
+                    groupVia ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, CAPPING_MODE>( _HKI( "Capping" ),
-            &PCB_VIA::SetCappingMode, &PCB_VIA::GetCappingMode ), groupVia );
+                    &PCB_VIA::SetCappingMode, &PCB_VIA::GetCappingMode ),
+                    groupVia ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, FILLING_MODE>( _HKI( "Filling" ),
-            &PCB_VIA::SetFillingMode, &PCB_VIA::GetFillingMode ), groupVia );
-
-        auto canHaveBackdrill =
-                []( INSPECTABLE* aItem )
-                {
-                    if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
-                    {
-                        if( via->GetViaType() == VIATYPE::THROUGH )
-                            return true;
-
-                        if( via->Padstack().GetBackdrillMode() != BACKDRILL_MODE::NO_BACKDRILL )
-                            return true;
-                    }
-
-                    return false;
-                };
+                    &PCB_VIA::SetFillingMode, &PCB_VIA::GetFillingMode ),
+                    groupVia ).SetIsCopyable();
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, BACKDRILL_MODE>( _HKI( "Backdrill Mode" ),
-                &PCB_VIA::SetBackdrillMode, &PCB_VIA::GetBackdrillMode ), groupBackdrill )
-            .SetAvailableFunc( canHaveBackdrill );
+                    &PCB_VIA::SetBackdrillMode, &PCB_VIA::GetBackdrillMode ),
+                    groupBackdrill )
+                .SetAvailableFunc( []( INSPECTABLE* aItem )
+                                   {
+                                       if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                                       {
+                                           if( via->GetViaType() == VIATYPE::THROUGH )
+                                               return true;
+
+                                           if( via->Padstack().GetBackdrillMode() != BACKDRILL_MODE::NO_BACKDRILL )
+                                               return true;
+                                       }
+
+                                       return false;
+                                   } );
 
         propMgr.AddProperty( new PROPERTY<PCB_VIA, std::optional<int>>( _HKI( "Bottom Backdrill Size" ),
-                &PCB_VIA::SetBottomBackdrillSize, &PCB_VIA::GetBottomBackdrillSize, PROPERTY_DISPLAY::PT_SIZE ),
-                groupBackdrill )
-            .SetAvailableFunc(
-                    []( INSPECTABLE* aItem ) -> bool
-                    {
-                        if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
-                        {
-                            auto mode = via->GetBackdrillMode();
-                            return mode == BACKDRILL_MODE::BACKDRILL_BOTTOM || mode == BACKDRILL_MODE::BACKDRILL_BOTH;
-                        }
-                        return false;
-                    } );
+                    &PCB_VIA::SetBottomBackdrillSize, &PCB_VIA::GetBottomBackdrillSize, PROPERTY_DISPLAY::PT_SIZE ),
+                    groupBackdrill )
+                .SetAvailableFunc( []( INSPECTABLE* aItem ) -> bool
+                                   {
+                                       if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                                       {
+                                           BACKDRILL_MODE mode = via->GetBackdrillMode();
+                                           return mode == BACKDRILL_MODE::BACKDRILL_BOTTOM
+                                                   || mode == BACKDRILL_MODE::BACKDRILL_BOTH;
+                                       }
+
+                                       return false;
+                                   } );
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PCB_LAYER_ID>( _HKI( "Bottom Backdrill Must-Cut" ),
-                &PCB_VIA::SetBottomBackdrillLayer, &PCB_VIA::GetBottomBackdrillLayer ), groupBackdrill )
-            .SetAvailableFunc(
-                    []( INSPECTABLE* aItem ) -> bool
-                    {
-                        if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
-                        {
-                            auto mode = via->GetBackdrillMode();
-                            return mode == BACKDRILL_MODE::BACKDRILL_BOTTOM || mode == BACKDRILL_MODE::BACKDRILL_BOTH;
-                        }
-                        return false;
-                    } );
+                    &PCB_VIA::SetBottomBackdrillLayer, &PCB_VIA::GetBottomBackdrillLayer ), groupBackdrill )
+                .SetAvailableFunc( []( INSPECTABLE* aItem ) -> bool
+                                   {
+                                       if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                                       {
+                                           BACKDRILL_MODE mode = via->GetBackdrillMode();
+                                           return mode == BACKDRILL_MODE::BACKDRILL_BOTTOM
+                                                   || mode == BACKDRILL_MODE::BACKDRILL_BOTH;
+                                       }
+
+                                       return false;
+                                   } );
 
         propMgr.AddProperty( new PROPERTY<PCB_VIA, std::optional<int>>( _HKI( "Top Backdrill Size" ),
-                &PCB_VIA::SetTopBackdrillSize, &PCB_VIA::GetTopBackdrillSize, PROPERTY_DISPLAY::PT_SIZE ),
-                groupBackdrill )
-            .SetAvailableFunc(
-                    []( INSPECTABLE* aItem ) -> bool
-                    {
-                        if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
-                        {
-                            auto mode = via->GetBackdrillMode();
-                            return mode == BACKDRILL_MODE::BACKDRILL_TOP || mode == BACKDRILL_MODE::BACKDRILL_BOTH;
-                        }
-                        return false;
-                    } );
+                    &PCB_VIA::SetTopBackdrillSize, &PCB_VIA::GetTopBackdrillSize, PROPERTY_DISPLAY::PT_SIZE ),
+                    groupBackdrill )
+                .SetAvailableFunc( []( INSPECTABLE* aItem ) -> bool
+                                   {
+                                       if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                                       {
+                                           BACKDRILL_MODE mode = via->GetBackdrillMode();
+                                           return mode == BACKDRILL_MODE::BACKDRILL_TOP
+                                                   || mode == BACKDRILL_MODE::BACKDRILL_BOTH;
+                                       }
+
+                                       return false;
+                                   } );
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PCB_LAYER_ID>( _HKI( "Top Backdrill Must-Cut" ),
-                &PCB_VIA::SetTopBackdrillLayer, &PCB_VIA::GetTopBackdrillLayer ), groupBackdrill )
-            .SetAvailableFunc(
-                    []( INSPECTABLE* aItem ) -> bool
-                    {
-                        if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
-                        {
-                            auto mode = via->GetBackdrillMode();
-                            return mode == BACKDRILL_MODE::BACKDRILL_TOP || mode == BACKDRILL_MODE::BACKDRILL_BOTH;
-                        }
-                        return false;
-                    } );
+                    &PCB_VIA::SetTopBackdrillLayer, &PCB_VIA::GetTopBackdrillLayer ), groupBackdrill )
+                .SetAvailableFunc( []( INSPECTABLE* aItem ) -> bool
+                                   {
+                                       if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                                       {
+                                           BACKDRILL_MODE mode = via->GetBackdrillMode();
+                                           return mode == BACKDRILL_MODE::BACKDRILL_TOP
+                                                   || mode == BACKDRILL_MODE::BACKDRILL_BOTH;
+                                       }
+
+                                       return false;
+                                   } );
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PAD_DRILL_POST_MACHINING_MODE>( _HKI( "Front Post-machining" ),
-                &PCB_VIA::SetFrontPostMachiningMode, &PCB_VIA::GetFrontPostMachiningMode ), groupPostMachining );
+                    &PCB_VIA::SetFrontPostMachiningMode, &PCB_VIA::GetFrontPostMachiningMode ),
+                    groupPostMachining );
 
         propMgr.AddProperty( new PROPERTY<PCB_VIA, int>( _HKI( "Front Post-machining Size" ),
-                &PCB_VIA::SetFrontPostMachiningSize, &PCB_VIA::GetFrontPostMachiningSize, PROPERTY_DISPLAY::PT_SIZE ),
-                groupPostMachining )
-            .SetAvailableFunc(
-                    []( INSPECTABLE* aItem )
-                    {
-                        if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                    &PCB_VIA::SetFrontPostMachiningSize, &PCB_VIA::GetFrontPostMachiningSize,
+                    PROPERTY_DISPLAY::PT_SIZE ),
+                    groupPostMachining )
+                .SetAvailableFunc(
+                        []( INSPECTABLE* aItem )
                         {
-                             auto mode = via->GetFrontPostMachining();
-                             return mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE
-                                    || mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;
-                        }
-                        return false;
-                    } );
+                            if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                            {
+                                std::optional<PAD_DRILL_POST_MACHINING_MODE> mode = via->GetFrontPostMachining();
+
+                                if( mode.has_value() )
+                                {
+                                     return mode.value() == PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE
+                                            || mode.value() == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;
+                                }
+                            }
+
+                            return false;
+                        } );
 
         propMgr.AddProperty( new PROPERTY<PCB_VIA, int>( _HKI( "Front Post-machining Depth" ),
-                &PCB_VIA::SetFrontPostMachiningDepth, &PCB_VIA::GetFrontPostMachiningDepth, PROPERTY_DISPLAY::PT_SIZE ),
-                groupPostMachining )
-            .SetAvailableFunc(
-                    []( INSPECTABLE* aItem )
-                    {
-                        if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                    &PCB_VIA::SetFrontPostMachiningDepth, &PCB_VIA::GetFrontPostMachiningDepth,
+                    PROPERTY_DISPLAY::PT_SIZE ),
+                    groupPostMachining )
+                .SetAvailableFunc(
+                        []( INSPECTABLE* aItem )
                         {
-                             auto mode = via->GetFrontPostMachining();
-                             return mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE;
-                        }
-                        return false;
-                    } );
+                            if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                            {
+                                std::optional<PAD_DRILL_POST_MACHINING_MODE> mode = via->GetFrontPostMachining();
+
+                                if( mode.has_value() )
+                                    return mode.value() == PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE;
+                            }
+
+                            return false;
+                        } );
 
         propMgr.AddProperty( new PROPERTY<PCB_VIA, int>( _HKI( "Front Post-machining Angle" ),
-                &PCB_VIA::SetFrontPostMachiningAngle, &PCB_VIA::GetFrontPostMachiningAngle, PROPERTY_DISPLAY::PT_DECIDEGREE ),
-                groupPostMachining )
-            .SetAvailableFunc(
-                    []( INSPECTABLE* aItem )
-                    {
-                        if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                    &PCB_VIA::SetFrontPostMachiningAngle, &PCB_VIA::GetFrontPostMachiningAngle,
+                    PROPERTY_DISPLAY::PT_DECIDEGREE ),
+                    groupPostMachining )
+                .SetAvailableFunc(
+                        []( INSPECTABLE* aItem )
                         {
-                             auto mode = via->GetFrontPostMachining();
-                             return mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;
-                        }
-                        return false;
-                    } );
+                            if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                            {
+                                std::optional<PAD_DRILL_POST_MACHINING_MODE> mode = via->GetFrontPostMachining();
+
+                                if( mode.has_value() )
+                                    return mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;
+                            }
+
+                            return false;
+                        } );
 
         propMgr.AddProperty( new PROPERTY_ENUM<PCB_VIA, PAD_DRILL_POST_MACHINING_MODE>( _HKI( "Back Post-machining" ),
-                &PCB_VIA::SetBackPostMachiningMode, &PCB_VIA::GetBackPostMachiningMode ), groupPostMachining );
+                    &PCB_VIA::SetBackPostMachiningMode, &PCB_VIA::GetBackPostMachiningMode ), groupPostMachining );
 
         propMgr.AddProperty( new PROPERTY<PCB_VIA, int>( _HKI( "Back Post-machining Size" ),
-                &PCB_VIA::SetBackPostMachiningSize, &PCB_VIA::GetBackPostMachiningSize, PROPERTY_DISPLAY::PT_SIZE ),
-                groupPostMachining )
-            .SetAvailableFunc(
-                    []( INSPECTABLE* aItem )
-                    {
-                        if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                    &PCB_VIA::SetBackPostMachiningSize, &PCB_VIA::GetBackPostMachiningSize, PROPERTY_DISPLAY::PT_SIZE ),
+                    groupPostMachining )
+                .SetAvailableFunc(
+                        []( INSPECTABLE* aItem )
                         {
-                             auto mode = via->GetBackPostMachining();
-                             return mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE
-                                    || mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;
-                        }
-                        return false;
-                    } );
+                            if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                            {
+                                std::optional<PAD_DRILL_POST_MACHINING_MODE> mode = via->GetBackPostMachining();
+
+                                if( mode.has_value() )
+                                {
+                                    return mode.value() == PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE
+                                            || mode.value() == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;
+                                }
+                            }
+
+                            return false;
+                        } );
 
         propMgr.AddProperty( new PROPERTY<PCB_VIA, int>( _HKI( "Back Post-machining Depth" ),
-                &PCB_VIA::SetBackPostMachiningDepth, &PCB_VIA::GetBackPostMachiningDepth, PROPERTY_DISPLAY::PT_SIZE ),
-                groupPostMachining )
-            .SetAvailableFunc(
-                    []( INSPECTABLE* aItem )
-                    {
-                        if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                    &PCB_VIA::SetBackPostMachiningDepth, &PCB_VIA::GetBackPostMachiningDepth, PROPERTY_DISPLAY::PT_SIZE ),
+                    groupPostMachining )
+                .SetAvailableFunc(
+                        []( INSPECTABLE* aItem )
                         {
-                             auto mode = via->GetBackPostMachining();
-                             return mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE;
-                        }
-                        return false;
-                    } );
+                            if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                            {
+                                std::optional<PAD_DRILL_POST_MACHINING_MODE> mode = via->GetBackPostMachining();
+
+                                if( mode.has_value() )
+                                    return mode.value() == PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE;
+                            }
+
+                            return false;
+                        } );
 
         propMgr.AddProperty( new PROPERTY<PCB_VIA, int>( _HKI( "Back Post-machining Angle" ),
-                &PCB_VIA::SetBackPostMachiningAngle, &PCB_VIA::GetBackPostMachiningAngle, PROPERTY_DISPLAY::PT_DECIDEGREE ),
-                groupPostMachining )
-            .SetAvailableFunc(
-                    []( INSPECTABLE* aItem )
-                    {
-                        if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                    &PCB_VIA::SetBackPostMachiningAngle, &PCB_VIA::GetBackPostMachiningAngle, PROPERTY_DISPLAY::PT_DECIDEGREE ),
+                    groupPostMachining )
+                .SetAvailableFunc(
+                        []( INSPECTABLE* aItem )
                         {
-                             auto mode = via->GetBackPostMachining();
-                             return mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;
-                        }
-                        return false;
-                    } );
+                            if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem ) )
+                            {
+                                std::optional<PAD_DRILL_POST_MACHINING_MODE> mode = via->GetBackPostMachining();
+
+                                if( mode.has_value() )
+                                    return mode.value() == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;
+                            }
+
+                            return false;
+                        } );
         // clang-format on: the suggestion is less readable
     }
 } _TRACK_VIA_DESC;

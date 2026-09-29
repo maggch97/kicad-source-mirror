@@ -20,7 +20,6 @@
 
 
 #include <cstdarg>
-#include <exception>
 #include <config.h> // HAVE_FGETC_NOLOCK
 
 #include <kiplatform/io.h>
@@ -32,7 +31,6 @@
 #include <io/kicad/kicad_io_utils.h>
 
 #include <wx/filename.h>
-#include <wx/log.h>
 #include <wx/translation.h>
 #include <wx/ffile.h>
 
@@ -56,13 +54,13 @@ wxString SafeReadFile( const wxString& aFilePath, const wxString& aReadType )
     // the IsOpened check would be logical, but on linux you can fopen (in read mode) a directory
     // And then everything else in here will barf
     if( !wxFileExists( aFilePath ) )
-        THROW_IO_ERROR( wxString::Format( _( "File '%s' does not exist." ), aFilePath ) );
+        THROW_IO_ERRORF( _( "File '%s' does not exist." ), aFilePath );
 
     wxString contents;
     wxFFile  ff( aFilePath );
 
     if( !ff.IsOpened() )
-        THROW_IO_ERROR( wxString::Format( _( "Cannot open file '%s'." ), aFilePath ) );
+        THROW_IO_ERRORF( _( "Cannot open file '%s'." ), aFilePath );
 
     // Try to determine encoding
     char bytes[2]{ 0 };
@@ -85,7 +83,7 @@ wxString SafeReadFile( const wxString& aFilePath, const wxString& aReadType )
     }
 
     if( contents.empty() )
-        THROW_IO_ERROR( wxString::Format( _( "Unable to read file '%s'." ), aFilePath ) );
+        THROW_IO_ERRORF( _( "Unable to read file '%s'." ), aFilePath );
 
     // I'm not sure what the source of this style of line-endings is, but it can be
     // found in some Fairchild Semiconductor SPICE files.
@@ -160,11 +158,7 @@ FILE_LINE_READER::FILE_LINE_READER( const wxString& aFileName, unsigned aStartin
     m_fp = KIPLATFORM::IO::SeqFOpen( aFileName, wxT( "rt" ) );
 
     if( !m_fp )
-    {
-        wxString msg = wxString::Format( _( "Unable to open %s for reading." ),
-                                         aFileName.GetData() );
-        THROW_IO_ERROR( msg );
-    }
+        THROW_IO_ERRORF( _( "Unable to open %s for reading." ), aFileName.GetData() );
 
     m_source  = aFileName;
     m_lineNum = aStartingLineNumber;
@@ -419,31 +413,35 @@ int OUTPUTFORMATTER::sprint( const char* fmt, ... )
 }
 
 
-int OUTPUTFORMATTER::Print( int nestLevel, const char* fmt, ... )
+int OUTPUTFORMATTER::Indent( int aNestLevel )
 {
 #define NESTWIDTH           2   ///< how many spaces per nestLevel
 
+    int total = 0;
+
+    for( int i = 0; i < aNestLevel; ++i )
+    {
+        // no error checking needed, an exception indicates an error.
+        total += sprint( "%*c", NESTWIDTH, ' ' );
+    }
+
+    return total;
+}
+
+
+int OUTPUTFORMATTER::Print( int nestLevel, const char* fmt, ... )
+{
     va_list     args;
 
     va_start( args, fmt );
 
-    int result = 0;
-    int total  = 0;
-
-    for( int i = 0; i < nestLevel; ++i )
-    {
-        // no error checking needed, an exception indicates an error.
-        result = sprint( "%*c", NESTWIDTH, ' ' );
-
-        total += result;
-    }
+    int total = Indent( nestLevel );
 
     // no error checking needed, an exception indicates an error.
-    result = vprint( fmt, args );
+    total += vprint( fmt, args );
 
     va_end( args );
 
-    total += result;
     return total;
 }
 
@@ -539,188 +537,196 @@ void STRING_FORMATTER::StripUseless()
 }
 
 
-// Both file-output formatters below write to a sibling temp file and atomically rename
-// over the target on Finish(). A crash, throw, or power loss before commit leaves the
-// final target byte-identical to its prior contents.
+/**
+ * A class that owns a sibling temp file, which is created next to the target at construction.
 
-namespace
+ * The temp file is flushed, closed and renamed over the target on Commit(), the only
+ * path that promotes it. Abandon() closes the handle early without committing, and any
+ * other uncommitted exit from the object's lifetime (e.g. exception or early return)
+ * discards the temp file and leaves the target untouched.
+ *
+ * In this way, the target is never truncated or left in a half-written state, and a crash or
+ * power loss between construction and Commit() leaves the target untouched.
+ */
+class SIBLING_TEMP_FILE
 {
-void atomicCommit( FILE*& aFp, const wxString& aTempPath, const wxString& aFinalPath )
-{
-    if( !KIPLATFORM::IO::FlushToDisk( aFp ) )
+public:
+    SIBLING_TEMP_FILE( const wxString& aTargetPath, const wxChar* aMode ) :
+            m_targetPath( aTargetPath )
     {
-        int err = errno;
-        fclose( aFp );
-        aFp = nullptr;
-        wxRemoveFile( aTempPath );
-        THROW_IO_ERROR( wxString::Format( _( "Cannot flush '%s' to disk: %s" ), aTempPath,
-                                          wxString::FromUTF8( strerror( err ) ) ) );
+        wxString err;
+
+        m_fp = KIPLATFORM::IO::OpenUniqueSiblingTempFile( m_targetPath, aMode, &m_tempPath, &err );
+
+        if( !m_fp )
+            THROW_IO_ERROR( err );
+
+        wxASSERT( !m_tempPath.IsEmpty() );
     }
 
-    fclose( aFp );
-    aFp = nullptr;
+    /// Copy is meaningless: the temp file cannot be shared
+    SIBLING_TEMP_FILE( const SIBLING_TEMP_FILE& ) = delete;
+    /// Ditto for assignment: the temp file cannot be shared
+    SIBLING_TEMP_FILE& operator=( const SIBLING_TEMP_FILE& ) = delete;
 
-    wxString commitError;
-
-    if( !KIPLATFORM::IO::CommitTempFile( aTempPath, aFinalPath, &commitError ) )
+    ~SIBLING_TEMP_FILE()
     {
-        wxRemoveFile( aTempPath );
-        THROW_IO_ERROR( commitError );
+        if( m_committed )
+            return;
+
+        Abandon();
+
+        // CommitTempFile() can fail after the rename has already moved the temp onto
+        // the target (directory fsync error), so the temp may already be gone here.
+        // Only remove what is still present, or wxRemoveFile reports an ENOENT error
+        // for an already-clean state.
+        if( !m_tempPath.IsEmpty() && wxFileExists( m_tempPath ) )
+            wxRemoveFile( m_tempPath );
     }
+
+    /// The open temp file to write to. Null once Commit() or Abandon() has run.
+    FILE* File() { return m_fp; }
+
+    /// The temp file's path on disk.
+    const wxString& Path() const { return m_tempPath; }
+
+    /**
+     * Abandons the in-progress save: closes the temp file handle without committing,
+     * leaving the file on disk for the destructor to discard. Commit() must not be
+     * called afterwards: the handle is gone.
+     *
+     * Idempotent: calling it again (or after Commit()) is a no-op.
+     *
+     * Commit() checks the returned fclose() status because NFS and quota'd volumes can
+     * surface write errors at close time, not at write time; an unchecked close could
+     * rename a short file into place.
+     *
+     * @return the fclose() result (0 if the handle was already closed).
+     */
+    int Abandon()
+    {
+        int ret = 0;
+
+        if( m_fp )
+        {
+            ret = fclose( m_fp );
+            m_fp = nullptr;
+        }
+
+        return ret;
+    }
+
+    /**
+     * Flush, close and atomically rename the temp file over the target. A failure before
+     * the rename leaves the target untouched and the destructor discards the temp file.
+     * The one exception is a directory-flush failure after the rename has already landed:
+     * it throws although the target already holds the new contents, since only their
+     * durability is in doubt.
+     *
+     * Commit() must be called at most once. Calling it again (whether the first call
+     * succeeded or failed) is a programming error, because the temp file is already
+     * gone in that case.
+     *
+     * @return true on a successful commit.
+     * @throw IO_ERROR if fsync, close, rename, or the directory flush fails.
+     */
+    bool Commit()
+    {
+        wxCHECK_MSG( m_fp, false, wxT( "Commit() called on an already-used temp file (committed or abandoned)" ) );
+
+        if( !KIPLATFORM::IO::FlushToDisk( m_fp ) )
+        {
+            int err = errno;
+
+            // We're already failing, so we don't care if Abandon()'s own close also
+            // fails (e.g. on NFS); the flush error below is the one to report.
+            Abandon();
+
+            THROW_IO_ERRORF( _( "Cannot flush '%s' to disk: %s" ), m_tempPath,
+                             wxString::FromUTF8( strerror( err ) ) );
+        }
+
+        if( Abandon() != 0 )
+        {
+            int err = errno;
+            THROW_IO_ERRORF( _( "Cannot close '%s': %s" ), m_tempPath, wxString::FromUTF8( strerror( err ) ) );
+        }
+
+        wxString commitError;
+
+        if( !KIPLATFORM::IO::CommitTempFile( m_tempPath, m_targetPath, &commitError ) )
+            THROW_IO_ERROR( commitError );
+
+        m_committed = true;
+        return true;
+    }
+
+private:
+    wxString m_targetPath;
+    wxString m_tempPath;
+    FILE*    m_fp = nullptr;
+    bool     m_committed = false;
+};
+
+
+FILE_OUTPUTFORMATTER::FILE_OUTPUTFORMATTER( const wxString& aFileName, const wxChar* aMode, char aQuoteChar ) :
+        OUTPUTFORMATTER( OUTPUTFMTBUFZ, aQuoteChar ),
+        m_tempFile( std::make_unique<SIBLING_TEMP_FILE>( KIPLATFORM::IO::ResolveSymlinkTarget( aFileName ), aMode ) )
+{
 }
 
 
-void discardTempFile( FILE*& aFp, const wxString& aTempPath )
-{
-    if( aFp )
-    {
-        fclose( aFp );
-        aFp = nullptr;
-    }
-
-    if( !aTempPath.IsEmpty() )
-        wxRemoveFile( aTempPath );
-}
-
-
-// Shared destructor body for the atomic-commit formatters. Throwing from a destructor
-// while another exception is in flight calls std::terminate, so during stack unwinding
-// we discard the temp and let the original exception propagate. When no exception is in
-// flight we fall back to a best-effort commit for callers that have not been migrated to
-// explicit Finish() yet. Explicit Finish() is the contract for anything that cares about
-// data-loss detection; destructor-path failures are surfaced as wxLogError because we
-// cannot throw safely from here.
-template <typename FinishFn>
-void finalizeFormatter( FILE*& aFp, const wxString& aTempPath, const wxString& aFilename,
-                        bool aCommitted, FinishFn aFinish )
-{
-    if( aCommitted )
-        return;
-
-    if( std::uncaught_exceptions() > 0 )
-    {
-        discardTempFile( aFp, aTempPath );
-        return;
-    }
-
-    try
-    {
-        aFinish();
-    }
-    catch( const std::exception& e )
-    {
-        wxLogError( _( "Failed to commit save of '%s': %s. "
-                       "The file on disk has not been modified." ),
-                    aFilename, wxString::FromUTF8( e.what() ) );
-        discardTempFile( aFp, aTempPath );
-    }
-}
-} // anonymous namespace
-
-
-FILE_OUTPUTFORMATTER::FILE_OUTPUTFORMATTER( const wxString& aFileName, const wxChar* aMode,
-                                            char aQuoteChar ):
-    OUTPUTFORMATTER( OUTPUTFMTBUFZ, aQuoteChar ),
-    m_fp( nullptr ),
-    m_filename( KIPLATFORM::IO::ResolveSymlinkTarget( aFileName ) ),
-    m_committed( false )
-{
-    wxString err;
-    m_fp = KIPLATFORM::IO::OpenUniqueSiblingTempFile( m_filename, aMode, &m_tempPath, &err );
-
-    if( !m_fp )
-        THROW_IO_ERROR( err );
-}
-
-
-FILE_OUTPUTFORMATTER::~FILE_OUTPUTFORMATTER()
-{
-    finalizeFormatter( m_fp, m_tempPath, m_filename, m_committed, [this] { Finish(); } );
-}
+FILE_OUTPUTFORMATTER::~FILE_OUTPUTFORMATTER() = default;
 
 
 bool FILE_OUTPUTFORMATTER::Finish()
 {
-    if( m_committed )
-        return true;
-
-    if( !m_fp )
-    {
-        if( !m_tempPath.IsEmpty() )
-            wxRemoveFile( m_tempPath );
-
-        return false;
-    }
-
-    atomicCommit( m_fp, m_tempPath, m_filename );
-    m_committed = true;
-    return true;
+    return m_tempFile->Commit();
 }
 
 
 void FILE_OUTPUTFORMATTER::write( const char* aOutBuf, int aCount )
 {
-    if( fwrite( aOutBuf, (unsigned) aCount, 1, m_fp ) != 1 )
+    if( fwrite( aOutBuf, (unsigned) aCount, 1, m_tempFile->File() ) != 1 )
         THROW_IO_ERROR( strerror( errno ) );
 }
 
 
-PRETTIFIED_FILE_OUTPUTFORMATTER::PRETTIFIED_FILE_OUTPUTFORMATTER( const wxString& aFileName,
+PRETTIFIED_FILE_OUTPUTFORMATTER::PRETTIFIED_FILE_OUTPUTFORMATTER( const wxString&           aFileName,
                                                                   KICAD_FORMAT::FORMAT_MODE aFormatMode,
-                                                                  const wxChar* aMode,
-                                                                  char aQuoteChar ) :
+                                                                  const wxChar* aMode, char aQuoteChar ) :
         OUTPUTFORMATTER( OUTPUTFMTBUFZ, aQuoteChar ),
-        m_fp( nullptr ),
-        m_filename( KIPLATFORM::IO::ResolveSymlinkTarget( aFileName ) ),
-        m_committed( false ),
+        m_tempFile( std::make_unique<SIBLING_TEMP_FILE>( KIPLATFORM::IO::ResolveSymlinkTarget( aFileName ), aMode ) ),
         m_mode( aFormatMode )
 {
     if( ADVANCED_CFG::GetCfg().m_CompactSave && m_mode == KICAD_FORMAT::FORMAT_MODE::NORMAL )
         m_mode = KICAD_FORMAT::FORMAT_MODE::COMPACT_TEXT_PROPERTIES;
-
-    wxString err;
-    m_fp = KIPLATFORM::IO::OpenUniqueSiblingTempFile( m_filename, aMode, &m_tempPath, &err );
-
-    if( !m_fp )
-        THROW_IO_ERROR( err );
 }
 
 
-PRETTIFIED_FILE_OUTPUTFORMATTER::~PRETTIFIED_FILE_OUTPUTFORMATTER()
-{
-    finalizeFormatter( m_fp, m_tempPath, m_filename, m_committed,
-                       [this] { PRETTIFIED_FILE_OUTPUTFORMATTER::Finish(); } );
-}
+PRETTIFIED_FILE_OUTPUTFORMATTER::~PRETTIFIED_FILE_OUTPUTFORMATTER() = default;
 
 
 bool PRETTIFIED_FILE_OUTPUTFORMATTER::Finish()
 {
-    if( m_committed )
-        return true;
-
-    if( !m_fp )
+    if( m_tempFile->File() )
     {
-        if( !m_tempPath.IsEmpty() )
-            wxRemoveFile( m_tempPath );
+        KICAD_FORMAT::Prettify( m_buf, m_mode );
 
-        return false;
+        if( !m_buf.empty() && fwrite( m_buf.c_str(), m_buf.length(), 1, m_tempFile->File() ) != 1 )
+        {
+            int err = errno;
+
+            // Abandon the temp so a mistaken second Finish() cannot flush and persist a
+            // partial file to the target. The destructor discards the file.
+            m_tempFile->Abandon();
+
+            THROW_IO_ERRORF( _( "Write failed to '%s': %s" ), m_tempFile->Path(),
+                             wxString::FromUTF8( strerror( err ) ) );
+        }
     }
 
-    KICAD_FORMAT::Prettify( m_buf, m_mode );
-
-    if( !m_buf.empty() && fwrite( m_buf.c_str(), m_buf.length(), 1, m_fp ) != 1 )
-    {
-        int err = errno;
-        fclose( m_fp );
-        m_fp = nullptr;
-        wxRemoveFile( m_tempPath );
-        THROW_IO_ERROR( wxString::Format( _( "Write failed to '%s': %s" ), m_tempPath,
-                                          wxString::FromUTF8( strerror( err ) ) ) );
-    }
-
-    atomicCommit( m_fp, m_tempPath, m_filename );
-    m_committed = true;
-    return true;
+    return m_tempFile->Commit();
 }
 
 

@@ -19,6 +19,7 @@
  */
 
 #include "layer_triangles.h"
+#include "../orphaned_gl_objects.h"
 #include "../raytracing/ray.h"
 #include <wx/debug.h>   // For the wxASSERT
 #include <mutex>
@@ -332,20 +333,23 @@ OPENGL_RENDER_LIST::OPENGL_RENDER_LIST( const TRIANGLE_DISPLAY_LIST& aLayerTrian
 
 OPENGL_RENDER_LIST::~OPENGL_RENDER_LIST()
 {
-    if( glIsList( m_layer_top_segment_ends ) )
-        glDeleteLists( m_layer_top_segment_ends, 1 );
+    if( !ORPHANED_GL_OBJECTS::Active() )
+    {
+        if( glIsList( m_layer_top_segment_ends ) )
+            glDeleteLists( m_layer_top_segment_ends, 1 );
 
-    if( glIsList( m_layer_top_triangles ) )
-        glDeleteLists( m_layer_top_triangles, 1 );
+        if( glIsList( m_layer_top_triangles ) )
+            glDeleteLists( m_layer_top_triangles, 1 );
 
-    if( glIsList( m_layer_middle_contours_quads ) )
-        glDeleteLists( m_layer_middle_contours_quads, 1 );
+        if( glIsList( m_layer_middle_contours_quads ) )
+            glDeleteLists( m_layer_middle_contours_quads, 1 );
 
-    if( glIsList( m_layer_bot_triangles ) )
-        glDeleteLists( m_layer_bot_triangles, 1 );
+        if( glIsList( m_layer_bot_triangles ) )
+            glDeleteLists( m_layer_bot_triangles, 1 );
 
-    if( glIsList( m_layer_bot_segment_ends ) )
-        glDeleteLists( m_layer_bot_segment_ends, 1 );
+        if( glIsList( m_layer_bot_segment_ends ) )
+            glDeleteLists( m_layer_bot_segment_ends, 1 );
+    }
 
     m_layer_top_segment_ends        = 0;
     m_layer_top_triangles           = 0;
@@ -453,10 +457,10 @@ void OPENGL_RENDER_LIST::DrawAll( bool aDrawMiddle ) const
 
 
 void OPENGL_RENDER_LIST::DrawCulled( bool aDrawMiddle,
-                                     const OPENGL_RENDER_LIST* aSubtractList,
-                                     const OPENGL_RENDER_LIST* bSubtractList,
-                                     const OPENGL_RENDER_LIST* cSubtractList,
-                                     const OPENGL_RENDER_LIST* dSubtractList ) const
+                                     const std::shared_ptr<OPENGL_RENDER_LIST> aSubtractList,
+                                     const std::shared_ptr<OPENGL_RENDER_LIST> bSubtractList,
+                                     const std::shared_ptr<OPENGL_RENDER_LIST> cSubtractList,
+                                     const std::shared_ptr<OPENGL_RENDER_LIST> dSubtractList ) const
 {
     glClearStencil( 0x00 );
     glClear( GL_STENCIL_BUFFER_BIT );
@@ -550,7 +554,7 @@ void OPENGL_RENDER_LIST::ApplyScalePosition( float aZposition, float aZscale )
 }
 
 
-void OPENGL_RENDER_LIST::ApplyScalePosition( OPENGL_RENDER_LIST* aOtherList )
+void OPENGL_RENDER_LIST::ApplyScalePosition( std::shared_ptr<OPENGL_RENDER_LIST> aOtherList )
 {
     ApplyScalePosition( aOtherList->GetZBot(), aOtherList->GetZTop() - aOtherList->GetZBot() );
 }

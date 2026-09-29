@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <font/font.h>
 #include <advanced_config.h>
 #include <common.h>
 #include <sch_edit_frame.h>
@@ -27,6 +28,9 @@
 #include <properties/property.h>
 #include <properties/property_mgr.h>
 
+#include <api/api_utils.h>
+#include <api/schematic/schematic_types.pb.h>
+
 
 SCH_TABLECELL::SCH_TABLECELL( int aLineWidth, FILL_T aFillType ) :
         SCH_TEXTBOX( LAYER_NOTES, aLineWidth, aFillType, wxEmptyString, SCH_TABLECELL_T ),
@@ -34,6 +38,53 @@ SCH_TABLECELL::SCH_TABLECELL( int aLineWidth, FILL_T aFillType ) :
         m_rowSpan( 1 )
 {
 }
+
+void SCH_TABLECELL::Serialize( kiapi::schematic::types::SchematicTableCell& aCell ) const
+{
+    aCell.set_column_span( m_colSpan );
+    aCell.set_row_span( m_rowSpan );
+
+    SCH_TEXTBOX::Serialize( *aCell.mutable_text_box(), schIUScale );
+    kiapi::common::PackCustomProperties( aCell.mutable_custom_properties(), *this );
+}
+
+
+void SCH_TABLECELL::Serialize( google::protobuf::Any& aContainer ) const
+{
+    kiapi::schematic::types::SchematicTableCell cell;
+    Serialize( cell );
+    aContainer.PackFrom( cell );
+}
+
+
+bool SCH_TABLECELL::Deserialize( const kiapi::schematic::types::SchematicTableCell& aCell )
+{
+    if( !aCell.has_text_box() )
+        return false;
+
+    if( !SCH_TEXTBOX::Deserialize( aCell.text_box(), schIUScale ) )
+        return false;
+
+    SetColSpan( aCell.column_span() );
+    SetRowSpan( aCell.row_span() );
+
+    kiapi::common::UnpackCustomProperties( aCell.custom_properties(), *this );
+
+    return true;
+}
+
+
+bool SCH_TABLECELL::Deserialize( const google::protobuf::Any& aContainer )
+{
+    kiapi::schematic::types::SchematicTableCell cell;
+
+    if( !aContainer.UnpackTo( &cell ) )
+        return false;
+
+    return Deserialize( cell );
+}
+
+
 
 
 void SCH_TABLECELL::swapData( SCH_ITEM* aItem )
@@ -148,7 +199,7 @@ static bool parseCellAddress( const wxString& aAddr, int& aRow, int& aCol )
 
 
 wxString SCH_TABLECELL::GetShownText( const RENDER_SETTINGS* aSettings, const SCH_SHEET_PATH* aPath,
-                                      bool aAllowExtraText, int aDepth ) const
+                                      RESOLUTION_CONTEXT aContext, int aDepth ) const
 {
     // Local depth counter for ResolveTextVars iteration tracking (separate from cross-cell aDepth)
     int depth = 0;
@@ -163,144 +214,147 @@ wxString SCH_TABLECELL::GetShownText( const RENDER_SETTINGS* aSettings, const SC
     // - @{expression} - math expression evaluation
     // - ${CELL("A1")} or ${CELL(row,col)} - reference to another cell's evaluated text
     // - \${...} and \@{...} - escape sequences for literal display
-    std::function<bool( wxString* )> tableCellResolver = [&]( wxString* token ) -> bool
+    std::function<bool( wxString* )> tableCellResolver =
+            [&]( wxString* token ) -> bool
+            {
+                if( token->IsSameAs( wxT( "ROW" ) ) )
+                {
+                    *token = wxString::Format( wxT( "%d" ), GetRow() ); // 0-based
+                    return true;
+                }
+                else if( token->IsSameAs( wxT( "COL" ) ) )
+                {
+                    *token = wxString::Format( wxT( "%d" ), GetColumn() ); // 0-based
+                    return true;
+                }
+                else if( token->IsSameAs( wxT( "ADDR" ) ) )
+                {
+                    *token = GetAddr();
+                    return true;
+                }
+                else if( token->StartsWith( wxT( "CELL(" ) ) && token->EndsWith( wxT( ")" ) ) )
+                {
+                    // Handle CELL("A0") or CELL(0, 1) syntax
+                    wxString args = token->Mid( 5, token->Length() - 6 ); // Extract arguments
+                    args.Trim( true ).Trim( false );                      // Remove whitespace
+
+                    SCH_TABLE* table = static_cast<SCH_TABLE*>( GetParent() );
+                    if( !table )
+                    {
+                        *token = wxT( "<Unresolved: CELL() requires table context>" );
+                        return true;
+                    }
+
+                    int targetRow = -1;
+                    int targetCol = -1;
+
+                    // Check if it's cell("A1") format (string argument with quotes)
+                    if( args.StartsWith( wxT( "\"" ) ) && args.EndsWith( wxT( "\"" ) ) )
+                    {
+                        wxString addr = args.Mid( 1, args.Length() - 2 ); // Remove quotes
+                        if( !parseCellAddress( addr, targetRow, targetCol ) )
+                        {
+                            *token = wxString::Format( wxT( "<Unresolved: Invalid cell address: %s>" ), addr );
+                            return true;
+                        }
+                    }
+                    // Check if it's cell(row, col) format (two numeric arguments)
+                    else if( args.Find( ',' ) != wxNOT_FOUND )
+                    {
+                        wxString rowStr = args.BeforeFirst( ',' ).Trim( true ).Trim( false );
+                        wxString colStr = args.AfterFirst( ',' ).Trim( true ).Trim( false );
+
+                        long rowNum, colNum;
+                        if( !rowStr.ToLong( &rowNum ) || !colStr.ToLong( &colNum ) )
+                        {
+                            *token = wxString::Format( wxT( "<Unresolved: Invalid cell coordinates: %s>" ), args );
+                            return true;
+                        }
+
+                        // Arguments are already 0-based
+                        targetRow = rowNum;
+                        targetCol = colNum;
+                    }
+                    else
+                    {
+                        *token = wxString::Format( wxT( "<Unresolved: Invalid CELL() syntax: %s>" ), args );
+                        return true;
+                    }
+
+                    // Check bounds
+                    if( targetRow < 0 || targetRow >= table->GetRowCount() || targetCol < 0
+                        || targetCol >= table->GetColCount() )
+                    {
+                        wxString cellAddr;
+                        if( targetRow >= 0 && targetCol >= 0 )
+                        {
+                            char colLetter = 'A' + ( targetCol % 26 );
+                            cellAddr = wxString::Format( wxT( "%c%d" ), colLetter, targetRow );
+                        }
+                        else
+                        {
+                            cellAddr = args;
+                        }
+                        *token = wxString::Format( wxT( "<Unresolved: Cell %s not found>" ), cellAddr );
+                        return true;
+                    }
+
+                    // Get the target cell and return its evaluated text
+                    SCH_TABLECELL* targetCell = table->GetCell( targetRow, targetCol );
+                    if( targetCell )
+                    {
+                        // Check for excessive recursion depth (circular references)
+                        const int maxDepth = ADVANCED_CFG::GetCfg().m_ResolveTextRecursionDepth;
+                        if( aDepth >= maxDepth )
+                        {
+                            *token = wxT( "<Circular reference>" );
+                            return true;
+                        }
+
+                        *token = targetCell->GetShownText( aSettings, aPath, aContext, aDepth + 1 );
+                        return true;
+                    }
+                    else
+                    {
+                        *token = wxT( "<Unresolved: Cell not found>" );
+                        return true;
+                    }
+                }
+
+                // Fall back to sheet variables
+                if( sheet )
+                {
+                    if( sheet->ResolveTextVar( aPath, token, depth + 1 ) )
+                        return true;
+                }
+
+                return false;
+            };
+
+    wxString text = EDA_TEXT::GetShownText( aContext, depth );
+
+    if( HasTextVars() && aContext != RAW_VALUE )
     {
-        if( token->IsSameAs( wxT( "ROW" ) ) )
-        {
-            *token = wxString::Format( wxT( "%d" ), GetRow() ); // 0-based
-            return true;
-        }
-        else if( token->IsSameAs( wxT( "COL" ) ) )
-        {
-            *token = wxString::Format( wxT( "%d" ), GetColumn() ); // 0-based
-            return true;
-        }
-        else if( token->IsSameAs( wxT( "ADDR" ) ) )
-        {
-            *token = GetAddr();
-            return true;
-        }
-        else if( token->StartsWith( wxT( "CELL(" ) ) && token->EndsWith( wxT( ")" ) ) )
-        {
-            // Handle CELL("A0") or CELL(0, 1) syntax
-            wxString args = token->Mid( 5, token->Length() - 6 ); // Extract arguments
-            args.Trim( true ).Trim( false );                      // Remove whitespace
-
-            SCH_TABLE* table = static_cast<SCH_TABLE*>( GetParent() );
-            if( !table )
-            {
-                *token = wxT( "<Unresolved: CELL() requires table context>" );
-                return true;
-            }
-
-            int targetRow = -1;
-            int targetCol = -1;
-
-            // Check if it's cell("A1") format (string argument with quotes)
-            if( args.StartsWith( wxT( "\"" ) ) && args.EndsWith( wxT( "\"" ) ) )
-            {
-                wxString addr = args.Mid( 1, args.Length() - 2 ); // Remove quotes
-                if( !parseCellAddress( addr, targetRow, targetCol ) )
-                {
-                    *token = wxString::Format( wxT( "<Unresolved: Invalid cell address: %s>" ), addr );
-                    return true;
-                }
-            }
-            // Check if it's cell(row, col) format (two numeric arguments)
-            else if( args.Find( ',' ) != wxNOT_FOUND )
-            {
-                wxString rowStr = args.BeforeFirst( ',' ).Trim( true ).Trim( false );
-                wxString colStr = args.AfterFirst( ',' ).Trim( true ).Trim( false );
-
-                long rowNum, colNum;
-                if( !rowStr.ToLong( &rowNum ) || !colStr.ToLong( &colNum ) )
-                {
-                    *token = wxString::Format( wxT( "<Unresolved: Invalid cell coordinates: %s>" ), args );
-                    return true;
-                }
-
-                // Arguments are already 0-based
-                targetRow = rowNum;
-                targetCol = colNum;
-            }
-            else
-            {
-                *token = wxString::Format( wxT( "<Unresolved: Invalid CELL() syntax: %s>" ), args );
-                return true;
-            }
-
-            // Check bounds
-            if( targetRow < 0 || targetRow >= table->GetRowCount() || targetCol < 0
-                || targetCol >= table->GetColCount() )
-            {
-                wxString cellAddr;
-                if( targetRow >= 0 && targetCol >= 0 )
-                {
-                    char colLetter = 'A' + ( targetCol % 26 );
-                    cellAddr = wxString::Format( wxT( "%c%d" ), colLetter, targetRow );
-                }
-                else
-                {
-                    cellAddr = args;
-                }
-                *token = wxString::Format( wxT( "<Unresolved: Cell %s not found>" ), cellAddr );
-                return true;
-            }
-
-            // Get the target cell and return its evaluated text
-            SCH_TABLECELL* targetCell = table->GetCell( targetRow, targetCol );
-            if( targetCell )
-            {
-                // Check for excessive recursion depth (circular references)
-                const int maxDepth = ADVANCED_CFG::GetCfg().m_ResolveTextRecursionDepth;
-                if( aDepth >= maxDepth )
-                {
-                    *token = wxT( "<Circular reference>" );
-                    return true;
-                }
-
-                *token = targetCell->GetShownText( aSettings, aPath, aAllowExtraText, aDepth + 1 );
-                return true;
-            }
-            else
-            {
-                *token = wxT( "<Unresolved: Cell not found>" );
-                return true;
-            }
-        }
-
-        // Fall back to sheet variables
-        if( sheet )
-        {
-            if( sheet->ResolveTextVar( aPath, token, depth + 1 ) )
-                return true;
-        }
-
-        return false;
-    };
-
-    wxString text = EDA_TEXT::GetShownText( aAllowExtraText, depth );
-
-    if( HasTextVars() )
         text = ResolveTextVars( text, &tableCellResolver, depth );
 
-    VECTOR2I size = GetEnd() - GetStart();
-    int      colWidth;
+        // Only do this at the top level (aDepth == 0) to avoid premature unescaping in nested CELL() calls
+        if( aDepth == 0 )
+            FinalizeTextVarExpansion( text, aContext );
+    }
 
-    if( GetTextAngle().IsVertical() )
-        colWidth = abs( size.y ) - ( GetMarginTop() + GetMarginBottom() );
-    else
-        colWidth = abs( size.x ) - ( GetMarginLeft() + GetMarginRight() );
-
-    GetDrawFont( aSettings )
-            ->LinebreakText( text, colWidth, GetTextSize(), GetEffectiveTextPenWidth(), IsBold(), IsItalic() );
-
-    // Convert escape markers back to literal ${} and @{} for final display
-    // Only do this at the top level (aDepth == 0) to avoid premature unescaping in nested CELL() calls
+    // Only linebreak when at top level
     if( aDepth == 0 )
     {
-        text.Replace( wxT( "<<<ESC_DOLLAR:" ), wxT( "${" ) );
-        text.Replace( wxT( "<<<ESC_AT:" ), wxT( "@{" ) );
+        VECTOR2I size = GetEnd() - GetStart();
+        int      colWidth;
+
+        if( GetTextAngle().IsVertical() )
+            colWidth = abs( size.y ) - ( GetMarginTop() + GetMarginBottom() );
+        else
+            colWidth = abs( size.x ) - ( GetMarginLeft() + GetMarginRight() );
+
+        GetDrawFont( aSettings )->LinebreakText( text, colWidth, GetTextSize(), GetEffectiveTextPenWidth(),
+                                                 IsBold(), IsItalic() );
     }
 
     return text;
@@ -447,26 +501,23 @@ static struct SCH_TABLECELL_DESC
 
         const wxString tableProps = _( "Table" );
 
-        propMgr.AddProperty( new PROPERTY<SCH_TABLECELL, int>( _HKI( "Column Width" ), &SCH_TABLECELL::SetColumnWidth,
-                                                               &SCH_TABLECELL::GetColumnWidth,
-                                                               PROPERTY_DISPLAY::PT_SIZE ),
-                             tableProps );
+        propMgr.AddProperty( new PROPERTY<SCH_TABLECELL, int>( _HKI( "Column Width" ),
+                    &SCH_TABLECELL::SetColumnWidth, &SCH_TABLECELL::GetColumnWidth, PROPERTY_DISPLAY::PT_SIZE ),
+                    tableProps );
 
-        propMgr.AddProperty( new PROPERTY<SCH_TABLECELL, int>( _HKI( "Row Height" ), &SCH_TABLECELL::SetRowHeight,
-                                                               &SCH_TABLECELL::GetRowHeight,
-                                                               PROPERTY_DISPLAY::PT_SIZE ),
-                             tableProps );
+        propMgr.AddProperty( new PROPERTY<SCH_TABLECELL, int>( _HKI( "Row Height" ),
+                    &SCH_TABLECELL::SetRowHeight, &SCH_TABLECELL::GetRowHeight, PROPERTY_DISPLAY::PT_SIZE ),
+                    tableProps );
 
         const wxString cellProps = _( "Cell Properties" );
 
-        propMgr.AddProperty( new PROPERTY<SCH_TABLECELL, bool, EDA_SHAPE>(
-                                     _HKI( "Background Fill" ), &EDA_SHAPE::SetFilled, &EDA_SHAPE::IsSolidFill ),
-                             cellProps );
+        propMgr.AddProperty( new PROPERTY<SCH_TABLECELL, bool, EDA_SHAPE>( _HKI( "Background Fill" ),
+                    &EDA_SHAPE::SetFilled, &EDA_SHAPE::IsSolidFill ),
+                    cellProps );
 
         propMgr.AddProperty( new PROPERTY<SCH_TABLECELL, COLOR4D, EDA_SHAPE>( _HKI( "Background Fill Color" ),
-                                                                              &EDA_SHAPE::SetFillColor,
-                                                                              &EDA_SHAPE::GetFillColor ),
-                             cellProps )
+                    &EDA_SHAPE::SetFillColor, &EDA_SHAPE::GetFillColor ),
+                    cellProps )
                 .SetIsHiddenFromRulesEditor();
     }
 } _SCH_TABLECELL_DESC;

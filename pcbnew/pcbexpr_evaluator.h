@@ -46,6 +46,22 @@ enum class PCBEXPR_NAV_STEP
     PARENT
 };
 
+enum class PCBEXPR_PROPERTY_KIND
+{
+    UNSUPPORTED,
+    INT_KIND,
+    OPTIONAL_INT,
+    UNSIGNED,
+    LONG_LONG,
+    DOUBLE,
+    OPTIONAL_DOUBLE,
+    BOOL_KIND,
+    STRING,
+    ENUM,
+    ANGLE,
+    COLOR
+};
+
 class PCBEXPR_UCODE final : public LIBEVAL::UCODE
 {
 public:
@@ -57,9 +73,13 @@ public:
     virtual LIBEVAL::FUNC_CALL_REF CreateFuncCall( const wxString& aName ) override;
 
     bool HasGeometryDependentFunctions() const { return m_hasGeometryDependentFunctions; }
+    bool RequiresPairItems() const { return m_requiresPairItems; }
+    bool ReferencesItemB() const { return m_referencesItemB; }
 
 private:
     bool m_hasGeometryDependentFunctions = false;
+    bool m_requiresPairItems = false;
+    bool m_referencesItemB = false;
 };
 
 
@@ -117,25 +137,21 @@ class PCBEXPR_VAR_REF : public LIBEVAL::VAR_REF
 public:
     PCBEXPR_VAR_REF( int aItemIndex ) :
             m_itemIndex( aItemIndex ),
-            m_type( LIBEVAL::VT_UNDEFINED ),
-            m_isEnum( false ),
-            m_isOptional( false )
-    {}
+            m_type( LIBEVAL::VT_UNDEFINED )
+    {
+    }
 
-    ~PCBEXPR_VAR_REF() {};
+    ~PCBEXPR_VAR_REF() override = default;
 
-    void SetIsEnum( bool s ) { m_isEnum = s; }
-    bool IsEnum() const { return m_isEnum; }
-
-    void SetIsOptional( bool s = true ) { m_isOptional = s; }
-    bool IsOptional() const { return m_isOptional; }
+    static PCBEXPR_PROPERTY_KIND ClassifyProperty( const PROPERTY_BASE* aProperty );
+    static LIBEVAL::VAR_TYPE_T   ExpressionType( PCBEXPR_PROPERTY_KIND aKind );
 
     void SetType( LIBEVAL::VAR_TYPE_T type ) { m_type = type; }
     LIBEVAL::VAR_TYPE_T GetType() const override { return m_type; }
 
-    void AddAllowedClass( TYPE_ID type_hash, PROPERTY_BASE* prop )
+    void AddAllowedClass( TYPE_ID aTypeHash, PROPERTY_BASE* aProperty, PCBEXPR_PROPERTY_KIND aKind )
     {
-        m_matchingTypes[type_hash] = prop;
+        m_matchingTypes[aTypeHash] = { aProperty, aKind };
     }
 
     // Navigation steps walked from the base item before the property/method is resolved.
@@ -150,12 +166,16 @@ public:
     BOARD_ITEM* GetObject( const LIBEVAL::CONTEXT* aCtx ) const;
 
 private:
-    std::unordered_map<TYPE_ID, PROPERTY_BASE*> m_matchingTypes;
-    int                                         m_itemIndex;
-    LIBEVAL::VAR_TYPE_T                         m_type;
-    bool                                        m_isEnum;
-    bool                                        m_isOptional;
-    std::vector<PCBEXPR_NAV_STEP>               m_navigation;
+    struct MATCHED_PROPERTY
+    {
+        PROPERTY_BASE*        property;
+        PCBEXPR_PROPERTY_KIND kind;
+    };
+
+    std::unordered_map<TYPE_ID, MATCHED_PROPERTY> m_matchingTypes;
+    int                                           m_itemIndex;
+    LIBEVAL::VAR_TYPE_T                           m_type;
+    std::vector<PCBEXPR_NAV_STEP>                 m_navigation;
 };
 
 
@@ -298,6 +318,9 @@ public:
 
     bool Evaluate( const wxString& aExpr );
     int  Result() const { return m_result; }
+
+    /// Unrounded result, for constraints whose value is a ratio rather than a count or a length.
+    double    ResultAsDouble() const { return m_resultAsDouble; }
     EDA_UNITS Units() const { return m_units; }
 
     void SetErrorCallback( std::function<void( const wxString& aMessage, int aOffset )> aCallback )
@@ -310,6 +333,7 @@ public:
 
 private:
     int  m_result;
+    double    m_resultAsDouble;
     EDA_UNITS m_units;
 
     PCBEXPR_COMPILER      m_compiler;

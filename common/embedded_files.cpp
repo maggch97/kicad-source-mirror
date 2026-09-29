@@ -138,16 +138,16 @@ EMBEDDED_FILES::EMBEDDED_FILE* EMBEDDED_FILES::AddFile( const wxFileName& aName,
 }
 
 
-void EMBEDDED_FILES::AddFile( EMBEDDED_FILE* aFile )
+EMBEDDED_FILES::EMBEDDED_FILE* EMBEDDED_FILES::AddFile( EMBEDDED_FILE* aFile )
 {
-    AddFile( std::shared_ptr<EMBEDDED_FILE>( aFile ) );
+    return AddFile( std::shared_ptr<EMBEDDED_FILE>( aFile ) );
 }
 
 
-void EMBEDDED_FILES::AddFile( std::shared_ptr<EMBEDDED_FILE> aFile )
+EMBEDDED_FILES::EMBEDDED_FILE* EMBEDDED_FILES::AddFile( std::shared_ptr<EMBEDDED_FILE> aFile )
 {
     if( !aFile )
-        return;
+        return nullptr;
 
     wxString name = aFile->name;
     auto [it, inserted] = m_files.emplace( std::move( name ), std::move( aFile ) );
@@ -157,6 +157,8 @@ void EMBEDDED_FILES::AddFile( std::shared_ptr<EMBEDDED_FILE> aFile )
     // the collection holds.
     if( inserted && m_fileAddedCallback )
         m_fileAddedCallback( it->second.get() );
+
+    return it->second.get();
 }
 
 
@@ -171,6 +173,24 @@ void EMBEDDED_FILES::RemoveFile( const wxString& name, bool aErase )
 
     if( it != m_files.end() )
         m_files.erase( it );
+}
+
+
+void EMBEDDED_FILES::AssignSharedFrom( const EMBEDDED_FILES& aSource,
+                                       const std::set<wxString>& aExcludedNames )
+{
+    // Build the filtered set before touching m_files so self-assignment stays safe.
+    std::map<wxString, std::shared_ptr<EMBEDDED_FILE>> filtered;
+
+    for( const auto& [name, file] : aSource.m_files )
+    {
+        if( aExcludedNames.count( file->name ) )
+            continue;
+
+        filtered[name] = file;
+    }
+
+    m_files = std::move( filtered );
 }
 
 
@@ -283,7 +303,7 @@ EMBEDDED_FILES::RETURN_CODE EMBEDDED_FILES::CompressAndEncode( EMBEDDED_FILE& aF
 
 
 // Decompress and Base64 decode data
-EMBEDDED_FILES::RETURN_CODE EMBEDDED_FILES::DecompressAndDecode( EMBEDDED_FILE& aFile )
+EMBEDDED_FILES::RETURN_CODE EMBEDDED_FILES::DecompressAndDecode( EMBEDDED_FILE& aFile, bool aAllowEmptyHash )
 {
     std::vector<char> compressedData;
     size_t            compressedSize = wxBase64DecodedSize( aFile.compressedEncodedData.size() );
@@ -336,7 +356,11 @@ EMBEDDED_FILES::RETURN_CODE EMBEDDED_FILES::DecompressAndDecode( EMBEDDED_FILE& 
     hash.add( aFile.decompressedData );
     std::string new_hash = hash.digest().ToString();
 
-    if( aFile.data_hash.length() == 64 )
+    if( aAllowEmptyHash && aFile.data_hash.empty() )
+    {
+        wxLogTrace( wxT( "KICAD_EMBED" ), wxT( "Generated new hash for '%s'"), aFile.name );
+    }
+    else if( aFile.data_hash.length() == 64 )
     {
         // SHA-256 hash from older file formats
         std::string sha_hash;
@@ -379,6 +403,9 @@ EMBEDDED_FILES::RETURN_CODE EMBEDDED_FILES::DecompressAndDecode( EMBEDDED_FILE& 
 EMBEDDED_FILES::RETURN_CODE EMBEDDED_FILES::ComputeFileHash( const wxFileName& aFileName,
                                                              std::string& aHash )
 {
+    if( !aFileName.FileExists() )
+        return RETURN_CODE::FILE_NOT_FOUND;
+
     wxFFileInputStream file( aFileName.GetFullPath() );
 
     if( !file.IsOk() )

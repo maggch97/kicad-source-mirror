@@ -22,6 +22,7 @@
 #include <api/api_utils.h>
 #include <footprint.h>
 #include <pgm_base.h>
+#include <reporter.h>
 #include <wx/log.h>
 
 #include <google/protobuf/util/json_util.h>
@@ -36,7 +37,7 @@ void FOOTPRINT_WIZARD::ResetParameters()
 }
 
 
-void FOOTPRINT_WIZARD_MANAGER::ReloadWizards()
+void FOOTPRINT_WIZARD_MANAGER::ReloadWizards( std::shared_ptr<REPORTER> aReporter )
 {
     m_wizards.clear();
 
@@ -48,7 +49,7 @@ void FOOTPRINT_WIZARD_MANAGER::ReloadWizards()
         std::unique_ptr<FOOTPRINT_WIZARD> wizard = std::make_unique<FOOTPRINT_WIZARD>();
         wizard->SetIdentifier( action->identifier );
 
-        if( RefreshInfo( wizard.get() ) )
+        if( RefreshInfo( wizard.get(), aReporter ) )
             m_wizards[wizard->Identifier()] = std::move( wizard );
     }
 }
@@ -84,7 +85,7 @@ std::optional<FOOTPRINT_WIZARD*> FOOTPRINT_WIZARD_MANAGER::GetWizard( const wxSt
 }
 
 
-bool FOOTPRINT_WIZARD_MANAGER::RefreshInfo( FOOTPRINT_WIZARD* aWizard )
+bool FOOTPRINT_WIZARD_MANAGER::RefreshInfo( FOOTPRINT_WIZARD* aWizard, std::shared_ptr<REPORTER> aReporter )
 {
     wxCHECK( aWizard, false );
 
@@ -95,11 +96,11 @@ bool FOOTPRINT_WIZARD_MANAGER::RefreshInfo( FOOTPRINT_WIZARD* aWizard )
     std::vector<wxString> args = {
         wxS( "--get-info" ),
         wxS( "--lang" ),
-        lang->CanonicalName
+        lang ? lang->CanonicalName : wxString( wxS( "en" ) )
     };
 
     wxString out, err;
-    int ret = manager.InvokeActionSync( aWizard->Identifier(), args, &out, &err );
+    int ret = manager.InvokeActionSync( aWizard->Identifier(), args, &out, &err, aReporter );
 
     if( ret != 0 )
         return false;
@@ -110,7 +111,17 @@ bool FOOTPRINT_WIZARD_MANAGER::RefreshInfo( FOOTPRINT_WIZARD* aWizard )
     options.ignore_unknown_fields = true;
 
     if( !google::protobuf::util::JsonStringToMessage( out.ToStdString(), &info, options ).ok() )
+    {
+        if( aReporter )
+        {
+            KI_ERROR error( RPT_SEVERITY_ERROR );
+            error.SetTitle( wxString::Format( _( "Plugin action '%s'" ), aWizard->Identifier() ) );
+            error.SetDescription( _( "could not parse wizard info" ) );
+            aReporter->Report( error );
+        }
+
         return false;
+    }
 
     aWizard->Info().FromProto( info );
     return true;
@@ -141,13 +152,23 @@ tl::expected<FOOTPRINT*, wxString> FOOTPRINT_WIZARD_MANAGER::Generate( FOOTPRINT
     if( !google::protobuf::util::MessageToJsonString( params, &paramsJson ).ok() )
         return tl::unexpected( _( "Unexpected error with footprint wizard" ) );
 
-    args.emplace_back( wxString::Format( wxS( "'%s'" ), paramsJson ) );
+    args.emplace_back( wxString::FromUTF8( paramsJson ) );
 
     wxString out, err;
     int ret = manager.InvokeActionSync( aWizard->Identifier(), args, &out, &err );
 
     if( ret != 0 )
-        return tl::unexpected( wxString::Format( _( "Could not launch footprint wizard '%s'" ), aWizard->Info().meta.name ) );
+    {
+        wxString error = wxString::Format( _( "Could not launch footprint wizard '%s'" ), aWizard->Info().meta.name );
+
+        err.Trim();
+        err.Trim( false );
+
+        if( !err.IsEmpty() )
+            error << wxS( "\n\n" ) << err;
+
+        return tl::unexpected( error );
+    }
 
     kiapi::common::types::WizardGeneratedContent response;
 
@@ -227,6 +248,14 @@ std::unique_ptr<WIZARD_PARAMETER> WIZARD_PARAMETER::Create( const kiapi::common:
         p = std::make_unique<WIZARD_BOOL_PARAMETER>();
         static_cast<WIZARD_BOOL_PARAMETER*>( p.get() )->FromProto( aProto.bool_() );
     }
+    else if( aProto.has_enum_() )
+    {
+        p = std::make_unique<WIZARD_ENUM_PARAMETER>();
+        static_cast<WIZARD_ENUM_PARAMETER*>( p.get() )->FromProto( aProto.enum_() );
+    }
+
+    if( !p )
+        return p;
 
     p->identifier = wxString::FromUTF8( aProto.identifier() );
     p->name = wxString::FromUTF8( aProto.name() );
@@ -327,6 +356,28 @@ kiapi::common::types::WizardParameter WIZARD_STRING_PARAMETER::Pack( bool aCompa
 }
 
 
+kiapi::common::types::WizardParameter WIZARD_ENUM_PARAMETER::Pack( bool aCompact )
+{
+    kiapi::common::types::WizardParameter packed = WIZARD_PARAMETER::Pack();
+
+    packed.mutable_enum_()->set_value( value );
+
+    if( !aCompact )
+    {
+        packed.mutable_enum_()->set_default_( default_value );
+
+        for( const auto& [id, label] : choices )
+        {
+            kiapi::common::types::WizardEnumChoice* choice = packed.mutable_enum_()->add_choices();
+            choice->set_identifier( id.ToUTF8() );
+            choice->set_label( label.ToUTF8() );
+        }
+    }
+
+    return packed;
+}
+
+
 void WIZARD_INT_PARAMETER::FromProto( const kiapi::common::types::WizardIntParameter& aProto )
 {
     value = aProto.value();
@@ -385,6 +436,19 @@ void WIZARD_STRING_PARAMETER::FromProto( const kiapi::common::types::WizardStrin
 }
 
 
+void WIZARD_ENUM_PARAMETER::FromProto( const kiapi::common::types::WizardEnumParameter& aProto )
+{
+    value = aProto.value();
+    default_value = aProto.default_();
+
+    choices.clear();
+    choices.reserve( aProto.choices_size() );
+
+    for( const kiapi::common::types::WizardEnumChoice& choice : aProto.choices() )
+        choices.emplace_back( wxString::FromUTF8( choice.identifier() ), wxString::FromUTF8( choice.label() ) );
+}
+
+
 void WIZARD_INFO::FromProto( const kiapi::common::types::WizardInfo& aProto )
 {
     meta.FromProto( aProto.meta() );
@@ -393,5 +457,8 @@ void WIZARD_INFO::FromProto( const kiapi::common::types::WizardInfo& aProto )
     parameters.reserve( aProto.parameters_size() );
 
     for( const kiapi::common::types::WizardParameter& parameter : aProto.parameters() )
-        parameters.emplace_back( WIZARD_PARAMETER::Create( parameter ) );
+    {
+        if( std::unique_ptr<WIZARD_PARAMETER> param = WIZARD_PARAMETER::Create( parameter ); param )
+            parameters.emplace_back( std::move( param ) );
+    }
 }

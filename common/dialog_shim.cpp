@@ -19,8 +19,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "dialog_shim.h"
+
 #include <app_monitor.h>
-#include <dialog_shim.h>
 #include <settings/common_settings.h>
 #include <settings/common_settings_internals.h>
 #include <core/ignore.h>
@@ -54,15 +55,21 @@
 #include <wx/splitter.h>
 #include <wx/radiobox.h>
 #include <wx/radiobut.h>
+#include <wx/datectrl.h>
+#if wxUSE_TIMEPICKCTRL
+#include <wx/timectrl.h>
+#endif
 #include <wx/variant.h>
+#include <wx/weakref.h>
 
 #include <algorithm>
 #include <functional>
 #include <nlohmann/json.hpp>
-#include <typeinfo>
+#include <utility>
 
 BEGIN_EVENT_TABLE( DIALOG_SHIM, wxDialog )
     EVT_CHAR_HOOK( DIALOG_SHIM::OnCharHook )
+    EVT_ACTIVATE( DIALOG_SHIM::OnActivate )
 END_EVENT_TABLE()
 
 
@@ -88,6 +95,31 @@ static std::string getDialogKeyFromTitle( const wxString& aTitle )
     }
 
     return title;
+}
+
+
+/**
+ * Return true when the given window is a compound date/time picker whose internal
+ * children should be opaque to the dialog-wide state save/load and undo/redo helpers.
+ *
+ * On wxGTK these controls are implemented as a wxComboCtrl + wxTextCtrl + popup
+ * wxCalendarCtrl. The inner text control reports as a wxTextEntry, so enumerating
+ * children causes the persisted state to clobber the picker's value on the next
+ * open and turns user edits into spurious undo entries.
+ */
+static bool isCompoundDateTimePicker( const wxWindow* aWin )
+{
+#if wxUSE_DATEPICKCTRL
+    if( dynamic_cast<const wxDatePickerCtrl*>( aWin ) != nullptr )
+        return true;
+#endif
+
+#if wxUSE_TIMEPICKCTRL
+    if( dynamic_cast<const wxTimePickerCtrl*>( aWin ) != nullptr )
+        return true;
+#endif
+
+    return false;
 }
 
 
@@ -178,11 +210,28 @@ DIALOG_SHIM::~DIALOG_SHIM()
     Unbind( wxEVT_MOVE, &DIALOG_SHIM::OnMove, this );
     Unbind( wxEVT_INIT_DIALOG, &DIALOG_SHIM::onInitDialog, this );
 
-    std::function<void( wxWindowList& )> disconnectFocusHandlers =
+    std::function<void( wxWindowList& )> clearOptOuts =
             [&]( wxWindowList& children )
+                {
+                    for( wxWindow* child : children )
+                    {
+                        delete PROPERTY_HOLDER::SafeCast( child->GetClientData() );
+                        child->SetClientData( nullptr );
+                    }
+                };
+
+    delete PROPERTY_HOLDER::SafeCast( GetClientData() );
+    SetClientData( nullptr );
+    clearOptOuts( GetChildren() );
+
+    std::function<void( wxWindowList& )> disconnectFocusHandlers =
+        [&]( wxWindowList& children )
             {
                 for( wxWindow* child : children )
                 {
+                    if( isCompoundDateTimePicker( child ) )
+                        continue;
+
                     if( wxTextCtrl* textCtrl = dynamic_cast<wxTextCtrl*>( child ) )
                     {
                         textCtrl->Disconnect( wxEVT_SET_FOCUS, wxFocusEventHandler( DIALOG_SHIM::onChildSetFocus ),
@@ -207,6 +256,9 @@ DIALOG_SHIM::~DIALOG_SHIM()
             {
                 for( wxWindow* child : children )
                 {
+                    if( isCompoundDateTimePicker( child ) )
+                        continue;
+
                     if( wxTextCtrl* textCtrl = dynamic_cast<wxTextCtrl*>( child ) )
                     {
                         textCtrl->Unbind( wxEVT_TEXT, &DIALOG_SHIM::onCommandEvent, this );
@@ -677,6 +729,9 @@ void DIALOG_SHIM::SaveControlState()
                         return;
                 }
 
+                if( isCompoundDateTimePicker( win ) )
+                    return;
+
                 std::string key = generateKey( win );
 
                 if( !key.empty() )
@@ -783,6 +838,9 @@ void DIALOG_SHIM::LoadControlState()
                     if( !props->GetPropertyOr( "persist", false ) )
                         return;
                 }
+
+                if( isCompoundDateTimePicker( win ) )
+                    return;
 
                 std::string key = generateKey( win );
 
@@ -965,6 +1023,9 @@ void DIALOG_SHIM::SelectAllInTextCtrls( wxWindowList& children )
 {
     for( wxWindow* child : children )
     {
+        if( isCompoundDateTimePicker( child ) )
+            continue;
+
         if( wxTextCtrl* textCtrl = dynamic_cast<wxTextCtrl*>( child ) )
         {
             m_beforeEditValues[ textCtrl ] = textCtrl->GetValue();
@@ -1037,6 +1098,9 @@ void DIALOG_SHIM::registerUndoRedoHandlers( wxWindowList& children )
     for( wxWindow* child : children )
     {
         if( m_noControlUndoRedo.count( child ) )
+            continue;
+
+        if( isCompoundDateTimePicker( child ) )
             continue;
 
         if( wxTextCtrl* textCtrl = dynamic_cast<wxTextCtrl*>( child ) )
@@ -1117,15 +1181,45 @@ void DIALOG_SHIM::registerUndoRedoHandlers( wxWindowList& children )
 
 void DIALOG_SHIM::recordControlChange( wxWindow* aCtrl )
 {
-    wxVariant before = m_currentValues[ aCtrl ];
-    wxVariant after = getControlValue( aCtrl );
+    // If we are in an event handler that generates lots of events (e.g. cutting
+    // a range of cells in a grid), we want to coalesce all of those events into a
+    // single undo commit.
+    //
+    // So what we'll do is collect all of the controls that have changes,
+    // and enqueue a single call to flushPendingControlChanges() to be called after the
+    // current event handler (which is calling this function) has finished.
 
-    if( before != after )
+    const auto [it, inserted] = m_controlsWithPendingChanges.insert( aCtrl );
+
+    if( !inserted )
+        return;
+
+    if( m_controlsWithPendingChanges.size() == 1 )
+        CallAfter( &DIALOG_SHIM::flushPendingControlChanges );
+}
+
+
+void DIALOG_SHIM::flushPendingControlChanges()
+{
+    for( wxWindow* const ctrl : m_controlsWithPendingChanges )
     {
-        m_undoStack.push_back( { aCtrl, before, after } );
-        m_redoStack.clear();
-        m_currentValues[ aCtrl ] = after;
+        wxVariant before = m_currentValues[ctrl];
+        wxVariant after = getControlValue( ctrl );
+
+        if( before != after )
+        {
+            // Note this still produces an undo/redo entry per control,
+            // even if changed within a control are combined.
+            // If an event causes a multi-control change, the user will
+            // still have to hit undo multiple times to get back to the
+            // original state.`
+            m_undoStack.push_back( { ctrl, before, after } );
+            m_redoStack.clear();
+            m_currentValues[ctrl] = after;
+        }
     }
+
+    m_controlsWithPendingChanges.clear();
 }
 
 
@@ -1321,13 +1415,30 @@ void DIALOG_SHIM::setControlValue( wxWindow* aCtrl, const wxVariant& aValue )
         {
             int rows = std::min( (int) j.size(), grid->GetNumberRows() );
 
+            std::vector<std::pair<int, int>> changedCells;
+
             for( int r = 0; r < rows; ++r )
             {
                 nlohmann::json row = j[r];
                 int cols = std::min( (int) row.size(), grid->GetNumberCols() );
 
                 for( int c = 0; c < cols; ++c )
-                    grid->SetCellValue( r, c, wxString( row[c].get<std::string>() ) );
+                {
+                    wxString value = wxString( row[c].get<std::string>() );
+
+                    if( grid->GetCellValue( r, c ) != value )
+                    {
+                        grid->SetCellValue( r, c, value );
+                        changedCells.emplace_back( r, c );
+                    }
+                }
+            }
+
+            for( const auto& [row, col] : changedCells )
+            {
+                wxGridEvent evt( grid->GetId(), wxEVT_GRID_CELL_CHANGED, grid, row, col );
+                evt.SetString( grid->GetCellValue( row, col ) );
+                grid->GetEventHandler()->ProcessEvent( evt );
             }
         }
     }
@@ -1388,6 +1499,8 @@ void DIALOG_SHIM::setControlValue( wxWindow* aCtrl, const wxVariant& aValue )
 
 void DIALOG_SHIM::doUndo()
 {
+    flushPendingControlChanges();
+
     if( m_undoStack.empty() )
         return;
 
@@ -1403,6 +1516,8 @@ void DIALOG_SHIM::doUndo()
 
 void DIALOG_SHIM::doRedo()
 {
+    flushPendingControlChanges();
+
     if( m_redoStack.empty() )
         return;
 
@@ -1425,15 +1540,52 @@ void DIALOG_SHIM::OnPaint( wxPaintEvent &event )
         SelectAllInTextCtrls( GetChildren() );
         registerUndoRedoHandlers( GetChildren() );
 
-        if( m_initialFocusTarget )
-            KIPLATFORM::UI::ForceFocus( m_initialFocusTarget );
-        else
-            KIPLATFORM::UI::ForceFocus( this );     // Focus the dialog itself
+        forceInitialFocus();
 
         m_firstPaintEvent = false;
     }
 
     event.Skip();
+}
+
+
+void DIALOG_SHIM::forceInitialFocus()
+{
+    // Skip targets that can't take focus (e.g. hidden on a notebook page) so ESC still works
+    if( m_initialFocusTarget && m_initialFocusTarget->IsShownOnScreen()
+            && m_initialFocusTarget->CanAcceptFocus() )
+    {
+        KIPLATFORM::UI::ForceFocus( m_initialFocusTarget );
+    }
+    else
+    {
+        KIPLATFORM::UI::ForceFocus( this );
+    }
+}
+
+
+void DIALOG_SHIM::OnActivate( wxActivateEvent& aEvent )
+{
+    // Null FindFocus() means focus landed on a non-wx element (WM title bar, GTK tab strip)
+    // where ESC never reaches OnCharHook; defer via CallAfter since GTK reports null transiently
+    if( aEvent.GetActive() && !m_firstPaintEvent )
+    {
+        wxWeakRef<DIALOG_SHIM> self( this );
+
+        CallAfter(
+                [self]()
+                {
+                    DIALOG_SHIM* dlg = self;
+
+                    if( dlg && KIPLATFORM::UI::IsWindowActive( dlg )
+                            && wxWindow::FindFocus() == nullptr )
+                    {
+                        dlg->forceInitialFocus();
+                    }
+                } );
+    }
+
+    aEvent.Skip();
 }
 
 
@@ -1582,6 +1734,7 @@ void DIALOG_SHIM::resetUndoRedoForNewContent( wxWindowList& aChildren )
     m_undoStack.clear();
     m_redoStack.clear();
     m_currentValues.clear();
+    m_controlsWithPendingChanges.clear();
     registerUndoRedoHandlers( aChildren );
 }
 
@@ -1893,4 +2046,13 @@ static void recursiveDescent( wxSizer* aSizer, std::map<int, wxString>& aLabels 
 void DIALOG_SHIM::SetupStandardButtons( std::map<int, wxString> aLabels )
 {
     recursiveDescent( GetSizer(), aLabels );
+}
+
+
+void DIALOG_SHIM::EndDialogShim( int aReturnCode )
+{
+    if( IsQuasiModal() )
+        EndQuasiModal( aReturnCode );
+    else
+        EndDialog( aReturnCode );       // Call the default handler for modal and mode-less dialogs.
 }

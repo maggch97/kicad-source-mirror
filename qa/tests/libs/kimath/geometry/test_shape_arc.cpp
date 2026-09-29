@@ -26,6 +26,8 @@
 #include <geometry/shape_arc.h>
 #include <geometry/shape_circle.h>
 #include <geometry/shape_line_chain.h>
+#include <geometry/shape_simple.h>
+#include <trigo.h>
 
 #include <qa_utils/geometry/geometry.h>
 #include <qa_utils/numeric.h>
@@ -1011,6 +1013,73 @@ BOOST_AUTO_TEST_CASE( CollideArcToShapeLineChain )
 }
 
 
+BOOST_AUTO_TEST_CASE( CollideArcToClosedChainMatchesSegmentScan )
+{
+    struct CASE
+    {
+        SHAPE_ARC        m_arc;
+        SHAPE_SIMPLE     m_chain;
+        int              m_clearance;
+        bool             m_collides;
+    };
+
+    const SHAPE_ARC semicircle( VECTOR2I( -100, 0 ), VECTOR2I( 0, 100 ), VECTOR2I( 100, 0 ), 0 );
+    const SHAPE_ARC major( VECTOR2I( 0, 0 ), VECTOR2I( -87, -50 ), EDA_ANGLE( 300.0, DEGREES_T ), 0 );
+
+    BOOST_REQUIRE( major.GetCentralAngle().AsDegrees() > 180.0 );
+    BOOST_REQUIRE( major.BBox( 150 ).GetLeft() > -238 );
+
+    auto rect =
+            []( int aX0, int aY0, int aX1, int aY1 )
+            {
+                return SHAPE_SIMPLE( SHAPE_LINE_CHAIN( { VECTOR2I( aX0, aY0 ), VECTOR2I( aX1, aY0 ),
+                                                         VECTOR2I( aX1, aY1 ), VECTOR2I( aX0, aY1 ) }, true ) );
+            };
+
+    // SHAPE_SIMPLE routes through the SHAPE_LINE_CHAIN_BASE overload that carries the box reject
+    const CASE cases[] = { { SHAPE_ARC( semicircle, 4 ), rect( -10, 102, 10, 110 ), 0, true },
+                           { semicircle, rect( -10, 105, 10, 110 ), 5, false },
+                           { major, rect( -239, -10, -238, 10 ), 150, true } };
+
+    for( const CASE& c : cases )
+    {
+        BOOST_REQUIRE( !c.m_chain.PointInside( c.m_arc.GetP0() ) );
+
+        int      expectedActual = std::numeric_limits<int>::max();
+        VECTOR2I expectedLocation;
+
+        for( size_t i = 0; i < c.m_chain.GetSegmentCount(); i++ )
+        {
+            int      segmentActual = 0;
+            VECTOR2I segmentLocation;
+
+            if( c.m_arc.Collide( c.m_chain.GetSegment( i ), c.m_clearance, &segmentActual, &segmentLocation )
+                && segmentActual < expectedActual )
+            {
+                expectedActual = segmentActual;
+                expectedLocation = segmentLocation;
+            }
+        }
+
+        bool expected = expectedActual == 0 || expectedActual < c.m_clearance;
+        BOOST_REQUIRE_EQUAL( expected, c.m_collides );
+
+        int      actual = 0;
+        VECTOR2I location;
+        bool collided = static_cast<const SHAPE&>( c.m_arc ).Collide( &c.m_chain, c.m_clearance,
+                                                                     &actual, &location );
+
+        BOOST_CHECK_EQUAL( collided, expected );
+
+        if( expected )
+        {
+            BOOST_CHECK_EQUAL( actual, expectedActual );
+            BOOST_CHECK( location == expectedLocation );
+        }
+    }
+}
+
+
 BOOST_AUTO_TEST_CASE( CollideArcToPolygonApproximation )
 {
     SHAPE_ARC arc( VECTOR2I( 73843527, 74355869 ), VECTOR2I( 71713528, 72965869 ),
@@ -1086,11 +1155,11 @@ bool ArePolylineEndPointsNearCircle( const SHAPE_LINE_CHAIN& aPolyline, const VE
 /**
  * Predicate for checking a polyline has all the segment mid points on
  * (near) a circle of given centre and radius
- * @param  aPolyline the polyline to check
- * @param  aCentre   the circle centre
- * @param  aRad      the circle radius
- * @param  aTolEnds  the tolerance for the midpoint-centre distance
- * @return           true if predicate met
+ * @param  aPolyline  the polyline to check
+ * @param  aCentre    the circle centre
+ * @param  aRad       the circle radius
+ * @param  aTolerance the tolerance for the midpoint-centre distance
+ * @return            true if predicate met
  */
 bool ArePolylineMidPointsNearCircle( const SHAPE_LINE_CHAIN& aPolyline, const VECTOR2I& aCentre,
                                      int aRad, int aTolerance )
@@ -1352,6 +1421,146 @@ BOOST_AUTO_TEST_CASE( DegenerateArcCoincidentPoints )
     BOOST_CHECK_LT( poly.BBox().GetWidth(),  1000 );  // < 1 µm
     BOOST_CHECK_LT( poly.BBox().GetHeight(), 1000 );
     BOOST_CHECK_LT( arc.GetLength(),         1000.0 );
+}
+
+
+// Collinear points from the reported board.  The coincident start/mid sends CalcArcCenter() to
+// the chord midpoint, which makes start and end antipodal and the raw sweep a clean half turn
+BOOST_AUTO_TEST_CASE( CollinearArcSweepIsNotAFullTurn )
+{
+    const SHAPE_ARC arc( VECTOR2I( 2275000, 3123714 ),
+                         VECTOR2I( 2275000, 3123715 ),
+                         VECTOR2I( 2275000, 3123720 ),
+                         127000 );
+
+    BOOST_CHECK_LT( std::abs( arc.GetCentralAngle().AsDegrees() ), 1.0 );
+
+    // The 6 nm chord is the whole run; a fabricated sweep inflates this without bound
+    BOOST_CHECK_CLOSE( arc.GetLength(), 6.0, 1.0 );
+
+    const SHAPE_LINE_CHAIN poly = arc.ConvertToPolyline();
+    BOOST_CHECK_LT( poly.BBox().GetWidth(), 10 );
+    BOOST_CHECK_LT( poly.BBox().GetHeight(), 10 );
+}
+
+
+// The guard must not catch major arcs, which are the only users of the full-turn correction
+BOOST_AUTO_TEST_CASE( CurvedArcsKeepTheirSweep )
+{
+    const SHAPE_ARC quarter( VECTOR2I( 1000000, 0 ), VECTOR2I( 707107, 707107 ),
+                             VECTOR2I( 0, 1000000 ), 127000 );
+
+    BOOST_CHECK_CLOSE( quarter.GetCentralAngle().AsDegrees(), 90.0, 0.01 );
+
+    const SHAPE_ARC major( VECTOR2I( 1000000, 0 ), VECTOR2I( -1000000, 0 ),
+                           VECTOR2I( 0, -1000000 ), 127000 );
+
+    BOOST_CHECK_CLOSE( major.GetCentralAngle().AsDegrees(), 270.0, 0.01 );
+}
+
+
+// Coincident start/mid plus a distant end previously produced a center far off from the inputs
+BOOST_AUTO_TEST_CASE( CalcArcCenterTwoCoincidentStartMid )
+{
+    const VECTOR2D start( 0.0, 0.0 );
+    const VECTOR2D mid  ( 0.0, 0.0 );
+    const VECTOR2D end  ( 1000.0, 0.0 );
+
+    VECTOR2D center = CalcArcCenter( start, mid, end );
+
+    BOOST_CHECK_CLOSE( center.x, 500.0, 1e-9 );
+    BOOST_CHECK_SMALL( center.y, 1e-9 );
+}
+
+
+BOOST_AUTO_TEST_CASE( CalcArcCenterTwoCoincidentMidEnd )
+{
+    const VECTOR2D start( -1000.0, 0.0 );
+    const VECTOR2D mid  ( 0.0, 0.0 );
+    const VECTOR2D end  ( 0.0, 0.0 );
+
+    VECTOR2D center = CalcArcCenter( start, mid, end );
+
+    BOOST_CHECK_CLOSE( center.x, -500.0, 1e-9 );
+    BOOST_CHECK_SMALL( center.y, 1e-9 );
+}
+
+
+BOOST_AUTO_TEST_CASE( CalcArcCenterTwoCoincidentStartEnd )
+{
+    // Coincident start/end with a distinct mid is a 360-degree arc, center is midpoint to mid
+    const VECTOR2D start( 0.0, 0.0 );
+    const VECTOR2D mid  ( 1000.0, 0.0 );
+    const VECTOR2D end  ( 0.0, 0.0 );
+
+    VECTOR2D center = CalcArcCenter( start, mid, end );
+
+    BOOST_CHECK_CLOSE( center.x, 500.0, 1e-9 );
+    BOOST_CHECK_SMALL( center.y, 1e-9 );
+}
+
+
+// Three near-coincident points collapse to the centroid via the bbox guard, not the pairwise guard
+BOOST_AUTO_TEST_CASE( CalcArcCenterThreeNearCoincident )
+{
+    const VECTOR2D start( 100.0, 200.0 );
+    const VECTOR2D mid  ( 101.0, 200.0 );
+    const VECTOR2D end  ( 100.0, 201.0 );
+
+    VECTOR2D center = CalcArcCenter( start, mid, end );
+
+    BOOST_CHECK_CLOSE( center.x, ( start.x + mid.x + end.x ) / 3.0, 1e-9 );
+    BOOST_CHECK_CLOSE( center.y, ( start.y + mid.y + end.y ) / 3.0, 1e-9 );
+}
+
+
+// A thin arc must not trip the coincident-point guards despite its short chord and small sagitta
+BOOST_AUTO_TEST_CASE( CalcArcCenterThinArcNotDegenerate )
+{
+    const VECTOR2D start( 0.0, 0.0 );
+    const VECTOR2D mid  ( 10.0, 1.0 );
+    const VECTOR2D end  ( 20.0, 0.0 );
+
+    VECTOR2D center = CalcArcCenter( start, mid, end );
+
+    double rs = ( center - start ).EuclideanNorm();
+    double rm = ( center - mid ).EuclideanNorm();
+    double re = ( center - end ).EuclideanNorm();
+
+    BOOST_CHECK_CLOSE( rs, rm, 0.01 );
+    BOOST_CHECK_CLOSE( rm, re, 0.01 );
+
+    // True circumradius is 50.5 IU; a wrongly-triggered midpoint guard would give ~10 IU
+    BOOST_CHECK_GT( rs, 40.0 );
+}
+
+
+// A few-IU arc rounds its own mid point off the true circle, but the three points still span a
+// healthy triangle.  Reading that as a coincident pair collapses the centre onto the chord and
+// turns a quarter turn into a reflex sweep
+BOOST_AUTO_TEST_CASE( CalcArcCenterFewUnitArcKeepsItsCircumcircle )
+{
+    const SHAPE_ARC arc( VECTOR2I( 0, 0 ), VECTOR2I( 5, 0 ), ANGLE_90 );
+
+    BOOST_CHECK_LT( std::abs( arc.GetCentralAngle().AsDegrees() ), 180.0 );
+
+    // The chord midpoint fallback sits at (3, 3), inside the arc it is supposed to circumscribe
+    BOOST_CHECK_GT( ( arc.GetCenter() - arc.GetArcMid() ).EuclideanNorm(), arc.GetRadius() / 2.0 );
+}
+
+
+// A board-scale arc must not regress from the new pairwise coincidence guards
+BOOST_AUTO_TEST_CASE( CalcArcCenterBoardScaleSanity )
+{
+    const double R = 50000000.0;
+    const VECTOR2D start( R, 0.0 );
+    const VECTOR2D mid  ( 0.0, R );
+    const VECTOR2D end  ( -R, 0.0 );
+
+    VECTOR2D center = CalcArcCenter( start, mid, end );
+
+    BOOST_CHECK_SMALL( center.x, 1.0 );
+    BOOST_CHECK_SMALL( center.y, 1.0 );
 }
 
 

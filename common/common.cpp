@@ -29,6 +29,7 @@
 #include <reporter.h>
 #include <macros.h>
 #include <string_utils.h>
+#include <text_eval/text_eval_environment.h>
 #include <text_eval/text_eval_wrapper.h>
 #include <text_var_dependency.h>
 #include <mutex>
@@ -56,14 +57,15 @@ enum Bracket
     Bracket_Max
 };
 
-wxString ExpandTextVars( const wxString& aSource, const PROJECT* aProject, int aFlags )
+wxString ExpandTextVars( const wxString& aSource, const PROJECT* aProject, RESOLUTION_CONTEXT aContext )
 {
-    std::function<bool( wxString* )> projectResolver = [&]( wxString* token ) -> bool
-    {
-        return aProject->TextVarResolver( token );
-    };
+    std::function<bool( wxString* )> projectResolver =
+            [&]( wxString* token ) -> bool
+            {
+                return aProject->TextVarResolver( token );
+            };
 
-    return ExpandTextVars( aSource, &projectResolver, aFlags );
+    return ExpandTextVars( aSource, &projectResolver, aContext );
 }
 
 
@@ -81,9 +83,29 @@ wxString NormalizeFilePathForTextVars( const wxString& aPath )
 }
 
 
-wxString ExpandTextVars( const wxString& aSource, const std::function<bool( wxString* )>* aResolver, int aFlags,
-                         int aDepth )
+// Convert escape markers back to literal \${ and \@{.
+// Strip '\' for canvas display.
+void FinalizeTextVarExpansion( wxString& aText, RESOLUTION_CONTEXT aContext )
 {
+    if( aContext == FOR_CANVAS || aContext == FOR_GUI || aContext == FOR_NETNAME || aContext == RESOLVED )
+    {
+        aText.Replace( wxT( "<<<ESC_DOLLAR:" ), wxT( "${" ) );
+        aText.Replace( wxT( "<<<ESC_AT:" ), wxT( "@{" ) );
+    }
+    else // aContext == FOR_ERC_DRC || aContext == INTERNAL
+    {
+        aText.Replace( wxT( "<<<ESC_DOLLAR:" ), wxT( "\\${" ) );
+        aText.Replace( wxT( "<<<ESC_AT:" ), wxT( "\\@{" ) );
+    }
+}
+
+
+wxString ExpandTextVars( const wxString& aSource, const std::function<bool( wxString* )>* aResolver,
+                         RESOLUTION_CONTEXT aContext, int aDepth )
+{
+    if( aContext == RAW_VALUE )
+        return aSource;
+
     wxString newbuf;
     size_t   sourceLen = aSource.length();
 
@@ -254,7 +276,7 @@ wxString ExpandTextVars( const wxString& aSource, const std::function<bool( wxSt
             {
                 if( ( token.Contains( wxT( "${" ) ) || token.Contains( wxT( "@{" ) ) ) && aDepth < maxDepth )
                 {
-                    token = ExpandTextVars( token, aResolver, aFlags, aDepth + 1 );
+                    token = ExpandTextVars( token, aResolver, aContext, aDepth + 1 );
                 }
 
                 // Return the expression with variables expanded but NOT evaluated
@@ -267,7 +289,7 @@ wxString ExpandTextVars( const wxString& aSource, const std::function<bool( wxSt
                 // This ensures innermost variables are expanded first (standard evaluation order)
                 if( ( token.Contains( wxT( "${" ) ) || token.Contains( wxT( "@{" ) ) ) && aDepth < maxDepth )
                 {
-                    token = ExpandTextVars( token, aResolver, aFlags, aDepth + 1 );
+                    token = ExpandTextVars( token, aResolver, aContext, aDepth + 1 );
 
                     // Also evaluate math expressions after expanding variables
                     if( token.Contains( wxT( "@{" ) ) )
@@ -280,9 +302,10 @@ wxString ExpandTextVars( const wxString& aSource, const std::function<bool( wxSt
                     }
                 }
 
-                if( ( aFlags & FOR_ERC_DRC ) == 0
-                    && ( token.StartsWith( wxS( "ERC_WARNING" ) ) || token.StartsWith( wxS( "ERC_ERROR" ) )
-                         || token.StartsWith( wxS( "DRC_WARNING" ) ) || token.StartsWith( wxS( "DRC_ERROR" ) ) ) )
+                if( aContext != FOR_ERC_DRC && (   token.StartsWith( wxS( "ERC_WARNING" ) )
+                                                || token.StartsWith( wxS( "ERC_ERROR" ) )
+                                                || token.StartsWith( wxS( "DRC_WARNING" ) )
+                                                || token.StartsWith( wxS( "DRC_ERROR" ) ) ) )
                 {
                     // Only show user-defined warnings/errors during ERC/DRC
                 }
@@ -325,7 +348,7 @@ wxString ResolveTextVars( const wxString& aSource, const std::function<bool( wxS
         // ExpandTextVars converts escapes to markers and expands ${} variables
         // Don't expand if the only remaining $ or @ are in escape markers like <<<ESC_DOLLAR: or <<<ESC_AT:
         if( text.Contains( wxT( "${" ) ) || text.Contains( wxT( "@{" ) ) )
-            text = ExpandTextVars( text, aResolver );
+            text = ExpandTextVars( text, aResolver, INTERNAL );
 
         // Only evaluate if there are @{} expressions present (not escape markers)
         // Don't evaluate if the only remaining @ are in escape markers like <<<ESC_AT:
@@ -457,21 +480,28 @@ std::vector<TEXT_VAR_REF_KEY> ExtractTextVarReferences( const wxString& aSource 
 
 wxString GetGeneratedFieldDisplayName( const wxString& aSource )
 {
-    std::function<bool( wxString* )> tokenExtractor = [&]( wxString* token ) -> bool
-    {
-        *token = *token; // token value is the token name
-        return true;
-    };
+    std::function<bool( wxString* )> tokenExtractor =
+            [&]( wxString* token ) -> bool
+            {
+                *token = *token; // token value is the token name
+                return true;
+            };
 
-    return ExpandTextVars( aSource, &tokenExtractor );
+    return ExpandTextVars( aSource, &tokenExtractor, FOR_GUI );
 }
 
 
-bool IsGeneratedField( const wxString& aSource )
+bool IsGeneratedField( const wxString& aFieldName )
 {
     // Per-thread regex.  Callers include parallel ERC/connection-graph workers.
-    thread_local wxRegEx expr( wxS( "^\\$\\{\\w*\\}$" ) );
-    return expr.Matches( aSource );
+    thread_local wxRegEx expr( wxS( "^(\\$\\{[\\w.]*\\}|@\\{.*\\})$" ) );
+    return expr.Matches( aFieldName );
+}
+
+
+bool IsGeneratedValue( const wxString& aValue )
+{
+    return aValue.Contains( wxT( "${" ) ) || aValue.Contains( wxT( "@{" ) );
 }
 
 
@@ -501,24 +531,35 @@ wxString KIwxExpandEnvVars( const wxString& str, const PROJECT* aProject, std::s
     wxString strResult;
     strResult.Alloc( strlen ); // best guess (improves performance)
 
-    auto getVersionedEnvVar = []( const wxString& aMatch, wxString& aResult ) -> bool
+    auto readEnvironment = []( const wxString& aName, wxString* aValue ) -> bool
     {
-        for( const wxString& var : ENV_VAR::GetPredefinedEnvVars() )
-        {
-            if( var.Matches( aMatch ) )
-            {
-                const auto value = ENV_VAR::GetEnvVar<wxString>( var );
+        const bool found = wxGetEnv( aName, aValue );
 
-                if( !value )
-                    continue;
+        if( TEXT_EVAL::ENVIRONMENT* environment = TEXT_EVAL::ENVIRONMENT::Current() )
+            environment->RecordEnvironmentVariable( aName, found ? std::optional<wxString>( *aValue ) : std::nullopt );
 
-                aResult += *value;
-                return true;
-            }
-        }
-
-        return false;
+        return found;
     };
+
+    auto getVersionedEnvVar =
+            [&]( const wxString& aMatch, wxString& aResult ) -> bool
+            {
+                for( const wxString& var : ENV_VAR::GetPredefinedEnvVars() )
+                {
+                    if( var.Matches( aMatch ) )
+                    {
+                        wxString value;
+
+                        if( !readEnvironment( var, &value ) )
+                            continue;
+
+                        aResult += value;
+                        return true;
+                    }
+                }
+
+                return false;
+            };
 
     for( size_t n = 0; n < strlen; n++ )
     {
@@ -531,7 +572,9 @@ wxString KIwxExpandEnvVars( const wxString& str, const PROJECT* aProject, std::s
 #endif // __WINDOWS__
         case wxT( '$' ):
         {
+            char    controlChar = str_n.GetValue();
             Bracket bracket;
+
 #ifdef __WINDOWS__
             if( str_n == wxT( '%' ) )
             {
@@ -557,7 +600,8 @@ wxString KIwxExpandEnvVars( const wxString& str, const PROJECT* aProject, std::s
                         str_n = str[++n]; // skip the bracket
                         break;
 
-                    default: bracket = Bracket_None;
+                    default:
+                        bracket = Bracket_None;
                     }
                 }
 
@@ -581,6 +625,17 @@ wxString KIwxExpandEnvVars( const wxString& str, const PROJECT* aProject, std::s
 
             wxString strVarName( str.c_str() + n + 1, m - n - 1 );
 
+            if( controlChar == '$' && bracket == Bracket_Curly && (   strVarName == wxT( "DRC_WARNING" )
+                                                                   || strVarName == wxT( "DRC_ERROR" )
+                                                                   || strVarName == wxT( "ERC_WARNING" )
+                                                                   || strVarName == wxT( "ERC_ERROR" ) ) )
+            {
+                // These aren't environment variables; pass them through unchanged
+                strResult << controlChar << bracket << strVarName << str_m;
+                n = m;
+                break;
+            }
+
             // NB: use wxGetEnv instead of wxGetenv as otherwise variables
             //     set through wxSetEnv may not be read correctly!
             bool     expanded = false;
@@ -591,7 +646,7 @@ wxString KIwxExpandEnvVars( const wxString& str, const PROJECT* aProject, std::s
                 strResult += tmp;
                 expanded = true;
             }
-            else if( wxGetEnv( strVarName, &tmp ) )
+            else if( readEnvironment( strVarName, &tmp ) )
             {
                 strResult += tmp;
                 expanded = true;
@@ -687,7 +742,6 @@ wxString KIwxExpandEnvVars( const wxString& str, const PROJECT* aProject, std::s
             }
 
             n = m - 1; // skip variable name
-            str_n = str[n];
         }
         break;
 
@@ -695,21 +749,22 @@ wxString KIwxExpandEnvVars( const wxString& str, const PROJECT* aProject, std::s
             // backslash can be used to suppress special meaning of % and $
             if( n < strlen - 1 && ( str[n + 1] == wxT( '%' ) || str[n + 1] == wxT( '$' ) ) )
             {
+                strResult += str_n;
                 str_n = str[++n];
                 strResult += str_n;
-
                 break;
             }
 
             KI_FALLTHROUGH;
 
-        default: strResult += str_n;
+        default:
+            strResult += str_n;
         }
     }
 
     std::set<wxString> loop_check;
-    auto               first_pos = strResult.find_first_of( wxS( "{(%" ) );
-    auto               last_pos = strResult.find_last_of( wxS( "})%" ) );
+    size_t             first_pos = strResult.find_first_of( wxS( "{(%" ) );
+    size_t             last_pos = strResult.find_last_of( wxS( "})%" ) );
 
     if( first_pos != strResult.npos && last_pos != strResult.npos && first_pos != last_pos )
         strResult = KIwxExpandEnvVars( strResult, aProject, aSet ? aSet : &loop_check );
@@ -733,7 +788,7 @@ const wxString ExpandEnvVarSubstitutions( const wxString& aString, const PROJECT
 
 const wxString ResolveUriByEnvVars( const wxString& aUri, const PROJECT* aProject )
 {
-    wxString uri = ExpandTextVars( aUri, aProject );
+    wxString uri = ExpandTextVars( aUri, aProject, INTERNAL );
 
     return ExpandEnvVarSubstitutions( uri, aProject );
 }
@@ -750,7 +805,8 @@ bool EnsureFileDirectoryExists( wxFileName* aTargetFullFileName, const wxString&
     {
         if( aReporter )
         {
-            msg.Printf( _( "Cannot make path '%s' absolute with respect to '%s'." ), aTargetFullFileName->GetPath(),
+            msg.Printf( _( "Cannot make path '%s' absolute with respect to '%s'." ),
+                        aTargetFullFileName->GetPath(),
                         baseFilePath );
             aReporter->Report( msg, RPT_SEVERITY_ERROR );
         }
@@ -946,6 +1002,10 @@ bool WarnUserIfOperatingSystemUnsupported()
 {
     if( !KIPLATFORM::APP::IsOperatingSystemUnsupported() )
         return false;
+
+    // wxLogGui shows queued messages when a modal opens
+    // A second modal inside this dialog makes GTK fail
+    wxLog::FlushActive();
 
     KICAD_MESSAGE_DIALOG dialog( nullptr,
                                  _( "This operating system is not supported "

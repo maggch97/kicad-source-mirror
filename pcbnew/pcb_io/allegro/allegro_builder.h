@@ -70,8 +70,8 @@ private:
 
     /**
      * Get a block by its key, and check that it is of the expected type.
-      *
-      * @tparam T must be a BLOCK_DATA struct with a BLOCK_TYPE_CODE member
+     *
+     * @tparam T must be a BLOCK_DATA struct with a BLOCK_TYPE_CODE member
      */
     template <ALLEGRO_BLOCK_DATA T>
     const T* expectBlockByKey( uint32_t aKey ) const
@@ -105,6 +105,54 @@ private:
 
     PCB_LAYER_ID getLayer( const LAYER_INFO& aLayerInfo ) const;
 
+    struct GRAPHIC_KEY_HASH
+    {
+        size_t operator()( const BOARD_ITEM* aItem ) const;
+    };
+
+    struct GRAPHIC_KEY_EQ
+    {
+        bool operator()( const BOARD_ITEM* aFirst, const BOARD_ITEM* aSecond ) const;
+    };
+
+    /**
+     * Rejects graphics that repeat one already accepted into the same container.
+     *
+     * Allegro stacks coincident graphics on documentation layers, up to a third of the items on
+     * some designs.  They are indistinguishable once drawn, so keeping them only inflates the
+     * board.  Scope one of these per container: footprint graphics are in footprint-relative
+     * coordinates, so identical shapes in different instances are not duplicates.
+     */
+    class GRAPHIC_DEDUP
+    {
+    public:
+        /// True when this graphic has not been seen before, and records it
+        bool IsFirst( const BOARD_ITEM* aItem );
+
+    private:
+        std::unordered_set<const BOARD_ITEM*, GRAPHIC_KEY_HASH, GRAPHIC_KEY_EQ> m_seen;
+    };
+
+    /// Coincidence filter for everything added straight to the board, which is one container
+    GRAPHIC_DEDUP m_boardGraphics;
+
+
+    /**
+     * Give @a aItem and its children ids derived from the Allegro block they came from.
+     *
+     * @param aItem
+     * @param aKey
+     * @param aSeq is advanced once per item stamped, so several items sharing one source block
+     *             still get distinct ids.
+     */
+    static void stampIds( BOARD_ITEM& aItem, uint32_t aKey, uint32_t& aSeq );
+
+    static void stampIds( BOARD_ITEM& aItem, uint32_t aKey )
+    {
+        uint32_t seq = 0;
+        stampIds( aItem, aKey, seq );
+    }
+
     /**
      * Get just the string value from a 0x31 STRING WRAPPER -> 0x30 STRING GRAPHIC pair
      *
@@ -124,7 +172,8 @@ private:
     /**
      * Build the shapes from an 0x14 shape list
      */
-    std::vector<std::unique_ptr<PCB_SHAPE>> buildShapes( const BLK_0x14_GRAPHIC& aGraphicList, BOARD_ITEM_CONTAINER& aParent );
+    std::vector<std::unique_ptr<PCB_SHAPE>> buildShapes( const BLK_0x14_GRAPHIC& aGraphicList,
+                                                         BOARD_ITEM_CONTAINER& aParent );
     std::unique_ptr<PCB_TEXT>  buildPcbText( const BLK_0x30_STR_WRAPPER& aStrWrapper, BOARD_ITEM_CONTAINER& aParent );
 
     /**
@@ -175,8 +224,10 @@ private:
     /**
      * Build a ZONE from an 0x0E, 0x24 or 0x28 block.
      *
+     * @param aBoundaryBlock
      * @param aRelatedBlocks are blocks to get net (0x1B) and fill (0x28) info from
      * @param aZoneFillHandler is a management object for efficiently dealing with filled zones
+     * @param aParent
      */
     std::unique_ptr<ZONE> buildZone( const BLOCK_BASE&                     aBoundaryBlock,
                                      const std::vector<const BLOCK_BASE*>& aRelatedBlocks,

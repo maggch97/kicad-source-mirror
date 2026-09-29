@@ -105,6 +105,8 @@ public:
     bool GetSignalAggregate( PNS::NET_HANDLE aNetP, PNS::NET_HANDLE aNetN,
                              long long& aExtraLength, long long& aExtraDelay ) const override;
     long long GetNetBoardLength( PNS::NET_HANDLE aNet ) const override;
+    void RemoveBoardConnected( const std::vector<const PNS::ITEM*>& aJoined,
+                               std::set<PNS::ITEM*>& aItems ) const override;
 
     void SetStartLayerFromPCBNew( PCB_LAYER_ID aLayer );
     void SetStartLayerFromPNS( int aLayer ) { m_startLayer = aLayer; }
@@ -136,7 +138,9 @@ protected:
     bool syncGraphicalItem( PNS::NODE* aWorld, PCB_SHAPE* aItem );
     bool syncZone( PNS::NODE* aWorld, ZONE* aZone, SHAPE_POLY_SET* aBoardOutline );
     bool syncBarcode( PNS::NODE* aWorld, PCB_BARCODE* aBarcode );
-    bool inheritTrackWidth( PNS::ITEM* aItem, int* aInheritedWidth, const VECTOR2I& aStartPosition );
+    bool inheritTrackWidthAndDpGap( PNS::ITEM* aItem, const VECTOR2I& aStartPosition, int* aInheritedWidth, int *aInheritedGap );
+    std::vector<LENGTH_DELAY_CALCULATION_ITEM> getLengthDelayCalculationItems( const PNS::ITEM_SET& aLine,
+                                                                               const NETCLASS*      aNetClass ) const;
 
 protected:
     PNS::NODE* m_world;

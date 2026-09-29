@@ -165,11 +165,43 @@ void ApplyAltiumProjectParametersToProject( PROJECT* aProject,
 }
 
 
+void LoadAltiumBoard( const wxString& aFileName, BOARD* aBoard,
+                      const std::map<ALTIUM_PCB_DIR, std::string>& aMapping,
+                      const std::map<std::string, UTF8>* aProperties, PROJECT* aProject,
+                      PROGRESS_REPORTER* aProgressReporter, LAYER_MAPPING_HANDLER& aLayerMappingHandler,
+                      REPORTER* aReporter )
+{
+    // The compound-file constructor already translates CFB errors to IO_ERROR.
+    ALTIUM_PCB_COMPOUND_FILE altiumPcbFile( aFileName );
+
+    try
+    {
+        ALTIUM_PCB pcb( aBoard, aProgressReporter, aLayerMappingHandler, aReporter );
+        pcb.Parse( altiumPcbFile, aMapping, aProperties );
+    }
+    catch( CFB::CFBException& exception )
+    {
+        THROW_IO_ERROR( exception.what() );
+    }
+
+    if( aProperties && aProperties->count( "project_file" ) )
+    {
+        const wxString& projectFile = aProperties->at( "project_file" );
+
+        auto variants = ParseAltiumProjectVariants( projectFile );
+
+        if( !variants.empty() )
+            ApplyAltiumProjectVariantsToBoard( aBoard, variants );
+
+        ApplyAltiumProjectParametersToProject( aProject,
+                                               ParseAltiumProjectParameters( projectFile ) );
+    }
+}
+
+
 PCB_IO_ALTIUM_DESIGNER::PCB_IO_ALTIUM_DESIGNER() :
         PCB_IO( wxS( "Altium Designer" ) )
 {
-    m_reporter = &WXLOG_REPORTER::GetInstance();
-
     RegisterCallback( PCB_IO_ALTIUM_DESIGNER::DefaultLayerMappingCallback );
 }
 
@@ -219,20 +251,14 @@ bool PCB_IO_ALTIUM_DESIGNER::CanReadLibrary( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_ALTIUM_DESIGNER::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                          const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_ALTIUM_DESIGNER::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                        const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
-
     m_props = aProperties;
-
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
+    m_board = &aBoard;
 
     // Collect the font substitution warnings (RAII - automatically reset on scope exit)
     FONTCONFIG_REPORTER_SCOPE fontconfigScope( &LOAD_INFO_REPORTER::GetInstance() );
-
-    // Give the filename to the board if it's new
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
 
     // clang-format off
     const std::map<ALTIUM_PCB_DIR, std::string> mapping = {
@@ -256,38 +282,14 @@ BOARD* PCB_IO_ALTIUM_DESIGNER::LoadBoard( const wxString& aFileName, BOARD* aApp
             { ALTIUM_PCB_DIR::SMARTUNIONS, "SmartUnions" },
             { ALTIUM_PCB_DIR::TEXTS6, "Texts6" },
             { ALTIUM_PCB_DIR::TRACKS6, "Tracks6" },
+            { ALTIUM_PCB_DIR::UNIONNAMES, "UnionNames" },
             { ALTIUM_PCB_DIR::VIAS6, "Vias6" },
             { ALTIUM_PCB_DIR::WIDESTRINGS6, "WideStrings6" }
     };
     // clang-format on
 
-    ALTIUM_PCB_COMPOUND_FILE altiumPcbFile( aFileName );
-
-    try
-    {
-        // Parse File
-        ALTIUM_PCB pcb( m_board, m_progressReporter, m_layer_mapping_handler, m_reporter );
-        pcb.Parse( altiumPcbFile, mapping );
-    }
-    catch( CFB::CFBException& exception )
-    {
-        THROW_IO_ERROR( exception.what() );
-    }
-
-    if( m_props && m_props->count( "project_file" ) )
-    {
-        const wxString& projectFile = m_props->at( "project_file" );
-
-        auto variants = ParseAltiumProjectVariants( projectFile );
-
-        if( !variants.empty() )
-            ApplyAltiumProjectVariantsToBoard( m_board, variants );
-
-        ApplyAltiumProjectParametersToProject( aProject,
-                                               ParseAltiumProjectParameters( projectFile ) );
-    }
-
-    return m_board;
+    LoadAltiumBoard( aFileName, m_board, mapping, m_props, aProject,
+                     m_progressReporter, m_layer_mapping_handler, m_reporter );
 }
 
 
@@ -366,10 +368,7 @@ void PCB_IO_ALTIUM_DESIGNER::FootprintEnumerate( wxArrayString&  aFootprintNames
             const CFB::COMPOUND_FILE_ENTRY* libraryData = altiumLibFile->FindStream( streamName );
 
             if( libraryData == nullptr )
-            {
-                THROW_IO_ERROR( wxString::Format( _( "File not found: '%s'." ),
-                                                  FormatPath( streamName ) ) );
-            }
+                THROW_IO_ERRORF( _( "File not found: '%s'." ), FormatPath( streamName ) );
 
             ALTIUM_BINARY_PARSER parser( *altiumLibFile, libraryData );
 
@@ -404,28 +403,18 @@ void PCB_IO_ALTIUM_DESIGNER::FootprintEnumerate( wxArrayString&  aFootprintNames
                 auto it = patternMap.find( fpPattern );
 
                 if( it != patternMap.end() )
-                {
                     aFootprintNames.Add( it->second ); // Proper unicode name
-                }
                 else
-                {
-                    THROW_IO_ERROR( wxString::Format( "Component name not found: '%s'", fpPattern ) );
-                }
+                    THROW_IO_ERRORF( _( "Component name not found: '%s'" ), fpPattern );
 
                 parser.SkipSubrecord();
             }
 
             if( parser.HasParsingError() )
-            {
-                THROW_IO_ERROR( wxString::Format( "%s stream was not parsed correctly",
-                                                  FormatPath( streamName ) ) );
-            }
+                THROW_IO_ERRORF( wxT( "%s stream was not parsed correctly" ), FormatPath( streamName ) );
 
             if( footprintListNotTruncated && parser.GetRemainingBytes() != 0 )
-            {
-                THROW_IO_ERROR( wxString::Format( "%s stream is not fully parsed",
-                                                  FormatPath( streamName ) ) );
-            }
+                THROW_IO_ERRORF( wxT( "%s stream is not fully parsed" ), FormatPath( streamName ) );
         }
     }
     catch( CFB::CFBException& exception )
@@ -435,14 +424,14 @@ void PCB_IO_ALTIUM_DESIGNER::FootprintEnumerate( wxArrayString&  aFootprintNames
 }
 
 
-FOOTPRINT* PCB_IO_ALTIUM_DESIGNER::FootprintLoad( const wxString& aLibraryPath,
-                                                  const wxString& aFootprintName, bool aKeepUUID,
-                                                  const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_ALTIUM_DESIGNER::FootprintLoad( const wxString& aLibraryPath,
+                                                                  const wxString& aFootprintName, bool aKeepUUID,
+                                                                  const std::map<std::string, UTF8>* aProperties )
 {
     loadAltiumLibrary( aLibraryPath );
 
     if( !m_fplibFiles.contains( aLibraryPath ) )
-        THROW_IO_ERROR( wxString::Format( _( "No footprints in library '%s'" ), aLibraryPath ) );
+        THROW_IO_ERRORF( _( "No footprints in library '%s'" ), aLibraryPath );
 
     try
     {
@@ -464,9 +453,7 @@ FOOTPRINT* PCB_IO_ALTIUM_DESIGNER::FootprintLoad( const wxString& aLibraryPath,
         THROW_IO_ERROR( exception.what() );
     }
 
-    THROW_IO_ERROR( wxString::Format( _( "Footprint '%s' not found in '%s'." ),
-                                      aFootprintName,
-                                      aLibraryPath ) );
+    THROW_IO_ERRORF( _( "Footprint '%s' not found in '%s'." ), aFootprintName, aLibraryPath );
 }
 
 

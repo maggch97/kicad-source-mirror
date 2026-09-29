@@ -20,6 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "core/typeinfo.h"
 #include <wx/log.h>
 #include <common.h>
 #include <sch_plotter.h>
@@ -30,11 +31,16 @@
 #include <pgm_base.h>
 #include <trace_helpers.h>
 
+#include <lib_symbol.h>
+#include <locale_io.h>
 #include <sch_edit_frame.h>
 #include <sch_painter.h>
+#include <sch_shape.h>
 #include <schematic.h>
 #include <sch_screen.h>
 #include <settings/settings_manager.h>
+
+#include <algorithm>
 
 // Note:
 // We need to switch between sheets to plot a hierarchy and update references and sheet number
@@ -105,7 +111,7 @@ void SCH_PLOTTER::createPDFFile( const SCH_PLOT_OPTS& aPlotOpts,
     else
     {
         // in Eeschema, this prints the current page
-        sheetList.push_back( m_schematic->CurrentSheet() );
+        sheetList.push_back( aPlotOpts.m_sheetPath.value_or( m_schematic->CurrentSheet() ) );
     }
 
     if( sheetList.empty() )
@@ -124,7 +130,7 @@ void SCH_PLOTTER::createPDFFile( const SCH_PLOT_OPTS& aPlotOpts,
     plotter->SetColorMode( !aPlotOpts.m_blackAndWhite );
     plotter->SetCreator( wxT( "Eeschema-PDF" ) );
     plotter->SetTitle( ExpandTextVars( m_schematic->RootScreen()->GetTitleBlock().GetTitle(),
-                                       &m_schematic->Project() ) );
+                                       &m_schematic->Project(), FOR_GUI ) );
 
     wxString   msg;
     wxFileName plotFileName;
@@ -136,7 +142,7 @@ void SCH_PLOTTER::createPDFFile( const SCH_PLOT_OPTS& aPlotOpts,
         m_schematic->SetSheetNumberAndCount();
 
         SCH_SCREEN* screen = m_schematic->CurrentSheet().LastScreen();
-        wxString    sheetName = sheetList[i].Last()->GetField( FIELD_T::SHEET_NAME )->GetShownText( false );
+        wxString    sheetName = sheetList[i].Last()->GetField( FIELD_T::SHEET_NAME )->GetShownText( FOR_GUI );
 
         if( aPlotOpts.m_PDFMetadata )
         {
@@ -209,11 +215,9 @@ void SCH_PLOTTER::createPDFFile( const SCH_PLOT_OPTS& aPlotOpts,
                 parentSheet.pop_back();
             }
 
-            wxString parentSheetName =
-                    parentSheet.Last()->GetField( FIELD_T::SHEET_NAME )->GetShownText( false );
+            wxString parentSheetName = parentSheet.Last()->GetField( FIELD_T::SHEET_NAME )->GetShownText( FOR_GUI );
 
-            plotter->StartPage( sheetList[i].GetPageNumber(), sheetName,
-                                parentSheet.GetPageNumber(), parentSheetName );
+            plotter->StartPage( sheetList[i].GetPageNumber(), sheetName, parentSheet.GetPageNumber(), parentSheetName );
         }
 
         plotOneSheetPDF( plotter, screen, aPlotOpts );
@@ -335,7 +339,7 @@ void SCH_PLOTTER::createPSFiles( const SCH_PLOT_OPTS& aPlotOpts,
     }
     else
     {
-        sheetList.push_back( m_schematic->CurrentSheet() );
+        sheetList.push_back( aPlotOpts.m_sheetPath.value_or( m_schematic->CurrentSheet() ) );
     }
 
     for( unsigned i = 0; i < sheetList.size(); i++ )
@@ -372,15 +376,29 @@ void SCH_PLOTTER::createPSFiles( const SCH_PLOT_OPTS& aPlotOpts,
 
         try
         {
-            wxString fname = m_schematic->GetUniqueFilenameForCurrentSheet();
+            wxFileName plotFileName;
 
-            // The sub sheet can be in a sub_hierarchy, but we plot the file in the
-            // main project folder (or the folder specified by the caller),
-            // so replace separators to create a unique filename:
-            fname.Replace( "/", "_" );
-            fname.Replace( "\\", "_" );
-            wxString   ext = PS_PLOTTER::GetDefaultFileExtension();
-            wxFileName plotFileName = createPlotFileName( aPlotOpts, fname, ext, aReporter );
+            if( !aPlotOpts.m_outputFile.empty() )
+            {
+                plotFileName = wxFileName( aPlotOpts.m_outputFile );
+
+                if( plotFileName.GetExt().IsEmpty() )
+                    plotFileName.SetExt( PS_PLOTTER::GetDefaultFileExtension() );
+            }
+            else
+            {
+                wxString fname = m_schematic->GetUniqueFilenameForCurrentSheet();
+
+                // The sub sheet can be in a sub_hierarchy, but we plot the file in the
+                // main project folder (or the folder specified by the caller),
+                // so replace separators to create a unique filename:
+                fname.Replace( "/", "_" );
+                fname.Replace( "\\", "_" );
+
+                plotFileName = createPlotFileName( aPlotOpts, fname,
+                                                   PS_PLOTTER::GetDefaultFileExtension(),
+                                                   aReporter );
+            }
 
             m_lastOutputFilePath = plotFileName.GetFullPath();
             m_outputFilePaths.push_back( m_lastOutputFilePath );
@@ -412,6 +430,9 @@ void SCH_PLOTTER::createPSFiles( const SCH_PLOT_OPTS& aPlotOpts,
                     aReporter->Report( msg, RPT_SEVERITY_ERROR );
                 }
             }
+
+            if( !aPlotOpts.m_outputFile.empty() )
+                break;
         }
         catch( IO_ERROR& e )
         {
@@ -512,7 +533,7 @@ void SCH_PLOTTER::createSVGFiles( const SCH_PLOT_OPTS& aPlotOpts,
     else
     {
         // in Eeschema, this prints the current page
-        sheetList.push_back( m_schematic->CurrentSheet() );
+        sheetList.push_back( aPlotOpts.m_sheetPath.value_or( m_schematic->CurrentSheet() ) );
     }
 
     for( unsigned i = 0; i < sheetList.size(); i++ )
@@ -527,15 +548,29 @@ void SCH_PLOTTER::createSVGFiles( const SCH_PLOT_OPTS& aPlotOpts,
 
         try
         {
-            wxString fname = m_schematic->GetUniqueFilenameForCurrentSheet();
+            wxFileName plotFileName;
 
-            // The sub sheet can be in a sub_hierarchy, but we plot the file in the
-            // main project folder (or the folder specified by the caller),
-            // so replace separators to create a unique filename:
-            fname.Replace( "/", "_" );
-            fname.Replace( "\\", "_" );
-            wxString   ext = SVG_PLOTTER::GetDefaultFileExtension();
-            wxFileName plotFileName = createPlotFileName( aPlotOpts, fname, ext, aReporter );
+            if( !aPlotOpts.m_outputFile.empty() )
+            {
+                plotFileName = wxFileName( aPlotOpts.m_outputFile );
+
+                if( plotFileName.GetExt().IsEmpty() )
+                    plotFileName.SetExt( SVG_PLOTTER::GetDefaultFileExtension() );
+            }
+            else
+            {
+                wxString fname = m_schematic->GetUniqueFilenameForCurrentSheet();
+
+                // The sub sheet can be in a sub_hierarchy, but we plot the file in the
+                // main project folder (or the folder specified by the caller),
+                // so replace separators to create a unique filename:
+                fname.Replace( "/", "_" );
+                fname.Replace( "\\", "_" );
+
+                plotFileName = createPlotFileName( aPlotOpts, fname,
+                                                   SVG_PLOTTER::GetDefaultFileExtension(),
+                                                   aReporter );
+            }
 
             m_lastOutputFilePath = plotFileName.GetFullPath();
             m_outputFilePaths.push_back( m_lastOutputFilePath );
@@ -562,6 +597,9 @@ void SCH_PLOTTER::createSVGFiles( const SCH_PLOT_OPTS& aPlotOpts,
                     aReporter->Report( msg, RPT_SEVERITY_ACTION );
                 }
             }
+
+            if( !aPlotOpts.m_outputFile.empty() )
+                break;
         }
         catch( const IO_ERROR& e )
         {
@@ -688,7 +726,7 @@ void SCH_PLOTTER::createPNGFiles( const SCH_PLOT_OPTS& aPlotOpts,
     }
     else
     {
-        sheetList.push_back( m_schematic->CurrentSheet() );
+        sheetList.push_back( aPlotOpts.m_sheetPath.value_or( m_schematic->CurrentSheet() ) );
     }
 
     for( unsigned i = 0; i < sheetList.size(); i++ )
@@ -703,13 +741,26 @@ void SCH_PLOTTER::createPNGFiles( const SCH_PLOT_OPTS& aPlotOpts,
 
         try
         {
-            wxString fname = m_schematic->GetUniqueFilenameForCurrentSheet();
+            wxFileName plotFileName;
 
-            fname.Replace( "/", "_" );
-            fname.Replace( "\\", "_" );
+            if( !aPlotOpts.m_outputFile.empty() )
+            {
+                plotFileName = wxFileName( aPlotOpts.m_outputFile );
 
-            wxString   ext = PNG_PLOTTER::GetDefaultFileExtension();
-            wxFileName plotFileName = createPlotFileName( aPlotOpts, fname, ext, aReporter );
+                if( plotFileName.GetExt().IsEmpty() )
+                    plotFileName.SetExt( PNG_PLOTTER::GetDefaultFileExtension() );
+            }
+            else
+            {
+                wxString fname = m_schematic->GetUniqueFilenameForCurrentSheet();
+
+                fname.Replace( "/", "_" );
+                fname.Replace( "\\", "_" );
+
+                plotFileName = createPlotFileName( aPlotOpts, fname,
+                                                   PNG_PLOTTER::GetDefaultFileExtension(),
+                                                   aReporter );
+            }
 
             m_lastOutputFilePath = plotFileName.GetFullPath();
             m_outputFilePaths.push_back( m_lastOutputFilePath );
@@ -733,6 +784,9 @@ void SCH_PLOTTER::createPNGFiles( const SCH_PLOT_OPTS& aPlotOpts,
                     aReporter->Report( msg, RPT_SEVERITY_ACTION );
                 }
             }
+
+            if( !aPlotOpts.m_outputFile.empty() )
+                break;
         }
         catch( const IO_ERROR& e )
         {
@@ -872,7 +926,7 @@ void SCH_PLOTTER::createDXFFiles( const SCH_PLOT_OPTS& aPlotOpts,
     else
     {
         // in Eeschema, this prints the current page
-        sheetList.push_back( m_schematic->CurrentSheet() );
+        sheetList.push_back( aPlotOpts.m_sheetPath.value_or( m_schematic->CurrentSheet() ) );
     }
 
     for( unsigned i = 0; i < sheetList.size(); i++ )
@@ -887,15 +941,29 @@ void SCH_PLOTTER::createDXFFiles( const SCH_PLOT_OPTS& aPlotOpts,
 
         try
         {
-            wxString fname = m_schematic->GetUniqueFilenameForCurrentSheet();
+            wxFileName plotFileName;
 
-            // The sub sheet can be in a sub_hierarchy, but we plot the file in the
-            // main project folder (or the folder specified by the caller),
-            // so replace separators to create a unique filename:
-            fname.Replace( "/", "_" );
-            fname.Replace( "\\", "_" );
-            wxString   ext = DXF_PLOTTER::GetDefaultFileExtension();
-            wxFileName plotFileName = createPlotFileName( aPlotOpts, fname, ext, aReporter );
+            if( !aPlotOpts.m_outputFile.empty() )
+            {
+                plotFileName = wxFileName( aPlotOpts.m_outputFile );
+
+                if( plotFileName.GetExt().IsEmpty() )
+                    plotFileName.SetExt( DXF_PLOTTER::GetDefaultFileExtension() );
+            }
+            else
+            {
+                wxString fname = m_schematic->GetUniqueFilenameForCurrentSheet();
+
+                // The sub sheet can be in a sub_hierarchy, but we plot the file in the
+                // main project folder (or the folder specified by the caller),
+                // so replace separators to create a unique filename:
+                fname.Replace( "/", "_" );
+                fname.Replace( "\\", "_" );
+
+                plotFileName = createPlotFileName( aPlotOpts, fname,
+                                                   DXF_PLOTTER::GetDefaultFileExtension(),
+                                                   aReporter );
+            }
 
             m_lastOutputFilePath = plotFileName.GetFullPath();
             m_outputFilePaths.push_back( m_lastOutputFilePath );
@@ -920,6 +988,9 @@ void SCH_PLOTTER::createDXFFiles( const SCH_PLOT_OPTS& aPlotOpts,
                     aReporter->Report( msg, RPT_SEVERITY_ERROR );
                 }
             }
+
+            if( !aPlotOpts.m_outputFile.empty() )
+                break;
         }
         catch( IO_ERROR& e )
         {
@@ -1076,4 +1147,69 @@ void SCH_PLOTTER::Plot( PLOT_FORMAT aPlotFormat, const SCH_PLOT_OPTS& aPlotOpts,
     }
 
     m_schematic->SetCurrentVariant( oldVariant );
+}
+
+
+BOX2I GetSymbolPlotBBox( const LIB_SYMBOL& aSymbol, int aUnit, int aBodyStyle, bool aIncludeHiddenFields )
+{
+    std::unique_ptr<LIB_SYMBOL> flatSymbol = aSymbol.Flatten();
+
+    BOX2I symbolBB = flatSymbol->GetUnitBoundingBox( aUnit, aBodyStyle, !aIncludeHiddenFields );
+
+    // Inflate the bbox by "some margin". A lot bounding boxes are slightly
+    // small because a stroke size of '0' is actually 'inherit', by default 6 mils,
+    // but the actual value can unly be known for sure with the schematic context.
+    // A margin of 2mm seems to cover most evantualities, but this is a bit of a
+    // guess.
+
+    const int expansion = schIUScale.mmToIU( 2 );
+    symbolBB.Inflate( expansion );
+
+    return symbolBB;
+}
+
+
+bool PlotSymbolToSVG( LIB_SYMBOL& aDrawSymbol, LIB_SYMBOL& aFieldsSymbol, int aUnit, int aBodyStyle, const BOX2I& aBBox,
+                      SCH_RENDER_SETTINGS& aRenderSettings, bool aBlackAndWhite, const wxString& aFileName,
+                      REPORTER* aReporter )
+{
+    PAGE_INFO pageInfo( PAGE_SIZE_TYPE::User );
+    pageInfo.SetHeightMils( schIUScale.IUToMils( aBBox.GetHeight() ) );
+    pageInfo.SetWidthMils( schIUScale.IUToMils( aBBox.GetWidth() ) );
+
+    std::unique_ptr<SVG_PLOTTER> plotter = std::make_unique<SVG_PLOTTER>();
+    plotter->SetRenderSettings( &aRenderSettings );
+    plotter->SetPageSettings( pageInfo );
+    plotter->SetColorMode( !aBlackAndWhite );
+
+    // Currently, plot units are in decimal.  Keep the symbol origin at the SVG origin; the
+    // viewBox is the content bbox.
+    plotter->SetViewport( VECTOR2I( 0, 0 ), schIUScale.IU_PER_MILS / 10, 1.0, false );
+    plotter->SetPlotBBox( aBBox );
+
+    plotter->SetCreator( wxT( "Eeschema-SVG" ) );
+
+    if( !plotter->OpenFile( aFileName ) )
+    {
+        if( aReporter )
+        {
+            aReporter->Report( wxString::Format( _( "Unable to open destination '%s'" ) + wxS( "\n" ),
+                                                 aFileName ),
+                               RPT_SEVERITY_ERROR );
+        }
+        return false;
+    }
+
+    LOCALE_IO     toggle;
+    SCH_PLOT_OPTS plotOpts;
+
+    plotter->StartPlot( wxS( "1" ) );
+
+    constexpr bool background = true;
+    aDrawSymbol.Plot( plotter.get(), background, plotOpts, aUnit, aBodyStyle, VECTOR2I( 0, 0 ), false );
+    aDrawSymbol.Plot( plotter.get(), !background, plotOpts, aUnit, aBodyStyle, VECTOR2I( 0, 0 ), false );
+    aFieldsSymbol.PlotFields( plotter.get(), !background, plotOpts, aUnit, aBodyStyle, VECTOR2I( 0, 0 ), false );
+
+    plotter->EndPlot();
+    return true;
 }

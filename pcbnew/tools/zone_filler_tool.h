@@ -31,6 +31,8 @@ class PCB_EDIT_FRAME;
 class PROGRESS_REPORTER;
 class WX_PROGRESS_REPORTER;
 class ZONE_FILLER;
+class PCB_GENERATOR;
+class BOARD_COMMIT;
 
 #define ZONE_FILLER_TOOL_NAME "pcbnew.ZoneFiller"
 
@@ -77,13 +79,23 @@ public:
     static bool IsZoneFillAction( const TOOL_EVENT* aEvent );
 
 private:
-    ///< Refocus on an idle event (used after the Progress Reporter messes up the focus).
+    /// Refocus on an idle event (used after the Progress Reporter messes up the focus).
     void singleShotRefocus( wxIdleEvent& );
 
     void rebuildConnectivity( bool aHeadless = false );
     void refresh();
 
-    ///< Set up handlers for various events.
+    /**
+     * Kicks all the generators as they may need to update after a zone fill update
+     */
+    std::vector<PCB_GENERATOR*> regenerateDirtyGenerators( BOARD_COMMIT& aCommit );
+
+    /**
+     * Triggers refill of zones near the given generators
+     */
+    void refillAroundGenerators( const std::vector<PCB_GENERATOR*>& aRegenerated );
+
+    /// Set up handlers for various events.
     void setTransitions() override;
 
 private:

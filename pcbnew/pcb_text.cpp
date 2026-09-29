@@ -111,85 +111,101 @@ void PCB_TEXT::CopyFrom( const BOARD_ITEM* aOther )
 }
 
 
-void PCB_TEXT::Serialize( google::protobuf::Any& aContainer ) const
+void PCB_TEXT::Serialize( kiapi::board::types::BoardText& boardText ) const
 {
     using namespace kiapi::common;
-    kiapi::board::types::BoardText boardText;
 
     boardText.mutable_id()->set_value( m_Uuid.AsStdString() );
     boardText.set_layer( ToProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( GetLayer() ) );
     boardText.set_knockout( IsKnockout() );
     boardText.set_locked( IsLocked() ? types::LockedState::LS_LOCKED : types::LockedState::LS_UNLOCKED );
 
-    google::protobuf::Any any;
-    EDA_TEXT::Serialize( any );
-    any.UnpackTo( boardText.mutable_text() );
+    EDA_TEXT::Serialize( *boardText.mutable_text(), pcbIUScale );
 
     // Some of the common Text message fields are not stored in EDA_TEXT
     types::Text* text = boardText.mutable_text();
 
     PackVector2( *text->mutable_position(), GetPosition() );
 
+    if( FOOTPRINT* parent = GetParentFootprint() )
+        boardText.mutable_parent()->set_value( parent->m_Uuid.AsStdString() );
+    else if( const BOARD* board = GetBoard() )
+        boardText.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
+
+    kiapi::common::PackCustomProperties( boardText.mutable_custom_properties(), *this );
+}
+
+
+void PCB_TEXT::Serialize( google::protobuf::Any& aContainer ) const
+{
+    kiapi::board::types::BoardText boardText;
+    Serialize( boardText );
     aContainer.PackFrom( boardText );
 }
 
 
-bool PCB_TEXT::Deserialize( const google::protobuf::Any& aContainer )
+bool PCB_TEXT::Deserialize( const kiapi::board::types::BoardText& boardText )
 {
     using namespace kiapi::common;
-    kiapi::board::types::BoardText boardText;
-
-    if( !aContainer.UnpackTo( &boardText ) )
-        return false;
 
     SetLayer( FromProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( boardText.layer() ) );
     SetUuidDirect( KIID( boardText.id().value() ) );
     SetIsKnockout( boardText.knockout() );
     SetLocked( boardText.locked() == types::LockedState::LS_LOCKED );
 
-    google::protobuf::Any any;
-    any.PackFrom( boardText.text() );
-    EDA_TEXT::Deserialize( any );
+    EDA_TEXT::Deserialize( boardText.text(), pcbIUScale );
 
     const types::Text& text = boardText.text();
 
     SetPosition( UnpackVector2( text.position() ) );
+    kiapi::common::UnpackCustomProperties( boardText.custom_properties(), *this );
 
     return true;
 }
 
 
-wxString PCB_TEXT::GetShownText( bool aAllowExtraText, int aDepth ) const
+bool PCB_TEXT::Deserialize( const google::protobuf::Any& aContainer )
+{
+    kiapi::board::types::BoardText boardText;
+
+    if( !aContainer.UnpackTo( &boardText ) )
+        return false;
+
+    return Deserialize( boardText );
+}
+
+
+wxString PCB_TEXT::GetShownText( RESOLUTION_CONTEXT aContext, int aDepth ) const
 {
     const FOOTPRINT* parentFootprint = GetParentFootprint();
     const BOARD*     board = GetBoard();
 
-    std::function<bool( wxString* )> resolver = [&]( wxString* token ) -> bool
+    std::function<bool( wxString* )> resolver =
+            [&]( wxString* token ) -> bool
+            {
+                if( token->IsSameAs( wxT( "LAYER" ) ) )
+                {
+                    *token = GetLayerName();
+                    return true;
+                }
+
+                if( parentFootprint && parentFootprint->ResolveTextVar( token, aDepth + 1 ) )
+                    return true;
+
+                // board can be null in some cases when saving a footprint in FP editor
+                if( board && board->ResolveTextVar( token, aDepth + 1 ) )
+                    return true;
+
+                return false;
+            };
+
+    wxString text = EDA_TEXT::GetShownText( aContext, aDepth );
+
+    if( HasTextVars() && aContext != RAW_VALUE )
     {
-        if( token->IsSameAs( wxT( "LAYER" ) ) )
-        {
-            *token = GetLayerName();
-            return true;
-        }
-
-        if( parentFootprint && parentFootprint->ResolveTextVar( token, aDepth + 1 ) )
-            return true;
-
-        // board can be null in some cases when saving a footprint in FP editor
-        if( board && board->ResolveTextVar( token, aDepth + 1 ) )
-            return true;
-
-        return false;
-    };
-
-    wxString text = EDA_TEXT::GetShownText( aAllowExtraText, aDepth );
-
-    if( HasTextVars() )
         text = ResolveTextVars( text, &resolver, aDepth );
-
-    // Convert escape markers back to literal ${} and @{} for final display
-    text.Replace( wxT( "<<<ESC_DOLLAR:" ), wxT( "${" ) );
-    text.Replace( wxT( "<<<ESC_AT:" ), wxT( "@{" ) );
+        FinalizeTextVarExpansion( text, aContext );
+    }
 
     return text;
 }
@@ -544,9 +560,12 @@ void PCB_TEXT::SetLibTextThickness( int aWidth )
 EDA_ANGLE PCB_TEXT::GetTextAngle() const
 {
     if( const FOOTPRINT* fp = GetParentFootprint() )
-        return m_libTextAngle + fp->GetOrientation();
+    {
+        EDA_ANGLE angle = m_libTextAngle.GetAngle() + fp->GetOrientation();
+        return angle.Normalize();
+    }
 
-    return m_libTextAngle;
+    return m_libTextAngle.GetAngle();
 }
 
 
@@ -557,7 +576,6 @@ void PCB_TEXT::SetTextAngle( const EDA_ANGLE& aAngle )
     else
         m_libTextAngle = aAngle;
 
-    m_libTextAngle.Normalize();
     EDA_TEXT::SetTextAngle( aAngle );
 }
 
@@ -639,7 +657,6 @@ void PCB_TEXT::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
     else
         m_libTextAngle = ANGLE_180 - m_libTextAngle;
 
-    m_libTextAngle.Normalize();
     EDA_TEXT::SetTextAngle( GetTextAngle() );
 
     SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
@@ -657,7 +674,7 @@ wxString PCB_TEXT::GetTextTypeDescription() const
 
 wxString PCB_TEXT::GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const
 {
-    wxString content = aFull ? GetShownText( false ) : KIUI::EllipsizeMenuText( GetText() );
+    wxString content = aFull ? GetShownText( FOR_GUI ) : KIUI::EllipsizeMenuText( GetText() );
 
     if( FOOTPRINT* parentFP = GetParentFootprint() )
     {
@@ -689,7 +706,7 @@ void PCB_TEXT::swapData( BOARD_ITEM* aImage )
 }
 
 
-std::shared_ptr<SHAPE> PCB_TEXT::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING aFlash ) const
+std::shared_ptr<SHAPE> PCB_TEXT::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING, DRC_CONSTRAINT_T ) const
 {
     if( IsKnockout() )
     {
@@ -774,7 +791,7 @@ void PCB_TEXT::TransformTextToPolySet( SHAPE_POLY_SET& aBuffer, int aClearance, 
     KIFONT::FONT*              font = GetDrawFont( nullptr );
     int                        penWidth = GetEffectiveTextPenWidth();
     TEXT_ATTRIBUTES            attrs = GetAttributes();
-    wxString                   shownText = GetShownText( true );
+    wxString                   shownText = GetShownText( FOR_CANVAS );
 
     attrs.m_Angle = GetDrawRotation();
     attrs.m_Size = GetTextSize();
@@ -829,6 +846,14 @@ void PCB_TEXT::TransformTextToPolySet( SHAPE_POLY_SET& aBuffer, int aClearance, 
 
         aBuffer.Append( textShape );
     }
+}
+
+
+double PCB_TEXT::GetCoverageArea( int aTextMargin ) const
+{
+    SHAPE_POLY_SET poly;
+    TransformTextToPolySet( poly, aTextMargin, ARC_LOW_DEF, ERROR_INSIDE );
+    return polygonArea( poly );
 }
 
 
@@ -905,21 +930,22 @@ static struct PCB_TEXT_DESC
 
         propMgr.Mask( TYPE_HASH( PCB_TEXT ), TYPE_HASH( EDA_TEXT ), _HKI( "Color" ) );
 
-        propMgr.AddProperty( new PROPERTY<PCB_TEXT, bool, BOARD_ITEM>( _HKI( "Knockout" ), &BOARD_ITEM::SetIsKnockout,
-                                                                       &BOARD_ITEM::IsKnockout ),
-                             _HKI( "Text Properties" ) );
+        propMgr.AddProperty( new PROPERTY<PCB_TEXT, bool, BOARD_ITEM>( _HKI( "Knockout" ),
+                    &BOARD_ITEM::SetIsKnockout, &BOARD_ITEM::IsKnockout ),
+                    _HKI( "Text Properties" ) ).SetIsCopyable();
 
-        propMgr.AddProperty( new PROPERTY<PCB_TEXT, bool, EDA_TEXT>( _HKI( "Keep Upright" ), &PCB_TEXT::SetKeepUpright,
-                                                                     &PCB_TEXT::IsKeepUpright ),
-                             _HKI( "Text Properties" ) );
+        propMgr.AddProperty( new PROPERTY<PCB_TEXT, bool, EDA_TEXT>( _HKI( "Keep Upright" ),
+                    &PCB_TEXT::SetKeepUpright, &PCB_TEXT::IsKeepUpright ),
+                    _HKI( "Text Properties" ) ).SetIsCopyable();
 
-        auto isFootprintText = []( INSPECTABLE* aItem ) -> bool
-        {
-            if( PCB_TEXT* text = dynamic_cast<PCB_TEXT*>( aItem ) )
-                return text->GetParentFootprint();
+        auto isFootprintText =
+                []( INSPECTABLE* aItem ) -> bool
+                {
+                    if( PCB_TEXT* text = dynamic_cast<PCB_TEXT*>( aItem ) )
+                        return text->GetParentFootprint();
 
-            return false;
-        };
+                    return false;
+                };
 
         propMgr.OverrideAvailability( TYPE_HASH( PCB_TEXT ), TYPE_HASH( EDA_TEXT ), _HKI( "Keep Upright" ),
                                       isFootprintText );

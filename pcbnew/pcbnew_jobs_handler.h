@@ -31,6 +31,7 @@ class DS_PROXY_VIEW_ITEM;
 class FOOTPRINT;
 class JOB_EXPORT_PCB_GERBER;
 class JOB_EXPORT_PCB_GERBERS;
+class JOB_EXPORT_PCB_PLOT;
 class JOB_FP_EXPORT_SVG;
 class TOOL_MANAGER;
 class REPORTER;
@@ -42,6 +43,7 @@ public:
     PCBNEW_JOBS_HANDLER( KIWAY* aKiway );
     virtual ~PCBNEW_JOBS_HANDLER();
 
+    int JobExportBom( JOB* aJob );
     int JobExportStep( JOB* aJob );
     int JobExportRender( JOB* aJob );
     int JobExportSvg( JOB* aJob );
@@ -59,8 +61,10 @@ public:
     int JobExportDrc( JOB* aJob );
     int JobExportIpc2581( JOB* aJob );
     int JobExportOdb( JOB* aJob );
+    int JobExportIdf( JOB* aJob );
     int JobExportIpcD356( JOB* aJob );
     int JobExportStats( JOB* aJob );
+    int JobExportStackup( JOB* aJob );
     int JobUpgrade( JOB* aJob );
     int JobImport( JOB* aJob );
     int JobDiff( JOB* aJob );
@@ -92,6 +96,10 @@ public:
 private:
     BOARD* getBoard( const wxString& aPath = wxEmptyString );
     LSEQ convertLayerArg( wxString& aLayerString, BOARD* aBoard ) const;
+
+    bool preparePlotLayers( JOB_EXPORT_PCB_PLOT* aJob, BOARD* aBoard, TOOL_MANAGER* aToolManager );
+    wxString resolvePlotOutputPath( JOB_EXPORT_PCB_PLOT* aJob, BOARD* aBoard,
+                                   PLOT_FORMAT aFormat, bool aSingleOutput );
 
     void populateGerberPlotOptionsFromJob( PCB_PLOT_PARAMS&  aPlotOpts,
                                            JOB_EXPORT_PCB_GERBER* aJob );

@@ -21,6 +21,7 @@
 #define SYMBOL_EDITOR_TAB_CONTEXT_H
 
 #include <wx/string.h>
+#include <wx/translation.h>
 
 #include <kiid.h>
 #include <widgets/editor_tab_context.h>
@@ -80,7 +81,20 @@ public:
                                : MakeTabKey( m_lib, m_name );
     }
 
-    wxString GetDisplayName() const override { return m_fromSchematic ? m_reference : m_name; }
+    wxString GetDisplayName( bool aShortForm = false ) const override
+    {
+        if( m_fromSchematic )
+        {
+            if( aShortForm )
+                return m_reference;
+            else
+                return m_reference + wxS( " " ) + _( "[from schematic]" );
+        }
+        else
+        {
+            return m_name;
+        }
+    }
 
     /**
      * True for an instance (schematic) tab, which is session-only and never persisted.
@@ -147,13 +161,13 @@ private:
     int         m_unit;
     int         m_bodyStyle;
 
-    ///< True for an instance tab edited in place from a placed schematic symbol.
+    /// True for an instance tab edited in place from a placed schematic symbol.
     bool        m_fromSchematic;
 
-    ///< Source instance UUID, used as both the de-dup key and the save-back target.
+    /// Source instance UUID, used as both the de-dup key and the save-back target.
     KIID        m_schematicSymbolUUID;
 
-    ///< Reference designator of the source instance, shown as the tab label.
+    /// Reference designator of the source instance, shown as the tab label.
     wxString    m_reference;
 };
 

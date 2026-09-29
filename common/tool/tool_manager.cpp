@@ -301,7 +301,11 @@ bool TOOL_MANAGER::doRunAction( const std::string& aActionName, bool aNow, const
 
     if( !action )
     {
-        wxASSERT_MSG( false, wxString::Format( "Could not find action %s.", aActionName ) );
+        // Names reaching this overload come from outside KiCad (the IPC API, plugins), so an
+        // unknown one is caller error to report, not an internal fault to assert on
+        wxLogTrace( kicadTraceToolStack, wxS( "TOOL_MANAGER::doRunAction - no action named %s" ),
+                    aActionName );
+
         return false;
     }
 
@@ -450,7 +454,11 @@ bool TOOL_MANAGER::invokeTool( TOOL_BASE* aTool )
     wxASSERT( aTool != nullptr );
 
     TOOL_EVENT evt( TC_COMMAND, TA_ACTIVATE, aTool->GetName() );
-    evt.SetMousePosition( GetCursorPosition() );
+
+    // Attach the cursor position if there is a canvas to query
+    if( m_viewControls )
+        evt.SetMousePosition( GetCursorPosition() );
+
     processEvent( evt );
 
     if( TOOL_STATE* active = GetCurrentToolState() )
@@ -914,10 +922,13 @@ void TOOL_MANAGER::DispatchContextMenu( const TOOL_EVENT& aEvent )
     // Don't open context menus if we're inside a yielding event loop such as a progress dialog.
     // Opening a popup menu during YieldFor creates a nested modal situation that can leave the
     // menu stuck and unresponsive, potentially locking up the entire UI on some platforms.
-    if( wxEventLoopBase* loop = wxEventLoopBase::GetActive() )
+    if( !aEvent.IsClick( BUT_RIGHT ) )
     {
-        if( loop->IsYielding() )
-            return;
+        if( wxEventLoopBase* loop = wxEventLoopBase::GetActive() )
+        {
+            if( loop->IsYielding() )
+                return;
+        }
     }
 
     for( TOOL_ID toolId : m_activeTools )
@@ -1184,11 +1195,21 @@ bool TOOL_MANAGER::processEvent( const TOOL_EVENT& aEvent )
     // the position at keypress time rather than polling a potentially stale position later in the
     // dispatch chain.  The scoped guard restores any prior value so a nested hotkey dispatch does
     // not clobber the outer position.
-    std::optional<VECTOR2D> hotKeyPos = aEvent.HasPosition() && aEvent.Action() == TA_KEY_PRESSED
-                                                ? std::make_optional( aEvent.Position() )
-                                                : m_hotKeyPos;
+    std::optional<VECTOR2D> hotKeyPos = m_hotKeyPos;
 
+    if( aEvent.HasPosition() && aEvent.Action() == TA_KEY_PRESSED )
+        hotKeyPos = aEvent.Position();
+
+    // The guard's restore vectorises into an unconditional load of the optional's payload, which
+    // GCC then reports as an uninitialized read on the disengaged path it can never observe.
+#if defined( __GNUC__ ) && !defined( __clang__ )
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
     SCOPED_SET_RESET<std::optional<VECTOR2D>> scopedHotKeyPos( m_hotKeyPos, hotKeyPos );
+#if defined( __GNUC__ ) && !defined( __clang__ )
+#pragma GCC diagnostic pop
+#endif
 
     // First try to dispatch the action associated with the event if it is a key press event
     bool handled = DispatchHotKey( aEvent );

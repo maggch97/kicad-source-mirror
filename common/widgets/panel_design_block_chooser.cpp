@@ -150,8 +150,8 @@ void PANEL_DESIGN_BLOCK_CHOOSER::SaveSettings()
         // Save any changes to column widths, etc.
         m_adapter->SaveSettings();
 
-        cfg->m_DesignBlockChooserPanel.width = GetParent()->GetSize().x;
-        cfg->m_DesignBlockChooserPanel.height = GetParent()->GetSize().y;
+        cfg->m_DesignBlockChooserPanel.width = GetParent()->ToDIP( GetParent()->GetSize().x );
+        cfg->m_DesignBlockChooserPanel.height = GetParent()->ToDIP( GetParent()->GetSize().y );
         cfg->m_DesignBlockChooserPanel.sash_pos_v = m_vsplitter->GetSashPosition();
         cfg->m_DesignBlockChooserPanel.sort_mode = m_tree->GetSortMode();
     }
@@ -207,10 +207,17 @@ void PANEL_DESIGN_BLOCK_CHOOSER::FinishSetup()
                     return GetParent()->ConvertDialogToPixels( sz ).x;
                 };
 
+        auto vertPixelsFromDU =
+                [&]( int y ) -> int
+                {
+                    wxSize sz( 0, y );
+                    return GetParent()->ConvertDialogToPixels( sz ).y;
+                };
+
         APP_SETTINGS_BASE::PANEL_DESIGN_BLOCK_CHOOSER& panelCfg = cfg->m_DesignBlockChooserPanel;
 
         int w = panelCfg.width > 40 ? panelCfg.width : horizPixelsFromDU( 440 );
-        int h = panelCfg.height > 40 ? panelCfg.height : horizPixelsFromDU( 340 );
+        int h = panelCfg.height > 40 ? panelCfg.height : vertPixelsFromDU( 340 );
 
         GetParent()->SetSize( wxSize( w, h ) );
         GetParent()->Layout();
@@ -222,7 +229,7 @@ void PANEL_DESIGN_BLOCK_CHOOSER::FinishSetup()
             panelCfg.sash_pos_h = horizPixelsFromDU( 220 );
 
         if( panelCfg.sash_pos_v < 0 )
-            panelCfg.sash_pos_v = horizPixelsFromDU( 230 );
+            panelCfg.sash_pos_v = vertPixelsFromDU( 230 );
 
         if( m_vsplitter )
             m_vsplitter->SetSashPosition( panelCfg.sash_pos_v );
@@ -241,15 +248,20 @@ void PANEL_DESIGN_BLOCK_CHOOSER::RefreshLibs( bool aProgress )
 
     DESIGN_BLOCK_TREE_MODEL_ADAPTER* adapter = static_cast<DESIGN_BLOCK_TREE_MODEL_ADAPTER*>( m_adapter.get() );
 
-    // Clear all existing libraries then re-add
-    adapter->ClearLibraries();
+    {
+        // ClearLibraries frees nodes the tree control still holds rows for, and the repopulate
+        // reads from disk, so the view stays detached across both
+        LIB_TREE_MODEL_ADAPTER::ResetTreeView resetGuard( *adapter );
 
-    rebuildHistoryNode();
+        adapter->ClearLibraries();
 
-    if( !m_historyList.empty() )
-        adapter->SetPreselectNode( m_historyList[0], 0 );
+        rebuildHistoryNode();
 
-    adapter->AddLibraries( m_frame );
+        if( !m_historyList.empty() )
+            adapter->SetPreselectNode( m_historyList[0], 0 );
+
+        adapter->AddLibraries( m_frame );
+    }
 
     m_tree->Regenerate( true );
 
@@ -262,7 +274,11 @@ void PANEL_DESIGN_BLOCK_CHOOSER::RefreshLibs( bool aProgress )
 
 void PANEL_DESIGN_BLOCK_CHOOSER::SetPreselect( const LIB_ID& aPreselect )
 {
+    m_preselect = aPreselect;
     m_adapter->SetPreselectNode( aPreselect, 0 );
+
+    if( m_tree && aPreselect.IsValid() )
+        m_tree->SelectLibId( aPreselect );
 }
 
 
@@ -304,11 +320,14 @@ void PANEL_DESIGN_BLOCK_CHOOSER::onCloseTimer( wxTimerEvent& aEvent )
 void PANEL_DESIGN_BLOCK_CHOOSER::onOpenLibsTimer( wxTimerEvent& aEvent )
 {
     if( APP_SETTINGS_BASE* cfg = m_frame->config() )
-        m_adapter->OpenLibs( cfg->m_LibTree.open_libs );
+        m_adapter->OpenLibs( cfg->m_DesignBlockChooserPanel.tree.open_libs );
 
     // Bind this now se we don't spam the event queue with EVT_LIBITEM_SELECTED events during
     // the initial load.
     Bind( EVT_LIBITEM_SELECTED, &PANEL_DESIGN_BLOCK_CHOOSER::onDesignBlockSelected, this );
+
+    if( m_preselect.IsValid() )
+        SelectLibId( m_preselect );
 }
 
 
@@ -319,7 +338,7 @@ void PANEL_DESIGN_BLOCK_CHOOSER::onDesignBlockSelected( wxCommandEvent& aEvent )
 
     if( GetSelectedLibId().IsValid() )
     {
-        std::unique_ptr<DESIGN_BLOCK> designBlock( m_parent->GetDesignBlock( GetSelectedLibId(), true, true ) );
+        std::unique_ptr<DESIGN_BLOCK> designBlock( m_parent->GetDesignBlock( GetSelectedLibId(), true, false ) );
         m_preview->DisplayDesignBlock( designBlock.get() );
     }
 }
@@ -362,8 +381,19 @@ void PANEL_DESIGN_BLOCK_CHOOSER::addDesignBlockToHistory( const LIB_ID& aLibId )
     while( m_historyList.size() >= 8 )
         m_historyList.pop_back();
 
-    rebuildHistoryNode();
+    // Detaching the view collapses it, and Regenerate() can only save state it can still read,
+    // so carry the open libraries across by nickname
+    std::vector<wxString> openLibs = m_adapter->GetOpenLibs();
+
+    {
+        // rebuildHistoryNode frees the recently-used nodes the tree control still holds rows for
+        LIB_TREE_MODEL_ADAPTER::ResetTreeView resetGuard( *m_adapter );
+
+        rebuildHistoryNode();
+    }
+
     m_tree->Regenerate( true );
+    m_adapter->OpenLibs( openLibs );
 
     SelectLibId( savedId );
 }

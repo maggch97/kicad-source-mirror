@@ -20,7 +20,10 @@
 #include <boost/test/unit_test.hpp>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
+#include <connection_graph.h>
+#include <erc/erc.h>
 #include <lib_id.h>
+#include <reporter.h>
 #include <schematic.h>
 #include <sch_io/altium/sch_io_altium.h>
 #include <sch_label.h>
@@ -42,7 +45,9 @@ namespace
 
 struct ALTIUM_SCH_IMPORT_FIXTURE
 {
-    ALTIUM_SCH_IMPORT_FIXTURE() : m_schematic( nullptr )
+    ALTIUM_SCH_IMPORT_FIXTURE() :
+            m_loadInfoScope( &NULL_REPORTER::GetInstance() ),
+            m_schematic( nullptr )
     {
         m_settingsManager.LoadProject( "" );
         m_schematic.SetProject( &m_settingsManager.Prj() );
@@ -72,6 +77,13 @@ struct ALTIUM_SCH_IMPORT_FIXTURE
                + aName;
     }
 
+    wxString issue16903DataFile( const wxString& aName ) const
+    {
+        return wxString::FromUTF8( KI_TEST::GetEeschemaTestDataDir()
+                                   + "/plugins/altium/issue16903/" )
+               + aName;
+    }
+
     wxString eDPAdapterDataFile( const wxString& aName ) const
     {
         return wxString::FromUTF8( KI_TEST::GetTestDataRootDir()
@@ -79,8 +91,10 @@ struct ALTIUM_SCH_IMPORT_FIXTURE
                + aName;
     }
 
-    SETTINGS_MANAGER m_settingsManager;
-    SCHEMATIC        m_schematic;
+    // The fixture project has no symbol libraries, so every symbol link fails by design
+    LOAD_INFO_REPORTER_SCOPE m_loadInfoScope;
+    SETTINGS_MANAGER         m_settingsManager;
+    SCHEMATIC                m_schematic;
 };
 
 } // namespace
@@ -288,6 +302,9 @@ BOOST_AUTO_TEST_CASE( Issue24843_SymbolOrientationMatchesAltium )
 {
     SCH_IO_ALTIUM plugin;
 
+    // The source embeds images by absolute Windows paths that cannot resolve here
+    plugin.SetReporter( &NULL_REPORTER::GetInstance() );
+
     SCH_SHEET* rootSheet = plugin.LoadSchematicFile( eDPAdapterDataFile( "power.SchDoc" ),
                                                      &m_schematic );
     BOOST_REQUIRE( rootSheet );
@@ -323,6 +340,25 @@ BOOST_AUTO_TEST_CASE( Issue24843_SymbolOrientationMatchesAltium )
                              "Symbol '" << ref << "' imported with orientation " << actual.at( ref )
                                         << ", expected " << angle );
     }
+}
+
+
+// https://gitlab.com/kicad/code/kicad/-/issues/16903
+// Every connectable coordinate in this design sits on a 50 mil grid in Altium's own frame, so the
+// importer's Y flip must preserve that grid phase rather than shift the sheet off grid.
+BOOST_AUTO_TEST_CASE( Issue16903_ImportKeepsGeometryOnGrid )
+{
+    SCH_IO_ALTIUM plugin;
+
+    SCH_SHEET* rootSheet =
+            plugin.LoadSchematicFile( issue16903DataFile( wxT( "hierarchical_schematic_top.SchDoc" ) ),
+                                      &m_schematic );
+    BOOST_REQUIRE( rootSheet );
+
+    m_schematic.RefreshHierarchy();
+
+    ERC_TESTER tester( &m_schematic );
+    BOOST_CHECK_EQUAL( tester.TestOffGridEndpoints(), 0 );
 }
 
 

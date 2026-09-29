@@ -26,13 +26,24 @@
 
 #include <fmt/format.h>
 
+#include <api/api_utils.h>
+#include <api/common/commands/cross_probe_commands.pb.h>
+
 #include "../common_ogl/ogl_utils.h"
 #include "eda_3d_canvas.h"
+
+#include <optional>
+
+#include <3d_math.h>
+#include <3d_rendering/orphaned_gl_objects.h>
+#include <glm/gtc/type_ptr.hpp>
+#include <plugins/3dapi/c3dmodel.h>
 #include <eda_3d_viewer_frame.h>
 #include <3d_rendering/raytracing/render_3d_raytrace_gl.h>
 #include <3d_rendering/opengl/render_3d_opengl.h>
 #include <3d_viewer_id.h>
 #include <advanced_config.h>
+#include <math/util.h>
 #include <build_version.h>
 #include <settings/color_settings.h>
 #include <board.h>
@@ -55,6 +66,10 @@
 #include <kiway_mail.h>
 #include <widgets/wx_busy_indicator.h>
 #include <zone.h>
+#include <chrono>
+#include <cmath>
+#include <limits>
+#include <ratio>
 
 
 /**
@@ -68,7 +83,7 @@ const wxChar* EDA_3D_CANVAS::m_logTrace = wxT( "KI_TRACE_EDA_3D_CANVAS" );
 
 
 // A custom event, used to call DoRePaint during an idle time
-wxDEFINE_EVENT( wxEVT_REFRESH_CUSTOM_COMMAND, wxEvent );
+wxDEFINE_EVENT( wxEVT_REFRESH_CUSTOM_COMMAND, wxCommandEvent );
 
 
 BEGIN_EVENT_TABLE( EDA_3D_CANVAS, HIDPI_GL_3D_CANVAS )
@@ -83,6 +98,7 @@ BEGIN_EVENT_TABLE( EDA_3D_CANVAS, HIDPI_GL_3D_CANVAS )
     EVT_RIGHT_UP( EDA_3D_CANVAS::OnRightUp )
     EVT_MOUSEWHEEL( EDA_3D_CANVAS::OnMouseWheel )
     EVT_MOTION( EDA_3D_CANVAS::OnMouseMove )
+    EVT_LEAVE_WINDOW( EDA_3D_CANVAS::OnMouseLeave )
     EVT_MAGNIFY( EDA_3D_CANVAS::OnMagnify )
 
     // touch gesture events
@@ -121,11 +137,8 @@ EDA_3D_CANVAS::EDA_3D_CANVAS( wxWindow* aParent, const wxGLAttributes& aGLAttrib
 
     m_is_currently_painting.clear();
 
-    m_3d_render_raytracing = new RENDER_3D_RAYTRACE_GL( this, m_boardAdapter, m_camera );
-    m_3d_render_opengl = new RENDER_3D_OPENGL( this, m_boardAdapter, m_camera );
-
-    wxASSERT( m_3d_render_raytracing != nullptr );
-    wxASSERT( m_3d_render_opengl != nullptr );
+    m_3d_render_raytracing = std::make_unique<RENDER_3D_RAYTRACE_GL>( this, m_boardAdapter, m_camera );
+    m_3d_render_opengl = std::make_unique<RENDER_3D_OPENGL>( this, m_boardAdapter, m_camera );
 
     auto busy_indicator_factory =
             []()
@@ -138,7 +151,7 @@ EDA_3D_CANVAS::EDA_3D_CANVAS( wxWindow* aParent, const wxGLAttributes& aGLAttrib
 
     // We always start with the opengl engine (raytracing is avoided due to very
     // long calculation time)
-    m_3d_render = m_3d_render_opengl;
+    m_3d_render = m_3d_render_opengl.get();
 
     m_boardAdapter.ReloadColorSettings();
 
@@ -174,6 +187,13 @@ EDA_3D_CANVAS::~EDA_3D_CANVAS()
 {
     wxLogTrace( m_logTrace, wxT( "EDA_3D_CANVAS::~EDA_3D_CANVAS" ) );
 
+    // Detach UI reporters before joining/destroying renderers that may still report.
+    if( m_activityReporterSync )
+        m_activityReporterSync->SetNullReporter();
+
+    if( m_warningReporterSync )
+        m_warningReporterSync->SetNullReporter();
+
     delete m_accelerator3DShapes;
     m_accelerator3DShapes = nullptr;
 
@@ -183,6 +203,11 @@ EDA_3D_CANVAS::~EDA_3D_CANVAS()
 
 void EDA_3D_CANVAS::releaseOpenGL()
 {
+    // Join the bg worker before taking the GL lock or destroying renderers. The worker
+    // may still be in ReloadRaytracingForHitTesting() and must not outlive either renderer.
+    if( m_3d_render_opengl )
+        m_3d_render_opengl->StopBgWorker();
+
     if( m_glRC )
     {
         GL_CONTEXT_MANAGER* gl_mgr = Pgm().GetGLContextManager();
@@ -190,16 +215,18 @@ void EDA_3D_CANVAS::releaseOpenGL()
 
         if( gl_mgr )
         {
-            gl_mgr->LockCtx( m_glRC, this );
+            // wxGTK destroys the native window before this runs, and our context cannot be
+            // made current without it.  The renderers then have to come down without GL
+            std::optional<ORPHANED_GL_OBJECTS> orphaned;
 
-            delete m_3d_render_raytracing;
-            m_3d_render_raytracing = nullptr;
+            if( !gl_mgr->LockCtx( m_glRC, this ) )
+                orphaned.emplace();
 
-            delete m_3d_render_opengl;
-            m_3d_render_opengl = nullptr;
-
-            // This is just a copy of a pointer, can safely be set to NULL.
             m_3d_render = nullptr;
+
+            // OpenGL dtor joins the bg worker; reset it before raytracing.
+            m_3d_render_opengl.reset();
+            m_3d_render_raytracing.reset();
 
             gl_mgr->UnlockCtx( m_glRC );
             gl_mgr->DestroyCtx( m_glRC );
@@ -314,8 +341,18 @@ void EDA_3D_CANVAS::GetScreenshot( wxImage& aDstImage )
 }
 
 
+void EDA_3D_CANVAS::JoinBgWorker()
+{
+    if( m_3d_render )
+        m_3d_render->JoinBgWorker();
+}
+
+
 void EDA_3D_CANVAS::ReloadRequest( BOARD* aBoard , S3D_CACHE* aCachePointer )
 {
+    if( m_3d_render_opengl )
+        m_3d_render_opengl->StopBgWorker();
+
     if( aCachePointer != nullptr )
         m_boardAdapter.Set3dCacheManager( aCachePointer );
 
@@ -329,9 +366,23 @@ void EDA_3D_CANVAS::ReloadRequest( BOARD* aBoard , S3D_CACHE* aCachePointer )
 }
 
 
+void EDA_3D_CANVAS::ReloadRaytracingForHitTesting( std::stop_token aStop )
+{
+    if( m_3d_render_raytracing )
+        m_3d_render_raytracing->Reload( true, aStop );
+}
+
+
+void EDA_3D_CANVAS::InvalidateRaytracingHitTesting()
+{
+    if( m_3d_render_raytracing )
+        m_3d_render_raytracing->InvalidateHitTesting();
+}
+
+
 void EDA_3D_CANVAS::RenderRaytracingRequest()
 {
-    m_3d_render = m_3d_render_raytracing;
+    m_3d_render = m_3d_render_raytracing.get();
 
     if( m_3d_render )
         m_3d_render->ReloadRequest();
@@ -387,13 +438,33 @@ void EDA_3D_CANVAS::DoRePaint()
     // therefore with invalid board.
     // This is dependent of the platform.
     // Especially on OSX, but also on Windows, it frequently happens
-    if( !GetParent()->GetParent()->IsShownOnScreen() )
+    wxWindow* viewer = wxGetTopLevelParent( this );
+    wxWindow* owner = viewer ? viewer->GetParent() : nullptr;
+
+    if( owner && !owner->IsShownOnScreen() )
+    {
+        m_is_currently_painting.clear();
         return; // The parent board editor frame is no more alive
+    }
+
+    if( !m_activityReporterSync || !m_warningReporterSync )
+    {
+        m_statusBarReporter =
+                std::make_unique<STATUSBAR_REPORTER>( m_parentStatusBar, EDA_3D_VIEWER_STATUSBAR::ACTIVITY );
+        m_infoBarReporter = std::make_unique<INFOBAR_REPORTER>( m_parentInfoBar );
+
+        m_activityReporterSync = std::make_shared<SYNC_REPORTER>( *m_statusBarReporter );
+        m_warningReporterSync = std::make_shared<SYNC_REPORTER>( *m_infoBarReporter );
+
+        if( m_3d_render_opengl )
+            m_3d_render_opengl->SetReporters( m_activityReporterSync, m_warningReporterSync );
+
+        if( m_3d_render_raytracing )
+            m_3d_render_raytracing->SetReporters( m_activityReporterSync, m_warningReporterSync );
+    }
 
     wxString            err_messages;
-    INFOBAR_REPORTER    warningReporter( m_parentInfoBar );
-    STATUSBAR_REPORTER  activityReporter( m_parentStatusBar, EDA_3D_VIEWER_STATUSBAR::ACTIVITY );
-    int64_t             start_time = GetRunningMicroSecs();
+    auto                start_time = std::chrono::steady_clock::now();
     GL_CONTEXT_MANAGER* gl_mgr = Pgm().GetGLContextManager();
 
     if( !gl_mgr )
@@ -413,8 +484,8 @@ void EDA_3D_CANVAS::DoRePaint()
     // CreateCtx could and does fail per sentry crash events, lets be graceful
     if( m_glRC == nullptr )
     {
-        warningReporter.Report( _( "OpenGL context creation error" ), RPT_SEVERITY_ERROR );
-        warningReporter.Finalize();
+        m_warningReporterSync->Report( _( "OpenGL context creation error" ), RPT_SEVERITY_ERROR );
+        m_warningReporterSync->Finalize();
         m_is_currently_painting.clear();
         return;
     }
@@ -444,10 +515,10 @@ void EDA_3D_CANVAS::DoRePaint()
 
         if( !m_is_opengl_version_supported )
         {
-            warningReporter.Report( _( "Your OpenGL version is not supported. Minimum required "
+            m_warningReporterSync->Report( _( "Your OpenGL version is not supported. Minimum required "
                                        "is 1.5." ), RPT_SEVERITY_ERROR );
 
-            warningReporter.Finalize();
+            m_warningReporterSync->Finalize();
         }
     }
 
@@ -467,7 +538,7 @@ void EDA_3D_CANVAS::DoRePaint()
     // Don't attempt to ray trace if OpenGL doesn't support it.
     if( !m_opengl_supports_raytracing )
     {
-        m_3d_render = m_3d_render_opengl;
+        m_3d_render = m_3d_render_opengl.get();
         m_render_raytracing_was_requested = false;
         m_boardAdapter.m_Cfg->m_Render.engine = RENDER_ENGINE::OPENGL;
     }
@@ -484,7 +555,7 @@ void EDA_3D_CANVAS::DoRePaint()
           && m_render_raytracing_was_requested )
         {
             m_render_raytracing_was_requested = false;
-            m_3d_render = m_3d_render_opengl;
+            m_3d_render = m_3d_render_opengl.get();
         }
     }
 
@@ -522,26 +593,7 @@ void EDA_3D_CANVAS::DoRePaint()
         {
             m_3d_render->SetCurWindowSize( clientSize );
 
-            bool reloadRaytracingForCalculations = false;
-
-            if( m_boardAdapter.m_Cfg->m_Render.engine == RENDER_ENGINE::OPENGL
-                    && m_3d_render_opengl->IsReloadRequestPending() )
-            {
-                reloadRaytracingForCalculations = true;
-            }
-
-            requested_redraw = m_3d_render->Redraw( m_mouse_was_moved || m_camera_is_moving,
-                                                    &activityReporter, &warningReporter );
-
-            // Raytracer renderer is responsible for some features also used by the OpenGL
-            // renderer.
-            // FIXME: Presumably because raytracing renderer reload is called only after current
-            // renderer redraw, the old zoom value stays for a single frame. This is ugly, but only
-            // cosmetic, so I'm not fixing that for now: I don't know how to do this without
-            // reloading twice (maybe it's not too bad of an idea?) or doing a complicated
-            // refactor.
-            if( reloadRaytracingForCalculations )
-                m_3d_render_raytracing->Reload( nullptr, nullptr, true );
+            requested_redraw = m_3d_render->Redraw( m_mouse_was_moved || m_camera_is_moving );
         }
         catch( std::runtime_error& )
         {
@@ -553,6 +605,8 @@ void EDA_3D_CANVAS::DoRePaint()
             return;
         }
     }
+
+    render_overlays();
 
     if( m_render_pivot )
     {
@@ -575,19 +629,21 @@ void EDA_3D_CANVAS::DoRePaint()
 
     gl_mgr->UnlockCtx( m_glRC );
 
-    if( m_mouse_was_moved || m_camera_is_moving )
-    {
-        // Calculation time in milliseconds
-        const double calculation_time = (double)( GetRunningMicroSecs() - start_time ) / 1e3;
+    // Calculation time in milliseconds
+    const double calculation_time =
+            std::chrono::duration<double, std::milli>( std::chrono::steady_clock::now() - start_time ).count();
 
-        activityReporter.Report( wxString::Format( _( "Last render time %.0f ms" ),
-                                 calculation_time ) );
+    if( m_parentStatusBar )
+    {
+        m_parentStatusBar->SetStatusText( wxString::Format( _( "Last render time %.0f ms" ), calculation_time ),
+                                          EDA_3D_VIEWER_STATUSBAR::RENDER_TIME );
     }
 
     // This will reset the flag of camera parameters changed
     m_camera.ParametersChanged();
 
-    warningReporter.Finalize();
+    if( m_warningReporterSync )
+        m_warningReporterSync->Finalize();
 
     if( !err_messages.IsEmpty() )
         wxLogMessage( err_messages );
@@ -751,7 +807,7 @@ void EDA_3D_CANVAS::RenderToFrameBuffer( unsigned char* buffer, int width, int h
     // Handle raytracing/OpenGL renderer selection
     if( !m_opengl_supports_raytracing )
     {
-        m_3d_render = m_3d_render_opengl;
+        m_3d_render = m_3d_render_opengl.get();
         m_render_raytracing_was_requested = false;
         m_boardAdapter.m_Cfg->m_Render.engine = RENDER_ENGINE::OPENGL;
     }
@@ -764,7 +820,7 @@ void EDA_3D_CANVAS::RenderToFrameBuffer( unsigned char* buffer, int width, int h
             && m_render_raytracing_was_requested )
         {
             m_render_raytracing_was_requested = false;
-            m_3d_render = m_3d_render_opengl;
+            m_3d_render = m_3d_render_opengl.get();
         }
     }
 
@@ -785,25 +841,20 @@ void EDA_3D_CANVAS::RenderToFrameBuffer( unsigned char* buffer, int width, int h
         }
     }
 
-    // Perform the actual rendering
-    bool requested_redraw = false;
+    // Perform the actual rendering. The first redraw may start background loading;
+    // wait for it to finish and redraw once more before reading pixels.
     if( m_3d_render )
     {
         try
         {
             m_3d_render->SetCurWindowSize( clientSize );
+            m_3d_render->Redraw( false );
 
-            bool reloadRaytracingForCalculations = false;
-            if( m_boardAdapter.m_Cfg->m_Render.engine == RENDER_ENGINE::OPENGL
-                && m_3d_render_opengl->IsReloadRequestPending() )
+            if( m_boardAdapter.m_Cfg->m_Render.engine == RENDER_ENGINE::OPENGL )
             {
-                reloadRaytracingForCalculations = true;
+                m_3d_render->JoinBgWorker();
+                m_3d_render->Redraw( false );
             }
-
-            requested_redraw = m_3d_render->Redraw( false, nullptr, nullptr );
-
-            if( reloadRaytracingForCalculations )
-                m_3d_render_raytracing->Reload( nullptr, nullptr, true );
         }
         catch( std::runtime_error& )
         {
@@ -814,8 +865,9 @@ void EDA_3D_CANVAS::RenderToFrameBuffer( unsigned char* buffer, int width, int h
         }
     }
 
+    glFinish();
+
     // Read pixels from framebuffer to the provided buffer
-    // Note: This reads RGB format. Adjust format as needed.
     glReadPixels( 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buffer );
 
     // Check for OpenGL errors
@@ -979,6 +1031,15 @@ void EDA_3D_CANVAS::OnMouseMove( wxMouseEvent& event )
         // OnMiddleUp() will do it at the end of mouse drag/move command
     }
 
+    // A pick handler owns the cursor: report the hover to it instead of rolling over board items.
+    if( m_hoverHandler )
+    {
+        if( !event.Dragging() )
+            m_hoverHandler( getRayAtCurrentMousePosition() );
+
+        return;
+    }
+
     if( !event.Dragging() && m_boardAdapter.m_Cfg->m_Render.engine == RENDER_ENGINE::OPENGL )
     {
         STATUSBAR_REPORTER reporter( m_parentStatusBar, EDA_3D_VIEWER_STATUSBAR::HOVERED_ITEM );
@@ -1076,6 +1137,15 @@ void EDA_3D_CANVAS::OnMouseMove( wxMouseEvent& event )
 }
 
 
+void EDA_3D_CANVAS::OnMouseLeave( wxMouseEvent& event )
+{
+    if( m_hoverHandler )
+        m_hoverHandler( std::nullopt );
+
+    event.Skip();
+}
+
+
 void EDA_3D_CANVAS::OnLeftDown( wxMouseEvent& event )
 {
     SetFocus();
@@ -1104,23 +1174,41 @@ void EDA_3D_CANVAS::OnLeftUp( wxMouseEvent& event )
         restart_editingTimeOut_Timer();
     }
 
-    wxSize logicalSize = GetClientSize();
-    int    logicalW = logicalSize.GetWidth();
-    int    logicalH = logicalSize.GetHeight();
+    bool gizmoClicked = false;
 
-    int gizmo_x = 0, gizmo_y = 0, gizmo_width = 0, gizmo_height = 0;
-    std::tie( gizmo_x, gizmo_y, gizmo_width, gizmo_height ) = m_3d_render_opengl->getGizmoViewport();
+    if( m_boardAdapter.m_Cfg->m_Render.show_navigator
+        && m_boardAdapter.m_Cfg->m_Render.engine == RENDER_ENGINE::OPENGL )
+    {
+        wxSize logicalSize = GetClientSize();
+        int    logicalW = logicalSize.GetWidth();
+        int    logicalH = logicalSize.GetHeight();
 
-    float scaleX = static_cast<float>( static_cast<double>( gizmo_width ) / static_cast<double>( logicalW ) );
-    float scaleY = static_cast<float>( static_cast<double>( gizmo_height ) / static_cast<double>( logicalH ) );
+        int gizmo_x = 0, gizmo_y = 0, gizmo_width = 0, gizmo_height = 0;
+        std::tie( gizmo_x, gizmo_y, gizmo_width, gizmo_height ) = m_3d_render_opengl->getGizmoViewport();
 
-    int scaledMouseX = static_cast<int>( static_cast<float>( event.GetX() ) * scaleX );
-    int scaledMouseY = static_cast<int>( static_cast<float>( logicalH - event.GetY() ) * scaleY );
+        float scaleX = static_cast<float>( static_cast<double>( gizmo_width ) / static_cast<double>( logicalW ) );
+        float scaleY = static_cast<float>( static_cast<double>( gizmo_height ) / static_cast<double>( logicalH ) );
 
-    m_3d_render_opengl->handleGizmoMouseInput( scaledMouseX, scaledMouseY );
-    m_3d_render_opengl->updateGizmoSelection( m_camera.GetRotationMatrix() );
+        int scaledMouseX = static_cast<int>( static_cast<float>( event.GetX() ) * scaleX );
+        int scaledMouseY = static_cast<int>( static_cast<float>( logicalH - event.GetY() ) * scaleY );
 
-    bool gizmoClicked = m_3d_render_opengl->getSelectedGizmoSphere() != SPHERES_GIZMO::GizmoSphereSelection::None;
+        m_3d_render_opengl->handleGizmoMouseInput( scaledMouseX, scaledMouseY );
+        m_3d_render_opengl->updateGizmoSelection( m_camera.GetRotationMatrix() );
+
+        gizmoClicked = m_3d_render_opengl->getSelectedGizmoSphere() != SPHERES_GIZMO::GizmoSphereSelection::None;
+    }
+
+    if( !wasRotating && !gizmoClicked && m_pickHandler )
+    {
+        // A completed pick can clear or replace the canvas handler.
+        auto handler = m_pickHandler;
+
+        if( handler( getRayAtCurrentMousePosition() ) )
+        {
+            Refresh();
+            return;
+        }
+    }
 
     // A plain click that missed the orientation gizmo: cross-probe the clicked footprint,
     // or clear the selection when clicking empty space. A click-drag rotation or a click
@@ -1148,15 +1236,21 @@ void EDA_3D_CANVAS::OnLeftUp( wxMouseEvent& event )
         // We send a message (by ExpressMail) to the board and schematic editor, but only
         // if the manager of this canvas is a EDA_3D_VIEWER_FRAME, because only this
         // kind of frame has ExpressMail stuff
-        if( EDA_3D_VIEWER_FRAME* frame = dynamic_cast<EDA_3D_VIEWER_FRAME*>( GetParent() ) )
+        if( EDA_3D_VIEWER_FRAME* frame = dynamic_cast<EDA_3D_VIEWER_FRAME*>( wxGetTopLevelParent( this ) ) )
         {
-            std::string command = "$SELECT: 0,";
+            kiapi::common::commands::SyncSelection sync;
 
             if( footprint )
-                command += fmt::format( "F{}", EscapeString( footprint->GetReference(), CTX_IPC ).ToStdString() );
+                sync.add_items()->mutable_footprint()->set_reference( footprint->GetReference().ToUTF8() );
 
-            frame->Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_SELECTION, command, frame );
-            frame->Kiway().ExpressMail( FRAME_SCH, MAIL_SELECTION, command, frame );
+            sync.set_mode( kiapi::common::commands::SyncSelectionMode::SSM_ITEMS_ONLY );
+            sync.set_context( kiapi::common::commands::SyncSelectionContext::SSC_IMPLICIT );
+
+            std::string payload;
+            kiapi::common::PackKiwayApiMessage( sync, payload );
+
+            frame->Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_SELECTION, payload, frame );
+            frame->Kiway().ExpressMail( FRAME_SCH, MAIL_SELECTION, payload, frame );
         }
     }
 
@@ -1424,9 +1518,9 @@ void EDA_3D_CANVAS::RenderEngineChanged()
     {
         switch( cfg->m_Render.engine )
         {
-        case RENDER_ENGINE::OPENGL:     m_3d_render = m_3d_render_opengl;     break;
-        case RENDER_ENGINE::RAYTRACING: m_3d_render = m_3d_render_raytracing; break;
-        default:                        m_3d_render = nullptr;                break;
+        case RENDER_ENGINE::OPENGL:     m_3d_render = m_3d_render_opengl.get();     break;
+        case RENDER_ENGINE::RAYTRACING: m_3d_render = m_3d_render_raytracing.get(); break;
+        default:                        m_3d_render = nullptr;                      break;
         }
     }
 
@@ -1436,6 +1530,151 @@ void EDA_3D_CANVAS::RenderEngineChanged()
     m_mouse_was_moved = false;
 
     Request_refresh();
+}
+
+
+void EDA_3D_CANVAS::render_overlays()
+{
+    if( m_overlays.empty() )
+        return;
+
+    glMatrixMode( GL_PROJECTION );
+    glLoadMatrixf( glm::value_ptr( m_camera.GetProjectionMatrix() ) );
+
+    glMatrixMode( GL_MODELVIEW );
+    glLoadMatrixf( glm::value_ptr( m_camera.GetViewMatrix() ) );
+
+    glDisable( GL_LIGHTING );
+    glDisable( GL_CULL_FACE );
+    glEnable( GL_COLOR_MATERIAL );
+    glEnable( GL_BLEND );
+    glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+    glDepthMask( GL_FALSE );
+    glEnable( GL_POLYGON_OFFSET_FILL );
+    glPolygonOffset( -2.0f, -2.0f );
+
+    glDisableClientState( GL_TEXTURE_COORD_ARRAY );
+    glDisableClientState( GL_COLOR_ARRAY );
+    glDisableClientState( GL_NORMAL_ARRAY );
+    glEnableClientState( GL_VERTEX_ARRAY );
+
+    // The raytracer paints a textured quad and leaves no usable depth buffer.
+    const bool depthUsable = m_boardAdapter.m_Cfg->m_Render.engine == RENDER_ENGINE::OPENGL;
+
+    for( const OVERLAY& overlay : m_overlays )
+    {
+        if( overlay.vertices.empty() )
+            continue;
+
+        if( depthUsable && !overlay.alwaysVisible )
+            glEnable( GL_DEPTH_TEST );
+        else
+            glDisable( GL_DEPTH_TEST );
+
+        glPushMatrix();
+        glMultMatrixf( glm::value_ptr( overlay.transform ) );
+        glColor4f( overlay.color.r, overlay.color.g, overlay.color.b, overlay.color.a );
+        glVertexPointer( 3, GL_FLOAT, 0, overlay.vertices.data() );
+        glDrawArrays( GL_TRIANGLES, 0, (GLsizei) overlay.vertices.size() );
+        glPopMatrix();
+    }
+
+    glDisableClientState( GL_VERTEX_ARRAY );
+    glDisable( GL_POLYGON_OFFSET_FILL );
+    glDepthMask( GL_TRUE );
+    glDisable( GL_BLEND );
+    glEnable( GL_DEPTH_TEST );
+}
+
+
+std::optional<EDA_3D_CANVAS::MODEL_HIT> EDA_3D_CANVAS::PickModel(
+        const RAY& aRay, const S3DMODEL& aGeometry, const FP_3DMODEL& aModel,
+        const FOOTPRINT& aFootprint ) const
+{
+    glm::mat4 world = m_boardAdapter.GetFootprintMatrix( aFootprint ) * CalcModelMatrix(
+            SFVEC3F( aModel.m_Offset.x, aModel.m_Offset.y, aModel.m_Offset.z ),
+            SFVEC3F( aModel.m_Rotation.x, aModel.m_Rotation.y, aModel.m_Rotation.z ),
+            SFVEC3F( aModel.m_Scale.x, aModel.m_Scale.y, aModel.m_Scale.z ) );
+    const double determinant = glm::determinant( glm::dmat4( world ) );
+
+    if( !aGeometry.m_Meshes || !std::isfinite( determinant ) || determinant == 0.0 )
+        return std::nullopt;
+
+    const glm::dmat4 inverse = glm::inverse( glm::dmat4( world ) );
+    const glm::dvec3 origin( inverse * glm::dvec4( aRay.m_Origin, 1.0 ) );
+    const glm::dvec3 direction( inverse * glm::dvec4( aRay.m_Dir, 0.0 ) );
+    double nearest = std::numeric_limits<double>::infinity();
+    std::optional<MODEL_HIT> hit;
+
+    for( unsigned int i = 0; i < aGeometry.m_MeshesSize; ++i )
+    {
+        const SMESH& mesh = aGeometry.m_Meshes[i];
+
+        if( !mesh.m_Positions || !mesh.m_FaceIdx )
+            continue;
+
+        for( unsigned int j = 0; j + 2 < mesh.m_FaceIdxSize; j += 3 )
+        {
+            if( !IsTriangleInRange( mesh.m_FaceIdx, j, mesh.m_VertexSize ) )
+                continue;
+
+            const glm::dvec3 a( mesh.m_Positions[mesh.m_FaceIdx[j]] );
+            const glm::dvec3 edge1 = glm::dvec3( mesh.m_Positions[mesh.m_FaceIdx[j + 1]] ) - a;
+            const glm::dvec3 edge2 = glm::dvec3( mesh.m_Positions[mesh.m_FaceIdx[j + 2]] ) - a;
+            const glm::dvec3 p = glm::cross( direction, edge2 );
+            const double det = glm::dot( edge1, p );
+            const double tolerance = 1e-12 * glm::length( edge1 ) * glm::length( p );
+
+            if( !std::isfinite( det ) || std::abs( det ) <= tolerance )
+                continue;
+
+            const glm::dvec3 delta = origin - a;
+            const double u = glm::dot( delta, p ) / det;
+            const glm::dvec3 q = glm::cross( delta, edge1 );
+            const double v = glm::dot( direction, q ) / det;
+            const double distance = glm::dot( edge2, q ) / det;
+
+            if( u >= 0.0 && v >= 0.0 && u + v <= 1.0 && distance >= 0.0 && distance < nearest )
+            {
+                nearest = distance;
+                hit = MODEL_HIT{ i, j };
+            }
+        }
+    }
+
+    return hit;
+}
+
+
+PAD* EDA_3D_CANVAS::PickFootprintPad( const RAY& aRay, const FOOTPRINT& aFootprint ) const
+{
+    const double units = m_boardAdapter.BiuTo3dUnits();
+
+    if( units <= 0.0 || std::abs( aRay.m_Dir.z ) < 1e-9 )
+        return nullptr;
+
+    const double z = m_boardAdapter.GetFootprintZPos( aFootprint.IsFlipped() );
+    const double distance = ( z - aRay.m_Origin.z ) / aRay.m_Dir.z;
+    const double x = ( aRay.m_Origin.x + distance * aRay.m_Dir.x ) / units;
+    const double y = -( aRay.m_Origin.y + distance * aRay.m_Dir.y ) / units;
+
+    if( distance < 0.0 || !std::isfinite( x ) || !std::isfinite( y )
+        || std::abs( x ) > std::numeric_limits<int>::max()
+        || std::abs( y ) > std::numeric_limits<int>::max() )
+    {
+        return nullptr;
+    }
+
+    const VECTOR2I point( KiROUND( x ), KiROUND( y ) );
+    const PCB_LAYER_ID copper = aFootprint.IsFlipped() ? B_Cu : F_Cu;
+
+    for( PAD* pad : aFootprint.Pads() )
+    {
+        if( pad->HitTest( point, 0, copper ) )
+            return pad;
+    }
+
+    return nullptr;
 }
 
 

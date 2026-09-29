@@ -25,6 +25,10 @@
 #include <pcbnew/pad.h>
 #include <pcbnew/pcb_track.h>
 #include <pcbnew/pcbexpr_evaluator.h>
+#include <pcbnew/generators/pcb_via_stack.h>
+
+#include <lset.h>
+#include <padstack.h>
 
 #include <geometry/shape_circle.h>
 #include <geometry/shape_arc.h>
@@ -40,7 +44,9 @@
 #include <router/pns_router.h>
 #include <router/pns_segment.h>
 #include <router/pns_shove.h>
+#include <router/pns_sizes_settings.h>
 #include <router/pns_solid.h>
+#include <router/pns_topology.h>
 #include <router/pns_via.h>
 
 static bool isCopper( const PNS::ITEM* aItem )
@@ -336,8 +342,11 @@ public:
                                 const VECTOR2I& aStartPosition = VECTOR2I() )
     {
         m_startLayer = aItem->Layer();
-        return inheritTrackWidth( aItem, aInheritedWidth, aStartPosition );
+
+        return inheritTrackWidthAndDpGap( aItem, aStartPosition, aInheritedWidth, nullptr );
     }
+
+    std::unique_ptr<PNS::VIA> TestSyncVia( PCB_VIA* aVia ) { return syncVia( aVia ); }
 
 private:
     PNS_TEST_FIXTURE* m_testFixture;
@@ -391,6 +400,100 @@ BOOST_FIXTURE_TEST_CASE( PNSShoveOwnsRootLineHistory, PNS_TEST_FIXTURE )
     shove.SetShovePolicy( &segment, PNS::SHOVE::SHP_SHOVE );
     shove.SetShovePolicy( line, PNS::SHOVE::SHP_SHOVE );
 }
+
+// A microvia stack's hops are copper on a net, so the router has to be able to anchor a route
+// on one. Non-routable means "obstacle carrying no connectivity", which would send
+// snapToItem() to the nearest grid point and start the track off the via. Locked is what
+// keeps the hop from being shoved.
+BOOST_FIXTURE_TEST_CASE( PNSViaStackHopIsRoutableButLocked, PNS_TEST_FIXTURE )
+{
+    BOARD board;
+    board.SetCopperLayerCount( 4 );
+    board.SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    PCB_VIA_STACK* stack = new PCB_VIA_STACK( &board, F_Cu );
+    stack->SetStartLayer( F_Cu );
+    stack->SetEndLayer( In2_Cu );
+    stack->SetViaSize( 300000 );
+    stack->SetViaDrill( 150000 );
+
+    // Deliberately off grid, which is where the grid fallback shows itself.
+    stack->SetPosition( VECTOR2I( 1234567, 7654321 ) );
+    board.Add( stack );
+    stack->Regenerate( &board, nullptr );
+
+    PCB_VIA* hop = nullptr;
+
+    for( BOARD_ITEM* item : stack->GetBoardItems() )
+    {
+        if( item->Type() == PCB_VIA_T )
+            hop = static_cast<PCB_VIA*>( item );
+    }
+
+    BOOST_REQUIRE_MESSAGE( hop, "the stack must have built at least one microvia" );
+
+    m_iface->SetBoard( &board );
+
+    std::unique_ptr<PNS::VIA> synced = m_iface->TestSyncVia( hop );
+
+    BOOST_REQUIRE( synced );
+    BOOST_CHECK_MESSAGE( synced->IsRoutable(), "a stack hop must be a valid route anchor" );
+    BOOST_CHECK_MESSAGE( synced->IsLocked(), "a stack hop must still be locked against shoving" );
+}
+
+
+// Routability decides whether a route may anchor on an item, not whether it collides with one.
+// A stack hop has to obstruct a foreign-net via either way.
+BOOST_FIXTURE_TEST_CASE( PNSViaStackHopIsAnObstacle, PNS_TEST_FIXTURE )
+{
+    BOARD board;
+    board.SetCopperLayerCount( 4 );
+    board.SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    VECTOR2I at( 5000000, 5000000 );
+
+    PCB_VIA_STACK* stack = new PCB_VIA_STACK( &board, F_Cu );
+    stack->SetStartLayer( F_Cu );
+    stack->SetEndLayer( In2_Cu );
+    stack->SetViaSize( 300000 );
+    stack->SetViaDrill( 150000 );
+    stack->SetPosition( at );
+    board.Add( stack );
+    stack->Regenerate( &board, nullptr );
+
+    m_iface->SetBoard( &board );
+
+    std::unique_ptr<PNS::NODE> world( new PNS::NODE );
+    world->SetMaxClearance( 10000000 );
+    world->SetRuleResolver( &m_ruleResolver );
+
+    int hops = 0;
+
+    for( BOARD_ITEM* item : stack->GetBoardItems() )
+    {
+        if( item->Type() != PCB_VIA_T )
+            continue;
+
+        std::unique_ptr<PNS::VIA> synced = m_iface->TestSyncVia( static_cast<PCB_VIA*>( item ) );
+        BOOST_REQUIRE( synced );
+        world->AddRaw( synced.release() );
+        hops++;
+    }
+
+    BOOST_REQUIRE_EQUAL( hops, 2 );
+
+    PNS::VIA* intruder = new PNS::VIA( at, PNS_LAYER_RANGE( F_Cu, B_Cu ), 300000, 150000 );
+    intruder->SetNet( (PNS::NET_HANDLE) 99 );
+    world->AddRaw( intruder );
+
+    m_ruleResolver.m_defaultClearance = 200000;
+
+    PNS::NODE::OBSTACLES obstacles;
+    world->QueryColliding( intruder, obstacles );
+
+    BOOST_CHECK_MESSAGE( obstacles.size() > 0, "a stack hop must obstruct a foreign-net via" );
+}
+
 
 static void dumpObstacles( const PNS::NODE::OBSTACLES &obstacles )
 {
@@ -1029,6 +1132,102 @@ BOOST_FIXTURE_TEST_CASE( PNSDragArcRejectsNear180, PNS_TEST_FIXTURE )
 }
 
 
+// Base mock's NetCode() returns -1 for everything, which reads as unnetted; use a real net here
+namespace
+{
+struct NETCODE_RULE_RESOLVER : public MOCK_RULE_RESOLVER
+{
+    int NetCode( PNS::NET_HANDLE aNet ) override { return aNet ? 1 : -1; }
+};
+
+PNS::ITEM* queryFinishAnchor( PNS::NODE& aWorld, const PNS::LINE& aTrack )
+{
+    PNS::TOPOLOGY   topo( &aWorld );
+    VECTOR2I        anchorPoint;
+    PNS_LAYER_RANGE anchorLayers;
+    PNS::ITEM*      anchorItem = nullptr;
+
+    BOOST_REQUIRE( topo.NearestUnconnectedAnchorPoint( &aTrack, anchorPoint, anchorLayers,
+                                                       anchorItem ) );
+    return anchorItem;
+}
+} // namespace
+
+
+// F-key finish adds the track to a temporary branch node; a joint linking only to that
+// track must still yield a persistent-world anchor, not a dangling branch pointer
+//
+// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24985
+BOOST_FIXTURE_TEST_CASE( PNSFinishAnchorNoDanglingBranchItem, PNS_TEST_FIXTURE )
+{
+    NETCODE_RULE_RESOLVER resolver;
+
+    PNS::NODE world;
+    world.SetMaxClearance( 10000000 );
+    world.SetRuleResolver( &resolver );
+
+    PNS::NET_HANDLE net = (PNS::NET_HANDLE) 1;
+
+    // Persistent unconnected target on the same net, away from the track
+    PNS::SEGMENT* target = new PNS::SEGMENT( SEG( VECTOR2I( 10000000, 10000000 ),
+                                                 VECTOR2I( 12000000, 10000000 ) ), net );
+    target->SetWidth( 250000 );
+    target->SetLayers( PNS_LAYER_RANGE( F_Cu ) );
+    world.AddRaw( target );
+
+    // Closed loop; end joint's two links are both owned by the temporary branch node
+    PNS::LINE track;
+    track.SetLayers( PNS_LAYER_RANGE( F_Cu ) );
+    track.SetNet( net );
+    track.SetWidth( 250000 );
+    track.Line().Append( VECTOR2I( 0, 0 ) );
+    track.Line().Append( VECTOR2I( 2000000, 0 ) );
+    track.Line().Append( VECTOR2I( 2000000, 2000000 ) );
+    track.Line().Append( VECTOR2I( 0, 2000000 ) );
+    track.Line().Append( VECTOR2I( 0, 0 ) );
+
+    // Anchor must be the persistent target, never a link owned by the destroyed temp branch
+    BOOST_CHECK_EQUAL( queryFinishAnchor( world, track ), target );
+}
+
+
+// ConnectedJoints must cross arcs when subtracting the track; stopping at an arc left
+// temporary primitives beyond it selectable as the anchor, reviving the dangling pointer
+//
+// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/24985
+BOOST_FIXTURE_TEST_CASE( PNSFinishAnchorCrossesArcInConnectivity, PNS_TEST_FIXTURE )
+{
+    NETCODE_RULE_RESOLVER resolver;
+
+    PNS::NODE world;
+    world.SetMaxClearance( 10000000 );
+    world.SetRuleResolver( &resolver );
+
+    PNS::NET_HANDLE net = (PNS::NET_HANDLE) 1;
+
+    // Farther from the track end than its own far segment, wins only once that's subtracted
+    PNS::SEGMENT* target = new PNS::SEGMENT( SEG( VECTOR2I( 7000000, 0 ),
+                                                 VECTOR2I( 8000000, 0 ) ), net );
+    target->SetWidth( 250000 );
+    target->SetLayers( PNS_LAYER_RANGE( F_Cu ) );
+    world.AddRaw( target );
+
+    // Segment-arc-segment track; far segment lies across the arc, so connectivity must cross it
+    PNS::LINE track;
+    track.SetLayers( PNS_LAYER_RANGE( F_Cu ) );
+    track.SetNet( net );
+    track.SetWidth( 250000 );
+    track.Line().Append( VECTOR2I( 0, 0 ) );
+    track.Line().Append( VECTOR2I( 1000000, 0 ) );
+    track.Line().Append( SHAPE_ARC( VECTOR2I( 1000000, 0 ), VECTOR2I( 1500000, 500000 ),
+                                    VECTOR2I( 2000000, 0 ), 0 ) );
+    track.Line().Append( VECTOR2I( 3000000, 0 ) );
+
+    // Anchor must be the persistent target, not a branch-owned primitive across the arc
+    BOOST_CHECK_EQUAL( queryFinishAnchor( world, track ), target );
+}
+
+
 // Regression tests for issues #18658 and #24132. Physical clearance rules must be
 // enforced for same-net and free-pad pairs without disturbing the fast path on
 // boards that do not define them.
@@ -1267,4 +1466,111 @@ BOOST_FIXTURE_TEST_CASE( PNSBothPhysicalConstraintsMaxWins, PNS_TEST_FIXTURE )
     for( const PNS::OBSTACLE& obs : obstacles )
         maxClearance = std::max( maxClearance, obs.m_clearance );
     BOOST_CHECK_EQUAL( maxClearance, 2000000 );
+}
+
+
+// Diff pair vias must respect copper-to-hole clearance, not just copper-to-copper and
+// hole-to-hole. EffectiveDiffPairViaGap() is the copper-edge-to-copper-edge distance the
+// placer fits vias to; it converts each clearance rule to that reference by subtracting the
+// annular ring(s) of via copper that sit between a hole edge and the copper edge.
+//
+// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/21623 where the placer
+// ignored copper-to-hole clearance and produced DRC violations on diff pair vias.
+BOOST_AUTO_TEST_CASE( PNSDiffPairViaGapCopperToHoleClearance )
+{
+    PNS::SIZES_SETTINGS sizes;
+
+    // 600um copper diameter over a 300um drill leaves a 150um annular ring.
+    sizes.SetViaDiameter( 600000 );
+    sizes.SetViaDrill( 300000 );
+    sizes.SetDiffPairViaGapSameAsTraceGap( false );
+
+    BOOST_CHECK_EQUAL( sizes.GetDiffPairCopperToHole(), 0 );
+
+    // Copper-to-hole binds because 400um from a hole edge to the neighbour's copper edge is
+    // 400000 - 150000 = 250000 copper-to-copper, exceeding both other rules.
+    sizes.SetDiffPairViaGap( 200000 );
+    sizes.SetDiffPairHoleToHole( 500000 ); // 500000 - 300000 = 200000 copper-to-copper
+    sizes.SetDiffPairCopperToHole( 400000 );
+
+    BOOST_CHECK_EQUAL( sizes.GetDiffPairCopperToHole(), 400000 );
+    BOOST_CHECK_EQUAL( sizes.EffectiveDiffPairViaGap(), 250000 );
+
+    // Hole-to-hole binds when it is the largest converted rule.
+    sizes.SetDiffPairHoleToHole( 900000 ); // 900000 - 300000 = 600000 copper-to-copper
+    BOOST_CHECK_EQUAL( sizes.EffectiveDiffPairViaGap(), 600000 );
+
+    // Plain copper-to-copper gap binds when the hole-based rules are slack.
+    sizes.SetDiffPairHoleToHole( 0 );
+    sizes.SetDiffPairCopperToHole( 0 );
+    BOOST_CHECK_EQUAL( sizes.EffectiveDiffPairViaGap(), 200000 );
+}
+
+
+// Collapsing a padstack via's layer range for the violation highlight orphaned its
+// layer-indexed shapes. Layer 2 is required here: 0, 1 and 5 resolve by accident.
+//
+// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/25139
+namespace
+{
+class PADSTACK_VIA_IFACE : public MOCK_PNS_KICAD_IFACE
+{
+public:
+    PADSTACK_VIA_IFACE( PNS_TEST_FIXTURE* aFixture ) :
+            MOCK_PNS_KICAD_IFACE( aFixture )
+    {
+    }
+
+    void SyncWorld( PNS::NODE* aWorld ) override
+    {
+        aWorld->SetMaxClearance( 10000000 );
+        aWorld->SetRuleResolver( GetRuleResolver() );
+
+        auto via = std::make_unique<PNS::VIA>( VECTOR2I( 0, 0 ), PNS_LAYER_RANGE( 0, 5 ), 400000, 100000,
+                                               (PNS::NET_HANDLE) 1, VIATYPE::THROUGH );
+        via->SetStackMode( PNS::VIA::STACK_MODE::FRONT_INNER_BACK );
+        via->SetDiameter( 0, 400000 );
+        via->SetDiameter( 1, 450000 );
+        via->SetDiameter( 5, 400000 );
+
+        aWorld->Add( std::move( via ) );
+    }
+
+    void DisplayItem( const PNS::ITEM* aItem, int aClearance, bool aEdit = false, int aFlags = 0 ) override
+    {
+        if( !aItem->OfKind( PNS::ITEM::VIA_T ) )
+            return;
+
+        m_viasDisplayed++;
+
+        if( !aItem->Shape( -1 ) )
+            m_nullShapes++;
+    }
+
+    int m_viasDisplayed = 0;
+    int m_nullShapes = 0;
+};
+} // namespace
+
+
+BOOST_FIXTURE_TEST_CASE( PNSMarkViolationsKeepsPadstackViaShape, PNS_TEST_FIXTURE )
+{
+    PADSTACK_VIA_IFACE    iface( this );
+    PNS::ROUTING_SETTINGS settings( nullptr, "" );
+    PNS::SIZES_SETTINGS   sizes;
+
+    m_router->SetInterface( &iface );
+    m_router->LoadSettings( &settings );
+    m_router->SetMode( PNS::PNS_MODE_ROUTE_SINGLE );
+
+    sizes.SetTrackWidth( 200000 );
+    sizes.SetBoardMinTrackWidth( 100000 );
+    m_router->UpdateSizes( sizes );
+
+    m_router->SyncWorld();
+
+    BOOST_REQUIRE( !m_router->StartRouting( VECTOR2I( 300000, 0 ), nullptr, 2 ) );
+
+    BOOST_REQUIRE_MESSAGE( iface.m_viasDisplayed > 0, "Via was not highlighted as a violation" );
+    BOOST_CHECK_MESSAGE( iface.m_nullShapes == 0, "Highlighted front/inner/back via has no resolvable shape" );
 }

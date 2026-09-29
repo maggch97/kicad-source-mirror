@@ -125,6 +125,9 @@ ACTION_TOOLBAR_CONTROL PCB_ACTION_TOOLBAR_CONTROLS::viaDiameter( "control.PCBVia
                                                                  _( "Via diameter selector" ),
                                                                  _( "Control to select the via diameter" ),
                                                                  { FRAME_PCB_EDITOR } );
+ACTION_TOOLBAR_CONTROL PCB_ACTION_TOOLBAR_CONTROLS::viaStack( "control.PCBViaStack", _( "Microvia stack selector" ),
+                                                              _( "Control to select the microvia stack preset" ),
+                                                              { FRAME_PCB_EDITOR } );
 ACTION_TOOLBAR_CONTROL PCB_ACTION_TOOLBAR_CONTROLS::currentVariant( "control.PCBCurrentVariant",
                                                                     _( "Current variant" ),
                                                                     _( "Control to select the current variant" ),
@@ -167,7 +170,8 @@ std::optional<TOOLBAR_CONFIGURATION> PCB_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
             .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Line modes" ) )
                         .AddAction( PCB_ACTIONS::lineModeFree )
                         .AddAction( PCB_ACTIONS::lineMode90 )
-                        .AddAction( PCB_ACTIONS::lineMode45 ) );
+                        .AddAction( PCB_ACTIONS::lineMode45 ) )
+            .AppendAction( PCB_ACTIONS::toggleAutoConstraints );
 
         config.AppendSeparator()
               .AppendAction( PCB_ACTIONS::showRatsnest )
@@ -233,7 +237,10 @@ std::optional<TOOLBAR_CONFIGURATION> PCB_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
                             .AddAction( PCB_ACTIONS::tuneDiffPair )
                             .AddAction( PCB_ACTIONS::tuneSkew ) )
               .AppendAction( PCB_ACTIONS::showDiffPhaseSkew )
-              .AppendAction( PCB_ACTIONS::drawVia )
+              .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Via tools" ) )
+                            .AddAction( PCB_ACTIONS::drawVia )
+                            .AddAction( PCB_ACTIONS::placeViaStack )
+                            .AddAction( PCB_ACTIONS::drawViaStitchArea ) )
               .AppendAction( PCB_ACTIONS::drawZone )
               .WithContextMenu(
                   []( TOOL_MANAGER* aMgr ) -> std::unique_ptr<ACTION_MENU>
@@ -254,7 +261,11 @@ std::optional<TOOLBAR_CONFIGURATION> PCB_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
         config.AppendSeparator()
               .AppendAction( PCB_ACTIONS::drawLine )
               .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Arc" ) )
-                            .AddAction( PCB_ACTIONS::drawArc )
+                            .AddAction( PCB_ACTIONS::drawArcCenter )
+                            .AddAction( PCB_ACTIONS::drawArcStartEndMid )
+                            .AddAction( PCB_ACTIONS::drawArcStartEndCenter )
+                            .AddAction( PCB_ACTIONS::drawArcTangent )
+                            .AddAction( PCB_ACTIONS::drawArcStartDirEnd )
                             .AddAction( PCB_ACTIONS::drawEllipseArc )
                             .AddContextMenu(
                                 []( TOOL_MANAGER* aMgr ) -> std::unique_ptr<ACTION_MENU>
@@ -273,6 +284,25 @@ std::optional<TOOLBAR_CONFIGURATION> PCB_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
               .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Circle" ) )
                             .AddAction( PCB_ACTIONS::drawCircle )
                             .AddAction( PCB_ACTIONS::drawEllipse ) )
+              .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Constraints" ) )
+                            .AddAction( PCB_ACTIONS::addConstraintCoincident )
+                            .AddAction( PCB_ACTIONS::addConstraintPointOnLine )
+                            .AddAction( PCB_ACTIONS::addConstraintMidpoint )
+                            .AddAction( PCB_ACTIONS::addConstraintSymmetric )
+                            .AddAction( PCB_ACTIONS::addConstraintFixedPosition )
+                            .AddAction( PCB_ACTIONS::addConstraintParallel )
+                            .AddAction( PCB_ACTIONS::addConstraintPerpendicular )
+                            .AddAction( PCB_ACTIONS::addConstraintCollinear )
+                            .AddAction( PCB_ACTIONS::addConstraintHorizontal )
+                            .AddAction( PCB_ACTIONS::addConstraintVertical )
+                            .AddAction( PCB_ACTIONS::addConstraintTangent )
+                            .AddAction( PCB_ACTIONS::addConstraintEqualLength )
+                            .AddAction( PCB_ACTIONS::addConstraintEqualRadius )
+                            .AddAction( PCB_ACTIONS::addConstraintConcentric )
+                            .AddAction( PCB_ACTIONS::addConstraintFixedLength )
+                            .AddAction( PCB_ACTIONS::addConstraintFixedRadius )
+                            .AddAction( PCB_ACTIONS::addConstraintArcAngle )
+                            .AddAction( PCB_ACTIONS::addConstraintAngular ) )
               .AppendAction( PCB_ACTIONS::drawPolygon )
               .AppendAction( PCB_ACTIONS::drawBezier )
               .AppendAction( PCB_ACTIONS::placeReferenceImage )
@@ -294,6 +324,7 @@ std::optional<TOOLBAR_CONFIGURATION> PCB_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
                             .AddAction( ACTIONS::gridSetOrigin )
                             .AddAction( PCB_ACTIONS::drillOrigin ) )
                             .AppendAction( PCB_ACTIONS::placePoint )
+              .AppendAction( PCB_ACTIONS::placeSubGrid )
               .AppendAction( ACTIONS::measureTool );
 
         break;
@@ -352,7 +383,8 @@ std::optional<TOOLBAR_CONFIGURATION> PCB_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
         else
             config.AppendAction( PCB_ACTIONS::importNetlist );
 
-        config.AppendAction( PCB_ACTIONS::runDRC );
+        config.AppendAction( PCB_ACTIONS::runDRC )
+              .AppendAction( PCB_ACTIONS::editFootprintFields );
 
         config.AppendSeparator();
         config.AppendAction( PCB_ACTIONS::showEeschema );
@@ -367,6 +399,9 @@ std::optional<TOOLBAR_CONFIGURATION> PCB_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
 
         config.AppendSeparator()
               .AppendControl( PCB_ACTION_TOOLBAR_CONTROLS::viaDiameter );
+
+        config.AppendSeparator()
+              .AppendControl( PCB_ACTION_TOOLBAR_CONTROLS::viaStack );
 
         config.AppendSeparator()
               .AppendControl( ACTION_TOOLBAR_CONTROLS::layerSelector )
@@ -432,6 +467,24 @@ void PCB_EDIT_FRAME::configureToolbars()
 
     RegisterCustomToolbarControlFactory( PCB_ACTION_TOOLBAR_CONTROLS::viaDiameter, viaDiaSelectorFactory );
 
+    // Box to display and choose via stack presets
+    auto viaStackSelectorFactory = [this]( ACTION_TOOLBAR* aToolbar )
+    {
+        if( !m_SelViaStackBox )
+        {
+            m_SelViaStackBox = new wxChoice( aToolbar, ID_AUX_TOOLBAR_PCB_VIA_STACK, wxDefaultPosition, wxDefaultSize,
+                                             0, nullptr );
+        }
+
+        m_SelViaStackBox->SetToolTip( _( "Select the microvia stack preset placed by the "
+                                         "microvia stack tool." ) );
+
+        UpdateViaStackSelectBox( m_SelViaStackBox );
+        aToolbar->Add( m_SelViaStackBox );
+    };
+
+    RegisterCustomToolbarControlFactory( PCB_ACTION_TOOLBAR_CONTROLS::viaStack, viaStackSelectorFactory );
+
     // Variant selection drop down control on main tool bar
     auto variantSelectionCtrlFactory =
             [this]( ACTION_TOOLBAR* aToolbar )
@@ -479,6 +532,7 @@ void PCB_EDIT_FRAME::ClearToolbarControl( int aId )
     {
     case ID_AUX_TOOLBAR_PCB_TRACK_WIDTH:    m_SelTrackWidthBox = nullptr;   break;
     case ID_AUX_TOOLBAR_PCB_VIA_SIZE:       m_SelViaSizeBox = nullptr;      break;
+    case ID_AUX_TOOLBAR_PCB_VIA_STACK: m_SelViaStackBox = nullptr; break;
     case ID_AUX_TOOLBAR_PCB_VARIANT_SELECT: m_CurrentVariantCtrl = nullptr; break;
     }
 }
@@ -515,6 +569,7 @@ void PCB_EDIT_FRAME::UpdateVariantSelectionCtrl()
 void PCB_EDIT_FRAME::SetCurrentVariant( const wxString& aVariantName )
 {
     GetBoard()->SetCurrentVariant( aVariantName );
+    UpdateVariantSelectionCtrl();
 
     if( PCB_DRAW_PANEL_GAL* canvas = dynamic_cast<PCB_DRAW_PANEL_GAL*>( GetCanvas() ) )
     {
@@ -718,6 +773,36 @@ void PCB_EDIT_FRAME::UpdateViaSizeSelectBox( wxChoice* aViaSizeSelectBox, bool a
 }
 
 
+void PCB_EDIT_FRAME::UpdateViaStackSelectBox( wxChoice* aViaStackSelectBox )
+{
+    if( aViaStackSelectBox == nullptr )
+        return;
+
+    aViaStackSelectBox->Clear();
+
+    const std::vector<VIA_STACK_PRESET>& presets = GetDesignSettings().m_ViaStackPresets;
+
+    if( presets.empty() )
+        aViaStackSelectBox->Append( _( "Microvia stack: none defined" ) );
+
+    for( const VIA_STACK_PRESET& preset : presets )
+        aViaStackSelectBox->Append( wxString::Format( _( "Microvia stack: %s" ), preset.m_Name ) );
+
+    aViaStackSelectBox->Append( wxT( "---" ) );
+    aViaStackSelectBox->Append( _( "Edit Pre-defined Microvia Stacks..." ) );
+
+    int idx = GetDesignSettings().GetViaStackIndex();
+
+    if( idx < 0 || idx >= (int) presets.size() )
+    {
+        idx = 0;
+        GetDesignSettings().SetViaStackIndex( 0 );
+    }
+
+    aViaStackSelectBox->SetSelection( presets.empty() ? 0 : idx );
+}
+
+
 void PCB_EDIT_FRAME::ReCreateLayerBox( bool aForceResizeToolbar )
 {
     if( m_SelLayerBox == nullptr || m_tbTopAux == nullptr )
@@ -828,6 +913,7 @@ void PCB_EDIT_FRAME::ReCreateAuxiliaryToolbar()
 {
     UpdateTrackWidthSelectBox( m_SelTrackWidthBox, true, true );
     UpdateViaSizeSelectBox( m_SelViaSizeBox, true, true );
+    UpdateViaStackSelectBox( m_SelViaStackBox );
 }
 
 

@@ -33,6 +33,7 @@
 #include <lib_id.h>
 #include <ctl_flags.h>
 #include <case_insensitive_map.h>
+#include <jumper_group.h>
 
 
 class REPORTER;
@@ -209,8 +210,8 @@ public:
     bool GetDuplicatePadNumbersAreJumpers() const { return m_duplicatePadNumbersAreJumpers; }
     void SetDuplicatePadNumbersAreJumpers( bool aEnabled ) { m_duplicatePadNumbersAreJumpers = aEnabled; }
 
-    std::vector<std::set<wxString>>& JumperPadGroups() { return m_jumperPadGroups; }
-    const std::vector<std::set<wxString>>& JumperPadGroups() const { return m_jumperPadGroups; }
+    JUMPER_GROUP_SET&       JumperPadGroups() { return m_jumperPadGroups; }
+    const JUMPER_GROUP_SET& JumperPadGroups() const { return m_jumperPadGroups; }
 
     NETLIST_GROUP* GetGroup() const { return m_group; }
     void SetGroup( NETLIST_GROUP* aGroup ) { m_group = aGroup; }
@@ -256,12 +257,12 @@ private:
     /// The #LIB_ID of the footprint assigned to the component.
     LIB_ID                       m_fpid;
 
-    /// The alt LIB_ID of the footprint, when there are 2 different assigned footprints,
+    /// The alt #LIB_ID of the footprint, when there are 2 different assigned footprints,
     /// One from the netlist, the other from the .cmp file.
     /// this one is a copy of the netlist footprint assignment
     LIB_ID                       m_altFpid;
 
-    /// The #FOOTPRINT loaded for #m_FPID.
+    /// The #FOOTPRINT loaded for #m_fpid.
     std::unique_ptr<FOOTPRINT>   m_footprint;
 
     /// Component-specific properties found in the netlist.
@@ -274,7 +275,7 @@ private:
     std::unordered_set<wxString> m_componentClassNames;
 
     /// Jumper pad groups for this footprint
-    std::vector<std::set<wxString>> m_jumperPadGroups;
+    JUMPER_GROUP_SET m_jumperPadGroups;
 
     /// Flag that this footprint should automatically treat sets of two or more pads with the same
     /// number as jumpered pin groups
@@ -393,7 +394,7 @@ public:
         return m_netChainNetClasses;
     }
 
-    /// Stored as a #RRGGBB or #RRGGBBAA string; empty means "no override".
+    /// Stored as a \#RRGGBB or \#RRGGBBAA string; empty means "no override".
     void SetSignalColor( const wxString& aNetChain, const wxString& aColor )
     {
         m_netChainColors[aNetChain] = aColor;

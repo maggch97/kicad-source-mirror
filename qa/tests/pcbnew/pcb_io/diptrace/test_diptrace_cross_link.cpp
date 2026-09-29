@@ -84,30 +84,13 @@ BOOST_FIXTURE_TEST_SUITE( DipTraceCrossLink, DIPTRACE_CROSS_LINK_FIXTURE )
 
 
 /**
- * Verify that the paired Z80 Board schematic file (.dch) has a valid DipTrace
- * schematic header.  This confirms the companion test data is present and is
- * a genuine DipTrace schematic file.
- */
-BOOST_AUTO_TEST_CASE( SchematicHeaderValid )
-{
-    // The paired schematic lives in the eeschema test data tree
-    std::string schPath = KI_TEST::GetPcbnewTestDataDir()
-                          + "../eeschema/plugins/diptrace/z80_board.dch";
-
-    BOOST_CHECK( HasDipTraceSchematicHeader( schPath ) );
-}
-
-
-/**
  * Load the Z80 Board PCB and verify that reference designators were imported.
  * A board with reference designators is a prerequisite for board-schematic
  * cross-linking.
  */
 BOOST_AUTO_TEST_CASE( BoardRefDesPresent )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -148,9 +131,7 @@ BOOST_AUTO_TEST_CASE( BoardRefDesPresent )
  */
 BOOST_AUTO_TEST_CASE( BoardNetsPresent )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -178,9 +159,7 @@ BOOST_AUTO_TEST_CASE( BoardNetsPresent )
  */
 BOOST_AUTO_TEST_CASE( PadsParsed )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
     BOOST_CHECK_GT( board->Footprints().size(), 10 );

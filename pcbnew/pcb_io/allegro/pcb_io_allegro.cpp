@@ -25,8 +25,8 @@
 #include "pcb_io_allegro.h"
 
 #include <board.h>
+#include <ki_exception.h>
 #include <reporter.h>
-#include <fstream>
 #include <io/io_utils.h>
 #include <kiplatform/io.h>
 
@@ -54,10 +54,11 @@ static bool checkFileHeader( const wxString& aFileName )
     // database version string (e.g. "dbd..."), so the "all" check above fails.
     // Detect these by checking the magic number at offset 0. The upper two bytes
     // of the little-endian magic identify the major Allegro format family:
-    //   0x0013 = v16.x, 0x0014 = v17.x, 0x0015 = v18+
+    //   0x0013 = v16.x, 0x0014 = v17.x, 0x0015 = v18.x, 0x0016 = revision 19
     static const std::vector<uint8_t> v16Magic = { 0x13, 0x00 };
     static const std::vector<uint8_t> v17Magic = { 0x14, 0x00 };
     static const std::vector<uint8_t> v18Magic = { 0x15, 0x00 };
+    static const std::vector<uint8_t> v19Magic = { 0x16, 0x00 };
     static const size_t               magicMajorOffset = 2;
 
     if( IO_UTILS::fileHasBinaryHeader( aFileName, v16Magic, magicMajorOffset ) )
@@ -66,7 +67,10 @@ static bool checkFileHeader( const wxString& aFileName )
     if( IO_UTILS::fileHasBinaryHeader( aFileName, v17Magic, magicMajorOffset ) )
         return true;
 
-    return IO_UTILS::fileHasBinaryHeader( aFileName, v18Magic, magicMajorOffset );
+    if( IO_UTILS::fileHasBinaryHeader( aFileName, v18Magic, magicMajorOffset ) )
+        return true;
+
+    return IO_UTILS::fileHasBinaryHeader( aFileName, v19Magic, magicMajorOffset );
 }
 
 
@@ -84,8 +88,6 @@ allegroDefaultLayerMappingCallback( const std::vector<INPUT_LAYER_DESC>& aInputL
 
 PCB_IO_ALLEGRO::PCB_IO_ALLEGRO() : PCB_IO( wxS( "Allegro" ) )
 {
-    m_reporter = &WXLOG_REPORTER::GetInstance();
-
     LAYER_MAPPABLE_PLUGIN::RegisterCallback( allegroDefaultLayerMappingCallback );
 }
 
@@ -108,16 +110,11 @@ bool PCB_IO_ALLEGRO::CanReadLibrary( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_ALLEGRO::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                  const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_ALLEGRO::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     m_props = aProperties;
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
-
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
-
-    std::unique_ptr<BOARD> deleter( aAppendToMe ? nullptr : m_board );
+    m_board = &aBoard;
 
     std::unique_ptr<KIPLATFORM::IO::MAPPED_FILE> mappedFile;
 
@@ -127,17 +124,14 @@ BOARD* PCB_IO_ALLEGRO::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
     }
     catch( const std::runtime_error& e )
     {
-        THROW_IO_ERROR( wxString::Format( wxS( "%s" ), e.what() ) );
+        THROW_IO_ERROR( e.what() );
     }
 
     if( !mappedFile->Data() || mappedFile->Size() == 0 )
-        THROW_IO_ERROR( wxString::Format( wxS( "File is empty: %s" ), aFileName ) );
+        THROW_IO_ERRORF( _( "File is empty: %s" ), aFileName );
 
     if( !LoadBoardFromData( mappedFile->Data(), mappedFile->Size(), *m_board ) )
-        return nullptr;
-
-    (void) deleter.release();
-    return m_board;
+        THROW_IO_ERRORF( _( "Failed to load Allegro board from file: %s" ), aFileName );
 }
 
 

@@ -22,7 +22,6 @@
 #include <sch_edit_frame.h>
 #include <sch_reference_list.h>
 #include <string_utils.h>
-#include <connection_graph.h>
 #include <core/kicad_algo.h>
 #include <netlist.h>
 #include "netlist_exporter_allegro.h"
@@ -31,7 +30,7 @@
 #include <fmt.h>
 #include <fmt/ranges.h>
 
-bool NETLIST_EXPORTER_ALLEGRO::WriteNetlist( const wxString& aOutFileName,
+bool NETLIST_EXPORTER_ALLEGRO::writeNetlist( const wxString& aOutFileName,
                                              unsigned /* aNetlistOptions */,
                                              REPORTER& aReporter )
 {
@@ -138,7 +137,7 @@ void NETLIST_EXPORTER_ALLEGRO::extractComponentsInfo()
     m_referencesAlreadyFound.Clear();
     m_libParts.clear();
 
-    for( const SCH_SHEET_PATH& sheet : m_schematic->Hierarchy() )
+    for( const SCH_SHEET_PATH& sheet : m_exportSheets )
     {
         m_schematic->SetCurrentSheet( sheet );
 
@@ -183,7 +182,7 @@ void NETLIST_EXPORTER_ALLEGRO::extractComponentsInfo()
                 continue;
 
             m_packageProperties.insert( std::pair<wxString,
-                                        wxString>( sheet.PathHumanReadable(),
+                                        wxString>( formatRoom( sheet ),
                                                    symbol->GetRef( &sheet ) ) );
             m_orderedSymbolsSheetpath.push_back( std::pair<SCH_SYMBOL*,
                                                  SCH_SHEET_PATH>( symbol, sheet ) );
@@ -202,37 +201,17 @@ void NETLIST_EXPORTER_ALLEGRO::extractComponentsInfo()
 
     std::vector<NET_RECORD*> nets;
 
-    for( const auto& it : m_schematic->ConnectionGraph()->GetNetMap() )
+    for( const EXPORT_NET& net : m_exportNets )
     {
-        wxString                                 net_name  = it.first.Name;
-        const std::vector<CONNECTION_SUBGRAPH*>& subgraphs = it.second;
-        NET_RECORD*                              net_record = nullptr;
+        nets.emplace_back( new NET_RECORD( net.name ) );
+        NET_RECORD* net_record = nets.back();
 
-        if( subgraphs.empty() )
-            continue;
-
-        nets.emplace_back( new NET_RECORD( net_name ) );
-        net_record = nets.back();
-
-        for( CONNECTION_SUBGRAPH* subgraph : subgraphs )
+        for( const auto& [pin, sheet] : net.pins )
         {
-            bool nc = subgraph->GetNoConnect() &&
-                      subgraph->GetNoConnect()->Type() == SCH_NO_CONNECT_T;
-            const SCH_SHEET_PATH& sheet = subgraph->GetSheet();
+            SYMBOL* symbol = pin->GetParentSymbol();
 
-            for( SCH_ITEM* item : subgraph->GetItems() )
-            {
-                if( item->Type() == SCH_PIN_T )
-                {
-                    SCH_PIN* pin = static_cast<SCH_PIN*>( item );
-                    SYMBOL*  symbol = pin->GetParentSymbol();
-
-                    if( !symbol || symbol->GetExcludedFromBoard() )
-                        continue;
-
-                    net_record->m_Nodes.emplace_back( pin, sheet, nc );
-                }
-            }
+            if( symbol && !symbol->GetExcludedFromBoard() )
+                net_record->m_Nodes.emplace_back( pin, sheet );
         }
     }
 
@@ -295,24 +274,22 @@ void NETLIST_EXPORTER_ALLEGRO::toAllegroPackages()
     wxString deviceFileCreatingError = wxString( "" );
 
     //Group the components......
-    while(!m_orderedSymbolsSheetpath.empty())
+    while( !m_orderedSymbolsSheetpath.empty() )
     {
         std::pair<SCH_SYMBOL*, SCH_SHEET_PATH> first_ele = m_orderedSymbolsSheetpath.front();
         m_orderedSymbolsSheetpath.pop_front();
-        m_componentGroups.insert( std::pair<int, std::pair<SCH_SYMBOL*,
-                                  SCH_SHEET_PATH>>( groupCount, first_ele ) );
+        m_componentGroups.insert( std::pair<int, std::pair<SCH_SYMBOL*, SCH_SHEET_PATH>>( groupCount, first_ele ) );
 
-        for( auto it = m_orderedSymbolsSheetpath.begin(); it != m_orderedSymbolsSheetpath.end();
-             ++it )
+        for( auto it = m_orderedSymbolsSheetpath.begin(); it != m_orderedSymbolsSheetpath.end(); ++it )
         {
-            if( it->first->GetValue( false, &it->second, false )
-                != first_ele.first->GetValue( false, &first_ele.second, false ) )
+            if( it->first->GetValue( &it->second, RAW_VALUE )
+                != first_ele.first->GetValue( &first_ele.second, RAW_VALUE ) )
             {
                 continue;
             }
 
-            if( it->first->GetFootprintFieldText( false, &it->second, false )
-                != first_ele.first->GetFootprintFieldText( false, &first_ele.second, false ) )
+            if( it->first->GetFootprintFieldText( &it->second, RAW_VALUE )
+                != first_ele.first->GetFootprintFieldText( &first_ele.second, RAW_VALUE ) )
             {
                 continue;
             }
@@ -322,8 +299,8 @@ void NETLIST_EXPORTER_ALLEGRO::toAllegroPackages()
 
             if( removeTailDigits( ref1 ) == removeTailDigits( ref2 ) )
             {
-                m_componentGroups.insert( std::pair<int, std::pair<SCH_SYMBOL*,
-                                          SCH_SHEET_PATH>>( groupCount, ( *it ) ) );
+                m_componentGroups.insert( std::pair<int, std::pair<SCH_SYMBOL*, SCH_SHEET_PATH>>( groupCount,
+                                                                                                  ( *it ) ) );
                 it = m_orderedSymbolsSheetpath.erase( it );
 
                 if( m_orderedSymbolsSheetpath.size() == 0 )
@@ -332,6 +309,7 @@ void NETLIST_EXPORTER_ALLEGRO::toAllegroPackages()
                     it--;   // we want to test the new it element, so compensate the next ++it
             }
         }
+
         groupCount++;
     }
 
@@ -354,8 +332,8 @@ void NETLIST_EXPORTER_ALLEGRO::toAllegroPackages()
         SCH_SYMBOL* sym = ( beginIter->second ).first;
         SCH_SHEET_PATH sheetPath = ( beginIter->second ).second;
 
-        wxString valueText = sym->GetValue( false, &sheetPath, false );
-        wxString footprintText = sym->GetFootprintFieldText( false, &sheetPath, false);
+        wxString valueText = sym->GetValue( &sheetPath, RAW_VALUE );
+        wxString footprintText = sym->GetFootprintFieldText( &sheetPath, RAW_VALUE );
         wxString deviceType = valueText + wxString("_") + footprintText;
 
         while( deviceType.GetChar(deviceType.Length()-1) == '_' )
@@ -380,9 +358,8 @@ void NETLIST_EXPORTER_ALLEGRO::toAllegroPackages()
 
         for( auto iter = beginIter; iter != endIter; iter++ )
         {
-            symbolSheetpaths.push_back( std::pair<SCH_SYMBOL*,
-                                        SCH_SHEET_PATH>( iter->second.first,
-                                                         iter->second.second ) );
+            symbolSheetpaths.push_back( std::pair<SCH_SYMBOL*, SCH_SHEET_PATH>( iter->second.first,
+                                                                                iter->second.second ) );
         }
 
         std::stable_sort( symbolSheetpaths.begin(), symbolSheetpaths.end(),
@@ -395,8 +372,7 @@ void NETLIST_EXPORTER_ALLEGRO::toAllegroPackages()
 
         // Write out the corresponding device file
         FILE* d = nullptr;
-        wxString deviceFileName = wxFileName( m_exportPath, deviceType,
-                                              wxString( "txt" ) ).GetFullPath();
+        wxString deviceFileName = wxFileName( m_exportPath, deviceType, wxString( "txt" ) ).GetFullPath();
 
         if( ( d = wxFopen( deviceFileName, wxT( "wt" ) ) ) == nullptr )
         {
@@ -437,7 +413,7 @@ void NETLIST_EXPORTER_ALLEGRO::toAllegroPackages()
         fmt::print( d, "PACKAGE '{}'\n", TO_UTF8( formatDevice( footprintText ) ) );
         fmt::print( d, "CLASS IC\n" );
 
-        std::vector<SCH_PIN*> pinList = sym->GetLibSymbolRef()->GetPins();
+        std::vector<SCH_PIN*> pinList = sym->GetLibSymbolRef()->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES );
 
         /*
          * We must erase redundant Pins references in pinList
@@ -560,9 +536,9 @@ wxString NETLIST_EXPORTER_ALLEGRO::formatText( wxString aString )
         return wxEmptyString;
 
     // Replace 'µ' ("\u00b5") by 'u' to keep ASCII7 constraint
-    wxString mu = "µ";      // also could be "\u03BC" (grec symbol mu);
+    wxString mu( wxUniChar( 0x00B5 ) );
     aString.Replace( mu, "u" );
-    mu = "\u03BC";          // grec mu
+    mu = wxUniChar( 0x03BC );
     aString.Replace( mu, "u" );
 
     std::regex reg( "[!']|[^ -~]" );
@@ -622,8 +598,7 @@ wxString NETLIST_EXPORTER_ALLEGRO::formatFunction( wxString aName, std::vector<S
 }
 
 
-wxString NETLIST_EXPORTER_ALLEGRO::getGroupField( int aGroupIndex, const wxArrayString& aFieldArray,
-                                                  bool aSanitize )
+wxString NETLIST_EXPORTER_ALLEGRO::getGroupField( int aGroupIndex, const wxArrayString& aFieldArray, bool aSanitize )
 {
     auto pairIter = m_componentGroups.equal_range( aGroupIndex );
 
@@ -636,7 +611,8 @@ wxString NETLIST_EXPORTER_ALLEGRO::getGroupField( int aGroupIndex, const wxArray
         {
             if( SCH_FIELD* fld = sym->FindFieldCaseInsensitive( field ) )
             {
-                wxString fieldText = fld->GetShownText( &sheetPath, true );
+                // TODO: FOR_CANVAS seems like an odd context here....
+                wxString fieldText = fld->GetShownText( &sheetPath, FOR_CANVAS );
 
                 if( !fieldText.IsEmpty() )
                 {
@@ -657,7 +633,7 @@ wxString NETLIST_EXPORTER_ALLEGRO::getGroupField( int aGroupIndex, const wxArray
         {
             if( SCH_FIELD* fld = sym->GetLibSymbolRef()->FindFieldCaseInsensitive( field ) )
             {
-                wxString fieldText = fld->GetShownText( false, 0 );
+                wxString fieldText = fld->GetShownText( RESOLVED );
 
                 if( !fieldText.IsEmpty() )
                 {
@@ -671,6 +647,46 @@ wxString NETLIST_EXPORTER_ALLEGRO::getGroupField( int aGroupIndex, const wxArray
     }
 
     return wxEmptyString;
+}
+
+
+wxString NETLIST_EXPORTER_ALLEGRO::formatRoom( const SCH_SHEET_PATH& aSheetPath )
+{
+    wxString path = aSheetPath.PathHumanReadable();
+
+    // Use root schematic file name for root
+    if( path == wxS( "/" ) )
+        path = aSheetPath.PathHumanReadable( false );
+
+    // The leading and trailing separators carry no information; the ones in between become
+    // dashes below.
+    while( path.StartsWith( wxS( "/" ) ) )
+        path = path.Mid( 1 );
+
+    while( path.EndsWith( wxS( "/" ) ) )
+        path.RemoveLast();
+
+    wxString roomName;
+
+    for( wxUniChar c : path )
+    {
+        if( ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' )
+            || c == '_' || c == '-' )
+        {
+            roomName << c;
+        }
+        else if( c == '/' )
+        {
+            // Use dash to represent our hierarchy breaks
+            roomName << wxS( "-" );
+        }
+        else
+        {
+            roomName << wxS( "_" );
+        }
+    }
+
+    return roomName;
 }
 
 
@@ -689,13 +705,11 @@ void NETLIST_EXPORTER_ALLEGRO::toAllegroPackageProperties()
     while( !m_packageProperties.empty() )
     {
         std::multimap<wxString, wxString>::iterator iter = m_packageProperties.begin();
-        wxString                                    sheetPathText = iter->first;
-
-        fmt::print( m_f, "'ROOM' '{}' ; ", TO_UTF8( formatText( sheetPathText ) ) );
+        wxString                                    roomName = iter->first;
 
         std::vector<wxString> refTexts;
 
-        auto pairIter = m_packageProperties.equal_range( sheetPathText );
+        auto pairIter = m_packageProperties.equal_range( roomName );
 
         for( iter = pairIter.first; iter != pairIter.second; ++iter )
         {
@@ -704,6 +718,14 @@ void NETLIST_EXPORTER_ALLEGRO::toAllegroPackageProperties()
         }
 
         m_packageProperties.erase( pairIter.first, pairIter.second );
+
+        // Nothing to name the room after (a schematic with no file name yet); leave these
+        // symbols without a ROOM rather than writing out an empty property.
+        if( roomName.IsEmpty() )
+            continue;
+
+        // formatRoom() already restricted this to characters that need no quoting or escaping.
+        fmt::print( m_f, "'ROOM' '{}' ; ", TO_UTF8( roomName ) );
 
         std::stable_sort( refTexts.begin(), refTexts.end(),
                           NETLIST_EXPORTER_ALLEGRO::CompareSymbolRef );

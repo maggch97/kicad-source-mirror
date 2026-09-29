@@ -21,13 +21,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-/// @todo The Boost entropy exception does not exist prior to 1.67. Once the minimum Boost
-///       version is raise to 1.67 or greater, this version check can be removed.
 #include <boost/version.hpp>
-
-#if BOOST_VERSION >= 106700
 #include <boost/uuid/entropy_error.hpp>
-#endif
 
 #include <3d_viewer/eda_3d_viewer_frame.h>
 #include <advanced_config.h>
@@ -39,6 +34,7 @@
 #include <footprint.h>
 #include <footprint_editor_settings.h>
 #include <footprint_library_adapter.h>
+#include <kiplatform/environment.h>
 #include <lset.h>
 #include <kiface_base.h>
 #include <pad.h>
@@ -1147,13 +1143,20 @@ void PCB_BASE_FRAME::setFPWatcher( FOOTPRINT* aFootprint )
 
     m_watcherLastModified = m_watcherFileName.GetModificationTime();
 
-    Bind( wxEVT_FSWATCHER, &PCB_BASE_FRAME::OnFPChange, this );
-    m_watcher = std::make_unique<wxFileSystemWatcher>();
-    m_watcher->SetOwner( this );
-
     wxFileName fn;
     fn.AssignDir( m_watcherFileName.GetPath() );
     fn.DontFollowLink();
+
+    // wxMSW frees a watch before SMB completes its pending read, which then corrupts the heap
+    if( KIPLATFORM::ENV::IsNetworkPath( fn.GetPath() ) )
+    {
+        wxLogTrace( traceLibWatch, "Network path, not watching: %s", fn.GetPath() );
+        return;
+    }
+
+    Bind( wxEVT_FSWATCHER, &PCB_BASE_FRAME::OnFPChange, this );
+    m_watcher = std::make_unique<wxFileSystemWatcher>();
+    m_watcher->SetOwner( this );
 
     wxLogTrace( traceLibWatch, "Add watch: %s", fn.GetPath() );
 

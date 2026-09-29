@@ -29,15 +29,16 @@ class TEXT_CTRL_EVAL;
 #include <wx/checkbox.h>
 #include <wx/simplebook.h>
 #include <wx/combobox.h>
+#include <wx/bmpbuttn.h>
 #include <wx/bitmap.h>
 #include <wx/image.h>
 #include <wx/icon.h>
+#include <wx/button.h>
 #include <wx/statbmp.h>
 #include <wx/statbox.h>
 #include <wx/spinctrl.h>
 #include <wx/bmpcbox.h>
 #include <wx/notebook.h>
-#include <wx/button.h>
 #include <wx/dialog.h>
 
 ///////////////////////////////////////////////////////////////////////////
@@ -69,8 +70,6 @@ class DIALOG_PAD_PROPERTIES_BASE : public DIALOG_SHIM
 		wxStaticText* m_posYLabel;
 		wxTextCtrl* m_posYCtrl;
 		wxStaticText* m_posYUnits;
-		wxStaticText* m_simElectricalTypeLabel;
-		wxChoice* m_simElectricalTypeCtrl;
 		wxStaticLine* m_staticline5;
 		wxBoxSizer* m_padstackControls;
 		wxStaticText* m_staticText891;
@@ -145,6 +144,7 @@ class DIALOG_PAD_PROPERTIES_BASE : public DIALOG_SHIM
 		wxStaticText* m_holeYLabel;
 		wxTextCtrl* m_holeYCtrl;
 		wxStaticText* m_holeYUnits;
+		wxBitmapButton* m_launchCalculatorBtn;
 		wxStaticLine* m_staticline71;
 		wxCheckBox* m_padToDieOpt;
 		wxStaticText* m_padToDieLabel;
@@ -175,6 +175,8 @@ class DIALOG_PAD_PROPERTIES_BASE : public DIALOG_SHIM
 		wxCheckBox* m_layerECO2;
 		wxStaticText* m_staticTextFabProperty;
 		wxChoice* m_choiceFabProperty;
+		wxStaticText* m_simElectricalTypeLabel;
+		wxChoice* m_simElectricalTypeCtrl;
 		wxPanel* m_connectionsPanel;
 		wxBoxSizer* m_legacyTeardropsWarning;
 		wxStaticBitmap* m_legacyTeardropsIcon;
@@ -296,7 +298,6 @@ class DIALOG_PAD_PROPERTIES_BASE : public DIALOG_SHIM
 		virtual void OnUpdateUI( wxUpdateUIEvent& event ) { event.Skip(); }
 		virtual void PadTypeSelected( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnValuesChanged( wxCommandEvent& event ) { event.Skip(); }
-		virtual void OnElectricalTypeChaged( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnPadstackModeChanged( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnEditLayerChanged( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnPadShapeSelection( wxCommandEvent& event ) { event.Skip(); }
@@ -306,9 +307,11 @@ class DIALOG_PAD_PROPERTIES_BASE : public DIALOG_SHIM
 		virtual void PadOrientEvent( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnOffsetCheckbox( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnDrillShapeSelected( wxCommandEvent& event ) { event.Skip(); }
+		virtual void OnHoleSizeCalculator( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnPadToDieCheckbox( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnPadToDieDelayCheckbox( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnSetCopperLayers( wxCommandEvent& event ) { event.Skip(); }
+		virtual void OnElectricalTypeChaged( wxCommandEvent& event ) { event.Skip(); }
 		virtual void onModify( wxCommandEvent& event ) { event.Skip(); }
 		virtual void onTeardropsUpdateUi( wxUpdateUIEvent& event ) { event.Skip(); }
 		virtual void onModify( wxSpinDoubleEvent& event ) { event.Skip(); }
@@ -322,7 +325,7 @@ class DIALOG_PAD_PROPERTIES_BASE : public DIALOG_SHIM
 
 	public:
 
-		DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWindowID id = wxID_DIALOG_EDIT_PAD, const wxString& title = _("Pad Properties"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 1004,695 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER );
+		DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWindowID id = wxID_DIALOG_EDIT_PAD, const wxString& title = _("Pad Properties"), const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( -1,-1 ), long style = wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER );
 
 		~DIALOG_PAD_PROPERTIES_BASE();
 

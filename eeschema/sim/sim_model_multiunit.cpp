@@ -23,7 +23,7 @@
 #include <map>
 #include <set>
 #include <utility>
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <ki_exception.h>
 #include <wx/intl.h>
 #include <wx/tokenzr.h>
@@ -106,10 +106,7 @@ std::vector<std::pair<wxString, wxString>> ParseSimPinsTokens( const wxString& a
         int      pos = token.Find( wxS( '=' ) );
 
         if( pos == wxNOT_FOUND || pos == 0 || pos == (int) token.length() - 1 )
-        {
-            THROW_IO_ERROR( wxString::Format(
-                    _( "Symbol '%s' has a malformed Sim.Pins entry '%s'." ), aRef, token ) );
-        }
+            THROW_IO_ERRORF( _( "Symbol '%s' has a malformed Sim.Pins entry '%s'." ), aRef, token );
 
         wxString symbolPin = token.Left( pos );
         wxString modelPin  = token.Mid( pos + 1 );
@@ -120,9 +117,11 @@ std::vector<std::pair<wxString, wxString>> ParseSimPinsTokens( const wxString& a
         {
             if( it->second != modelPin )
             {
-                THROW_IO_ERROR( wxString::Format(
-                        _( "Symbol '%s' maps pin '%s' to both '%s' and '%s'." ),
-                        aRef, symbolPin, it->second, modelPin ) );
+                THROW_IO_ERRORF( _( "Symbol '%s' maps pin '%s' to both '%s' and '%s'." ),
+                                 aRef,
+                                 symbolPin,
+                                 it->second,
+                                 modelPin );
             }
 
             continue;
@@ -191,19 +190,17 @@ SIM_MODEL_MULTIUNIT::SIM_MODEL_MULTIUNIT( const SIM_MODEL& aBaseModel, const wxS
     {
         if( aBaseModel.GetParam( ii ).info.isSpiceInstanceParam )
         {
-            THROW_IO_ERROR( wxString::Format(
-                    _( "Repeat-per-unit decomposition does not support model '%s' because it has "
-                       "subcircuit parameters." ),
-                    aBaseModelName ) );
+            THROW_IO_ERRORF( _( "Repeat-per-unit decomposition does not support model '%s' because it has "
+                                "subcircuit parameters." ), aBaseModelName );
         }
     }
 
     std::vector<wxString> basePinOrder;   // model-pin names in base header order
     std::set<wxString>    basePinSet;
 
-    for( const SIM_MODEL_PIN& pin : aBaseModel.GetPins() )
+    for( const std::reference_wrapper<const SIM_MODEL_PIN>& pin : aBaseModel.GetPins() )
     {
-        wxString name( pin.modelPinName );
+        wxString name( pin.get().modelPinName );
         basePinOrder.push_back( name );
         basePinSet.insert( name );
     }
@@ -213,10 +210,7 @@ SIM_MODEL_MULTIUNIT::SIM_MODEL_MULTIUNIT( const SIM_MODEL& aBaseModel, const wxS
     for( const wxString& shared : aSharedModelPins )
     {
         if( !basePinSet.count( shared ) )
-        {
-            THROW_IO_ERROR( wxString::Format(
-                    _( "Shared pin '%s' is not a pin of model '%s'." ), shared, aBaseModelName ) );
-        }
+            THROW_IO_ERRORF( _( "Shared pin '%s' is not a pin of model '%s'." ), shared, aBaseModelName );
 
         sharedSet.insert( shared );
     }
@@ -241,18 +235,21 @@ SIM_MODEL_MULTIUNIT::SIM_MODEL_MULTIUNIT( const SIM_MODEL& aBaseModel, const wxS
             // still counting the unit as an instance, so reject it.
             if( !basePinSet.count( modelPin ) )
             {
-                THROW_IO_ERROR( wxString::Format(
-                        _( "Unit %d maps to unknown pin '%s' of model '%s'." ), unitMap.unit,
-                        modelPin, aBaseModelName ) );
+                THROW_IO_ERRORF( _( "Unit %d maps to unknown pin '%s' of model '%s'." ),
+                                 unitMap.unit,
+                                 modelPin,
+                                 aBaseModelName );
             }
 
             auto [it, inserted] = info.modelToSymbol.emplace( modelPin, symbolPin );
 
             if( !inserted && it->second != symbolPin )
             {
-                THROW_IO_ERROR( wxString::Format(
-                        _( "Unit %d maps model pin '%s' to both symbol pins '%s' and '%s'." ),
-                        unitMap.unit, modelPin, it->second, symbolPin ) );
+                THROW_IO_ERRORF( _( "Unit %d maps model pin '%s' to both symbol pins '%s' and '%s'." ),
+                                 unitMap.unit,
+                                 modelPin,
+                                 it->second,
+                                 symbolPin );
             }
         }
 
@@ -285,16 +282,10 @@ SIM_MODEL_MULTIUNIT::SIM_MODEL_MULTIUNIT( const SIM_MODEL& aBaseModel, const wxS
         }
 
         if( symbolPins.empty() )
-        {
-            THROW_IO_ERROR( wxString::Format(
-                    _( "Shared pin '%s' is not connected on any unit." ), shared ) );
-        }
+            THROW_IO_ERRORF( _( "Shared pin '%s' is not connected on any unit." ), shared );
 
         if( symbolPins.size() > 1 )
-        {
-            THROW_IO_ERROR( wxString::Format(
-                    _( "Shared pin '%s' resolves to more than one net." ), shared ) );
-        }
+            THROW_IO_ERRORF( _( "Shared pin '%s' resolves to more than one net." ), shared );
 
         sharedNode[shared] = nodeName( *symbolPins.begin() );
     }
@@ -316,9 +307,9 @@ SIM_MODEL_MULTIUNIT::SIM_MODEL_MULTIUNIT( const SIM_MODEL& aBaseModel, const wxS
 
         if( !mapped )
         {
-            THROW_IO_ERROR( wxString::Format(
-                    _( "Model '%s' pin '%s' is neither shared nor assigned to any unit." ),
-                    aBaseModelName, basePin ) );
+            THROW_IO_ERRORF( _( "Model '%s' pin '%s' is neither shared nor assigned to any unit." ),
+                             aBaseModelName,
+                             basePin );
         }
     }
 
@@ -345,7 +336,8 @@ SIM_MODEL_MULTIUNIT::SIM_MODEL_MULTIUNIT( const SIM_MODEL& aBaseModel, const wxS
             else
             {
                 // Per-instance pin not mapped for this instance: leave it not-connected.
-                instance.nodes.push_back( wxString::Format( wxS( "nc_%zu_%s" ), m_instances.size(),
+                instance.nodes.push_back( wxString::Format( wxS( "nc_%zu_%s" ),
+                                                            m_instances.size(),
                                                             encodeIdentifier( basePin ) ) );
             }
         }
@@ -405,25 +397,27 @@ SIM_MODEL_MULTIUNIT::SIM_MODEL_MULTIUNIT( const SIM_MODEL& aBaseModel, const wxS
 wxString SIM_MODEL_MULTIUNIT::computeSignature() const
 {
     std::string canon = m_baseModelName.ToStdString();
-    canon += "|";
+    canon += '|';
 
-    for( const SIM_MODEL_PIN& pin : GetPins() )
-        canon += pin.modelPinName + ",";
+    for( const std::reference_wrapper<const SIM_MODEL_PIN>& pin : GetPins() )
+        canon += pin.get().modelPinName + ',';
 
-    canon += "|";
+    canon += '|';
 
     for( const INSTANCE& instance : m_instances )
     {
         for( const wxString& node : instance.nodes )
-            canon += node.ToStdString() + ",";
+            canon += node.ToStdString() + ',';
 
-        canon += ";";
+        canon += ';';
     }
 
     uint64_t hash = stableHash64( canon );
 
-    return wxString::Format( wxS( "kicad_mu_%s_%zuu_%016llx" ), encodeIdentifier( m_baseModelName ),
-                             m_instances.size(), static_cast<unsigned long long>( hash ) );
+    return wxString::Format( wxS( "kicad_mu_%s_%zuu_%016llx" ),
+                             encodeIdentifier( m_baseModelName ),
+                             m_instances.size(),
+                             hash );
 }
 
 
@@ -445,10 +439,10 @@ std::string SPICE_GENERATOR_MULTIUNIT::ModelLine( const SPICE_ITEM& aItem ) cons
 
     std::string result = fmt::format( ".subckt {}", model.m_signature.ToStdString() );
 
-    for( const SIM_MODEL_PIN& pin : GetPins() )
-        result += " " + pin.modelPinName;
+    for( const std::reference_wrapper<const SIM_MODEL_PIN>& pin : GetPins() )
+        result += " " + pin.get().modelPinName;
 
-    result += "\n";
+    result += '\n';
 
     int index = 1;
 
@@ -459,7 +453,7 @@ std::string SPICE_GENERATOR_MULTIUNIT::ModelLine( const SPICE_ITEM& aItem ) cons
         for( const wxString& node : instance.nodes )
             result += " " + node.ToStdString();
 
-        result += " " + model.m_baseModelName.ToStdString() + "\n";
+        result += " " + model.m_baseModelName.ToStdString() + '\n';
     }
 
     result += ".ends\n";
@@ -478,8 +472,12 @@ std::vector<std::string> SPICE_GENERATOR_MULTIUNIT::CurrentNames( const SPICE_IT
     }
     else
     {
-        for( const SIM_MODEL_PIN& pin : GetPins() )
-            currentNames.push_back( fmt::format( "I({}:{})", ItemName( aItem ), pin.modelPinName ) );
+        for( const std::reference_wrapper<const SIM_MODEL_PIN>& pin : GetPins() )
+        {
+            currentNames.push_back( fmt::format( "I({}:{})",
+                                                 ItemName( aItem ),
+                                                 pin.get().modelPinName ) );
+        }
     }
 
     return currentNames;

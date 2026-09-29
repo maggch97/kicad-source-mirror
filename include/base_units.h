@@ -76,12 +76,14 @@ struct EDA_IU_SCALE
     const double IU_PER_PS{ 1e6 };        ///< Internal time units are attoseconds
     const double IU_PER_PS_PER_MM{ 1e6 }; ///< Internal delay units are attoseconds/mm
     const double MM_PER_IU;
+    const double MILS_PER_IU;
 
 
     constexpr EDA_IU_SCALE( double aIUPerMM ) :
             IU_PER_MM( aIUPerMM ),
             IU_PER_MILS( aIUPerMM * 0.0254 ),
-            MM_PER_IU( 1 / IU_PER_MM )
+            MM_PER_IU( 1 / IU_PER_MM ),
+            MILS_PER_IU( 1 / IU_PER_MILS )
     {
     }
 
@@ -114,6 +116,11 @@ struct EDA_IU_SCALE
     {
         double iu = static_cast<double>( nm ) * IU_PER_MM / 1000000.0;
         return static_cast<int>( iu < 0 ? iu - 0.5 : iu + 0.5 );
+    }
+
+    constexpr inline double NmToIUD( int64_t nm ) const
+    {
+        return static_cast<double>( nm ) * IU_PER_MM / 1000000.0;
     }
 };
 

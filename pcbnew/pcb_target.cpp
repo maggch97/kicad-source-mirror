@@ -112,7 +112,7 @@ const BOX2I PCB_TARGET::GetBoundingBox() const
 }
 
 
-std::shared_ptr<SHAPE> PCB_TARGET::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING aFlash ) const
+std::shared_ptr<SHAPE> PCB_TARGET::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING, DRC_CONSTRAINT_T ) const
 {
     return std::make_shared<SHAPE_CIRCLE>( m_pos, m_size / 2 );
 }
@@ -242,14 +242,13 @@ static struct PCB_TARGET_DESC
         REGISTER_TYPE( PCB_TARGET );
         propMgr.InheritsAfter( TYPE_HASH( PCB_TARGET ), TYPE_HASH( BOARD_ITEM ) );
         propMgr.AddProperty( new PROPERTY<PCB_TARGET, int>( _HKI( "Size" ),
-                    &PCB_TARGET::SetSize, &PCB_TARGET::GetSize, PROPERTY_DISPLAY::PT_SIZE ) );
+                    &PCB_TARGET::SetSize, &PCB_TARGET::GetSize, PROPERTY_DISPLAY::PT_SIZE ) ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY<PCB_TARGET, int>( _HKI( "Width" ),
-                    &PCB_TARGET::SetWidth, &PCB_TARGET::GetWidth, PROPERTY_DISPLAY::PT_SIZE ) );
+                    &PCB_TARGET::SetWidth, &PCB_TARGET::GetWidth, PROPERTY_DISPLAY::PT_SIZE ) ).SetIsCopyable();
 
-        auto shape = new PROPERTY<PCB_TARGET, int>( _HKI( "Shape" ),
-                &PCB_TARGET::SetShape, &PCB_TARGET::GetShape );
         // TODO change the integer to an enum?
         //shape->SetValues( { { 0, _HKI( "Cross" ) }, { 1, ( "Plus" ) } } );
-        propMgr.AddProperty( shape );
+        propMgr.AddProperty( new PROPERTY<PCB_TARGET, int>( _HKI( "Shape" ),
+                &PCB_TARGET::SetShape, &PCB_TARGET::GetShape ) ).SetIsCopyable();
     }
 } _PCB_TARGET_DESC;

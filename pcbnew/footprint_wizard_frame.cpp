@@ -25,6 +25,7 @@
 #include <wx/listbox.h>
 #include <wx/numformatter.h>
 #include <wx/statline.h>
+#include <wx/textctrl.h>
 #include <wx/tokenzr.h>
 #include <wx/wupdlock.h>
 
@@ -98,12 +99,12 @@ FOOTPRINT_WIZARD_FRAME::FOOTPRINT_WIZARD_FRAME( KIWAY* aKiway, wxWindow* aParent
     SetIcon( icon );
 
     m_currentWizard = nullptr;
+    m_builtFootprint = nullptr;
     m_wizardManager = std::make_unique<FOOTPRINT_WIZARD_MANAGER>();
 
     // Create the GAL canvas.
     // Must be created before calling LoadSettings() that needs a valid GAL canvas
-    PCB_DRAW_PANEL_GAL* gal_drawPanel = new PCB_DRAW_PANEL_GAL( this, -1, wxPoint( 0, 0 ),
-                                                                m_frameSize,
+    PCB_DRAW_PANEL_GAL* gal_drawPanel = new PCB_DRAW_PANEL_GAL( this, -1, wxPoint( 0, 0 ), m_frameSize,
                                                                 GetGalDisplayOptions(),
                                                                 EDA_DRAW_PANEL_GAL::GAL_FALLBACK );
     SetCanvas( gal_drawPanel );
@@ -189,7 +190,6 @@ FOOTPRINT_WIZARD_FRAME::FOOTPRINT_WIZARD_FRAME( KIWAY* aKiway, wxWindow* aParent
 
     // Switch to the canvas type set in config
     resolveCanvasType();
-    GetCanvas()->SwitchBackend( m_canvasType );
     ActivateGalCanvas();
 
     updateView();

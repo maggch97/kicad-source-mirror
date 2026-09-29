@@ -71,6 +71,10 @@ struct ERULES
         // rvPadBottom      ( 0.25 ),
         rlMinPadTop         ( EDA_UNIT_UTILS::Mils2IU( pcbIUScale,  10 ) ),
         rlMaxPadTop         ( EDA_UNIT_UTILS::Mils2IU( pcbIUScale,  20 ) ),
+        rlMinPadInner       ( 0.0 ),
+        rlMaxPadInner       ( 0.0 ),
+        rlMinPadBottom      ( 0.0 ),
+        rlMaxPadBottom      ( 0.0 ),
 
         rvViaOuter          ( 0.25 ),
         rlMinViaOuter       ( EDA_UNIT_UTILS::Mils2IU( pcbIUScale,  10 ) ),
@@ -80,16 +84,16 @@ struct ERULES
 
     void parse( wxXmlNode* aRules, std::function<void()> aCheckpoint );
 
-    ///< percent over 100%.  0-> not elongated, 100->twice as wide as is tall
-    ///< Goes into making a scaling factor for "long" pads.
+    /// percent over 100%.  0-> not elongated, 100->twice as wide as is tall
+    /// Goes into making a scaling factor for "long" pads.
     int    psElongationLong;
 
     int    psElongationOffset;  ///< the offset of the hole within the "long" pad.
 
-    ///< solder mask, expressed as percentage of the smaller pad/via dimension
+    /// solder mask, expressed as percentage of the smaller pad/via dimension
     double mvStopFrame;
 
-    ///< solderpaste mask, expressed as percentage of the smaller pad/via dimension
+    /// solderpaste mask, expressed as percentage of the smaller pad/via dimension
     double mvCreamFrame;
     int    mlMinStopFrame;      ///< solder mask, minimum size (Eagle mils, here nanometers)
     int    mlMaxStopFrame;      ///< solder mask, maximum size (Eagle mils, here nanometers)
@@ -102,17 +106,21 @@ struct ERULES
 
     double srRoundness;         ///< corner rounding ratio for SMD pads (percentage)
 
-    ///< corner rounding radius, minimum size (Eagle mils, here nanometers)
+    /// corner rounding radius, minimum size (Eagle mils, here nanometers)
     int    srMinRoundness;
 
-    ///< corner rounding radius, maximum size (Eagle mils, here nanometers)
+    /// corner rounding radius, maximum size (Eagle mils, here nanometers)
     int    srMaxRoundness;
 
     double rvPadTop;            ///< top pad size as percent of drill size
     // double   rvPadBottom;    ///< bottom pad size as percent of drill size
 
-    double rlMinPadTop;         ///< minimum copper annulus on through hole pads
-    double rlMaxPadTop;         ///< maximum copper annulus on through hole pads
+    double rlMinPadTop;         ///< Minimum top layer copper annulus on through hole pads.
+    double rlMaxPadTop;         ///< Maximum top layer copper annulus on through hole pads
+    double rlMinPadInner;       ///< Minimum inner layer copper annulus on through hole pads.
+    double rlMaxPadInner;       ///< Maximum inner layer copper annulus on through hole pads.
+    double rlMinPadBottom;      ///< Minimum bottom layer copper annulus on through hole pads.
+    double rlMaxPadBottom;      ///< Maximum bottom layer copper annulus on through hole pads.
 
     double rvViaOuter;          ///< copper annulus is this percent of via hole
     double rlMinViaOuter;       ///< minimum copper annulus on via
@@ -122,7 +130,7 @@ struct ERULES
 
 
 /**
- * Works with Eagle 6.x XML board files and footprints to implement the Pcbnew #PLUGIN API
+ * Works with Eagle 6.x XML board files and footprints to implement the Pcbnew #PCB_IO API
  * or a portion of it.
  */
 class PCB_IO_EAGLE : public PCB_IO, public LAYER_MAPPABLE_PLUGIN
@@ -143,17 +151,14 @@ public:
     bool CanReadLibrary( const wxString& aFileName ) const override;
     bool CanReadFootprint( const wxString& aFileName ) const override;
 
-    BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                      const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr ) override;
-
     std::vector<FOOTPRINT*> GetImportedCachedLibraryFootprints() override;
 
     void FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aLibraryPath,
                              bool aBestEfforts, const std::map<std::string, UTF8>* aProperties = nullptr) override;
 
-    FOOTPRINT* FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
-                              bool  aKeepUUID = false,
-                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
+    std::unique_ptr<FOOTPRINT> FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                              bool                               aKeepUUID = false,
+                                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
     long long GetLibraryTimestamp( const wxString& aLibraryPath ) const override;
 
@@ -166,6 +171,10 @@ public:
 
     PCB_IO_EAGLE();
     ~PCB_IO_EAGLE();
+
+protected:
+    void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                    const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr ) override;
 
     /**
      * Return the automapped layers.
@@ -288,6 +297,24 @@ private:
                        double aTextDefAngle = 0.0, bool aTextDefMirror = false, bool aTextDefSpin = false );
 
 
+    /**
+     * Reconcile all required footprint design rule adjustments.
+     *
+     * Eagle adjusts footprints post library parsing to determine the final footprint.  This method
+     * performs the same adjustment when importing the Eagle board file.  Please note that the adjusted
+     * footprint will **not** match the footprint defined in the `library` section of the Eagle board
+     * file.
+     *
+     * @note This currently only adjusts the #ERULES::rlMinPadTop, #ERULES::rlMinPadInner, and
+     *       #ERULES::rlMinPadBottom for round through hole pads.
+     *
+     * @note This code assumes that there is no `designrule` section in Eagle footprint library (.lbr)
+     *       files.  If this is not the case, this code should be adjusted accordingly.
+     *
+     * @param aFootprint is the footprint to adjust.
+     */
+    void adjustFootprintForDesignRules( FOOTPRINT* aFootprint );
+
     /// move the BOARD into the center of the page
     void centerBoard();
 
@@ -311,10 +338,10 @@ private:
     void packageHole( FOOTPRINT* aFootprint, wxXmlNode* aTree, bool aCenter ) const;
     void packageSMD( FOOTPRINT* aFootprint, wxXmlNode* aTree ) const;
 
-    ///< Handles common pad properties
+    /// Handles common pad properties
     void transferPad( const EPAD_COMMON& aEaglePad, PAD* aPad ) const;
 
-    ///< Deletes the footprint templates list
+    /// Deletes the footprint templates list
     void deleteTemplates();
 
     typedef std::vector<ELAYER>     ELAYERS;
@@ -325,7 +352,7 @@ private:
     std::map<wxString, int>          m_eagleLayersIds; ///< Eagle layer ids stored by layer name
     std::map<wxString, PCB_LAYER_ID> m_layer_map;      ///< Map of Eagle layers to KiCad layers
 
-    ///< Eagle class number to KiCad netclass
+    /// Eagle class number to KiCad netclass
     std::map<wxString, std::shared_ptr<NETCLASS>>  m_classMap;
 
     wxString                         m_customRules;

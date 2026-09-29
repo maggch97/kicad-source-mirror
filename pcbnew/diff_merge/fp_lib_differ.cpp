@@ -64,7 +64,7 @@ FP_LIB_DIFFER::LoadLibrary( const wxString& aPrettyPath )
     // bilaterally-corrupt footprint vanish from the diff entirely.
     for( const wxString& name : names )
     {
-        std::unique_ptr<FOOTPRINT> owner( io.FootprintLoad( aPrettyPath, name, false, nullptr ) );
+        std::unique_ptr<FOOTPRINT> owner = io.FootprintLoad( aPrettyPath, name, false, nullptr );
 
         if( !owner )
         {

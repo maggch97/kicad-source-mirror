@@ -22,17 +22,21 @@
 
 #pragma once
 
+#include <set>
+#include <vector>
+
+#include <core/multivector.h>
+
 #include <base_units.h>
+#include <default_values.h>
 #include <embedded_files.h>
 #include <symbol.h>
 #include <sch_field.h>
 #include <sch_pin.h>
+#include <jumper_group.h>
 #include <lib_tree_item.h>
 #include <pin_map.h>
-#include <set>
-#include <vector>
-#include <core/multivector.h>
-#include <default_values.h>
+#include <lib_symbol_attributes.h>
 
 class LINE_READER;
 class OUTPUTFORMATTER;
@@ -40,6 +44,11 @@ class REPORTER;
 class LEGACY_SYMBOL_LIB;
 class LIB_SYMBOL;
 class TEST_LIB_SYMBOL_FIXTURE;
+
+namespace kiapi::schematic::types
+{
+class SchematicSymbol;
+}
 
 namespace KIFONT
 {
@@ -49,15 +58,6 @@ namespace KIFONT
 
 typedef MULTIVECTOR<SCH_ITEM, SCH_SHAPE_T, SCH_PIN_T> LIB_ITEMS_CONTAINER;
 typedef LIB_ITEMS_CONTAINER::ITEM_PTR_VECTOR LIB_ITEMS;
-
-
-/* values for member .m_options */
-enum LIBRENTRYOPTIONS
-{
-    ENTRY_NORMAL,     // Libentry is a standard symbol (real or alias)
-    ENTRY_GLOBAL_POWER,      // Libentry is a power symbol
-    ENTRY_LOCAL_POWER // Libentry is a local power symbol
-};
 
 
 extern bool operator<( const LIB_SYMBOL& aItem1, const LIB_SYMBOL& aItem2 );
@@ -119,6 +119,8 @@ public:
 
     virtual ~LIB_SYMBOL() = default;
 
+    LIB_SYMBOL_ATTRIBUTES ComparisonAttributes() const;
+
     /// http://www.boost.org/doc/libs/1_55_0/libs/smart_ptr/sp_techniques.html#weak_without_shared.
     std::shared_ptr<LIB_SYMBOL> SharedPtr() const { return m_me; }
 
@@ -136,8 +138,13 @@ public:
         return dupe;
     }
 
+    EDA_ITEM* Clone() const override
+    {
+        return new LIB_SYMBOL( *this, m_library );
+    }
+
     /**
-     * Returns a dummy LIB_SYMBOL, used when one is missing in the schematic
+     * Return a dummy #LIB_SYMBOL, used when one is missing in the schematic
      */
     static LIB_SYMBOL* GetDummy();
 
@@ -176,7 +183,7 @@ public:
     wxString GetName() const override { return m_name; }
 
     LIB_ID GetLIB_ID() const override { return m_libId; }
-    wxString GetDesc() override { return GetShownDescription(); }
+    wxString GetDesc() override { return GetShownDescription( FOR_GUI ); }
     wxString GetFootprint() override;
     int GetSubUnitCount() const override { return GetUnitCount(); }
 
@@ -188,10 +195,10 @@ public:
 
     wxString GetLibNickname() const override { return GetLibraryName(); }
 
-    ///< Sets the Description field text value
+    /// Set the Description field text value
     void SetDescription( const wxString& aDescription );
 
-    ///< Gets the Description field text value */
+    /// Get the Description field text value */
     wxString GetDescription() const override
     {
         if( GetDescriptionField().GetText().IsEmpty() && IsDerived() )
@@ -203,9 +210,12 @@ public:
         return GetDescriptionField().GetText();
     }
 
-    wxString GetShownDescription( int aDepth = 0 ) const override;
+    wxString GetShownDescription( RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const override;
 
     void SetKeyWords( const wxString& aKeyWords );
+
+    /// Return only this symbol's keywords, without inheriting from its parent.
+    const wxString& GetRawKeyWords() const { return m_keyWords; }
 
     wxString GetKeyWords() const override
     {
@@ -218,7 +228,7 @@ public:
         return m_keyWords;
     }
 
-    wxString GetShownKeyWords( int aDepth = 0 ) const override;
+    wxString GetShownKeyWords( RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const override;
 
     std::vector<SEARCH_TERM>& GetSearchTerms() override { return m_searchTermsCache; }
 
@@ -321,12 +331,16 @@ public:
     /**
      * Get the symbol bounding box excluding fields.
      *
-     * @return the symbol bounding box ( in user coordinates ) without fields
+     * If aUnit == 0, unit is not used
+     * if aBodyStyle == 0, body style is not used
+     * Fields are not taken in account
+     *
      * @param aUnit = unit selection = 0, or 1..n
      * @param aBodyStyle = body style selection = 0, or 1..n
-     *  If aUnit == 0, unit is not used
-     *  if aBodyStyle == 0, body style is not used
-     *  Fields are not taken in account
+     * @param aIncludePins includes pins in the bounding box when true
+     * @param aIncludePrivateItems
+     *
+     * @return the symbol bounding box ( in user coordinates ) without fields
      */
     const BOX2I GetBodyBoundingBox( int aUnit, int aBodyStyle, bool aIncludePins,
                                     bool aIncludePrivateItems ) const;
@@ -361,9 +375,13 @@ public:
 
     /**
      * Check whether symbol units are interchangeable.
+     *
+     * The units belong to the drawings, so a derived symbol resolves this through its root
+     * symbol.
+     *
      * @return False when interchangeable, true otherwise.
      */
-    bool UnitsLocked() const { return m_unitsLocked; }
+    bool UnitsLocked() const;
 
     /**
      * Overwrite all the existing fields in this symbol with fields supplied in \a aFieldsList.
@@ -375,7 +393,8 @@ public:
     /**
      * Populate a std::vector with SCH_FIELDs, sorted in ordinal order.
      *
-     * @param aList is the vector to populate.
+     * @param[out] aList is the vector to populate.
+     * @param aVisibleOnly limits returned fields to only the visible fields.
      */
     void GetFields( std::vector<SCH_FIELD*>& aList, bool aVisibleOnly = false ) const override;
 
@@ -424,23 +443,23 @@ public:
     const SCH_FIELD* GetField( FIELD_T aFieldType ) const;
     SCH_FIELD* GetField( FIELD_T aFieldType );
 
-    /** Return reference to the value field. */
+    // Return reference to the value field.
     SCH_FIELD& GetValueField() { return *GetField( FIELD_T::VALUE ); }
     const SCH_FIELD& GetValueField() const;
 
-    /** Return reference to the reference designator field. */
+    // Return reference to the reference designator field.
     SCH_FIELD& GetReferenceField() { return *GetField( FIELD_T::REFERENCE ); }
     const SCH_FIELD& GetReferenceField() const;
 
-    /** Return reference to the footprint field */
+    // Return reference to the footprint field
     SCH_FIELD& GetFootprintField() { return *GetField( FIELD_T::FOOTPRINT ); }
     const SCH_FIELD& GetFootprintField() const;
 
-    /** Return reference to the datasheet field. */
+    // Return reference to the datasheet field.
     SCH_FIELD& GetDatasheetField() { return *GetField( FIELD_T::DATASHEET ); }
     const SCH_FIELD& GetDatasheetField() const;
 
-    /** Return reference to the description field. */
+    // Return reference to the description field.
     SCH_FIELD& GetDescriptionField() {return *GetField( FIELD_T::DESCRIPTION ); }
     const SCH_FIELD& GetDescriptionField() const;
 
@@ -451,7 +470,7 @@ public:
         return GetReferenceField().GetText();
     }
 
-    const wxString GetValue( bool aResolve, const SCH_SHEET_PATH* aPath, bool aAllowExtraText,
+    const wxString GetValue( const SCH_SHEET_PATH* aPath, RESOLUTION_CONTEXT aContext,
                              const wxString& aVariantName = wxEmptyString ) const override
     {
         return GetValueField().GetText();
@@ -488,6 +507,7 @@ public:
     void SetFootprintProp( const wxString& aFootprint )
     {
         GetFootprintField().SetText( aFootprint );
+        cacheSearchTerms();
     }
 
     wxString GetDatasheetProp() const
@@ -615,6 +635,12 @@ public:
     bool GetExcludedFromPosFilesProp() const { return GetExcludedFromPosFiles(); }
     void SetExcludedFromPosFilesProp( bool aExclude ) { SetExcludedFromPosFiles( aExclude ); }
 
+    void Serialize( kiapi::schematic::types::SchematicSymbol& aOutput, bool aSkipPins = false ) const;
+    bool Deserialize( const kiapi::schematic::types::SchematicSymbol& aInput );
+
+    void Serialize( google::protobuf::Any& aContainer ) const override;
+    bool Deserialize( const google::protobuf::Any& aContainer ) override;
+
     std::set<KIFONT::OUTLINE_FONT*> GetFonts() const override;
 
     EMBEDDED_FILES* GetEmbeddedFiles() override;
@@ -626,8 +652,9 @@ public:
     /**
      * Automatically orient all the fields in the symbol.
      *
-     * @param aScreen is the SCH_SCREEN associated with the current instance of the symbol.
+     * @param aScreen is the #SCH_SCREEN associated with the current instance of the symbol.
      *                Required when \a aAlgo is AUTOPLACE_MANUAL; optional otherwise.
+     * @param aAlgo is the field placement algorithm to use.
      */
     void AutoplaceFields( SCH_SCREEN* aScreen, AUTOPLACE_ALGO aAlgo ) override;
 
@@ -636,9 +663,10 @@ public:
     /**
      * Resolve any references to system tokens supported by the symbol.
      *
+     * @param aToken is the text variable to resolve.
      * @param aDepth a counter to limit recursion and circular references.
      */
-    bool ResolveTextVar( wxString* token, int aDepth = 0 ) const;
+    bool ResolveTextVar( wxString* aToken, int aDepth = 0 ) const;
 
     void Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& aPlotOpts,
                int aUnit, int aBodyStyle, const VECTOR2I& aOffset, bool aDimmed ) override;
@@ -674,8 +702,7 @@ public:
      * @param aUnit Unit number to collect; 0 = all units
      * @param aBodyStyle Alternate body style to collect; 0 = all body styles
      */
-    std::vector<const SCH_PIN*> GetGraphicalPins( int aUnit = 0, int aBodyStyle = 0 ) const;
-    std::vector<SCH_PIN*> GetGraphicalPins( int aUnit = 0, int aBodyStyle = 0 );
+    std::vector<SCH_PIN*> GetGraphicalPins( int aUnit = 0, int aBodyStyle = 0 ) const override;
 
     /**
      * Logical pins: Return expanded logical pins based on stacked-pin notation.
@@ -705,9 +732,6 @@ public:
     std::vector<UNIT_PIN_INFO> GetUnitPinInfo() const;
 
 
-    // Deprecated: use GetGraphicalPins(). This override remains to satisfy SYMBOL's pure virtual.
-    std::vector<SCH_PIN*> GetPins() const override;
-
     /**
      * @return a count of pins for all units / converts.
      */
@@ -735,6 +759,13 @@ public:
      * @return Vector of matching pin objects, empty if none found.
      */
     std::vector<SCH_PIN*> GetPinsByNumber( const wxString& aNumber, int aUnit = 0, int aBodyStyle = 0 );
+
+    /**
+     * Return true if \a aNumber names a pin of this symbol, in any unit or body style.
+     *
+     * @param aNumber - Pin number to look for.
+     */
+    bool HasPinNumber( const wxString& aNumber ) const;
 
     /**
      * Return true if this symbol's pins do not match another symbol's pins. This is used to
@@ -812,7 +843,7 @@ public:
     /**
      * This function finds the filled draw items that are covering up smaller draw items
      * and replaces their body fill color with the background fill color.
-    */
+     */
     void FixupDrawItems();
 
     INSPECT_RESULT Visit( INSPECTOR inspector, void* testData,
@@ -854,59 +885,63 @@ public:
      * Each jumper pin group is a set of pin numbers that should be treated as internally connected.
      * @return The list of jumper pin groups in this symbols
      */
-    std::vector<std::set<wxString>>& JumperPinGroups() { return m_jumperPinGroups; }
-    const std::vector<std::set<wxString>>& JumperPinGroups() const { return m_jumperPinGroups; }
-
-    /// Retrieves the jumper group containing the specified pin number, if one exists
-    std::optional<const std::set<wxString>> GetJumperPinGroup( const wxString& aPinNumber ) const;
+    JUMPER_GROUP_SET&       JumperPinGroups() { return m_jumperPinGroups; }
+    const JUMPER_GROUP_SET& JumperPinGroups() const { return m_jumperPinGroups; }
 
     /**
      * @return true if the symbol has multiple units per symbol.
      * When true, the reference has a sub reference to identify symbol.
      */
-    bool IsMultiUnit() const override { return m_unitCount > 1; }
+    bool IsMultiUnit() const override { return GetUnitCount() > 1; }
 
     static wxString LetterSubReference( int aUnit, wxChar aInitialLetter );
 
     bool IsMultiBodyStyle() const override { return GetBodyStyleCount() > 1; }
 
-    int GetBodyStyleCount() const override
-    {
-        if( m_demorgan )
-            return 2;
-        else
-            return std::max( 1, (int) m_bodyStyleNames.size() );
-    }
+    /**
+     * The body styles are a property of the drawings, which a derived symbol inherits from its
+     * root symbol rather than owning, so these resolve through the inheritance chain.
+     */
+    int GetBodyStyleCount() const override;
+    bool HasDeMorganBodyStyles() const override;
+    const std::vector<wxString>& GetBodyStyleNames() const;
 
-    bool HasDeMorganBodyStyles() const override { return m_demorgan; }
     void SetHasDeMorganBodyStyles( bool aFlag ) { m_demorgan = aFlag; }
-
-    const std::vector<wxString>& GetBodyStyleNames() const { return m_bodyStyleNames; }
     void SetBodyStyleNames( const std::vector<wxString>& aBodyStyleNames ) { m_bodyStyleNames = aBodyStyleNames; }
 
     /**
-     * Set or clear the alternate body style (DeMorgan) for the symbol.
+     * Set the number of body styles for the symbol.
      *
-     * If the symbol already has an alternate body style set and aHasAlternate is false, all
-     * of the existing draw items for the alternate body style are remove.  If the alternate
-     * body style is not set and aHasAlternate is true, than the base draw items are duplicated
-     * and added to the symbol.
+     * Draw items belonging to body styles beyond \a aCount are always deleted.  Draw items for
+     * the new body styles are duplicated from the standard body style when the symbol gains
+     * body styles and the caller asks for it.
      *
-     * @param aHasAlternate - Set or clear the symbol alternate body style.
-     * @param aDuplicatePins - Duplicate all pins from original body style if true.
+     * @param aCount - Number of body styles, at least 1.
+     * @param aDuplicateDrawItems - Duplicate all graphics from the standard body style if true.
+     * @param aDuplicatePins - Duplicate all pins from the standard body style if true.
      */
     void SetBodyStyleCount( int aCount, bool aDuplicateDrawItems, bool aDuplicatePins );
+
+    /**
+     * Delete the draw items belonging to a body style beyond \a aBodyStyleCount.
+     *
+     * @param aBodyStyleCount - Number of body styles to keep.
+     */
+    void PruneBodyStyleDrawItems( int aBodyStyleCount );
 
     /**
      * Comparison test that can be used for operators.
      *
      * @param aRhs is the right hand side symbol used for comparison.
+     * @param aCompareFlags are used to control the comparison.
+     * @param aReporter is an optional #REPORTER object to write comparison status information.
      *
      * @return -1 if this symbol is less than \a aRhs
      *         1 if this symbol is greater than \a aRhs
      *         0 if this symbol is the same as \a aRhs
      */
-    int Compare( const LIB_SYMBOL& aRhs, int aCompareFlags = 0, REPORTER* aReporter = nullptr ) const;
+    int Compare( const LIB_SYMBOL& aRhs, int aCompareFlags = ~COMPARE_FLAGS::UNIT,
+                 REPORTER* aReporter = nullptr ) const;
 
     const LIB_SYMBOL& operator=( const LIB_SYMBOL& aSymbol );
 
@@ -921,6 +956,10 @@ public:
 
     /**
      * Return a list of SCH_ITEM objects separated by unit and convert number.
+     *
+     * Every unit and body style of the symbol is reported, whether or not it owns any draw
+     * items.  Items that belong to no numbered unit or body style (0 meaning "common to all")
+     * get a record of their own.
      *
      * @note This does not include SCH_FIELD objects since they are not associated with
      *       unit and/or convert numbers.
@@ -944,7 +983,7 @@ public:
      * @param aSymbol is the symbol to compare to.
      *
      * @return a measure of similarity from 1.0 (identical) to 0.0 (no similarity).
-    */
+     */
     double Similarity( const SCH_ITEM& aSymbol ) const override;
 
     void RefreshLibraryTreeCaches();
@@ -956,18 +995,30 @@ public:
     void Show( int nestLevel, std::ostream& os ) const override { ShowDummy( os ); }
 #endif
 
+protected:
+    /**
+     * The library symbol specific sort order is as follows:
+     *
+     *   - Symbol name
+     *   - Symbol lib_id
+     *   - Symbol parent (if inherited)
+     *   - Power flag
+     *   - Unit count
+     *   - Drawings
+     *   - Pins
+     *   - Fields
+     *   - Attributes
+     */
+    int compare( const SCH_ITEM& aOther,
+                 int aCompareFlags = ~( COMPARE_FLAGS::UUID | COMPARE_FLAGS::UNIT ) ) const override;
+
 private:
     // We create a different set parent function for this class, so we hide the inherited one.
     using EDA_ITEM::SetParent;
 
-    /**
-     * The library symbol specific sort order is as follows:
-     *
-     *   - The result of #SCH_ITEM::compare()
-     */
-    int compare( const SCH_ITEM& aOther, int aCompareFlags = SCH_ITEM::COMPARE_FLAGS::EQUALITY ) const override;
-
     void deleteAllFields();
+
+    wxString getShownDescription( RESOLUTION_CONTEXT aContext, int aDepth ) const;
 
     /// @return true when this symbol defines its own pin-map bundle (either named maps or
     ///         associated footprints), so the bundle is not inherited from the parent.
@@ -1015,7 +1066,7 @@ private:
 
     /// A list of jumper pin groups, each of which is a set of pin numbers that should be jumpered
     /// together (treated as internally connected for the purposes of connectivity)
-    std::vector<std::set<wxString> > m_jumperPinGroups;
+    JUMPER_GROUP_SET m_jumperPinGroups;
 
     /// Flag that this symbol should automatically treat sets of two or more pins with the same
     /// number as jumpered pin groups

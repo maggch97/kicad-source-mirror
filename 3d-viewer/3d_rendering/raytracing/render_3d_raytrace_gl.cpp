@@ -29,6 +29,7 @@
 #include <wx/log.h>
 
 #include "render_3d_raytrace_gl.h"
+#include "../orphaned_gl_objects.h"
 #include "../common_ogl/ogl_utils.h"
 
 #include <core/profile.h>        // To use GetRunningMicroSecs or another profiling utility
@@ -58,7 +59,7 @@ void RENDER_3D_RAYTRACE_GL::deletePbo()
     // Delete PBO if it was created
     if( m_openglSupportsVertexBufferObjects )
     {
-        if( glIsBuffer( m_pboId ) )
+        if( !ORPHANED_GL_OBJECTS::Active() && glIsBuffer( m_pboId ) )
             glDeleteBuffers( 1, &m_pboId );
 
         m_pboId = GL_NONE;
@@ -78,8 +79,7 @@ void RENDER_3D_RAYTRACE_GL::SetCurWindowSize( const wxSize& aSize )
 }
 
 
-bool RENDER_3D_RAYTRACE_GL::Redraw( bool aIsMoving, REPORTER* aStatusReporter,
-                                    REPORTER* aWarningReporter )
+bool RENDER_3D_RAYTRACE_GL::Redraw( bool aIsMoving )
 {
     bool requestRedraw = false;
 
@@ -102,12 +102,12 @@ bool RENDER_3D_RAYTRACE_GL::Redraw( bool aIsMoving, REPORTER* aStatusReporter,
     // Reload board if it was requested
     if( m_reloadRequested )
     {
-        if( aStatusReporter )
-            aStatusReporter->Report( _( "Loading..." ) );
+        if( m_activityReporter )
+            m_activityReporter->Report( _( "Loading..." ) );
 
         //aIsMoving = true;
         requestRedraw = true;
-        Reload( aStatusReporter, aWarningReporter, false );
+        Reload( false );
     }
 
 
@@ -182,7 +182,7 @@ bool RENDER_3D_RAYTRACE_GL::Redraw( bool aIsMoving, REPORTER* aStatusReporter,
 
             if( ptrPBO )
             {
-                render( ptrPBO, aStatusReporter );
+                render( ptrPBO );
 
                 if( m_renderState != RT_RENDER_STATE_FINISH )
                     requestRedraw = true;

@@ -169,22 +169,25 @@ protected:
     {
         LIB_TABLE_GRID_DATA_MODEL* tbl = static_cast<LIB_TABLE_GRID_DATA_MODEL*>( m_grid->GetTable() );
 
-        if( tbl->GetNumberRows() > aRow )
+        if( aRow < tbl->GetNumberRows() )
         {
-            LIBRARY_TABLE_ROW& row = tbl->At( static_cast<size_t>( aRow ) );
-            const wxString&    options = row.Options();
-            wxString           result = options;
+            LIBRARY_TABLE_ROW&          row = tbl->At( static_cast<size_t>( aRow ) );
+            const wxString&             options = row.Options();
+            wxString                    result = options;
             std::map<std::string, UTF8> choices;
 
             SCH_IO_MGR::SCH_FILE_T pi_type = SCH_IO_MGR::EnumFromStr( row.Type() );
-            IO_RELEASER<SCH_IO> pi( SCH_IO_MGR::FindPlugin( pi_type ) );
-            pi->GetLibraryOptions( &choices );
+            IO_RELEASER<SCH_IO>    pi( SCH_IO_MGR::FindPlugin( pi_type ) );
+
+            if( pi )
+                pi->GetLibraryOptions( &choices );
 
             DIALOG_PLUGIN_OPTIONS dlg( wxGetTopLevelParent( m_grid ), row.Nickname(), choices, options, &result );
             dlg.ShowModal();
 
             if( options != result )
             {
+                tbl->OnModify();
                 row.SetOptions( result );
                 m_grid->Refresh();
             }
@@ -194,7 +197,8 @@ protected:
     void openTable( const LIBRARY_TABLE_ROW& aRow ) override
     {
         wxFileName fn( LIBRARY_MANAGER::ExpandURI( aRow.URI(), Pgm().GetSettingsManager().Prj() ) );
-        std::shared_ptr<LIBRARY_TABLE> child = std::make_shared<LIBRARY_TABLE>( fn, LIBRARY_TABLE_SCOPE::GLOBAL, LIBRARY_TABLE_TYPE::SYMBOL );
+        std::shared_ptr<LIBRARY_TABLE> child = std::make_shared<LIBRARY_TABLE>( fn, LIBRARY_TABLE_SCOPE::GLOBAL,
+                                                                                LIBRARY_TABLE_TYPE::SYMBOL );
 
         if( !child->IsOk() )
         {
@@ -232,7 +236,12 @@ void PANEL_SYM_LIB_TABLE::OpenTable( const std::shared_ptr<LIBRARY_TABLE>& aTabl
 
     for( int ii = 2; ii < (int) m_notebook->GetPageCount(); ++ii )
     {
-        if( m_notebook->GetPageText( ii ) == tabTitle )
+        wxString candidate = m_notebook->GetPageText( ii );
+
+        if( candidate.EndsWith( " *" ) )
+            candidate = candidate.Left( candidate.Length() - 2 );
+
+        if( candidate == tabTitle )
         {
             // Something is pretty fishy with wxAuiNotebook::ChangeSelection(); on Mac at least it
             // results in a re-entrant call where the second call is one page behind.
@@ -433,32 +442,6 @@ PANEL_SYM_LIB_TABLE::PANEL_SYM_LIB_TABLE( DIALOG_EDIT_LIBRARY_TABLES* aParent, P
     m_notebook->Bind( wxEVT_AUINOTEBOOK_PAGE_CLOSE, &PANEL_SYM_LIB_TABLE::onNotebookPageCloseRequest, this );
     m_notebook->Bind( wxEVT_AUINOTEBOOK_PAGE_CHANGING, &PANEL_SYM_LIB_TABLE::onNotebookPageChangeRequest, this );
     m_browseButton->Bind( wxEVT_BUTTON, &PANEL_SYM_LIB_TABLE::browseLibrariesHandler, this );
-
-    m_parent->SetCanCloseCheck(
-            [this]()
-            {
-                for( int ii = 0; ii < (int) m_notebook->GetPageCount(); ++ii )
-                {
-                    LIB_TABLE_NOTEBOOK_PANEL* panel =
-                            static_cast<LIB_TABLE_NOTEBOOK_PANEL*>( m_notebook->GetPage( ii ) );
-
-                    if( panel->GetClosable() )
-                    {
-                        bool wasDirty = panel->TableModified();
-
-                        if( !panel->GetCanClose() )
-                            return false;
-
-                        if( wasDirty && !panel->TableModified() )
-                        {
-                            m_parent->m_GlobalTableChanged = true;
-                            m_parent->m_ProjectTableChanged = true;
-                        }
-                    }
-                }
-
-                return true;
-            } );
 }
 
 
@@ -679,7 +662,7 @@ void PANEL_SYM_LIB_TABLE::browseLibrariesHandler( wxCommandEvent& event )
 
 void PANEL_SYM_LIB_TABLE::appendRowHandler( wxCommandEvent& event )
 {
-    LIB_TABLE_GRID_TRICKS::AppendRowHandler( cur_grid() );
+    LIB_TABLE_GRID_TRICKS::AppendRowHandler( cur_grid(), SCH_IO_MGR::ShowType( SCH_IO_MGR::SCH_KICAD ) );
 }
 
 
@@ -748,11 +731,14 @@ void PANEL_SYM_LIB_TABLE::onReset( wxCommandEvent& event )
                                                           lastGlobalLibDir, wxEmptyString ),
                     true /* take ownership */ );
 
-    LIB_TABLE_NOTEBOOK_PANEL* panel0 =
-            static_cast<LIB_TABLE_NOTEBOOK_PANEL*>( m_notebook->GetPage( 0 ) );
+    LIB_TABLE_NOTEBOOK_PANEL* panel0 = static_cast<LIB_TABLE_NOTEBOOK_PANEL*>( m_notebook->GetPage( 0 ) );
     panel0->ClearDirty();
+
     static_cast<LIB_TABLE_GRID_DATA_MODEL*>( grid->GetTable() )->SetChangeCallback(
-            [panel0]() { panel0->MarkDirty(); } );
+            [panel0]()
+            {
+                panel0->MarkDirty();
+            } );
 
     m_parent->m_GlobalTableChanged = true;
 
@@ -908,46 +894,58 @@ bool PANEL_SYM_LIB_TABLE::TransferDataFromWindow()
     if( !verifyTables() )
         return false;
 
+    bool                          success = true;
     LIBRARY_MANAGER&              manager = Pgm().GetLibraryManager();
-    std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_SCOPE::GLOBAL );
-    wxCHECK( optTable, false );
-    LIBRARY_TABLE* globalTable = *optTable;
+    int                           firstNestedTable = 1;
+    std::optional<LIBRARY_TABLE*> globalTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL,
+                                                               LIBRARY_TABLE_SCOPE::GLOBAL );
 
-    if( get_model( 0 )->Table() != *globalTable )
+    if( globalTable.has_value() && get_model( 0 )->Table() != *globalTable.value() )
     {
         m_parent->m_GlobalTableChanged = true;
-        *globalTable = get_model( 0 )->Table();
+        *globalTable.value() = get_model( 0 )->Table();
 
-        globalTable->Save().map_error(
-                []( const LIBRARY_ERROR& aError )
+        globalTable.value()->Save().map_error(
+                [&success]( const LIBRARY_ERROR& aError )
                 {
                     wxMessageBox( _( "Error saving global library table:\n\n" ) + aError.message,
                                   _( "File Save Error" ), wxOK | wxICON_ERROR );
+                    success = false;
                 } );
     }
 
-    optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_SCOPE::PROJECT );
+    std::optional<LIBRARY_TABLE*> projectTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL,
+                                                                LIBRARY_TABLE_SCOPE::PROJECT );
 
-    if( optTable.has_value() && get_model( 1 )->Table().Path() == optTable.value()->Path() )
+    if( projectTable.has_value() && get_model( 1 )->Table().Path() == projectTable.value()->Path() )
     {
-        LIBRARY_TABLE* projectTable = *optTable;
+        firstNestedTable = 2;
 
-        if( get_model( 1 )->Table() != *projectTable )
+        if( get_model( 1 )->Table() != *projectTable.value() )
         {
             m_parent->m_ProjectTableChanged = true;
-            *projectTable = get_model( 1 )->Table();
+            *projectTable.value() = get_model( 1 )->Table();
 
-            projectTable->Save().map_error(
-                    []( const LIBRARY_ERROR& aError )
+            projectTable.value()->Save().map_error(
+                    [&success]( const LIBRARY_ERROR& aError )
                     {
                         wxMessageBox( _( "Error saving project library table:\n\n" ) + aError.message,
                                       _( "File Save Error" ), wxOK | wxICON_ERROR );
+                        success = false;
                     } );
         }
     }
 
-    m_suppressNotebookPageEvents = true;
-    return true;
+    for( int ii = firstNestedTable; ii < (int) m_notebook->GetPageCount(); ++ii )
+    {
+        LIB_TABLE_NOTEBOOK_PANEL* panel = static_cast<LIB_TABLE_NOTEBOOK_PANEL*>( m_notebook->GetPage( ii ) );
+
+        if( panel->TableModified() )
+            success &= panel->SaveTable();
+    }
+
+    m_suppressNotebookPageEvents = success;
+    return success;
 }
 
 
@@ -1070,15 +1068,11 @@ void InvokeSchEditSymbolLibTable( KIWAY* aKiway, wxWindow *aParent )
     DIALOG_EDIT_LIBRARY_TABLES dlg( aParent, _( "Symbol Libraries" ) );
     dlg.SetKiway( &dlg, aKiway );
 
-    dlg.InstallPanel( new PANEL_SYM_LIB_TABLE( &dlg, &aKiway->Prj() ) );
+    PANEL_SYM_LIB_TABLE* panel = new PANEL_SYM_LIB_TABLE( &dlg, &aKiway->Prj() );
+    dlg.InstallPanel( panel, panel->GetNotebook() );
 
-    if( dlg.ShowModal() == wxID_CANCEL )
-    {
-        if( symbolEditor )
-            symbolEditor->ThawLibraryTree();
-
-        return;
-    }
+    // User can choose to save changes on a Cancel, so don't exit on wxID_CANCEL.
+    dlg.ShowModal();
 
     if( dlg.m_GlobalTableChanged )
         Pgm().GetLibraryManager().LoadGlobalTables( { LIBRARY_TABLE_TYPE::SYMBOL } );

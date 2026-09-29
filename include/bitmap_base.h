@@ -182,21 +182,21 @@ public:
     bool SetImage( const wxImage& aImage );
 
     /**
-    * Write the bitmap data to \a aOutStream.
-    *
-    * This writes binary data, not hexadecimal strings
-    *
-    * @param aOutStream The output stream to write to.
-    * @return true if success writing else false.
-    */
+     * Write the bitmap data to \a aOutStream.
+     *
+     * This writes binary data, not hexadecimal strings
+     *
+     * @param aOutStream The output stream to write to.
+     * @return true if success writing else false.
+     */
     bool SaveImageData( wxOutputStream& aOutStream ) const;
 
     /**
-     * Load an image data saved by #SaveData.
+     * Load an image data saved by #SaveImageData.
      *
      * The file format must be png format in hexadecimal.
      *
-     * @param aLine the LINE_READER used to read the data file.
+     * @param aLine the #LINE_READER used to read the data file.
      * @param aErrorMsg Description of the error if an error occurs while loading the
      *                  png bitmap data.
      * @return true if the bitmap loaded successfully.
@@ -218,6 +218,23 @@ public:
     void Rotate( bool aRotateCCW );
 
     void ConvertToGreyscale();
+
+    /**
+     * Invert the colours of the image (e.g. white becomes black).
+     *
+     * The alpha channel is not modified.
+     */
+    void InvertColors();
+
+    /**
+     * Convert \a aColour to transparent in the image, proportionally to the 'distance'
+     * of each pixel from \a aColour.
+     *
+     * Pixels matching \a aColour exactly become fully transparent. Pixels further
+     * away from it keep proportionally more opacity. The alpha channel is added
+     * if the image does not have one.
+     */
+    void ConvertColourToAlpha( const wxColour& aColour );
 
     bool IsMirroredX() const { return m_isMirroredX; }
     bool IsMirroredY() const { return m_isMirroredY; }
@@ -273,6 +290,13 @@ private:
      * Mirror the wxImage pixel data in-place without allocating a new image.
      */
     static void mirrorImageInPlace( wxImage& aImage, FLIP_DIRECTION aFlipDirection );
+
+    /**
+     * Invert the colour of every pixel of the wxImage in-place without allocating a new image.
+     *
+     * The alpha channel is not modified.
+     */
+    static void invertImageInPlace( wxImage& aImage );
 
     double    m_scale;              ///< The scaling factor of the bitmap
                                     ///< with #m_pixelSizeIu, controls the actual draw size.

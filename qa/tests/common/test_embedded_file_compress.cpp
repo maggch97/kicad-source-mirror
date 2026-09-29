@@ -17,15 +17,21 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include <magic_enum.hpp>
-#include <magic_enum_iostream.hpp>
 #include <boost/test/unit_test.hpp>
-#include <mmh3_hash.h>
-#include <embedded_files.h>
+
+#include <random>
 
 #include <wx/wfstream.h>
 
-#include <random>
+#include <qa_utils/file_utils.h>
+
+#include <magic_enum.hpp>
+#include <magic_enum_iostream.hpp>
+
+#include <mmh3_hash.h>
+#include <embedded_files.h>
+
+
 using magic_enum::iostream_operators::operator<<;
 
 BOOST_AUTO_TEST_SUITE( EmbeddedFiles )
@@ -143,7 +149,8 @@ BOOST_AUTO_TEST_CASE( DecompressAndDecode_ChecksumError )
 BOOST_AUTO_TEST_CASE( ComputeFileHash_MatchesEmbeddedHash )
 {
     // Create a temp file with known content
-    wxFileName tempFile = wxFileName::CreateTempFileName( wxS( "kicad_embed_test" ) );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_embed_test" );
+    wxFileName               tempFile = tempDir.CreateChildFileStr( "test.txt" );
     std::string data = "Test file content for hash computation";
 
     {
@@ -163,17 +170,17 @@ BOOST_AUTO_TEST_CASE( ComputeFileHash_MatchesEmbeddedHash )
     EMBEDDED_FILES::EMBEDDED_FILE* embedded = files.AddFile( tempFile, false );
     BOOST_REQUIRE( embedded != nullptr );
     BOOST_CHECK_EQUAL( computedHash, embedded->data_hash );
-
-    // Clean up
-    wxRemoveFile( tempFile.GetFullPath() );
 }
 
 
 BOOST_AUTO_TEST_CASE( ComputeFileHash_DifferentContent )
 {
     // Create two temp files with different content
-    wxFileName tempFile1 = wxFileName::CreateTempFileName( wxS( "kicad_embed_test1" ) );
-    wxFileName tempFile2 = wxFileName::CreateTempFileName( wxS( "kicad_embed_test2" ) );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_embed_test_diff" );
+
+    wxFileName tempFile1 = tempDir.CreateChildFileStr( "file1.txt" );
+    wxFileName tempFile2 = tempDir.CreateChildFileStr( "file2.txt" );
+
     std::string data1 = "Content version 1";
     std::string data2 = "Content version 2";
 
@@ -198,10 +205,6 @@ BOOST_AUTO_TEST_CASE( ComputeFileHash_DifferentContent )
 
     // Hashes should be different
     BOOST_CHECK_NE( hash1, hash2 );
-
-    // Clean up
-    wxRemoveFile( tempFile1.GetFullPath() );
-    wxRemoveFile( tempFile2.GetFullPath() );
 }
 
 
@@ -365,6 +368,78 @@ BOOST_AUTO_TEST_CASE( DeepCopyAllocatesIndependentPayloads )
     BOOST_REQUIRE( deepFile );
     BOOST_CHECK_NE( deepFile, file );
     BOOST_CHECK_EQUAL( deepFile->data_hash, file->data_hash );
+}
+
+
+// A paged setup dialog commits its working copy on both page change and OK, so the commit must
+// leave the source intact.  A destructive commit wiped the board/schematic on the second pass and
+// silently dropped the embedded drawing sheet (issue 24998).
+BOOST_AUTO_TEST_CASE( AssignSharedFromIsIdempotent )
+{
+    EMBEDDED_FILES working;
+
+    auto* file = new EMBEDDED_FILES::EMBEDDED_FILE();
+    file->name = wxS( "ARTIDIS-KiCAD_HEADER.kicad_wks" );
+    file->type = EMBEDDED_FILES::EMBEDDED_FILE::FILE_TYPE::WORKSHEET;
+    file->decompressedData.assign( { '1', '2', '3' } );
+
+    MMH3_HASH hash( EMBEDDED_FILES::Seed() );
+    hash.add( file->decompressedData );
+    file->data_hash = hash.digest().ToString();
+
+    BOOST_REQUIRE_EQUAL( EMBEDDED_FILES::CompressAndEncode( *file ),
+                         EMBEDDED_FILES::RETURN_CODE::OK );
+
+    working.AddFile( file );
+
+    EMBEDDED_FILES target;
+
+    target.AssignSharedFrom( working );
+    target.AssignSharedFrom( working );
+
+    // IsEmpty() gates whether the embedded_files block is written on save.
+    BOOST_CHECK( !target.IsEmpty() );
+    BOOST_CHECK( target.HasFile( wxS( "ARTIDIS-KiCAD_HEADER.kicad_wks" ) ) );
+    BOOST_CHECK( working.HasFile( wxS( "ARTIDIS-KiCAD_HEADER.kicad_wks" ) ) );
+
+    // Self-assignment must not empty the collection.
+    working.AssignSharedFrom( working );
+    BOOST_CHECK( working.HasFile( wxS( "ARTIDIS-KiCAD_HEADER.kicad_wks" ) ) );
+
+    std::set<wxString> exclude{ wxS( "ARTIDIS-KiCAD_HEADER.kicad_wks" ) };
+    working.AssignSharedFrom( working, exclude );
+    BOOST_CHECK( !working.HasFile( wxS( "ARTIDIS-KiCAD_HEADER.kicad_wks" ) ) );
+}
+
+
+// AddFile() destroys a name-duplicate, so it must hand back the entry the collection holds;
+// callers that kept using their own pointer were reading freed memory (issue 25362)
+BOOST_AUTO_TEST_CASE( AddFileReturnsTheStoredEntry )
+{
+    EMBEDDED_FILES files;
+
+    auto* first = new EMBEDDED_FILES::EMBEDDED_FILE();
+    first->name = wxS( "duplicate.step" );
+    first->decompressedData.assign( { 'k', 'e', 'p', 't' } );
+
+    BOOST_REQUIRE_EQUAL( files.AddFile( first ), first );
+
+    auto* duplicate = new EMBEDDED_FILES::EMBEDDED_FILE();
+    duplicate->name = wxS( "duplicate.step" );
+    duplicate->decompressedData.assign( { 'd', 'r', 'o', 'p', 'p', 'e', 'd' } );
+
+    EMBEDDED_FILES::EMBEDDED_FILE* stored = files.AddFile( duplicate );
+
+    BOOST_REQUIRE_EQUAL( stored, first );
+    BOOST_CHECK_EQUAL( files.EmbeddedFileMap().size(), 1 );
+
+    // The returned pointer must stay usable; the caller's own is already gone
+    BOOST_REQUIRE_EQUAL( EMBEDDED_FILES::CompressAndEncode( *stored ),
+                         EMBEDDED_FILES::RETURN_CODE::OK );
+    BOOST_CHECK( stored->Validate() );
+    BOOST_CHECK_EQUAL( std::string( stored->decompressedData.begin(),
+                                    stored->decompressedData.end() ),
+                       std::string( "kept" ) );
 }
 
 

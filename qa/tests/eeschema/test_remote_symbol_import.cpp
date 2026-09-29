@@ -22,13 +22,22 @@
 #include <eeschema_settings.h>
 #include <io/io_mgr.h>
 #include <lib_symbol.h>
+#include <libraries/library_manager.h>
+#include <libraries/symbol_library_adapter.h>
+#include <pgm_base.h>
 #include <picosha2.h>
+#include <project.h>
+#include <project_sch.h>
 #include <remote_symbol_download_manager.h>
 #include <remote_symbol_import_job.h>
+#include <remote_symbol_import_utils.h>
 #include <sch_io/sch_io.h>
 #include <sch_io/sch_io_mgr.h>
 #include <settings/settings_manager.h>
 
+#include <qa_utils/wx_utils/unit_test_utils.h>
+
+#include <wx/ffile.h>
 #include <wx/filefn.h>
 #include <wx/filename.h>
 #include <wx/stdpaths.h>
@@ -36,40 +45,22 @@
 
 namespace
 {
+// The served payload is the shared qa/data library with its symbol renamed, so a download
+// under a different name still yields a parseable .kicad_sym.
 std::string symbolPayload( const char* aName )
 {
-    return wxString::Format(
-                   wxS( "(kicad_symbol_lib (version 20220914) (generator kicad_symbol_editor)\n"
-                        "  (symbol \"%s\" (in_bom yes) (on_board yes)\n"
-                        "    (property \"Reference\" \"R\" (at 0 0 0)\n"
-                        "      (effects (font (size 1.27 1.27)))\n"
-                        "    )\n"
-                        "    (property \"Value\" \"%s\" (at 0 0 0)\n"
-                        "      (effects (font (size 1.27 1.27)))\n"
-                        "    )\n"
-                        "    (property \"Footprint\" \"\" (at 0 0 0)\n"
-                        "      (effects (font (size 1.27 1.27)) hide)\n"
-                        "    )\n"
-                        "    (property \"Datasheet\" \"\" (at 0 0 0)\n"
-                        "      (effects (font (size 1.27 1.27)) hide)\n"
-                        "    )\n"
-                        "    (symbol \"%s_0_1\"\n"
-                        "      (rectangle (start -1.27 -1.27) (end 1.27 1.27)\n"
-                        "        (stroke (width 0) (type default))\n"
-                        "        (fill (type background))\n"
-                        "      )\n"
-                        "    )\n"
-                        "    (symbol \"%s_1_1\"\n"
-                        "      (pin passive line (at -3.81 0 0) (length 2.54)\n"
-                        "        (name \"PIN\" (effects (font (size 1.27 1.27))))\n"
-                        "        (number \"1\" (effects (font (size 1.27 1.27))))\n"
-                        "      )\n"
-                        "    )\n"
-                        "  )\n"
-                        ")\n" ),
-                   wxString::FromUTF8( aName ), wxString::FromUTF8( aName ),
-                   wxString::FromUTF8( aName ), wxString::FromUTF8( aName ) )
-            .ToStdString();
+    wxString libPath = wxString::FromUTF8( KI_TEST::GetEeschemaTestDataDir() )
+                       + wxS( "remote_symbol_lib.kicad_sym" );
+
+    wxFFile file( libPath, wxS( "rb" ) );
+    BOOST_REQUIRE_MESSAGE( file.IsOpened(), "Could not open " << libPath );
+
+    wxString body;
+    BOOST_REQUIRE( file.ReadAll( &body ) );
+
+    body.Replace( wxS( "TestResistor" ), wxString::FromUTF8( aName ) );
+
+    return std::string( body.ToUTF8() );
 }
 
 
@@ -337,6 +328,33 @@ BOOST_AUTO_TEST_CASE( ImportLinksFirstFootprintAndAddsAlternatesAsFilters )
     BOOST_CHECK_EQUAL( filters.GetCount(), 1u );
     if( filters.GetCount() == 1 )
         BOOST_CHECK_EQUAL( filters[0].ToStdString(), std::string( "R_0805_2012Metric" ) );
+}
+
+// The first save into a remote library must create its file rather than fail to load it
+BOOST_AUTO_TEST_CASE( SaveCreatesMissingSymbolLibrary )
+{
+    const wxString outputDir = tempDir();
+    wxFileName     projectFile( outputDir, wxS( "remote" ), wxS( "kicad_pro" ) );
+
+    Pgm().GetSettingsManager().LoadProject( projectFile.GetFullPath() );
+    PROJECT& project = Pgm().GetSettingsManager().Prj();
+    Pgm().GetLibraryManager().LoadProjectTables( project.GetProjectDirectory() );
+
+    SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &project );
+    BOOST_REQUIRE( adapter );
+
+    const std::string payload = symbolPayload( "R" );
+    wxString          error;
+
+    std::unique_ptr<LIB_SYMBOL> symbol = LoadRemoteSymbolFromPayload(
+            std::vector<uint8_t>( payload.begin(), payload.end() ), wxS( "R" ), error );
+    BOOST_REQUIRE( symbol );
+
+    const wxString nickname = wxS( "testremote_device" );
+    wxFileName     libFile( outputDir, nickname, wxS( "kicad_sym" ) );
+
+    BOOST_CHECK_MESSAGE( SaveRemoteSymbolToLibrary( *adapter, libFile, nickname, false, std::move( symbol ), error ),
+                         error );
 }
 
 

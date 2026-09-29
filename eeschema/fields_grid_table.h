@@ -32,6 +32,10 @@ class EMBEDDED_FILES;
 class SCH_LABEL_BASE;
 
 
+wxString BuildFootprintChooserSymbolNetlist( const LIB_SYMBOL* aSymbol );
+wxString BuildFootprintChooserSymbolNetlist( const std::vector<LIB_SYMBOL*>& aSymbols );
+
+
 class FIELDS_GRID_TRICKS : public GRID_TRICKS
 {
 public:
@@ -126,21 +130,19 @@ public:
 
     void SetFieldInherited( size_t aRow, const SCH_FIELD& aParent )
     {
-        m_isInherited.resize( aRow + 1, false );
-        m_parentFields.resize( aRow + 1 );
+        if( m_isInherited.size() <= aRow )
+            m_isInherited.resize( aRow + 1, false );
+
+        if( m_parentFields.size() <= aRow )
+            m_parentFields.resize( aRow + 1 );
+
         m_parentFields[aRow] = aParent;
         m_isInherited[aRow] = true;
     }
 
-    bool IsInherited( size_t aRow ) const
-    {
-        if( aRow >= m_isInherited.size() || aRow >= m_parentFields.size() )
-            return false;
+    bool IsInherited( size_t aRow ) const;
 
-        return m_isInherited[aRow] && m_parentFields[aRow].GetText() == at( aRow ).GetText();
-    }
-
-    const SCH_FIELD& ParentField( size_t row ) const { return m_parentFields[row]; }
+    const SCH_FIELD& ParentField( size_t aRow ) const;
 
     void push_back( const SCH_FIELD& field );
     // For std::vector compatibility, but we don't use it directly.
@@ -151,11 +153,15 @@ public:
 
     void DetachFields();
 
+    const std::vector<EMBEDDED_FILES*>& GetEmbeddedFilesStack() const { return m_filesStack; }
+
 protected:
     void initGrid( WX_GRID* aGrid );
 
     void onUnitsChanged( wxCommandEvent& aEvent );
 
+    bool privateFieldsAreHidden() const;
+    int  getFieldIndex( int aRow ) const;
     int getColumnCount() const;
     int getVisibleRowCount() const;
 

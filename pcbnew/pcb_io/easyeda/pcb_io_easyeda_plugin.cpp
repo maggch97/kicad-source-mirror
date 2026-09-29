@@ -131,27 +131,23 @@ bool PCB_IO_EASYEDA::CanReadLibrary( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_EASYEDA::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                  const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_EASYEDA::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     m_loadedFootprints.clear();
 
     m_props = aProperties;
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
+    m_board = &aBoard;
 
     // Collect the font substitution warnings (RAII - automatically reset on scope exit)
     FONTCONFIG_REPORTER_SCOPE fontconfigScope( &LOAD_INFO_REPORTER::GetInstance() );
-
-    // Give the filename to the board if it's new
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
 
     if( m_progressReporter )
     {
         m_progressReporter->Report( wxString::Format( _( "Loading %s..." ), aFileName ) );
 
         if( !m_progressReporter->KeepRefreshing() )
-            THROW_IO_ERROR( _( "File import canceled by user." ) );
+            THROW_IO_CANCELLED();
     }
 
     PCB_IO_EASYEDA_PARSER parser( nullptr );
@@ -163,10 +159,7 @@ BOARD* PCB_IO_EASYEDA::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
         EASYEDA::DOCUMENT  doc;
 
         if( !FindBoardInStream( aFileName, in, js, doc ) )
-        {
-            THROW_IO_ERROR(
-                    wxString::Format( _( "Unable to find a valid board in '%s'" ), aFileName ) );
-        }
+            THROW_IO_ERRORF( _( "Unable to find a valid board in '%s'" ), aFileName );
 
         EASYEDA::DOCUMENT_PCB pcbDoc = js.get<EASYEDA::DOCUMENT_PCB>();
 
@@ -199,6 +192,8 @@ BOARD* PCB_IO_EASYEDA::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
 
         BOARD_DESIGN_SETTINGS&    bds = m_board->GetDesignSettings();
         std::shared_ptr<NETCLASS> defNetclass = bds.m_NetSettings->GetDefaultNetclass();
+        bool                      importedNetclassRules = false;
+
 
         if( pcbDoc.DRCRULE )
         {
@@ -213,6 +208,7 @@ BOARD* PCB_IO_EASYEDA::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
                 {
                     double val = parser.ScaleSize( defRules->at( key ) );
                     defNetclass->SetTrackWidth( val );
+                    importedNetclassRules = true;
                 }
 
                 key = wxS( "clearance" );
@@ -220,6 +216,7 @@ BOARD* PCB_IO_EASYEDA::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
                 {
                     double val = parser.ScaleSize( defRules->at( key ) );
                     defNetclass->SetClearance( val );
+                    importedNetclassRules = true;
                 }
 
                 key = wxS( "viaHoleD" );
@@ -228,6 +225,7 @@ BOARD* PCB_IO_EASYEDA::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
                     double val = parser.ScaleSize( defRules->at( key ) );
 
                     defNetclass->SetViaDrill( val );
+                    importedNetclassRules = true;
                 }
 
                 key = wxS( "viaHoleDiameter" ); // Yes, this is via diameter, not drill diameter
@@ -235,9 +233,13 @@ BOARD* PCB_IO_EASYEDA::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
                 {
                     double val = parser.ScaleSize( defRules->at( key ) );
                     defNetclass->SetViaDiameter( val );
+                    importedNetclassRules = true;
                 }
             }
         }
+        if( importedNetclassRules )
+            m_board->m_LegacyNetclassesLoaded = true;
+
 
         VECTOR2D origin( doc.head.x, doc.head.y );
         parser.ParseBoard( m_board, origin, m_loadedFootprints, doc.shape );
@@ -257,16 +259,14 @@ BOARD* PCB_IO_EASYEDA::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
 
         m_board->Move( offset );
         bds.SetAuxOrigin( offset );
-
-        return m_board;
     }
     catch( nlohmann::json::exception& e )
     {
-        THROW_IO_ERROR( wxString::Format( _( "Error loading board '%s': %s" ), aFileName, e.what() ) );
+        THROW_IO_ERRORF( _( "Error loading board '%s': %s" ), aFileName, e.what() );
     }
     catch( std::exception& e )
     {
-        THROW_IO_ERROR( wxString::Format( _( "Error loading board '%s': %s" ), aFileName, e.what() ) );
+        THROW_IO_ERRORF( _( "Error loading board '%s': %s" ), aFileName, e.what() );
     }
 }
 
@@ -288,10 +288,7 @@ void PCB_IO_EASYEDA::FootprintEnumerate( wxArrayString&  aFootprintNames,
         EASYEDA::DOCUMENT  doc;
 
         if( !FindBoardInStream( aLibraryPath, in, js, doc ) )
-        {
-            THROW_IO_ERROR( wxString::Format( _( "Unable to find valid footprints in '%s'" ),
-                                              aLibraryPath ) );
-        }
+            THROW_IO_ERRORF( _( "Unable to find valid footprints in '%s'" ), aLibraryPath );
 
         if( doc.head.docType == EASYEDA::DOC_TYPE::PCB
             || doc.head.docType == EASYEDA::DOC_TYPE::PCB_MODULE )
@@ -360,20 +357,18 @@ void PCB_IO_EASYEDA::FootprintEnumerate( wxArrayString&  aFootprintNames,
     }
     catch( nlohmann::json::exception& e )
     {
-        THROW_IO_ERROR( wxString::Format( _( "Error enumerating footprints in library '%s': %s" ),
-                                          aLibraryPath, e.what() ) );
+        THROW_IO_ERRORF( _( "Error enumerating footprints in library '%s': %s" ), aLibraryPath, e.what() );
     }
     catch( std::exception& e )
     {
-        THROW_IO_ERROR( wxString::Format( _( "Error enumerating footprints in library '%s': %s" ),
-                                          aLibraryPath, e.what() ) );
+        THROW_IO_ERRORF( _( "Error enumerating footprints in library '%s': %s" ), aLibraryPath, e.what() );
     }
 }
 
 
-FOOTPRINT* PCB_IO_EASYEDA::FootprintLoad( const wxString& aLibraryPath,
-                                          const wxString& aFootprintName, bool aKeepUUID,
-                                          const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_EASYEDA::FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                                          bool                               aKeepUUID,
+                                                          const std::map<std::string, UTF8>* aProperties )
 {
     // Suppress font substitution warnings (RAII - automatically restored on scope exit)
     FONTCONFIG_REPORTER_SCOPE fontconfigScope( nullptr );
@@ -389,10 +384,7 @@ FOOTPRINT* PCB_IO_EASYEDA::FootprintLoad( const wxString& aLibraryPath,
         EASYEDA::DOCUMENT  doc;
 
         if( !FindBoardInStream( aLibraryPath, in, js, doc ) )
-        {
-            THROW_IO_ERROR( wxString::Format( _( "Unable to find valid footprints in '%s'" ),
-                                              aLibraryPath ) );
-        }
+            THROW_IO_ERRORF( _( "Unable to find valid footprints in '%s'" ), aLibraryPath );
 
         if( doc.head.docType == EASYEDA::DOC_TYPE::PCB
             || doc.head.docType == EASYEDA::DOC_TYPE::PCB_MODULE )
@@ -454,8 +446,8 @@ FOOTPRINT* PCB_IO_EASYEDA::FootprintLoad( const wxString& aLibraryPath,
                     {
                         parts.RemoveAt( 0 );
 
-                        FOOTPRINT* footprint = parser.ParseFootprint( origin, orientation, layer, nullptr,
-                                                                      paramMap, m_loadedFootprints, parts );
+                        std::unique_ptr<FOOTPRINT> footprint = parser.ParseFootprint(
+                                origin, orientation, layer, nullptr, paramMap, m_loadedFootprints, parts );
 
                         if( !footprint )
                             return nullptr;
@@ -498,8 +490,8 @@ FOOTPRINT* PCB_IO_EASYEDA::FootprintLoad( const wxString& aLibraryPath,
 
                 VECTOR2D origin( doc.head.x, doc.head.y );
 
-                FOOTPRINT* footprint = parser.ParseFootprint( origin, ANGLE_0, F_Cu, nullptr, *c_para,
-                                                              m_loadedFootprints, doc.shape );
+                std::unique_ptr<FOOTPRINT> footprint( parser.ParseFootprint( origin, ANGLE_0, F_Cu, nullptr, *c_para,
+                                                                             m_loadedFootprints, doc.shape ) );
 
                 if( !footprint )
                     return nullptr;
@@ -520,13 +512,17 @@ FOOTPRINT* PCB_IO_EASYEDA::FootprintLoad( const wxString& aLibraryPath,
     }
     catch( nlohmann::json::exception& e )
     {
-        THROW_IO_ERROR( wxString::Format( _( "Error reading footprint '%s' from library '%s': %s" ),
-                                          aFootprintName, aLibraryPath, e.what() ) );
+        THROW_IO_ERRORF( _( "Error reading footprint '%s' from library '%s': %s" ),
+                         aFootprintName,
+                         aLibraryPath,
+                         e.what() );
     }
     catch( std::exception& e )
     {
-        THROW_IO_ERROR( wxString::Format( _( "Error reading footprint '%s' from library '%s': %s" ),
-                                          aFootprintName, aLibraryPath, e.what() ) );
+        THROW_IO_ERRORF( _( "Error reading footprint '%s' from library '%s': %s" ),
+                         aFootprintName,
+                         aLibraryPath,
+                         e.what() );
     }
 
     return nullptr;

@@ -23,6 +23,7 @@
 #include <kicommon.h>
 #include "job.h"
 #include "job_import_utils.h"
+#include <map>
 
 /**
  * Job to import a non-KiCad schematic file to KiCad format.
@@ -49,13 +50,15 @@ public:
         LTSPICE,
         PADS,
         DIPTRACE,
-        PCAD
+        PCAD,
+        ORCAD
     };
 
     wxString             m_inputFile;
     FORMAT               m_format = FORMAT::AUTO;
     IMPORT_REPORT_FORMAT m_reportFormat = IMPORT_REPORT_FORMAT::NONE;
     wxString             m_reportFile;
+    std::map<wxString, wxString> m_netNameMap;
 };
 
 #endif

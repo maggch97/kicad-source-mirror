@@ -32,12 +32,12 @@
 #include <kiid.h>
 #include <hotkeys_basic.h>
 #include <lib_id.h>
+#include <tool/arc_draw_mode.h>
 
 struct EDA_SEARCH_DATA;
 struct PLUGIN_ACTION;
 class LIB_TREE;
 class EDA_ITEM;
-class wxSingleInstanceChecker;
 class ACTION_TOOLBAR;
 class GRID_HELPER;
 class COLOR_SETTINGS;
@@ -105,6 +105,7 @@ public:
 
     EDA_SEARCH_DATA& GetFindReplaceData();
     wxArrayString& GetFindHistoryList() { return m_findStringHistoryList; }
+    wxArrayString& GetReplaceHistoryList() { return m_replaceStringHistoryList; }
 
     virtual void SetPageSettings( const PAGE_INFO& aPageSettings ) = 0;
     virtual const PAGE_INFO& GetPageSettings() const = 0;
@@ -293,6 +294,7 @@ public:
      * drawing if the requested point is out of view or if center on location is requested.
      *
      * @param aPos is the point to go to.
+     * @param aAllowScroll is the flag to enable location scrolling.
      */
     void FocusOnLocation( const VECTOR2I& aPos, bool aAllowScroll = true );
 
@@ -300,6 +302,7 @@ public:
      * Focus on a particular canvas item.
      *
      * @param aItem is the item to focus on. nullptr clears the focus.
+     * @param aAllowScroll is the flag to enable item scrolling.
      */
     virtual void FocusOnItem( EDA_ITEM* aItem, bool aAllowScroll = true ) {}
 
@@ -314,6 +317,7 @@ public:
     /**
      * Print the drawing-sheet (frame and title block).
      *
+     * @param aSettings are the rendering settings used for printing.
      * @param aScreen screen to draw.
      * @param aProperties Optional properties for text variable resolution.
      * @param aMils2Iu The mils to Iu conversion factor.
@@ -449,6 +453,11 @@ public:
     virtual void SwitchCanvas( EDA_DRAW_PANEL_GAL::GAL_TYPE aCanvasType );
 
     /**
+     * Keep every frame on the fallback canvas for this session without changing the saved preference.
+     */
+    static void SetOpenGLFailureOccurred() { m_openGLFailureOccured = true; }
+
+    /**
      * Return a pointer to GAL-based canvas of given EDA draw frame.
      *
      * @return Pointer to GAL-based canvas.
@@ -497,7 +506,6 @@ public:
     /**
      * Save the current view as an image file.
      *
-     * @param aFrame The current draw frame view to save.
      * @param aFileName The file name to save the image.  This will overwrite an existing file.
      * @param aBitmapType The type of bitmap create as defined by wxImage.
      * @return True if the file was successfully saved or false if the file failed to be saved.
@@ -520,10 +528,19 @@ public:
      * Must be static at the moment because this needs to be called from the preferences dialog,
      * which can exist without the frame in question actually being created.
      *
+     * @param aScope is the scope of the plugins to get.
      * @param aCfg is the settings to read the plugin ordering from.
      */
     static std::vector<const PLUGIN_ACTION*> GetOrderedPluginActions( PLUGIN_ACTION_SCOPE aScope,
                                                                       APP_SETTINGS_BASE* aCfg );
+
+    /**
+     * Append actions from API plugins to the given menu.
+     *
+     * @param aMenu is the menu to add the plugin actions to
+     * @return the number of actions added to the menu
+     */
+    size_t AddApiPluginMenuItems( ACTION_MENU* aMenu );
 
     /**
      * Append actions from API plugins to the given toolbar.
@@ -543,6 +560,19 @@ protected:
 
     void setupUIConditions() override;
 
+    /// The action that starts the arc tool in @a aMode, or nullptr in a frame without an arc tool.
+    virtual const TOOL_ACTION* drawArcAction( ARC_DRAW_MODE aMode ) const { return nullptr; }
+
+    /**
+     * Check each arc mode's tool action while the arc tool runs in that mode.
+     *
+     * @param aDrawArc is the arc tool action without a mode; its name must begin every arc tool action's name.
+     * @param aEnable enables the arc tool actions.
+     */
+    void setArcModeConditions( const TOOL_ACTION& aDrawArc, const std::function<bool( const SELECTION& )>& aEnable );
+
+    void syncToolbarSelections() override;
+
     void setupUnits( APP_SETTINGS_BASE* aCfg );
 
     void updateStatusBarWidths();
@@ -556,9 +586,6 @@ protected:
 
     /**
      * Return the canvas type stored in the application settings.
-     *
-     * @param aCfg is the APP_SETTINGS_BASE config storing the canvas type.
-     * If nullptr (default) the KifaceSettings() will be used
      */
     EDA_DRAW_PANEL_GAL::GAL_TYPE loadCanvasTypeSetting();
 
@@ -575,7 +602,7 @@ protected:
 
     wxSocketServer*             m_socketServer;
 
-    ///< Prevents opening same file multiple times.
+    /// Prevents opening same file multiple times.
     std::unique_ptr<LOCKFILE> m_file_checker;
 
     COLOR4D              m_gridColor;         // Grid color

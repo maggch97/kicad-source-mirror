@@ -100,7 +100,7 @@ bool SCH_EDIT_FRAME::SaveSheetAsDesignBlock( const wxString& aLibraryName, SCH_S
         if( field.GetId() == FIELD_T::SHEET_NAME || field.GetId() == FIELD_T::SHEET_FILENAME )
             continue;
 
-        blk.GetFields()[field.GetCanonicalName()] = field.GetText();
+        blk.GetFields()[field.GetUntranslatedName()] = field.GetText();
     }
 
     DIALOG_DESIGN_BLOCK_PROPERTIES dlg( this, &blk );
@@ -167,22 +167,15 @@ bool SCH_EDIT_FRAME::UpdateDesignBlockFromSheet( const LIB_ID& aLibId, SCH_SHEET
         return false;
     }
 
+    wxString                      error;
     std::unique_ptr<DESIGN_BLOCK> blk;
 
-    try
-    {
-        blk.reset( Prj().DesignBlockLibs()->LoadDesignBlock( aLibId.GetLibNickname(), aLibId.GetLibItemName() ) );
-    }
-    catch( const IO_ERROR& ioe )
-    {
-        DisplayError( this, ioe.What() );
-        return false;
-    }
+    blk.reset( Prj().DesignBlockLibs()->LoadDesignBlock( aLibId.GetLibNickname(), aLibId.GetLibItemName(), false,
+                                                         &error ) );
 
     if( !blk )
     {
-        DisplayErrorMessage(
-                this, wxString::Format( _( "Design block '%s' does not exist." ), aLibId.GetUniStringLibItemName() ) );
+        DisplayErrorMessage( this, error );
         return false;
     }
 
@@ -197,7 +190,7 @@ bool SCH_EDIT_FRAME::UpdateDesignBlockFromSheet( const LIB_ID& aLibId, SCH_SHEET
         if( field.GetId() == FIELD_T::SHEET_NAME || field.GetId() == FIELD_T::SHEET_FILENAME )
             continue;
 
-        blk->GetFields()[field.GetCanonicalName()] = field.GetText();
+        blk->GetFields()[field.GetUntranslatedName()] = field.GetText();
     }
 
     DIALOG_DESIGN_BLOCK_PROPERTIES dlg( this, blk.get(), true );
@@ -265,14 +258,13 @@ bool SCH_EDIT_FRAME::SaveSelectionAsDesignBlock( const wxString& aLibraryName )
             SCH_SHEET_PATH curPath = GetCurrentSheet();
 
             curPath.push_back( sheet );
-            SaveSheetAsDesignBlock( aLibraryName, curPath );
+            return SaveSheetAsDesignBlock( aLibraryName, curPath );
         }
         else
         {
             DisplayErrorMessage( this, _( "Design blocks with nested sheets are not supported." ) );
+            return false;
         }
-
-        return false;
     }
 
     DESIGN_BLOCK blk;
@@ -354,12 +346,12 @@ bool SCH_EDIT_FRAME::SaveSelectionAsDesignBlock( const wxString& aLibraryName )
     }
 
     // Create a sheet for the temporary screen
-    SCH_SHEET* tempSheet = new SCH_SHEET( m_schematic );
+    std::unique_ptr<SCH_SHEET> tempSheet = std::make_unique<SCH_SHEET>( m_schematic );
     tempSheet->SetScreen( tempScreen );
 
     // Save a temporary copy of the schematic file, as the plugin is just going to move it
     wxString tempFile = wxFileName::CreateTempFileName( "design_block" );
-    if( !saveSchematicFile( tempSheet, tempFile ) )
+    if( !saveSchematicFile( tempSheet.get(), tempFile ) )
     {
         DisplayErrorMessage( this, _( "Error saving temporary schematic file to create design block." ) );
         wxRemoveFile( tempFile );
@@ -439,8 +431,6 @@ bool SCH_EDIT_FRAME::SaveSelectionAsDesignBlock( const wxString& aLibraryName )
 
     // Clean up the temporaries
     wxRemoveFile( tempFile );
-    // This will also delete the screen
-    delete tempSheet;
 
     m_designBlocksPane->RefreshLibs();
     m_designBlocksPane->SelectLibId( blk.GetLibId() );
@@ -476,54 +466,76 @@ bool SCH_EDIT_FRAME::UpdateDesignBlockFromSelection( const LIB_ID& aLibId )
             SCH_SHEET_PATH curPath = GetCurrentSheet();
 
             curPath.push_back( sheet );
-            UpdateDesignBlockFromSheet( aLibId, curPath );
+            return UpdateDesignBlockFromSheet( aLibId, curPath );
         }
         else
         {
             DisplayErrorMessage( this, _( "Design blocks with nested sheets are not supported." ) );
+            return false;
         }
-
-        return false;
     }
 
-    // If we have a single group, we want to strip the group and select the children
-    SCH_GROUP* group = nullptr;
+    // If the selection is a single group, or contains this block's linked group plus extra items,
+    // we want to strip the group and select the children
+    SCH_GROUP*             group = nullptr;
+    std::vector<SCH_ITEM*> extraItems;
 
     if( selection.Size() == 1 )
     {
         EDA_ITEM* item = selection.Front();
 
         if( item->Type() == SCH_GROUP_T )
-        {
             group = static_cast<SCH_GROUP*>( item );
+    }
+    else
+    {
+        for( EDA_ITEM* item : selection )
+        {
+            if( item->Type() != SCH_GROUP_T )
+                continue;
 
-            selection.Remove( group );
+            if( static_cast<SCH_GROUP*>( item )->GetDesignBlockLibId() != aLibId )
+                continue;
 
-            // Don't recurse; if we have a group of groups the user probably intends the inner groups to be saved
-            group->RunOnChildren( [&]( EDA_ITEM* aItem )
-                                  {
-                                      selection.Add( aItem );
-                                  },
-                                  RECURSE_MODE::NO_RECURSE );
+            if( group )
+            {
+                DisplayErrorMessage( this, _( "The selection contains more than one group linked to "
+                                              "this design block." ) );
+                return false;
+            }
+
+            group = static_cast<SCH_GROUP*>( item );
         }
     }
 
+    if( group )
+    {
+        for( EDA_ITEM* item : selection )
+        {
+            if( item != group && item->IsSCH_ITEM() )
+                extraItems.push_back( static_cast<SCH_ITEM*>( item ) );
+        }
+
+        selection.Remove( group );
+
+        // Don't recurse; if we have a group of groups the user probably intends the inner groups to be saved
+        group->RunOnChildren(
+                [&]( EDA_ITEM* aItem )
+                {
+                    selection.Add( aItem );
+                },
+                RECURSE_MODE::NO_RECURSE );
+    }
+
+    wxString                      error;
     std::unique_ptr<DESIGN_BLOCK> blk;
 
-    try
-    {
-        blk.reset( Prj().DesignBlockLibs()->LoadDesignBlock( aLibId.GetLibNickname(), aLibId.GetLibItemName() ) );
-    }
-    catch( const IO_ERROR& ioe )
-    {
-        DisplayError( this, ioe.What() );
-        return false;
-    }
+    blk.reset( Prj().DesignBlockLibs()->LoadDesignBlock( aLibId.GetLibNickname(), aLibId.GetLibItemName(), false,
+                                                         &error ) );
 
     if( !blk )
     {
-        DisplayErrorMessage(
-                this, wxString::Format( _( "Design block '%s' does not exist." ), aLibId.GetUniStringLibItemName() ) );
+        DisplayErrorMessage( this, error );
         return false;
     }
 
@@ -561,13 +573,13 @@ bool SCH_EDIT_FRAME::UpdateDesignBlockFromSelection( const LIB_ID& aLibId )
     }
 
     // Create a sheet for the temporary screen
-    SCH_SHEET* tempSheet = new SCH_SHEET( m_schematic );
+    std::unique_ptr<SCH_SHEET> tempSheet = std::make_unique<SCH_SHEET>( m_schematic );
     tempSheet->SetScreen( tempScreen );
 
     // Save a temporary copy of the schematic file, as the plugin is just going to move it
     wxString tempFile = wxFileName::CreateTempFileName( "design_block" );
 
-    if( !saveSchematicFile( tempSheet, tempFile ) )
+    if( !saveSchematicFile( tempSheet.get(), tempFile ) )
     {
         DisplayErrorMessage( this, _( "Error saving temporary schematic file to create design block." ) );
         wxRemoveFile( tempFile );
@@ -583,22 +595,45 @@ bool SCH_EDIT_FRAME::UpdateDesignBlockFromSelection( const LIB_ID& aLibId )
         success = Prj().DesignBlockLibs()->SaveDesignBlock( aLibId.GetLibNickname(), blk.get() )
                   == DESIGN_BLOCK_LIBRARY_ADAPTER::SAVE_OK;
 
-        // If we had a group, we need to reselect it
+        // If we had a group, extend it with the extra items and reselect it
         if( group )
         {
             selection.Clear();
             selection.Add( group );
 
+            SCH_COMMIT  commit( m_toolManager );
+            SCH_SCREEN* screen = GetScreen();
+            bool        changed = false;
+
+            for( SCH_ITEM* item : extraItems )
+            {
+                if( item->GetParentSymbol() || !item->IsGroupableType() )
+                    continue;
+
+                if( item->GetParentGroup() == group )
+                    continue;
+
+                if( EDA_GROUP* existingGroup = item->GetParentGroup() )
+                    commit.Modify( existingGroup->AsEdaItem(), screen, RECURSE_MODE::NO_RECURSE );
+
+                if( !changed )
+                    commit.Modify( group, screen, RECURSE_MODE::NO_RECURSE );
+
+                commit.Modify( item, screen, RECURSE_MODE::NO_RECURSE );
+                group->AddItem( item );
+                changed = true;
+            }
+
             // If we didn't have a design block link before, add one for convenience
             if( !group->HasDesignBlockLink() )
             {
-                SCH_COMMIT commit( m_toolManager );
-
-                commit.Modify( group, GetScreen() );
+                commit.Modify( group, screen, RECURSE_MODE::NO_RECURSE );
                 group->SetDesignBlockLibId( aLibId );
-
-                commit.Push( _( "Set Group Design Block Link" ) );
+                changed = true;
             }
+
+            if( changed )
+                commit.Push( _( "Update Design Block Group" ) );
         }
     }
     catch( const IO_ERROR& ioe )
@@ -656,8 +691,6 @@ bool SCH_EDIT_FRAME::UpdateDesignBlockFromSelection( const LIB_ID& aLibId )
 
     // Clean up the temporaries
     wxRemoveFile( tempFile );
-    // This will also delete the screen
-    delete tempSheet;
 
     m_designBlocksPane->RefreshLibs();
     m_designBlocksPane->SelectLibId( blk->GetLibId() );

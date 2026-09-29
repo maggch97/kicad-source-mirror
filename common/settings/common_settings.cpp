@@ -25,6 +25,7 @@
 #include <class_draw_panel_gal.h>
 #include <env_vars.h>
 #include <paths.h>
+#include <richio.h>
 #include <search_stack.h>
 #include <settings/settings_manager.h>
 #include <settings/common_settings.h>
@@ -45,7 +46,7 @@
 const wxRegEx versionedEnvVarRegex( wxS( "KICAD[0-9]+_[A-Z0-9_]+(_DIR)?" ) );
 
 ///! Update the schema version whenever a migration is required
-const int commonSchemaVersion = 6;
+const int commonSchemaVersion = 7;
 
 COMMON_SETTINGS::~COMMON_SETTINGS() = default;
 
@@ -62,6 +63,7 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
         m_DoNotShowAgain(),
         m_PackageManager(),
         m_Api(),
+        m_FieldNameTemplates(),
         m_csInternals( std::make_unique<COMMON_SETTINGS_INTERNALS>() )
 {
     /*
@@ -140,7 +142,7 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
     auto envVarsParam = m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "environment.vars",
             [&]() -> nlohmann::json
             {
-                nlohmann::json ret = {};
+                nlohmann::json ret = nlohmann::json::object();
 
                 for( const std::pair<wxString, ENV_VAR_ITEM> entry : m_Env.vars )
                 {
@@ -255,7 +257,7 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
             &m_Input.warp_mouse_on_move, true ) );
 
     m_params.emplace_back( new PARAM<bool>( "input.horizontal_pan",
-            &m_Input.horizontal_pan, false ) );
+            &m_Input.horizontal_pan, true ) );
 
     m_params.emplace_back( new PARAM<bool>( "input.hotkey_feedback",
             &m_Input.hotkey_feedback, true ) );
@@ -274,6 +276,16 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
 
     m_params.emplace_back( new PARAM<bool>( "input.zoom_speed_auto",
             &m_Input.zoom_speed_auto, true ) );
+
+#ifdef __WXMSW__
+    constexpr TOUCHPAD_MODE defaultTouchpadMode = TOUCHPAD_MODE::NATIVE_GESTURES;
+#else
+    constexpr TOUCHPAD_MODE defaultTouchpadMode = TOUCHPAD_MODE::SCROLL_GESTURES;
+#endif
+
+    m_params.emplace_back( new PARAM_ENUM<TOUCHPAD_MODE>( "input.touchpad_mode",
+            &m_Input.touchpad_mode, defaultTouchpadMode, TOUCHPAD_MODE::NATIVE_GESTURES,
+            TOUCHPAD_MODE::SCROLL_GESTURES ) );
 
     m_params.emplace_back( new PARAM<int>( "input.scroll_modifier_zoom",
             &m_Input.scroll_modifier_zoom, 0 ) );
@@ -396,6 +408,9 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
     m_params.emplace_back( new PARAM_LIST<wxString>( "system.extra_3d_search_dirs",
             &m_Extra3DSearchDirs, {} ) );
 
+    m_params.emplace_back( new PARAM_LIST<wxString>( "system.declined_model_preview_requirements",
+            &m_DeclinedModelPreviewRequirements, {} ) );
+
     m_params.emplace_back( new PARAM<bool>( "session.remember_open_files",
             &m_Session.remember_open_files, false ) );
 
@@ -408,13 +423,34 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
     m_params.emplace_back( new PARAM_LIST<wxString>( "session.pinned_design_block_libs",
             &m_Session.pinned_design_block_libs, {} ) );
 
+    m_params.emplace_back( new PARAM_LAMBDA<std::string>( "fields.template_field_names",
+            [&]() -> std::string
+            {
+                if( m_FieldNameTemplates.GetTemplateFieldNames( TEMPLATES::SCOPE::GLOBAL ).empty() )
+                    return {};
+
+                STRING_FORMATTER formatter;
+                m_FieldNameTemplates.Format( &formatter, TEMPLATES::SCOPE::GLOBAL );
+                return formatter.GetString();
+            },
+            [&]( const std::string& aSerializedTemplates )
+            {
+                m_FieldNameTemplates.DeleteFieldNameTemplates( TEMPLATES::SCOPE::GLOBAL );
+
+                if( !aSerializedTemplates.empty() )
+                {
+                    m_FieldNameTemplates.AddTemplateFieldNames(
+                            wxString::FromUTF8( aSerializedTemplates ), TEMPLATES::SCOPE::GLOBAL );
+                }
+            }, {} ) );
+
     m_params.emplace_back( new PARAM<int>( "package_manager.sash_pos",
             &m_PackageManager.sash_pos, 380 ) );
 
     m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "git.repositories",
             [&]() -> nlohmann::json
             {
-                nlohmann::json ret = {};
+                nlohmann::json ret = nlohmann::json::array();
 
                 for( const GIT_REPOSITORY& repo : m_Git.repositories )
                 {
@@ -505,6 +541,8 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
             },
             nlohmann::json::object() ) );
 
+    // Let the save drop entries for dialogs and controls that no longer exist
+    m_params.back()->SetClearUnknownKeys();
 
     registerMigration( 0, 1, std::bind( &COMMON_SETTINGS::migrateSchema0to1, this ) );
     registerMigration( 1, 2, std::bind( &COMMON_SETTINGS::migrateSchema1to2, this ) );
@@ -512,6 +550,7 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
     registerMigration( 3, 4, std::bind( &COMMON_SETTINGS::migrateSchema3to4, this ) );
     registerMigration( 4, 5, std::bind( &COMMON_SETTINGS::migrateSchema4to5, this ) );
     registerMigration( 5, 6, std::bind( &COMMON_SETTINGS::migrateSchema5to6, this ) );
+    registerMigration( 6, 7, std::bind( &COMMON_SETTINGS::migrateSchema6to7, this ) );
 }
 
 
@@ -749,6 +788,46 @@ bool COMMON_SETTINGS::migrateSchema5to6()
     {
         wxLogTrace( traceSettings,
                     wxT( "COMMON_SETTINGS::Migrate 5->6: failed to set auto_backup.format" ) );
+    }
+
+    return true;
+}
+
+
+bool COMMON_SETTINGS::migrateSchema6to7()
+{
+    // Global field name templates used to be stored in eeschema.json.  Import them here so
+    // applications which do not load Eeschema can use them immediately after upgrading.
+    if( Contains( "fields.template_field_names" ) )
+        return true;
+
+    wxFileName eeschemaPath( PATHS::GetUserSettingsPath(), wxS( "eeschema.json" ) );
+
+    if( !eeschemaPath.IsFileReadable() )
+        return true;
+
+    try
+    {
+        std::ifstream eeschemaFile( eeschemaPath.GetFullPath().fn_str() );
+        nlohmann::json eeschemaSettings =
+                nlohmann::json::parse( eeschemaFile, nullptr,
+                                       /* allow_exceptions = */ true,
+                                       /* ignore_comments  = */ true );
+
+        const nlohmann::json::json_pointer fieldNamesPointer(
+                "/drawing/field_names"_json_pointer );
+
+        if( eeschemaSettings.contains( fieldNamesPointer )
+                && eeschemaSettings.at( fieldNamesPointer ).is_string() )
+        {
+            Set<std::string>( "fields.template_field_names",
+                              eeschemaSettings.at( fieldNamesPointer ).get<std::string>() );
+        }
+    }
+    catch( ... )
+    {
+        wxLogTrace( traceSettings,
+                    wxT( "COMMON_SETTINGS::Migrate 6->7: failed to import field name templates" ) );
     }
 
     return true;

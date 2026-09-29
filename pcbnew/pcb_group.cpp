@@ -53,11 +53,12 @@ PCB_GROUP::PCB_GROUP( BOARD_ITEM* aParent, KICAD_T idtype, PCB_LAYER_ID aLayer )
 
 void PCB_GROUP::Serialize( google::protobuf::Any &aContainer ) const
 {
-    using namespace kiapi::board::types;
-    Group group;
+    using namespace kiapi::common::types;
+    kiapi::board::types::Group group;
 
     group.mutable_id()->set_value( m_Uuid.AsStdString() );
     group.set_name( GetName().ToUTF8() );
+    group.set_locked( IsLocked() ? LockedState::LS_LOCKED : LockedState::LS_UNLOCKED );
 
     for( EDA_ITEM* item : GetItems() )
     {
@@ -65,11 +66,28 @@ void PCB_GROUP::Serialize( google::protobuf::Any &aContainer ) const
         itemId->set_value( item->m_Uuid.AsStdString() );
     }
 
+    if( FOOTPRINT* parent = GetParentFootprint() )
+        group.mutable_parent()->set_value( parent->m_Uuid.AsStdString() );
+    else if( const BOARD* board = GetBoard() )
+        group.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
+
+    if( HasDesignBlockLink() )
+        kiapi::common::PackLibId( group.mutable_lib_id(), GetDesignBlockLibId() );
+
+    kiapi::common::PackCustomProperties( group.mutable_custom_properties(), *this );
     aContainer.PackFrom( group );
 }
 
 
-bool PCB_GROUP::Deserialize( const google::protobuf::Any &aContainer )
+bool PCB_GROUP::Deserialize( const google::protobuf::Any& aContainer )
+{
+    return DeserializeGroup( aContainer, nullptr );
+}
+
+
+// Note: this only records the group members in m_deserializedItems.  A proper AddItem() must
+// be done in a second pass (FinalizeGroupDeserialization()).
+bool PCB_GROUP::DeserializeGroup( const google::protobuf::Any& aContainer, COMMIT* aCommit )
 {
     kiapi::board::types::Group group;
 
@@ -78,6 +96,10 @@ bool PCB_GROUP::Deserialize( const google::protobuf::Any &aContainer )
 
     SetUuidDirect( KIID( group.id().value() ) );
     SetName( wxString( group.name().c_str(), wxConvUTF8 ) );
+    SetLocked( group.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+
+    m_items.clear();
+    m_deserializedItems.clear();
 
     BOARD* board = GetBoard();
 
@@ -87,13 +109,23 @@ bool PCB_GROUP::Deserialize( const google::protobuf::Any &aContainer )
     for( const kiapi::common::types::KIID& itemId : group.items() )
     {
         KIID id( itemId.value() );
+        EDA_ITEM* item = board->ResolveItem( id, true );
 
-        if( BOARD_ITEM* item = board->ResolveItem( id, true ) )
-            AddItem( item );
+        if( !item && aCommit )
+            item = aCommit->ResolveItem( id );
+
+        if( item )
+            m_deserializedItems.insert( item );
     }
+
+    if( group.has_lib_id() )
+        SetDesignBlockLibId( kiapi::common::UnpackLibId( group.lib_id() ) );
+
+    kiapi::common::UnpackCustomProperties( group.custom_properties(), *this );
 
     return true;
 }
+
 
 std::unordered_set<BOARD_ITEM*> PCB_GROUP::GetBoardItems() const
 {
@@ -174,12 +206,11 @@ void PCB_GROUP::SetLocked( bool aLockState )
 {
     BOARD_ITEM::SetLocked( aLockState );
 
-    RunOnChildren(
-            [&]( BOARD_ITEM* child )
-            {
-                child->SetLocked( aLockState );
-            },
-            RECURSE_MODE::NO_RECURSE );
+    // Don't set locked flag on children.  BOARD_ITEM::IsLocked() checks the parent group for current
+    // lock status before exmaining its own flag.
+    //
+    // Setting the child flag just leands to endless problems when members get added-to/removed-from
+    // locked groups.
 }
 
 
@@ -211,19 +242,53 @@ PCB_GROUP* PCB_GROUP::DeepClone() const
 }
 
 
-PCB_GROUP* PCB_GROUP::DeepDuplicate( bool addToParentGroup, BOARD_COMMIT* aCommit ) const
+PCB_GROUP* PCB_GROUP::DeepDuplicate( bool addToParentGroup, BOARD_COMMIT* aCommit,
+                                    std::map<KIID, KIID>* aKIIDMap ) const
 {
     PCB_GROUP* newGroup = static_cast<PCB_GROUP*>( Duplicate( addToParentGroup, aCommit ) );
     newGroup->m_items.clear();
+
+    if( aKIIDMap )
+        ( *aKIIDMap )[m_Uuid] = newGroup->m_Uuid;
 
     for( EDA_ITEM* member : m_items )
     {
         // A PCB_GENERATOR owns member items that are not in this group's m_items, so a shallow
         // copy would leave the duplicate referencing the original's members.
         if( member->Type() == PCB_GROUP_T || member->Type() == PCB_GENERATOR_T )
-            newGroup->AddItem( static_cast<PCB_GROUP*>( member )->DeepDuplicate( IGNORE_PARENT_GROUP ) );
+        {
+            newGroup->AddItem( static_cast<PCB_GROUP*>( member )->DeepDuplicate( IGNORE_PARENT_GROUP,
+                                                                                nullptr, aKIIDMap ) );
+        }
         else
-            newGroup->AddItem( static_cast<BOARD_ITEM*>( member )->Duplicate( IGNORE_PARENT_GROUP ) );
+        {
+            BOARD_ITEM* orig = static_cast<BOARD_ITEM*>( member );
+            BOARD_ITEM* memberDupe = orig->Duplicate( IGNORE_PARENT_GROUP );
+
+            if( aKIIDMap )
+            {
+                ( *aKIIDMap )[orig->m_Uuid] = memberDupe->m_Uuid;
+
+                // Children from ordered vectors so lockstep walk pairs reliably
+                // only unordered group membership above needs clone-time capture
+                std::vector<BOARD_ITEM*> dupeChildren;
+                memberDupe->RunOnChildren( [&]( BOARD_ITEM* aChild ) { dupeChildren.push_back( aChild ); },
+                                           RECURSE_MODE::RECURSE );
+
+                std::size_t index = 0;
+                orig->RunOnChildren(
+                        [&]( BOARD_ITEM* aChild )
+                        {
+                            if( index < dupeChildren.size() )
+                                ( *aKIIDMap )[aChild->m_Uuid] = dupeChildren[index]->m_Uuid;
+
+                            index++;
+                        },
+                        RECURSE_MODE::RECURSE );
+            }
+
+            newGroup->AddItem( memberDupe );
+        }
     }
 
     return newGroup;
@@ -237,15 +302,21 @@ void PCB_GROUP::swapData( BOARD_ITEM* aImage )
 
     std::swap( *this, *image );
 
+    swapChildOwnership( image );
+}
+
+
+void PCB_GROUP::swapChildOwnership( PCB_GROUP* aImage )
+{
     // A group doesn't own its children (they're owned by the board), so undo doesn't do a
     // deep clone when making an image.  However, it's still safest to update the parentGroup
     // pointers of the group's children. We must do it in the right order in case any of the
     // children are shared (ie: image first, "this" second so that any shared children end up
     // with "this").
-    image->RunOnChildren(
+    aImage->RunOnChildren(
             [&]( BOARD_ITEM* child )
             {
-                child->SetParentGroup( image );
+                child->SetParentGroup( aImage );
             },
             RECURSE_MODE::NO_RECURSE );
 
@@ -255,6 +326,17 @@ void PCB_GROUP::swapData( BOARD_ITEM* aImage )
                 child->SetParentGroup( this );
             },
             RECURSE_MODE::NO_RECURSE );
+}
+
+
+double PCB_GROUP::GetCoverageArea( int aTextMargin ) const
+{
+    double area = 0.0;
+
+    for( BOARD_ITEM* member : GetBoardItems() )
+        area += member->GetCoverageArea( aTextMargin );
+
+    return area;
 }
 
 
@@ -297,12 +379,13 @@ const BOX2I PCB_GROUP::GetBoundingBox() const
 }
 
 
-std::shared_ptr<SHAPE> PCB_GROUP::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING aFlash ) const
+std::shared_ptr<SHAPE> PCB_GROUP::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING aFlash,
+                                                     DRC_CONSTRAINT_T aUsage ) const
 {
     std::shared_ptr<SHAPE_COMPOUND> shape = std::make_shared<SHAPE_COMPOUND>();
 
     for( BOARD_ITEM* item : GetBoardItems() )
-        shape->AddShape( item->GetEffectiveShape( aLayer, aFlash )->Clone() );
+        shape->AddShape( item->GetEffectiveShape( aLayer, aFlash, aUsage )->Clone() );
 
     return shape;
 }
@@ -529,8 +612,8 @@ static struct PCB_GROUP_DESC
 
         const wxString groupTab = _HKI( "Group Properties" );
 
-        propMgr.AddProperty(
-                new PROPERTY<EDA_GROUP, wxString>( _HKI( "Name" ), &PCB_GROUP::SetName, &PCB_GROUP::GetName ),
-                groupTab );
+        propMgr.AddProperty( new PROPERTY<EDA_GROUP, wxString>( _HKI( "Name" ),
+                    &PCB_GROUP::SetName, &PCB_GROUP::GetName ),
+                    groupTab );
     }
 } _PCB_GROUP_DESC;

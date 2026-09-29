@@ -60,16 +60,21 @@ class BOARD_NETLIST_UPDATER;
 class ACTION_MENU;
 class TOOL_ACTION;
 class DIALOG_BOARD_SETUP;
+class DIALOG_FOOTPRINT_FIELDS_TABLE;
 class PCB_DESIGN_BLOCK_PANE;
+class PANEL_CONSTRAINTS;
 class WX_INFOBAR;
 
 class KICAD_API_SERVER;
 class API_HANDLER_PCB;
 class API_HANDLER_COMMON;
+class API_HANDLER_LIBRARIES;
 
 enum LAST_PATH_TYPE : unsigned int;
 
 namespace PCB { struct IFACE; }     // KIFACE is in pcbnew.cpp
+
+wxDECLARE_EVENT( EDA_EVT_PCB_LAST_SCH_SHEET_CHANGED, wxCommandEvent );
 
 /**
  * The main frame for Pcbnew.
@@ -108,17 +113,24 @@ public:
      */
     void ExecuteRemoteCommand( const char* cmdline ) override;
 
+    void HandleRemoteNetHighlight( const std::vector<wxString>& aNetNames );
+
     void KiwayMailIn( KIWAY_MAIL_EVENT& aEvent ) override;
 
-    /**
-     * Used to find items by selection synchronization spec string.
-     */
-    std::vector<BOARD_ITEM*> FindItemsFromSyncSelection( std::string syncStr );
+    void      SetLastSchematicSheetPath( const KIID_PATH& aPath );
+    KIID_PATH GetLastSchematicSheetPath() const { return m_lastSchematicSheetPath; }
 
     /**
      * @return the name of the wxAuiPaneInfo managing the Search panel
      */
     static const wxString SearchPaneName() { return wxT( "Search" ); }
+    static const wxString ConstraintsPaneName() { return wxT( "Constraints" ); }
+
+    /// Show/hide the dockable geometric-constraint list pane, refreshing it when shown (#2329).
+    void ToggleConstraintsPanel();
+
+    /// The dockable geometric-constraint list pane (#2329), or nullptr.
+    PANEL_CONSTRAINTS* GetConstraintsPanel() const { return m_constraintsPanel; }
 
     /**
      * Show the Find dialog.
@@ -150,6 +162,11 @@ public:
     void UpdateTrackWidthSelectBox( wxChoice* aTrackWidthSelectBox, bool aShowNetclass,
                                     bool aShowEdit );
     void UpdateViaSizeSelectBox( wxChoice* aViaSizeSelectBox, bool aShowNetclass, bool aShowEdit );
+
+    /**
+     * Fill the via stack preset selector with the board's defined presets plus an edit entry.
+     */
+    void UpdateViaStackSelectBox( wxChoice* aViaStackSelectBox );
 
     /**
      * Update the variant selection dropdown with the current board's variant names.
@@ -232,7 +249,8 @@ public:
      *       the project file.  The advantage of relative paths is that is more likely to
      *       work when opening the same project from both Windows and Linux.
      *
-     * @param aLastPath - The last file with full path successfully read.
+     * @param aType
+     * @param aLastPath is the last file with full path successfully read.
      */
     void SetLastPath( LAST_PATH_TYPE aType, const wxString& aLastPath );
 
@@ -245,6 +263,10 @@ public:
     void Process_Special_Functions( wxCommandEvent& event );
     void Tracks_and_Vias_Size_Event( wxCommandEvent& event );
 
+    /**
+     * Handle the via stack preset selector on the auxiliary toolbar.
+     */
+    void SelectViaStack_Event( wxCommandEvent& event );
 
 
     /**
@@ -301,8 +323,16 @@ public:
      */
     void SetElementVisibility( GAL_LAYER_ID aElement, bool aNewState );
 
-    ///< @copydoc EDA_DRAW_FRAME::UseGalCanvas()
+    /// @copydoc EDA_DRAW_FRAME::ActivateGalCanvas()
     void ActivateGalCanvas() override;
+
+    /**
+     * Tell every hole to redraw its drill symbol.
+     *
+     * A cached GAL group replays until its own item is updated, so changing a map or a
+     * symbol assignment is invisible until the holes themselves are refreshed.
+     */
+    void RefreshDrillSymbols( int aUpdateFlags ) override;
 
     void ShowBoardSetupDialog( const wxString& aInitialPage = wxEmptyString, wxWindow* aParent = nullptr );
 
@@ -399,7 +429,7 @@ public:
      */
     bool Clear_Pcb( bool doAskAboutUnsavedChanges, bool aFinal = false );
 
-    ///< @copydoc PCB_BASE_FRAME::SetBoard()
+    /// @copydoc PCB_BASE_FRAME::SetBoard()
     void SetBoard( BOARD* aBoard, PROGRESS_REPORTER* aReporter = nullptr ) override
     {
         SetBoard( aBoard, true, aReporter );
@@ -407,12 +437,12 @@ public:
 
     void SetBoard( BOARD* aBoard, bool aBuildConnectivity, PROGRESS_REPORTER* aReporter = nullptr );
 
-    ///< @copydoc PCB_BASE_FRAME::GetModel()
+    /// @copydoc PCB_BASE_FRAME::GetModel()
     BOARD_ITEM_CONTAINER* GetModel() const override;
 
     std::unique_ptr<GRID_HELPER> MakeGridHelper() override;
 
-    ///< @copydoc PCB_BASE_FRAME::SetPageSettings()
+    /// @copydoc PCB_BASE_FRAME::SetPageSettings()
     void SetPageSettings( const PAGE_INFO& aPageSettings ) override;
 
     bool SaveBoardAsDesignBlock( const wxString& aLibraryName );
@@ -432,9 +462,9 @@ public:
      *                       will be kept or updated.  This library should be in fp lib table,
      *                       and is type is .pretty. False to save footprints in a new library.
      *                       If it is an existing lib, previous footprints will be removed.
-     *
      * @param aLibName optional library name to create, stops dialog call. Must be called with
      *                 \a aStoreInNewLib as true.
+     * @param aLibPath is the path to export the library to.
      */
     void ExportFootprintsToLibrary( bool aStoreInNewLib, const wxString& aLibName = wxEmptyString,
                                     wxString* aLibPath = nullptr );
@@ -454,6 +484,8 @@ public:
      *
      * @param aFullFileName the full filename of the file to create
      * @param aMMtoWRMLunit the VRML scaling factor: 1.0 to export in mm. 0.001 for meters
+     * @param aIncludeUnspecified
+     * @param aIncludeDNP include DNP footprint models on export.
      * @param aExport3DFiles true to copy 3D shapes in the subir a3D_Subdir
      * @param aUseRelativePaths set to true to use relative paths instead of absolute paths
      *                          in the board VRML file URLs.
@@ -469,22 +501,6 @@ public:
                           const wxString& a3D_Subdir, double aXRef, double aYRef );
 
     /**
-     * Create an IDF3 compliant BOARD (*.emn) and LIBRARY (*.emp) file.
-     *
-     * @param aPcb a pointer to the board to be exported to IDF.
-     * @param aFullFileName the full filename of the export file.
-     * @param aUseThou set to true if the desired IDF unit is thou (mil).
-     * @param aXRef the board Reference Point in mm, X value.
-     * @param aYRef the board Reference Point in mm, Y value.
-     * @param aIncludeUnspecified true to include unspecified-type footprint models
-     * @param aIncludeDNP true to include DNP footprint models
-     * @return true if OK.
-     */
-    bool Export_IDF3( BOARD* aPcb, const wxString& aFullFileName,
-                      bool aUseThou, double aXRef, double aYRef,
-                      bool aIncludeUnspecified, bool aIncludeDNP );
-
-    /**
      * Export the current BOARD to a specctra dsn file.
      *
      * See http://www.autotraxeda.com/docs/SPECCTRA/SPECCTRA.pdf for the specification.
@@ -494,8 +510,11 @@ public:
     bool ExportSpecctraFile( const wxString& aFullFilename );
 
     /**
-     * Import a specctra *.ses file and use it to relocate MODULEs and to replace all vias and
+     * Import a specctra *.ses file and use it to relocate footprints and to replace all vias and
      * tracks in an existing and loaded #BOARD.
+     *
+     * Changes are committed through #BOARD_COMMIT so they participate in undo/redo and refresh
+     * the canvas view (including moved footprints).
      *
      * See http://www.autotraxeda.com/docs/SPECCTRA/SPECCTRA.pdf for the specification.
      */
@@ -509,7 +528,6 @@ public:
     /**
      * Install the corresponding dialog editor for the given item.
      *
-     * @param aDC the current device context.
      * @param aItem a pointer to the BOARD_ITEM to edit.
      */
     void OnEditItemRequest( BOARD_ITEM* aItem ) override;
@@ -654,6 +672,9 @@ public:
 
     DIALOG_BOOK_REPORTER* GetFootprintDiffDialog();
 
+    DIALOG_FOOTPRINT_FIELDS_TABLE* GetFootprintFieldsTableDialog();
+    bool                           CloseFootprintFieldsTableDialog();
+
     /**
      * Perform auto save when the board has been modified and not saved within the
      * auto save interval.
@@ -727,8 +748,9 @@ protected:
     /**
      * Load the given filename but sets the path to the current project path.
      *
-     * @param full file path of file to be imported.
-     * @param aFileType PCB_FILE_T value for file type
+     * @param aFileName full file path of file to be imported.
+     * @param aFileType PCB_FILE_T value for file type.
+     * @param aProperties is a list of import properties.
      */
     bool importFile( const wxString& aFileName, int aFileType,
                      const std::map<std::string, UTF8>* aProperties = nullptr );
@@ -741,6 +763,7 @@ protected:
      *
      * @param aDefinitions are the importer's caller-owned cached library footprints, captured
      *                     during load before the plugin was destroyed.
+     * @param aBoardPath
      */
     void reconcileImportedFootprintLibraries(
             std::vector<std::unique_ptr<FOOTPRINT>> aDefinitions, const wxString& aBoardPath );
@@ -754,7 +777,7 @@ protected:
      *
      * @return
      */
-    bool saveBoardAsFile( BOARD* aBoard, const wxString& aFileName, bool aHeadless = false );
+    bool saveBoardAsFile( BOARD& aBoard, const wxString& aFileName, bool aHeadless = false );
 
     bool saveSelectionToDesignBlock( const wxString& aNickname, PCB_SELECTION& aSelection, DESIGN_BLOCK& aBlock );
 
@@ -774,12 +797,14 @@ protected:
     void saveProjectSettings() override;
 
     void onCloseModelessBookReporterDialogs( wxCommandEvent& aEvent );
+    void onCloseFootprintFieldsTableDialog( wxCommandEvent& aEvent );
 
     void onPluginAvailabilityChanged( wxCommandEvent& aEvt );
 
 public:
     wxChoice* m_SelTrackWidthBox;        // a choice box to display and select current track width
     wxChoice* m_SelViaSizeBox;           // a choice box to display and select current via diameter
+    wxChoice* m_SelViaStackBox;          // a choice box to display and select current via stack preset
     wxChoice* m_CurrentVariantCtrl;      // a choice box to display and select current variant
 
     bool      m_ShowLayerManagerTools;
@@ -829,9 +854,12 @@ private:
     DIALOG_BOOK_REPORTER*      m_inspectConstraintsDlg;
     DIALOG_BOOK_REPORTER*      m_footprintDiffDlg;
     DIALOG_BOARD_SETUP*        m_boardSetupDlg;
+    DIALOG_FOOTPRINT_FIELDS_TABLE* m_footprintFieldsTableDialog;
 
     std::vector<LIB_ID>    m_designBlockHistoryList;
     PCB_DESIGN_BLOCK_PANE* m_designBlocksPane;
+    // Tool Reset() reads this before the ctor creates the panel.
+    PANEL_CONSTRAINTS* m_constraintsPanel = nullptr; ///< Dockable geometric-constraint list (#2329).
 
     /// Secondary infobar that stacks above the main one; reserved for load-time
     /// notices (currently the WRL -> STEP migration prompt) that must not be
@@ -854,8 +882,13 @@ private:
     std::vector<KIID> m_crossProbeFlashItems;          ///< Items to flash (by UUID)
     bool              m_crossProbeFlashing = false;    ///< Currently flashing guard
 
+    // Most recent schematic path (default to root), used in the footprint fields
+    // table to enable the same schematic scope limiting as the symbol fields table
+    KIID_PATH         m_lastSchematicSheetPath;
+
     std::unique_ptr<API_HANDLER_PCB>    m_apiHandler;
     std::unique_ptr<API_HANDLER_COMMON> m_apiHandlerCommon;
+    std::unique_ptr<API_HANDLER_LIBRARIES> m_apiLibrariesHandler;
 };
 
 #endif  // __PCB_EDIT_FRAME_H__

@@ -262,7 +262,8 @@ int PCB_VIEWER_TOOLS::MeasureTool( const TOOL_EVENT& aEvent )
     auto& view     = *getView();
     auto& controls = *getViewControls();
 
-    frame()->PushTool( aEvent );
+    TOOL_EVENT         originalEvent = aEvent;          // This can change out from under us when the event loop runs
+    SCOPED_TOOL_PUSHER raii( frame(), originalEvent );
 
     bool invertXAxis = displayOptions().m_DisplayInvertXAxis;
     bool invertYAxis = displayOptions().m_DisplayInvertYAxis;
@@ -318,7 +319,7 @@ int PCB_VIEWER_TOOLS::MeasureTool( const TOOL_EVENT& aEvent )
         if( !evt->IsActivate() && !evt->IsCancelInteractive() )
         {
             // If we are switching, the canvas may not be valid any more
-            cursorPos = grid.BestSnapAnchor( cursorPos, nullptr );
+            cursorPos = grid.ResolveSnap( cursorPos, nullptr ).position;
             controls.ForceCursorPosition( true, cursorPos );
         }
         else
@@ -329,18 +330,11 @@ int PCB_VIEWER_TOOLS::MeasureTool( const TOOL_EVENT& aEvent )
         if( evt->IsCancelInteractive() )
         {
             if( originSet )
-            {
                 cleanup();
-            }
             else if( m_isDefaultTool )
-            {
                 view.SetVisible( &ruler, false );
-            }
             else
-            {
-                frame()->PopTool( aEvent );
                 break;
-            }
         }
         else if( evt->IsActivate() )
         {
@@ -349,17 +343,16 @@ int PCB_VIEWER_TOOLS::MeasureTool( const TOOL_EVENT& aEvent )
 
             if( evt->IsMoveTool() )
             {
-                // leave ourselves on the stack so we come back after the move
-                break;
+                // Make sure we come back after the move tool is done
+                frame()->PushTool( originalEvent );
             }
-            else
-            {
-                frame()->PopTool( aEvent );
-                break;
-            }
+
+            break;
         }
         // click or drag starts
-        else if( !originSet && ( evt->IsDrag( BUT_LEFT ) || evt->IsClick( BUT_LEFT ) ) )
+        else if( !originSet && (   evt->IsDrag( BUT_LEFT )
+                                || evt->IsClick( BUT_LEFT )
+                                || evt->IsAction( &ACTIONS::cursorClick ) ) )
         {
             twoPtMgr.SetOrigin( cursorPos );
             twoPtMgr.SetEnd( cursorPos );
@@ -370,7 +363,9 @@ int PCB_VIEWER_TOOLS::MeasureTool( const TOOL_EVENT& aEvent )
             originSet = true;
         }
         // second click or mouse up after drag ends
-        else if( originSet && ( evt->IsClick( BUT_LEFT ) || evt->IsMouseUp( BUT_LEFT ) ) )
+        else if( originSet && (   evt->IsClick( BUT_LEFT )
+                               || evt->IsAction( &ACTIONS::cursorClick )
+                               || evt->IsMouseUp( BUT_LEFT ) ) )
         {
             originSet = false;
 
@@ -378,12 +373,14 @@ int PCB_VIEWER_TOOLS::MeasureTool( const TOOL_EVENT& aEvent )
             controls.CaptureCursor( false );
         }
         // move or drag when origin set updates rules
-        else if( originSet && ( evt->IsMotion() || evt->IsDrag( BUT_LEFT ) ) )
+        else if( originSet && (   evt->IsMotion()
+                               || evt->IsAction( &ACTIONS::refreshPreview )
+                               || evt->IsDrag( BUT_LEFT ) ) )
         {
             // The measurement tool always measures in a direct line; holding Shift
             // constrains to 45° increments for convenience.
             twoPtMgr.SetAngleSnap( evt->Modifier( MD_SHIFT ) ? LEADER_MODE::DEG45
-                                                              : LEADER_MODE::DIRECT );
+                                                             : LEADER_MODE::DIRECT );
             twoPtMgr.SetEnd( cursorPos );
 
             view.SetVisible( &ruler, true );

@@ -22,7 +22,6 @@
 #pragma once
 
 #include <widgets/properties_panel.h>
-#include <set>
 
 class wxButton;
 class wxCommandEvent;
@@ -61,6 +60,19 @@ protected:
     void valueChanging( wxPropertyGridEvent& aEvent ) override;
     void valueChanged( wxPropertyGridEvent& aEvent ) override;
 
+    bool isKeyEditable( const wxPGProperty* aPGProp ) const override;
+    bool isKeyNameInUse( const wxString& aName ) const override;
+    void onKeyRenamed( const wxString& aOldName, const wxString& aNewName ) override;
+
+    bool buildContextMenu( wxMenu& aMenu, wxPGProperty* aPGProp ) override;
+    void onNewItemLeftBlank( const wxString& aKey ) override;
+
+    void addBlankField();
+    void addBlankCustomProperty();
+    void removeField( const wxString& aName );
+    void removeCustomProperty( const wxString& aName );
+    void onContextMenu( wxCommandEvent& aEvent );
+
     bool handleSheetFilenameChange( SCH_EDIT_FRAME* aFrame, SCH_SHEET* aSheet,
                                     SCH_COMMIT& aChanges, const wxString& aNewFilename );
 
@@ -87,7 +99,7 @@ protected:
      * Open the symbol properties dialog on its Pin Map page for the single selected symbol
      * (issue #2282).  Only enabled in the schematic editor.
      */
-    void onEditPinMap( wxCommandEvent& aEvent );
+    void onEditPinMap();
 
     /// @return the single selected SCH_SYMBOL with an effective associated footprint, else nullptr.
     SCH_SYMBOL* getSinglePinMappedSymbol();
@@ -101,12 +113,9 @@ protected:
     PG_FPID_EDITOR*     m_fpEditorInstance;
     PG_URL_EDITOR*      m_urlEditorInstance;
 
-    static std::set<wxString> m_currentSymbolFieldNames;
-    static std::set<wxString> m_currentSheetFieldNames;
+    static bool               m_selContainsJunctions;
+    static bool               m_selContainsWiresOrBuses;
 
-    /// Distinct pin numbers of the selected pin-mapped symbol, gating the per-pin table rows.
-    static std::set<wxString> m_currentPinMapPinNumbers;
     wxPGChoices               m_nets;
 
-    wxButton* m_editPinMapButton;
 };

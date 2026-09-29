@@ -60,10 +60,10 @@ public:
 
     static std::shared_ptr<ERC_ITEM> Create( const wxString& aErrorKey )
     {
-        for( const RC_ITEM& item : allItemTypes )
+        for( const std::reference_wrapper<RC_ITEM>& item : allItemTypes )
         {
-            if( aErrorKey == item.GetSettingsKey() )
-                return std::make_shared<ERC_ITEM>( static_cast<const ERC_ITEM&>( item ) );
+            if( aErrorKey == item.get().GetSettingsKey() )
+                return std::make_shared<ERC_ITEM>( static_cast<const ERC_ITEM&>( item.get() ) );
         }
 
         return nullptr;
@@ -75,9 +75,9 @@ public:
 
         if( itemsWithSeverities.empty() )
         {
-            for( RC_ITEM& item : allItemTypes )
+            for( std::reference_wrapper<RC_ITEM>& item : allItemTypes )
             {
-                if( &item == &heading_internal )
+                if( &item.get() == &heading_internal )
                     break;
 
                 itemsWithSeverities.push_back( item );
@@ -133,8 +133,7 @@ public:
      * @param mainItemSheet the SCH_SHEET_PATH of the first item causing the ERC violation
      * @param auxItemSheet  the SCH_SHEET_PATH of the second item causing the ERC violation
      */
-    void SetItemsSheetPaths( const SCH_SHEET_PATH& mainItemSheet,
-                             const SCH_SHEET_PATH& auxItemSheet )
+    void SetItemsSheetPaths( const SCH_SHEET_PATH& mainItemSheet, const SCH_SHEET_PATH& auxItemSheet )
     {
         m_mainItemSheet = mainItemSheet;
         m_auxItemSheet = auxItemSheet;
@@ -186,8 +185,8 @@ protected:
 private:
     ERC_ITEM( int aErrorCode = 0, const wxString& aTitle = "", const wxString& aSettingsKey = "" )
     {
-        m_errorCode     = aErrorCode;
-        m_errorTitle    = aTitle;
+        m_errorCode   = aErrorCode;
+        m_errorTitle  = aTitle;
         m_settingsKey = aSettingsKey;
     }
 
@@ -207,6 +206,7 @@ private:
     static ERC_ITEM pinNotConnected;
     static ERC_ITEM pinNotDriven;
     static ERC_ITEM powerpinNotDriven;
+    static ERC_ITEM wiredImplicitPower;
     static ERC_ITEM duplicatePinError;
     static ERC_ITEM pinTableWarning;
     static ERC_ITEM pinTableError;
@@ -235,6 +235,7 @@ private:
     static ERC_ITEM groundPinNotGround;
     static ERC_ITEM stackedPinName;
     static ERC_ITEM fieldNameWhitespace;
+    static ERC_ITEM emptyLabelName;
     static ERC_ITEM pinMapBadPad;
     static ERC_ITEM pinMapUnmappedPin;
     static ERC_ITEM pinMapDuplicatePad;
@@ -257,6 +258,8 @@ private:
     static ERC_ITEM duplicateReference;
     static ERC_ITEM busEntryNeeded;
     static ERC_ITEM unconnectedWireEndpoint;
+    static ERC_ITEM variantSymbolInvalid;
+    static ERC_ITEM variantSymbolIncompatible;
 
     /// True if this item is specific to a sheet instance (as opposed to applying to all instances)
     std::optional<SCH_SHEET_PATH> m_sheetSpecificPath;

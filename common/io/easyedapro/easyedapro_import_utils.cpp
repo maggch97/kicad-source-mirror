@@ -38,6 +38,7 @@
 #include <wx/wfstream.h>
 #include <wx/mstream.h>
 #include <wx/txtstrm.h>
+#include <trace_helpers.h>
 
 
 namespace
@@ -249,7 +250,7 @@ nlohmann::json EASYEDAPRO::FindJsonFile( const wxString&           aZipFileName,
     wxFFileInputStream          in( aZipFileName );
     wxZipInputStream            zip( in );
 
-    while( entry.reset( zip.GetNextEntry() ), entry.get() != NULL )
+    while( entry.reset( zip.GetNextEntry() ), entry.get() )
     {
         wxString name = entry->GetName();
 
@@ -261,20 +262,18 @@ nlohmann::json EASYEDAPRO::FindJsonFile( const wxString&           aZipFileName,
                 memos << zip;
                 wxStreamBuffer* buf = memos.GetOutputStreamBuffer();
 
-                wxString str =
-                        wxString::FromUTF8( (char*) buf->GetBufferStart(), buf->GetBufferSize() );
+                wxString str = wxString::FromUTF8( (char*) buf->GetBufferStart(), buf->GetBufferSize() );
 
                 return nlohmann::json::parse( str );
             }
         }
         catch( nlohmann::json::exception& e )
         {
-            THROW_IO_ERROR(
-                    wxString::Format( _( "JSON error reading '%s': %s" ), name, e.what() ) );
+            THROW_IO_ERRORF( _( "JSON error reading '%s': %s" ), name, e.what() );
         }
         catch( std::exception& e )
         {
-            THROW_IO_ERROR( wxString::Format( _( "Error reading '%s': %s" ), name, e.what() ) );
+            THROW_IO_ERRORF( _( "Error reading '%s': %s" ), name, e.what() );
         }
     }
 
@@ -292,10 +291,8 @@ nlohmann::json EASYEDAPRO::ReadProjectOrDeviceFile( const wxString& aZipFileName
     if( !j.is_null() )
         return j;
 
-    THROW_IO_ERROR( wxString::Format(
-            _( "'%s' does not appear to be a valid EasyEDA (JLCEDA) Pro "
-               "project or library file. Cannot find project.json or device.json." ),
-            aZipFileName ) );
+    THROW_IO_ERRORF(  _( "'%s' does not appear to be a valid EasyEDA (JLCEDA) Pro project or library file. "
+                         "Cannot find project.json or device.json." ), aZipFileName );
 }
 
 
@@ -308,11 +305,9 @@ void EASYEDAPRO::IterateZipFiles(
     wxZipInputStream            zip( in );
 
     if( !zip.IsOk() )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Cannot read ZIP archive '%s'" ), aFileName ) );
-    }
+        THROW_IO_ERRORF( _( "Cannot read ZIP archive '%s'" ), aFileName );
 
-    while( entry.reset( zip.GetNextEntry() ), entry.get() != NULL )
+    while( entry.reset( zip.GetNextEntry() ), entry.get() )
     {
         wxString name = entry->GetName();
         wxString baseName = name.AfterLast( '\\' ).AfterLast( '/' ).BeforeFirst( '.' );
@@ -324,26 +319,26 @@ void EASYEDAPRO::IterateZipFiles(
         }
         catch( nlohmann::json::exception& e )
         {
-            THROW_IO_ERROR(
-                    wxString::Format( _( "JSON error reading '%s': %s" ), name, e.what() ) );
+            THROW_IO_ERRORF( _( "JSON error reading '%s': %s" ), name, e.what() );
         }
         catch( std::exception& e )
         {
-            THROW_IO_ERROR( wxString::Format( _( "Error reading '%s': %s" ), name, e.what() ) );
+            THROW_IO_ERRORF( _( "Error reading '%s': %s" ), name, e.what() );
         }
     }
 }
 
 
-std::vector<nlohmann::json> EASYEDAPRO::ParseJsonLines( wxInputStream&  aInput,
-                                                        const wxString& aSource )
+std::vector<nlohmann::json> EASYEDAPRO::ParseJsonLines( wxInputStream&  aInput, const wxString& aSource )
 {
-    wxTextInputStream txt( aInput, wxS( " " ), wxConvUTF8 );
+    // wxTextInputStream reads a byte at a time, so an unbuffered zip stream inflates per character
+    wxBufferedInputStream buffered( aInput, 64 * 1024 );
+    wxTextInputStream     txt( buffered, wxS( " " ), wxConvUTF8 );
 
     int currentLine = 1;
 
     std::vector<nlohmann::json> lines;
-    while( aInput.CanRead() )
+    while( buffered.CanRead() )
     {
         try
         {
@@ -361,8 +356,8 @@ std::vector<nlohmann::json> EASYEDAPRO::ParseJsonLines( wxInputStream&  aInput,
         }
         catch( nlohmann::json::exception& e )
         {
-            wxLogWarning( wxString::Format( _( "Cannot parse JSON line %d in '%s': %s" ),
-                                            currentLine, aSource, e.what() ) );
+            wxLogTrace( traceEasyEdaIo, wxT( "Cannot parse JSON line %d in '%s': %s" ),
+                                            currentLine, aSource, e.what() );
         }
 
         currentLine++;
@@ -375,14 +370,15 @@ std::vector<nlohmann::json> EASYEDAPRO::ParseJsonLines( wxInputStream&  aInput,
 std::vector<std::vector<nlohmann::json>>
 EASYEDAPRO::ParseJsonLinesWithSeparation( wxInputStream& aInput, const wxString& aSource )
 {
-    wxTextInputStream txt( aInput, wxS( " " ), wxConvUTF8 );
+    wxBufferedInputStream buffered( aInput, 64 * 1024 );
+    wxTextInputStream     txt( buffered, wxS( " " ), wxConvUTF8 );
 
     int currentLine = 1;
 
     std::vector<std::vector<nlohmann::json>> lineBlocks;
     lineBlocks.emplace_back();
 
-    while( aInput.CanRead() )
+    while( buffered.CanRead() )
     {
         try
         {
@@ -400,8 +396,8 @@ EASYEDAPRO::ParseJsonLinesWithSeparation( wxInputStream& aInput, const wxString&
         }
         catch( nlohmann::json::exception& e )
         {
-            wxLogWarning( wxString::Format( _( "Cannot parse JSON line %d in '%s': %s" ),
-                                            currentLine, aSource, e.what() ) );
+            wxLogTrace( traceEasyEdaIo, wxT( "Cannot parse JSON line %d in '%s': %s" ),
+                                            currentLine, aSource, e.what() );
         }
 
         currentLine++;
@@ -639,8 +635,8 @@ std::map<wxString, EASYEDAPRO::BLOB> EASYEDAPRO::BuildV3BlobMap( const V3_DOC_PA
             }
             catch( nlohmann::json::exception& e )
             {
-                wxLogWarning( wxString::Format( _( "EasyEDA Pro v3 blob in '%s' was skipped due to parse error: %s" ),
-                                                blobDocUuid, e.what() ) );
+                wxLogTrace( traceEasyEdaIo, wxT( "EasyEDA Pro v3 blob in '%s' was skipped due to parse error: %s" ),
+                                                blobDocUuid, e.what() );
             }
         }
     }
@@ -926,7 +922,7 @@ std::map<wxString, EASYEDAPRO::V3_SYMBOL_LIB_ITEM> EASYEDAPRO::BuildV3SymbolLibr
         }
         catch( nlohmann::json::exception& e )
         {
-            wxLogWarning( wxString::Format( _( "Failed to parse EasyEDA Pro v3 device metadata: %s" ), e.what() ) );
+            wxLogTrace( traceEasyEdaIo, wxT( "Failed to parse EasyEDA Pro v3 device metadata: %s" ), e.what() );
             return {};
         }
 

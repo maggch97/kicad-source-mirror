@@ -255,17 +255,20 @@ bool DIALOG_DRC::hitTestLink( wxDataViewCtrl* aCtrl, const wxPoint& aPoint, wxSt
     if( !item.IsOk() || !col )
         return false;
 
-    auto* hl = dynamic_cast<HYPERLINK_DV_RENDERER*>( col->GetRenderer() );
+    HYPERLINK_DV_RENDERER* hl = dynamic_cast<HYPERLINK_DV_RENDERER*>( col->GetRenderer() );
 
     if( !hl )
         return false;
 
-    wxVariant value;
+    wxVariant          value;
+    wxDataViewItemAttr attr;
+
     model->GetValue( value, item, col->GetModelColumn() );
+    model->GetAttr( item, col->GetModelColumn(), attr );
 
-    wxRect cell = aCtrl->GetItemRect( item, col );
+    wxRect cellRect = aCtrl->GetItemRect( item, col );
 
-    return hl->HitTestRunsForCell( value.GetString(), cell, aPoint, aHref );
+    return hl->HitTestRunsForCell( value.GetString(), attr, cellRect, aPoint, aHref );
 }
 
 
@@ -287,7 +290,12 @@ void DIALOG_DRC::OnActivateDlg( wxActivateEvent& aEvent )
 
         DRC_TOOL* drcTool = m_frame->GetToolManager()->GetTool<DRC_TOOL>();
         drcTool->DestroyDRCDialog();
+
+        return;
     }
+
+    // Let DIALOG_SHIM re-establish keyboard focus so ESC keeps closing the dialog.
+    aEvent.Skip();
 }
 
 
@@ -722,7 +730,7 @@ void DIALOG_DRC::OnDRCItemSelected( wxDataViewEvent& aEvent )
             focus( item );
         }
     }
-    else if( rc_item->GetErrorCode() == DRCE_DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG )
+    else if( rc_item->GetErrorCode() == DRCE_DP_UNCOUPLED_LENGTH_TOO_LONG )
     {
         BOARD_CONNECTED_ITEM*    track = dynamic_cast<PCB_TRACK*>( item );
         std::vector<BOARD_ITEM*> items;
@@ -907,9 +915,10 @@ void DIALOG_DRC::OnDRCItemRClick( wxDataViewEvent& aEvent )
 
             marker->SetExcluded( true, dlg.GetValue() );
 
-            wxString serialized = marker->SerializeToString();
-            bds().m_DrcExclusions.insert( serialized );
-            bds().m_DrcExclusionComments[serialized] = dlg.GetValue();
+            DRC_EXCLUSION exclusion = DRC_EXCLUSION::FromMarker( *marker );
+            exclusion.SetComment( dlg.GetValue() );
+            bds().m_DrcExclusions.erase( exclusion );
+            bds().m_DrcExclusions.insert( exclusion );
 
             // Update view
             static_cast<RC_TREE_MODEL*>( aEvent.GetModel() )->ValueChanged( node );
@@ -922,10 +931,7 @@ void DIALOG_DRC::OnDRCItemRClick( wxDataViewEvent& aEvent )
         if( PCB_MARKER* marker = dynamic_cast<PCB_MARKER*>( rcItem->GetParent() ) )
         {
             marker->SetExcluded( false );
-
-            wxString serialized = marker->SerializeToString();
-            bds().m_DrcExclusions.erase( serialized );
-            bds().m_DrcExclusionComments.erase( serialized );
+            bds().m_DrcExclusions.erase( DRC_EXCLUSION::FromMarker( *marker ) );
 
             if( rcItem->GetErrorCode() == DRCE_UNCONNECTED_ITEMS )
             {
@@ -962,9 +968,9 @@ void DIALOG_DRC::OnDRCItemRClick( wxDataViewEvent& aEvent )
 
             marker->SetExcluded( true, comment );
 
-            wxString serialized = marker->SerializeToString();
-            bds().m_DrcExclusions.insert( serialized );
-            bds().m_DrcExclusionComments[serialized] = comment;
+            DRC_EXCLUSION exclusion = DRC_EXCLUSION::FromMarker( *marker );
+            exclusion.SetComment( comment );
+            bds().m_DrcExclusions.insert( exclusion );
 
             if( rcItem->GetErrorCode() == DRCE_UNCONNECTED_ITEMS )
             {
@@ -995,10 +1001,7 @@ void DIALOG_DRC::OnDRCItemRClick( wxDataViewEvent& aEvent )
             if( candidateDrcItem->GetViolatingRule() == drcItem->GetViolatingRule() )
             {
                 marker->SetExcluded( false );
-
-                wxString serialized = marker->SerializeToString();
-                bds().m_DrcExclusions.erase( serialized );
-                bds().m_DrcExclusionComments.erase( serialized );
+                bds().m_DrcExclusions.erase( DRC_EXCLUSION::FromMarker( *marker ) );
             }
         }
 
@@ -1015,9 +1018,7 @@ void DIALOG_DRC::OnDRCItemRClick( wxDataViewEvent& aEvent )
             if( candidateDrcItem->GetViolatingRule() == drcItem->GetViolatingRule() )
             {
                 marker->SetExcluded( true );
-
-                wxString serialized = marker->SerializeToString();
-                bds().m_DrcExclusions.insert( serialized );
+                bds().m_DrcExclusions.insert( DRC_EXCLUSION::FromMarker( *marker ) );
             }
         }
 
@@ -1102,6 +1103,10 @@ void DIALOG_DRC::OnDRCItemRClick( wxDataViewEvent& aEvent )
 
     case ID_EDIT_SEVERITIES:
         m_frame->ShowBoardSetupDialog( _( "Violation Severity" ), this );
+
+        // Rebuild model and view
+        static_cast<RC_TREE_MODEL*>( aEvent.GetModel() )->Update( m_markersProvider, getSeverities() );
+        updateDisplayedCounts();
         break;
     }
 
@@ -1132,6 +1137,7 @@ void DIALOG_DRC::OnIgnoredItemRClick( wxListEvent& event )
         if( bds().m_DRCSeverities[ errorCode ] != severity )
         {
             bds().m_DRCSeverities[ errorCode ] = (SEVERITY) severity;
+            m_ignoredList->DeleteItem( event.m_itemIndex );
 
             updateDisplayedCounts();
             refreshEditor();
@@ -1188,7 +1194,8 @@ void DIALOG_DRC::OnSaveReport( wxCommandEvent& aEvent )
                              m_ratsnestProvider, m_fpWarningsProvider );
 
     bool success = false;
-    if( fn.GetExt() == FILEEXT::JsonFileExtension )
+
+    if( fn.GetExt().Lower() == FILEEXT::JsonFileExtension )
         success = reportWriter.WriteJsonReport( fn.GetFullPath() );
     else
         success = reportWriter.WriteTextReport( fn.GetFullPath() );
@@ -1310,7 +1317,7 @@ void DIALOG_DRC::ExcludeMarker()
         if( marker && marker->GetSeverity() != RPT_SEVERITY_EXCLUSION )
         {
             marker->SetExcluded( true );
-            bds().m_DrcExclusions.insert( marker->SerializeToString() );
+            bds().m_DrcExclusions.insert( DRC_EXCLUSION::FromMarker( *marker ) );
             m_frame->GetCanvas()->GetView()->Update( marker );
 
             // Update view

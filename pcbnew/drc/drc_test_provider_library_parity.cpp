@@ -708,24 +708,33 @@ bool zoneNeedsUpdate( const ZONE* a, const ZONE* b, REPORTER* aReporter )
     TEST( aLibOutline.TotalVertices(), bLibOutline.TotalVertices(),
           wxString::Format( _( "%s outline corner count differs." ), ITEM_DESC( a ) ) );
 
-    bool cornersDiffer = false;
+    bool cornersDiffer = aLibOutline.OutlineCount() != bLibOutline.OutlineCount();
 
-    for( int poly = 0; poly < static_cast<int>( aLibOutline.CPolygons().size() ); poly++ )
+    for( int poly = 0; !cornersDiffer && poly < aLibOutline.OutlineCount(); poly++ )
     {
-        const SHAPE_POLY_SET::POLYGON aPolygon = aLibOutline.CPolygon( poly );
-        const SHAPE_POLY_SET::POLYGON bPolygon = bLibOutline.CPolygon( poly );
+        const SHAPE_POLY_SET::POLYGON& aPolygon = aLibOutline.CPolygon( poly );
+        const SHAPE_POLY_SET::POLYGON& bPolygon = bLibOutline.CPolygon( poly );
 
-        if( aPolygon.size() == 0 || bPolygon.size() == 0
-            || !aPolygon[0].CompareGeometry( bPolygon[0], true, EPSILON ) )
+        if( aPolygon.size() != bPolygon.size() )
         {
-            diff = true;
             cornersDiffer = true;
             break;
         }
+
+        for( size_t contour = 0; contour < aPolygon.size() && !cornersDiffer; contour++ )
+        {
+            if( !aPolygon[contour].CompareGeometry( bPolygon[contour], true, EPSILON ) )
+                cornersDiffer = true;
+        }
     }
 
-    if( cornersDiffer && aReporter )
-        aReporter->Report( wxString::Format( _( "%s corners differ." ), ITEM_DESC( a ) ) );
+    if( cornersDiffer )
+    {
+        diff = true;
+
+        if( aReporter )
+            aReporter->Report( wxString::Format( _( "%s corners differ." ), ITEM_DESC( a ) ) );
+    }
 
     return diff;
 }
@@ -809,6 +818,9 @@ bool FOOTPRINT::FootprintNeedsUpdate( const FOOTPRINT* aLibFP, int aCompareFlags
 
     temp->SetParent( GetBoard() );
 
+    if( !( aCompareFlags & COMPARE_FLAGS::INSTANCE_TO_INSTANCE ) && IsFlipped() != temp->IsFlipped() )
+        temp->Flip( { 0, 0 }, FLIP_DIRECTION::TOP_BOTTOM );
+
     for( BOARD_ITEM* item : temp->GraphicalItems() )
         item->NormalizeForCompare();
 
@@ -844,6 +856,10 @@ bool FOOTPRINT::FootprintNeedsUpdate( const FOOTPRINT* aLibFP, int aCompareFlags
         TEST_ATTR( GetAttributes(), aLibFP->GetAttributes(), FP_EXCLUDE_FROM_BOM,
                    wxString::Format( _( "'%s' settings differ." ),
                                      _( "Exclude from bill of materials" ) ) );
+
+        TEST_ATTR( GetAttributes(), aLibFP->GetAttributes(), FP_EXCLUDE_FROM_SIM,
+                   wxString::Format( _( "'%s' settings differ." ),
+                                     _( "Exclude from simulation" ) ) );
 
         TEST_ATTR( GetAttributes(), aLibFP->GetAttributes(), FP_DNP,
                    wxString::Format( _( "'%s' settings differ." ),

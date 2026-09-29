@@ -112,7 +112,7 @@ private:
      * @warning This routine is reentrant!
      *
      * @param[in] aList is the #SCH_SHEET_PATH list to explore.
-     * @param aPreviousmenu is the wxTreeItemId used as parent to add sub items.
+     * @param[in] aParent is the wxTreeItemId used as parent to add sub items.
      */
     void buildHierarchyTree( SCH_SHEET_PATH* aList, const wxTreeItemId& aParent );
 
@@ -124,6 +124,14 @@ private:
 
     void onTreeItemRightClick( wxTreeEvent& aEvent );
     void onRightClick( wxTreeItemId aItem );
+
+    /**
+     * Bring the editor back in sync after a top-level sheet was added or removed.
+     *
+     * @param aPreviousSheet is the sheet path that was displayed before the change.
+     */
+    void resyncAfterTopLevelSheetChange( const SCH_SHEET_PATH& aPreviousSheet );
+
     void onContextMenu( wxContextMenuEvent& aEvent );
     void onCharHook( wxKeyEvent& aKeyStroke );
     void onTreeRightClick( wxTreeEvent& event );

@@ -156,3 +156,13 @@ bool DRC_RULE_CONDITION::HasGeometryDependentFunctions() const
 }
 
 
+bool DRC_RULE_CONDITION::RequiresPairItems() const
+{
+    return m_ucode && m_ucode->RequiresPairItems();
+}
+
+
+bool DRC_RULE_CONDITION::ReferencesItemB() const
+{
+    return m_ucode && m_ucode->ReferencesItemB();
+}

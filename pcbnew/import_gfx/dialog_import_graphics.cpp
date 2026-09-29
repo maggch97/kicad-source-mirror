@@ -31,7 +31,6 @@
 #include <wildcards_and_files_ext.h>
 #include <bitmaps.h>
 #include <widgets/std_bitmap_button.h>
-#include <map>
 #include <footprint.h>
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
@@ -39,14 +38,7 @@
 
 #include <memory>
 
-
-const std::map<DXF_IMPORT_UNITS, wxString> dxfUnitsMap = {
-    { DXF_IMPORT_UNITS::INCH, _( "Inches" ) },
-    { DXF_IMPORT_UNITS::MM,   _( "Millimeters" ) },
-    { DXF_IMPORT_UNITS::MILS, _( "Mils" ) },
-    { DXF_IMPORT_UNITS::CM,   _( "Centimeter" ) },
-    { DXF_IMPORT_UNITS::FEET, _( "Feet" ) },
-};
+#include "settings/settings_manager.h"
 
 
 static PCB_LAYER_ID getAutoMappedLayer( const wxString& aSourceLayer, const LSET& aPermittedLayers )
@@ -111,8 +103,7 @@ DIALOG_IMPORT_GRAPHICS::DIALOG_IMPORT_GRAPHICS( PCB_BASE_FRAME* aParent ) :
     m_SelLayerBox->SetBoardFrame( m_parent );
     m_SelLayerBox->Resync();
 
-    for( const std::pair<const DXF_IMPORT_UNITS, wxString>& unitEntry : dxfUnitsMap )
-        m_dxfUnitsChoice->Append( unitEntry.second );
+    m_dxfUnitsChoice->Append( GetDxfImportUnitChoices() );
 
     m_browseButton->SetBitmap( KiBitmapBundle( BITMAPS::small_folder ) );
 
@@ -238,6 +229,13 @@ bool DIALOG_IMPORT_GRAPHICS::TransferDataFromWindow()
     PCBNEW_SETTINGS* cfg = m_parent->GetPcbNewSettings();
     wxString ext = wxFileName( m_textCtrlFileName->GetValue() ).GetExt();
     double   scale = EDA_UNIT_UTILS::UI::DoubleValueFromString( m_importScaleCtrl->GetValue() );
+
+    if( scale <= 0.0 )
+    {
+        wxMessageBox( _( "Import scale must be a positive number." ) );
+        return false;
+    }
+
     double           xscale = scale;
     double           yscale = scale;
 
@@ -249,20 +247,21 @@ bool DIALOG_IMPORT_GRAPHICS::TransferDataFromWindow()
 
     VECTOR2D origin( m_xOrigin.GetDoubleValue() / xscale, m_yOrigin.GetDoubleValue() / yscale );
 
+    switch( m_originCtrl->GetSelection() )
+    {
+    case 0:                                      break;
+    case 1: origin += m_parent->GetAuxOrigin();  break;     // Drill/place file origin
+    case 2: origin += m_parent->GetGridOrigin(); break;
+    case 3: origin += m_parent->GetUserOrigin(); break;
+    }
+
     if( std::unique_ptr<GRAPHICS_IMPORT_PLUGIN> plugin = m_gfxImportMgr->GetPluginByExt( ext ) )
     {
         DXF_IMPORT_PLUGIN* dxfPlugin = dynamic_cast<DXF_IMPORT_PLUGIN*>( plugin.get() );
 
         if( dxfPlugin )
         {
-            auto it = dxfUnitsMap.begin();
-            std::advance( it, m_dxfUnitsChoice->GetSelection() );
-
-            if( it == dxfUnitsMap.end() )
-                dxfPlugin->SetUnit( DXF_IMPORT_UNITS::DEFAULT );
-            else
-                dxfPlugin->SetUnit( it->first );
-
+            dxfPlugin->SetUnit( DxfImportUnitFromChoice( m_dxfUnitsChoice->GetSelection() ) );
             m_importer->SetLineWidthMM( pcbIUScale.IUTomm( m_defaultLineWidth.GetIntValue() ) );
         }
         else
@@ -326,6 +325,8 @@ void DIALOG_IMPORT_GRAPHICS::onUpdateUI( wxUpdateUIEvent& event )
 {
     m_xOrigin.Enable( m_placeAtCheckbox->GetValue() );
     m_yOrigin.Enable( m_placeAtCheckbox->GetValue() );
+    m_originLabel->Enable( m_placeAtCheckbox->GetValue() );
+    m_originCtrl->Enable( m_placeAtCheckbox->GetValue() );
 
     m_tolerance.Enable( m_rbFixDiscontinuities->GetValue() );
 

@@ -164,7 +164,7 @@ ITEM* TOOL_BASE::pickSingleItem( const VECTOR2I& aWhere, NET_HANDLE aNet, int aL
             {
                 continue;
             }
-            else if( m_router->GetInterface()->GetNetCode( aNet) <= 0 || item->Net() == aNet )
+            else if( m_router->Mode() == PNS::PNS_MODE_ROUTE_DIFF_PAIR || m_router->GetInterface()->GetNetCode( aNet) <= 0 || item->Net() == aNet )
             {
                 if( item->OfKind( ITEM::VIA_T | ITEM::SOLID_T ) )
                 {
@@ -298,14 +298,13 @@ bool TOOL_BASE::checkSnap( ITEM *aItem )
     // Sync PNS engine settings with the general PCB editor options.
     ROUTING_SETTINGS& pnss = m_router->Settings();
 
-    // If we're dragging a track segment, don't try to snap to items that are part of the original line.
+    // Don't snap to items that move with the drag, or the cursor sticks to their old position
     if( m_startItem && aItem && m_router->GetState() == ROUTER::DRAG_SEGMENT
         && m_router->GetDragger() )
     {
-        DRAGGER*     dragger = dynamic_cast<DRAGGER*>( m_router->GetDragger() );
-        LINKED_ITEM* linkedItem = dynamic_cast<LINKED_ITEM*>( aItem );
+        DRAGGER* dragger = dynamic_cast<DRAGGER*>( m_router->GetDragger() );
 
-        if( dragger && linkedItem && dragger->GetOriginalLine().ContainsLink( linkedItem ) )
+        if( dragger && dragger->IsDragOrigin( aItem ) )
             return false;
     }
 
@@ -331,8 +330,7 @@ bool TOOL_BASE::checkSnap( ITEM *aItem )
 
 void TOOL_BASE::updateStartItem( const TOOL_EVENT& aEvent, bool aIgnorePads )
 {
-    int tl = m_router->GetInterface()->GetPNSLayerFromBoardLayer(
-            static_cast<PCB_LAYER_ID>( getView()->GetTopLayer() ) );
+    int      tl = m_router->GetInterface()->GetPNSLayerFromBoardLayer( ToLAYER_ID( getView()->GetTopLayer() ) );
     GAL*     gal = m_toolMgr->GetView()->GetGAL();
     VECTOR2I pos = aEvent.HasPosition() ? (VECTOR2I) aEvent.Position() : m_startSnapPoint;
 
@@ -345,6 +343,9 @@ void TOOL_BASE::updateStartItem( const TOOL_EVENT& aEvent, bool aIgnorePads )
         controls()->ForceCursorPosition( true, m_startSnapPoint );
         return;
     }
+
+    // Snapping uses ViewGetLOD(), which use the layerVisibilityCache.  Make sure the cache is up-to-date.
+    m_toolMgr->GetView()->SyncLayerVisibilityCache();
 
     controls()->ForceCursorPosition( false );
     m_gridHelper->SetUseGrid( gal->GetGridSnapping() && !aEvent.DisableGridSnapping()  );
@@ -364,6 +365,9 @@ void TOOL_BASE::updateEndItem( const TOOL_EVENT& aEvent )
 {
     int  layer;
     GAL* gal = m_toolMgr->GetView()->GetGAL();
+
+    // Snapping uses ViewGetLOD(), which use the layerVisibilityCache.  Make sure the cache is up-to-date.
+    m_toolMgr->GetView()->SyncLayerVisibilityCache();
 
     m_gridHelper->SetUseGrid( gal->GetGridSnapping() && !aEvent.DisableGridSnapping()  );
     m_gridHelper->SetSnap( !aEvent.Modifier( MD_SHIFT ) );
@@ -401,7 +405,8 @@ void TOOL_BASE::updateEndItem( const TOOL_EVENT& aEvent )
 
     for( NET_HANDLE net : nets )
     {
-        endItem = pickSingleItem( mousePos, net, layer, false, { m_startItem } );
+        
+        endItem = pickSingleItem( mousePos, net, layer, false, {} ); //{ m_startItem } );
 
         if( endItem )
             break;

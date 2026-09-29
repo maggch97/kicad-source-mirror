@@ -21,6 +21,7 @@
 
 #include "symbol_tree_model_adapter.h"
 
+#include <wx/colour.h>
 #include <wx/log.h>
 #include <wx/tokenzr.h>
 #include <wx/window.h>
@@ -51,11 +52,11 @@ SYMBOL_TREE_MODEL_ADAPTER::SYMBOL_TREE_MODEL_ADAPTER( SCH_BASE_FRAME* aParent, S
         m_adapter( aLibs ),
         m_check_pending_libraries_timer( nullptr )
 {
-    m_colWidths[ GetDefaultFieldName( FIELD_T::VALUE, false ) ] = 300;
-    m_colWidths[ GetDefaultFieldName( FIELD_T::FOOTPRINT, false ) ] = 600;
+    m_colWidths[GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED )] = 300;
+    m_colWidths[GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED )] = 600;
 
-    m_availableColumns.emplace_back( GetDefaultFieldName( FIELD_T::VALUE, false ) );
-    m_availableColumns.emplace_back( GetDefaultFieldName( FIELD_T::FOOTPRINT, false ) );
+    m_availableColumns.emplace_back( GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED ) );
+    m_availableColumns.emplace_back( GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED ) );
 }
 
 
@@ -71,7 +72,10 @@ void SYMBOL_TREE_MODEL_ADAPTER::loadColumnConfig()
     m_shownColumns = m_cfg.columns;
 
     if( m_shownColumns.empty() )
-        m_shownColumns = {  _HKI( "Item" ), _HKI( "Description" ), GetDefaultFieldName( FIELD_T::VALUE, false ) };
+    {
+        m_shownColumns = { _HKI( "Item" ), _HKI( "Description" ),
+                           GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED ) };
+    }
 
     if( m_shownColumns[0] != _HKI( "Item" ) )
         m_shownColumns.insert( m_shownColumns.begin(), _HKI( "Item" ) );
@@ -80,6 +84,8 @@ void SYMBOL_TREE_MODEL_ADAPTER::loadColumnConfig()
 
 void SYMBOL_TREE_MODEL_ADAPTER::AddLibraries( SCH_BASE_FRAME* aFrame )
 {
+    m_compatCache.clear();
+
     COMMON_SETTINGS* cfg = Pgm().GetCommonSettings();
     PROJECT_FILE&    project = aFrame->Prj().GetProjectFile();
 
@@ -234,6 +240,37 @@ void SYMBOL_TREE_MODEL_ADAPTER::AddLibrary( wxString const& aLibNickname, bool p
         comp_list.assign( symbols.begin(), symbols.end() );
         DoAddLibrary( aLibNickname, ( *row )->Description(), comp_list, pinned, false );
     }
+}
+
+
+bool SYMBOL_TREE_MODEL_ADAPTER::GetAttr( const wxDataViewItem& aItem, unsigned int aCol,
+                                         wxDataViewItemAttr& aAttr ) const
+{
+    bool base = LIB_TREE_MODEL_ADAPTER::GetAttr( aItem, aCol, aAttr );
+
+    if( m_compatCallback && aCol == NAME_COL )
+    {
+        LIB_TREE_NODE* node = ToNode( aItem );
+
+        if( node && node->m_Type == LIB_TREE_NODE::TYPE::ITEM )
+        {
+            auto it = m_compatCache.find( node->m_LibId );
+
+            if( it == m_compatCache.end() )
+            {
+                std::vector<VARIANT_COMPAT_RESULT> issues = m_compatCallback( node->m_LibId );
+                it = m_compatCache.emplace( node->m_LibId, !issues.empty() ).first;
+            }
+
+            if( it->second )
+            {
+                aAttr.SetColour( wxColour( 200, 120, 0 ) );
+                return true;
+            }
+        }
+    }
+
+    return base;
 }
 
 

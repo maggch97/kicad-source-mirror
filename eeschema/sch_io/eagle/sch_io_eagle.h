@@ -72,7 +72,7 @@ struct EAGLE_LIBRARY
 
 
 /**
- * A #SCH_IO derivation for loading 6.x+ Eagle schematic files.
+ * A #SCH_IO derivation for loading Eagle schematic files.
  *
  * As with all #SCH_IO objects there are no UI dependencies i.e. windowing calls allowed.
  */
@@ -86,7 +86,7 @@ public:
 
     const IO_BASE::IO_FILE_DESC GetSchematicFileDesc() const override
     {
-        return IO_BASE::IO_FILE_DESC( _HKI( "Eagle XML schematic files" ), { "sch" } );
+        return IO_BASE::IO_FILE_DESC( _HKI( "Eagle schematic files" ), { "sch" } );
     }
 
     const IO_BASE::IO_FILE_DESC GetLibraryDesc() const override
@@ -145,46 +145,35 @@ private:
     std::pair<VECTOR2I, const SEG*> findNearestLinePoint( const VECTOR2I&         aPoint,
                                                           const std::vector<SEG>& aLines ) const;
 
-    void          loadSegments( const std::vector<std::unique_ptr<ESEGMENT>>& aSegments,
-                                const wxString& aNetName,
-                                const wxString& aNetClass,
-                                bool aIsBus = false );
+    void          loadSegments( const std::vector<std::unique_ptr<ESEGMENT>>& aSegments, const wxString& aNetName,
+                                const wxString& aNetClass, bool aIsBus = false );
     SCH_SHAPE*    loadPolyLine( const std::unique_ptr<EPOLYGON>& aPolygon );
     SCH_ITEM*     loadWire( const std::unique_ptr<EWIRE>& aWire, SEG& endpoints );
     SCH_SHAPE*    loadCircle( const std::unique_ptr<ECIRCLE>& aCircle );
     SCH_SHAPE*    loadRectangle( const std::unique_ptr<ERECT>& aRect );
-    SCH_LABEL_BASE* loadLabel( const std::unique_ptr<ELABEL>& aLabel, const wxString& aNetName,
-                               bool aIsBus = false );
+    SCH_LABEL_BASE* loadLabel( const std::unique_ptr<ELABEL>& aLabel, const wxString& aNetName, bool aIsBus = false );
     SCH_JUNCTION* loadJunction( const std::unique_ptr<EJUNCTION>&  aJunction );
     SCH_TEXT*     loadPlainText( const std::unique_ptr<ETEXT>& aSchText );
     void          loadFrame( const std::unique_ptr<EFRAME>& aFrame, std::vector<SCH_ITEM*>& aItems,
                              SCH_LAYER_ID aLayer = LAYER_NOTES );
 
-    bool          loadSymbol( const std::unique_ptr<ESYMBOL>& aEsymbol,
-                              std::unique_ptr<LIB_SYMBOL>& aSymbol,
-                              const std::unique_ptr<EDEVICE>& aDevice, int aGateNumber,
-                              const wxString& aGateName );
-    SCH_SHAPE*    loadSymbolCircle( std::unique_ptr<LIB_SYMBOL>& aSymbol,
-                                    const std::unique_ptr<ECIRCLE>& aCircle,
+    bool          loadSymbol( const std::unique_ptr<ESYMBOL>& aEsymbol, std::unique_ptr<LIB_SYMBOL>& aSymbol,
+                              const std::unique_ptr<EDEVICE>& aDevice, int aGateNumber, const wxString& aGateName );
+    SCH_SHAPE*    loadSymbolCircle( std::unique_ptr<LIB_SYMBOL>& aSymbol, const std::unique_ptr<ECIRCLE>& aCircle,
                                     int aGateNumber );
-    SCH_SHAPE*    loadSymbolRectangle( std::unique_ptr<LIB_SYMBOL>& aSymbol,
-                                       const std::unique_ptr<ERECT>& aRectangle,
+    SCH_SHAPE*    loadSymbolRectangle( std::unique_ptr<LIB_SYMBOL>& aSymbol, const std::unique_ptr<ERECT>& aRectangle,
                                        int aGateNumber );
-    SCH_SHAPE*    loadSymbolPolyLine( std::unique_ptr<LIB_SYMBOL>& aSymbol,
-                                      const std::unique_ptr<EPOLYGON>& aPolygon, int aGateNumber );
-    SCH_ITEM*     loadSymbolWire( std::unique_ptr<LIB_SYMBOL>& aSymbol,
-                                  const std::unique_ptr<EWIRE>& aWire,
+    SCH_SHAPE*    loadSymbolPolyLine( std::unique_ptr<LIB_SYMBOL>& aSymbol, const std::unique_ptr<EPOLYGON>& aPolygon,
+                                      int aGateNumber );
+    SCH_ITEM*     loadSymbolWire( std::unique_ptr<LIB_SYMBOL>& aSymbol, const std::unique_ptr<EWIRE>& aWire,
                                   int aGateNumber );
     SCH_PIN*      loadPin( std::unique_ptr<LIB_SYMBOL>& aSymbol, const std::unique_ptr<EPIN>& aPin,
                            int aGateNumber );
-    SCH_TEXT*     loadSymbolText( std::unique_ptr<LIB_SYMBOL>& aSymbol,
-                                  const std::unique_ptr<ETEXT>& aText,
+    SCH_TEXT*     loadSymbolText( std::unique_ptr<LIB_SYMBOL>& aSymbol, const std::unique_ptr<ETEXT>& aText,
                                   int aGateNumber );
-    void          loadTextAttributes( EDA_TEXT* aText,
-                                      const std::unique_ptr<ETEXT>& aAttributes ) const;
-    void          loadFieldAttributes( SCH_FIELD* aField, const SCH_TEXT* aText ) const;
+    void          loadTextAttributes( EDA_TEXT* aText, const std::unique_ptr<ETEXT>& aAttributes ) const;
 
-    ///< Move net labels that are detached from any wire to the nearest wire
+    /// Move net labels that are detached from any wire to the nearest wire
     void adjustNetLabels();
 
     /**
@@ -200,7 +189,7 @@ private:
     wxString        getLibName();
     wxFileName      getLibFileName();
 
-    ///< Checks if there are other wires or pins at the position of the tested pin
+    /// Checks if there are other wires or pins at the position of the tested pin
     bool checkConnections( const SCH_SYMBOL* aSymbol, const SCH_PIN* aPin ) const;
 
     /**
@@ -238,10 +227,10 @@ private:
         {
         }
 
-        ///< Link to the parent symbol
+        /// Link to the parent symbol
         const SCH_SYMBOL* cmp;
 
-        ///< Screen where the parent symbol is located
+        /// Screen where the parent symbol is located
         SCH_SCREEN* screen;
 
         /* Map of the symbol units: for each unit there is a flag saying
@@ -251,7 +240,7 @@ private:
         std::map<int, bool> units;
     };
 
-    ///< Map references to missing symbol units data
+    /// Map references to missing symbol units data
     std::map<wxString, EAGLE_MISSING_CMP> m_missingCmps;
 
     SCH_SHEET*  m_rootSheet;      ///< The root sheet of the schematic being loaded
@@ -268,7 +257,7 @@ private:
     std::map<wxString, EAGLE_LIBRARY>  m_eagleLibs;
     std::map<wxString, std::unique_ptr<EMODULE>> m_eagleModules;
 
-    std::unordered_map<wxString, bool> m_userValue; ///< deviceset/@uservalue for device.
+    std::unordered_map<wxString, bool> m_userValue; ///< deviceset/\@uservalue for device.
 
     IO_RELEASER<SCH_IO>                m_pi;                ///< PI to create KiCad symbol library.
 
@@ -278,30 +267,30 @@ private:
     std::map<wxString, wxString>       m_powerPorts;        ///< map from symbol reference to global
                                                             ///<   label equivalent
 
-    ///< Wire intersection points, used for quick checks whether placing a net label in a particular
-    ///< place would short two nets.
+    /// Wire intersection points, used for quick checks whether placing a net label in a particular
+    /// place would short two nets.
     std::vector<VECTOR2I> m_wireIntersections;
 
-    ///< Wires and labels of a single connection (segment in Eagle nomenclature)
+    /// Wires and labels of a single connection (segment in Eagle nomenclature)
     struct SEG_DESC
     {
-        ///< Test if a particular label is attached to any of the stored segments
+        /// Test if a particular label is attached to any of the stored segments
         const SEG* LabelAttached( const SCH_LABEL_BASE* aLabel ) const;
 
         std::vector<SCH_LABEL_BASE*> labels;
         std::vector<SEG> segs;
     };
 
-    ///< Segments representing wires for intersection checking
+    /// Segments representing wires for intersection checking
     std::vector<SEG_DESC> m_segments;
 
-    ///< Nets as defined in the <nets> sections of an Eagle schematic file.
+    /// Nets as defined in the \<nets\> sections of an Eagle schematic file.
     std::map<wxString, ENET> m_nets;
 
-    ///< Positions of pins and wire endings mapped to its parent
+    /// Positions of pins and wire endings mapped to its parent
     std::map<VECTOR2I, std::set<const EDA_ITEM*>> m_connPoints;
 
-    ///< The fully parsed Eagle schematic file.
+    /// The fully parsed Eagle schematic file.
     std::unique_ptr<EAGLE_DOC> m_eagleDoc;
 };
 

@@ -30,6 +30,10 @@ include_directories(
     )
 
 set( PCBNEW_DIALOGS
+    dialogs/dialog_constraint_value.cpp
+    dialogs/dialog_constraint_value_base.cpp
+    dialogs/dialog_constraint_list.cpp
+    dialogs/dialog_constraint_list_base.cpp
     dialogs/dialog_filter_selection.cpp
     dialogs/dialog_filter_selection_base.cpp
     dialogs/dialog_barcode_properties.cpp
@@ -56,6 +60,8 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_drc_job_config.cpp
     dialogs/dialog_board_stats_job.cpp
     dialogs/dialog_board_stats_job_base.cpp
+    dialogs/dialog_board_stackup_job.cpp
+    dialogs/dialog_board_stackup_job_base.cpp
     dialogs/dialog_footprint_associations.cpp
     dialogs/dialog_footprint_associations_base.cpp
     dialogs/dialog_footprint_checker.cpp
@@ -70,6 +76,8 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_exchange_footprints_base.cpp
     dialogs/dialog_export_2581.cpp
     dialogs/dialog_export_2581_base.cpp
+    dialogs/dialog_export_2581_bom.cpp
+    dialogs/dialog_export_2581_bom_base.cpp
     dialogs/dialog_export_idf.cpp
     dialogs/dialog_export_idf_base.cpp
     dialogs/dialog_export_step.cpp
@@ -84,6 +92,8 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_find_base.cpp
     dialogs/dialog_find_by_properties.cpp
     dialogs/dialog_find_by_properties_base.cpp
+    dialogs/dialog_footprint_fields_table.cpp
+    dialogs/dialog_lib_footprint_fields_table.cpp
     dialogs/dialog_footprint_wizard_list.cpp
     dialogs/dialog_footprint_wizard_list_base.cpp
     dialogs/dialog_gen_footprint_position.cpp
@@ -103,6 +113,9 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_global_edit_teardrops_base.cpp
     dialogs/dialog_global_edit_text_and_graphics.cpp
     dialogs/dialog_global_edit_text_and_graphics_base.cpp
+    dialogs/dialog_grid_item_properties.cpp
+    dialogs/dialog_grid_item_properties_base.cpp
+    dialogs/geom_field_helpers.cpp
     dialogs/dialog_push_pad_properties.cpp
     dialogs/dialog_push_pad_properties_base.cpp
     dialogs/dialog_shape_properties.cpp
@@ -146,6 +159,14 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_render_job.cpp
     dialogs/dialog_swap_layers.cpp
     dialogs/dialog_swap_layers_base.cpp
+    dialogs/dialog_generated_table_properties.cpp
+    dialogs/dialog_generated_table_properties_base.cpp
+    dialogs/dialog_drill_groups.cpp
+    dialogs/dialog_drill_groups_base.cpp
+    dialogs/panel_drill_chart_options.cpp
+    dialogs/panel_drill_chart_options_base.cpp
+    dialogs/panel_setup_drill_chart.cpp
+    dialogs/panel_setup_drill_chart_base.cpp
     dialogs/dialog_table_properties.cpp
     dialogs/dialog_table_properties_base.cpp
     dialogs/dialog_tablecell_properties.cpp
@@ -156,6 +177,8 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_text_properties_base.cpp
     dialogs/dialog_textbox_properties.cpp
     dialogs/dialog_textbox_properties_base.cpp
+    dialogs/dialog_microvia_stack.cpp
+    dialogs/dialog_microvia_stack_base.cpp
     dialogs/dialog_track_via_properties.cpp
     dialogs/dialog_track_via_properties_base.cpp
     dialogs/dialog_track_via_size.cpp
@@ -166,6 +189,8 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_unused_pad_layers_base.cpp
     dialogs/dialog_update_pcb.cpp
     dialogs/dialog_update_pcb_base.cpp
+    dialogs/dialog_via_stitch_properties.cpp
+    dialogs/dialog_via_stitch_properties_base.cpp
     dialogs/dialog_multichannel_generate_rule_areas_base.cpp
     dialogs/dialog_multichannel_generate_rule_areas.cpp
     dialogs/dialog_multichannel_repeat_layout_base.cpp
@@ -216,6 +241,8 @@ set( PCBNEW_DIALOGS
     dialogs/panel_setup_text_and_graphics_base.cpp
     dialogs/panel_setup_tracks_and_vias.cpp
     dialogs/panel_setup_tracks_and_vias_base.cpp
+    dialogs/panel_setup_via_stacks.cpp
+    dialogs/panel_setup_via_stacks_base.cpp
     dialogs/panel_setup_tuning_patterns.cpp
     dialogs/panel_setup_tuning_patterns_base.cpp
     dialogs/panel_setup_tuning_profiles_base.cpp
@@ -226,6 +253,8 @@ set( PCBNEW_DIALOGS
     dialogs/panel_setup_zones_base.cpp
     dialogs/panel_setup_zone_hatch_offsets.cpp
     dialogs/panel_setup_zone_hatch_offsets_base.cpp
+    dialogs/panel_zone_conversion.cpp
+    dialogs/panel_zone_conversion_base.cpp
     dialogs/panel_zone_properties.cpp
     dialogs/panel_zone_properties_base.cpp
     footprint_wizard.cpp
@@ -287,6 +316,9 @@ set( PCBNEW_MICROWAVE_SRCS
 
 set( PCBNEW_GENERATORS_SRCS
     generators/pcb_tuning_pattern.cpp
+    generators/pcb_via_stack.cpp
+    generators/pcb_via_stitch.cpp
+    generators/via_stitch_tool.cpp
     )
 
 set( PCBNEW_DRC_SRCS
@@ -311,12 +343,15 @@ set( PCBNEW_DRC_SRCS
     drc/drc_test_provider_library_parity.cpp
     drc/drc_test_provider_schematic_parity.cpp
     drc/drc_test_provider_misc.cpp
+    drc/drc_test_provider_net_chain_tuning_profiles.cpp
     drc/drc_test_provider_text_dims.cpp
     drc/drc_test_provider_track_angle.cpp
     drc/drc_test_provider_track_width.cpp
     drc/drc_test_provider_track_segment_length.cpp
     drc/drc_test_provider_zone_connections.cpp
     drc/drc_test_provider_via_diameter.cpp
+    drc/drc_test_provider_via_stack.cpp
+    drc/drc_test_provider_via_stitch.cpp
     drc/drc_test_provider_solder_mask.cpp
     drc/drc_test_provider_silk_clearance.cpp
     drc/drc_test_provider_matched_length.cpp
@@ -389,6 +424,11 @@ set( PCBNEW_CLASS_SRCS
 
     array_pad_number_provider.cpp
     board_loader.cpp
+    constraints/board_constraint_adapter.cpp
+    constraints/constraint_system_2d.cpp
+    tools/constraint_edit_tool.cpp
+    tools/constraint_overlay.cpp
+    tools/view_overlay_holder.cpp
     board_statistics.cpp
     board_statistics_report.cpp
     board_tables/board_characteristics_table.cpp
@@ -411,6 +451,7 @@ set( PCBNEW_CLASS_SRCS
     footprint_libraries_utils.cpp
     footprint_viewer_frame.cpp
     fp_tree_model_adapter.cpp
+    footprint_fields_data_model.cpp
     generate_footprint_info.cpp
     graphics_cleaner.cpp
     grid_layer_box_helpers.cpp
@@ -449,6 +490,7 @@ set( PCBNEW_CLASS_SRCS
     edit_zone_helpers.cpp
 
     api/api_handler_board.cpp
+    api/api_handler_fp_libraries.cpp
     api/api_handler_footprint.cpp
     api/api_handler_pcb.cpp
     api/footprint_context.cpp
@@ -467,12 +509,18 @@ set( PCBNEW_CLASS_SRCS
     tools/drc_tool.cpp
     tools/edit_tool.cpp
     tools/edit_tool_move_fct.cpp
+    tools/graphic_edit.cpp
+    tools/graphic_edit_tool.cpp
+    tools/graphic_extend.cpp
+    tools/graphic_trim.cpp
     tools/pcb_edit_table_tool.cpp
     tools/global_edit_tool.cpp
     tools/footprint_editor_control.cpp
     tools/footprint_chooser_selection_tool.cpp
     tools/footprint_wizard_tools.cpp
+    tools/hover_picker.cpp
     tools/item_modification_routine.cpp
+    tools/match_properties_tool.cpp
     tools/pad_tool.cpp
     tools/pcb_control.cpp
     tools/pcb_design_block_control.cpp
@@ -500,6 +548,9 @@ set( PCBNEW_CLASS_SRCS
     widgets/appearance_controls.cpp
     widgets/appearance_controls_base.cpp
     widgets/footprint_wizard_properties_panel.cpp
+    widgets/constraint_list_view.cpp
+    widgets/panel_constraints.cpp
+    widgets/panel_constraints_base.cpp
     widgets/panel_footprint_chooser.cpp
     widgets/panel_selection_filter.cpp
     widgets/panel_selection_filter_base.cpp
@@ -718,6 +769,7 @@ target_link_libraries( pcbnew_kiface_objects
         rectpack2d
         gzip-hpp
         nanoflann
+        planegcs
         Boost::boost
         ZLIB::ZLIB
         ${OCC_LIBRARIES}
@@ -758,7 +810,6 @@ set( PCBNEW_KIFACE_LIBRARIES
     common
     gal
     core
-    idf3
     markdown_lib
     ${PCBNEW_IO_LIBRARIES}
     ${wxWidgets_LIBRARIES}
@@ -787,6 +838,9 @@ if( WIN32 )
 #Copy dynamic lib dependency to build dir to allow running directly
     add_custom_command( TARGET pcbnew POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicad_3dsg>" "$<TARGET_FILE_DIR:pcbnew>"
+        )
+    add_custom_command( TARGET pcbnew POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicad_3d_import>" "$<TARGET_FILE_DIR:pcbnew>"
         )
     add_custom_command( TARGET pcbnew POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kiapi>" "$<TARGET_FILE_DIR:pcbnew>"

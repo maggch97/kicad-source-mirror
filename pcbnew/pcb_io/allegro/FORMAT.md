@@ -34,6 +34,7 @@ to determine the format version:
 |---------------|---------|-----------------|
 | `0x0013_0000` | V_160   | 16.0            |
 | `0x0013_0400` | V_162   | 16.2            |
+| `0x0013_0500` | V_162   | 16.2            |
 | `0x0013_0C00` | V_164   | 16.4            |
 | `0x0013_1000` | V_165   | 16.5            |
 | `0x0013_1500` | V_166   | 16.6            |
@@ -490,6 +491,34 @@ provides a layer name string.
 ### 0x2B: Footprint Definition
 
 A template that multiple placed instances share.
+
+- `m_FieldsPtr`: Head of the 0x03 FIELD chain holding the definition's
+  properties (library symbol path, 3D model assignment)
+- `m_FirstInstPtr`: Head of the 0x2D placed instance linked list
+
+### 3D Models
+
+The 3D model assignment is a pair of string fields on the definition's
+0x03 chain. Both are comma separated and both are optional; a definition
+with no model has neither.
+
+| Field code | Content |
+|------------|---------|
+| 0x345 | `<file>, <bytes>, <mtime>, <colourIdx>, <r>, <g>, <b>, <triangles>` |
+| 0x346 | `<units>, <offX>, <offY>, <offZ>, <rotX>, <rotY>, <rotZ>` |
+
+`<file>` is a bare file name with no directory, e.g. `led3d.stp`. A
+`<colourIdx>` of -1 means the model keeps its own colours; KiCad has no
+per-model colour override, so the colour is dropped.
+
+`<units>` is one of `MM`, `CM`, `MICRONS`, `MILS` or `INCH`. The
+placement is relative to the symbol origin, in the same Z-up, Y-up frame
+KiCad uses for `FP_3DMODEL`, so offsets convert to mm directly.
+Rotations are negated because KiCad stores the negation of the rotation
+its renderers apply.
+
+Only the definition carries the model; placed instances inherit it, and
+the instance's own placement and side are applied on top by KiCad.
 
 ### 0x2D: Placed Footprint Instance
 

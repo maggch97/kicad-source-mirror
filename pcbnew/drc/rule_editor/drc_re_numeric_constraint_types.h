@@ -31,7 +31,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_copper_to_edge_clearance; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 208, 263, 177, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 208, 263, 177, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Minimum clearance between copper items and the board edge" ) } };
     }
 };
 
@@ -42,7 +43,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_copper_to_hole_clearance; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 200, 255, 119, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 200, 255, 119, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Minimum clearance between copper items and hole edges" ) } };
     }
 };
 
@@ -54,7 +56,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_courtyard_clearance; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 260, 315, 129, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 260, 315, 129, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Minimum clearance between footprint courtyards" ) } };
     }
 };
 
@@ -66,7 +69,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_clearance; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 160, 215, 214, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 160, 215, 214, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Minimum clearance between items regardless of net" ) } };
     }
 };
 
@@ -78,7 +82,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_creepage_distance; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 120, 175, 131, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 120, 175, 131, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Minimum creepage distance between conductors along the board surface" ) } };
     }
 };
 
@@ -90,7 +95,7 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_hole_size; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 72, 127, 34, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 72, 127, 34, wxS( "mm" ), LABEL_POSITION::RIGHT, _( "Minimum hole diameter" ) } };
     }
 };
 
@@ -102,7 +107,7 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_hole_to_hole_distance; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 102, 157, 47, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 102, 157, 47, wxS( "mm" ), LABEL_POSITION::RIGHT, _( "Minimum distance between hole edges" ) } };
     }
 };
 
@@ -115,7 +120,8 @@ public:
     bool                               IsIntegerOnly() const override { return true; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 165, 220, 69, 1 } };
+        return { { 165, 220, 69, wxEmptyString, LABEL_POSITION::NONE,
+                   _( "Maximum number of vias allowed on a matched net" ) } };
     }
 };
 
@@ -127,7 +133,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_minimum_annular_width; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 209, 264, 79, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 209, 264, 79, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Minimum width of the copper ring around a hole" ) } };
     }
 };
 
@@ -139,7 +146,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_minimum_clearance; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 205, 260, 119, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 205, 260, 119, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Minimum clearance between copper items on different nets" ) } };
     }
 };
 
@@ -150,7 +158,7 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_minimum_connection_width; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 230, 285, 116, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 230, 285, 116, wxS( "mm" ), LABEL_POSITION::RIGHT, _( "Minimum width of any copper connection" ) } };
     }
 };
 
@@ -162,7 +170,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_minimum_soldermask_sliver; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 195, 250, 302, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 195, 250, 302, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Minimum width of solder mask left between two mask openings" ) } };
     }
 };
 
@@ -175,9 +184,42 @@ public:
     bool    IsIntegerOnly() const override { return true; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 150, 205, 44, 1 } };
+        return { { 150, 205, 44, wxEmptyString, LABEL_POSITION::NONE,
+                   _( "Minimum number of thermal relief spokes connecting a pad to its zone" ) } };
     }
 };
+
+class DRC_RE_MICROVIA_STACK_DEPTH_CONSTRAINT_DATA : public DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA
+{
+public:
+    using DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA::DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA;
+    BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_microvia_stack_depth; }
+    bool    IsIntegerOnly() const override { return true; }
+
+    std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
+    {
+        return { { 205, 261, 121, wxEmptyString, LABEL_POSITION::NONE,
+                   _( "Largest number of microvias allowed stacked on one another." ) } };
+    }
+};
+
+
+class DRC_RE_MICROVIA_ASPECT_RATIO_CONSTRAINT_DATA : public DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA
+{
+public:
+    using DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA::DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA;
+    BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_microvia_aspect_ratio; }
+
+    // Under the drawing rather than beside a dimension, so neither one reads as the value to type.
+    std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
+    {
+        return { { 72, 128, 174, wxEmptyString, LABEL_POSITION::NONE,
+                   _( "The largest hole depth divided by hole width you allow.\n"
+                      "A 0.1 mm hole drilled 0.075 mm deep gives 0.75.\n"
+                      "Most fabs allow 0.75 to 1.0. A deeper hole is harder to plate." ) } };
+    }
+};
+
 
 class DRC_RE_MINIMUM_DRILL_SIZE_CONSTRAINT_DATA : public DRC_RE_NUMERIC_INPUT_CONSTRAINT_DATA
 {
@@ -186,7 +228,7 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_minimum_drill_size; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 209, 264, 119, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 209, 264, 119, wxS( "mm" ), LABEL_POSITION::RIGHT, _( "Minimum drill diameter" ) } };
     }
 };
 
@@ -198,7 +240,7 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_minimum_via_diameter; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 186, 241, 117, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 186, 241, 117, wxS( "mm" ), LABEL_POSITION::RIGHT, _( "Minimum outer diameter of vias" ) } };
     }
 };
 
@@ -210,7 +252,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_silk_to_silk_clearance; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 165, 220, 37, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 165, 220, 37, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Minimum clearance between silkscreen items" ) } };
     }
 };
 
@@ -222,7 +265,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_silk_to_soldermask_clearance; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 235, 290, 72, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 235, 290, 72, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Minimum clearance between silkscreen and solder mask openings" ) } };
     }
 };
 
@@ -234,7 +278,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_soldermask_expansion; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 348, 403, 59, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 348, 403, 59, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Distance the solder mask opening extends beyond the pad" ) } };
     }
 };
 
@@ -246,7 +291,8 @@ public:
     BITMAPS GetOverlayBitmap() const override { return BITMAPS::constraint_solderpaste_expansion; }
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 245, 300, 79, 1, wxS( "mm" ), LABEL_POSITION::RIGHT } };
+        return { { 245, 300, 79, wxS( "mm" ), LABEL_POSITION::RIGHT,
+                   _( "Distance the solder paste aperture extends beyond the pad" ) } };
     }
 };
 

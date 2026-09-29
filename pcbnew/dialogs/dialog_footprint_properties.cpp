@@ -28,6 +28,7 @@
 #include <footprint.h>
 #include <eda_group.h>
 #include <confirm.h>
+#include <core/kicad_algo.h>
 #include <dialogs/dialog_text_entry.h>
 #include <filename_resolver.h>
 #include <pcb_edit_frame.h>
@@ -40,6 +41,7 @@
 #include <widgets/text_ctrl_eval.h>
 #include <widgets/std_bitmap_button.h>
 #include <settings/settings_manager.h>
+#include <template_fieldnames.h>
 #include <panel_embedded_files.h>
 #include <panel_fp_properties_3d_model.h>
 #include <dialogs/panel_preview_3d_model.h>
@@ -95,6 +97,7 @@ DIALOG_FOOTPRINT_PROPERTIES::DIALOG_FOOTPRINT_PROPERTIES( PCB_EDIT_FRAME* aParen
     m_itemsGrid->SetTable( m_fields );
     m_itemsGrid->OverrideMinSize( 1.0, 1.0 );
     m_itemsGrid->PushEventHandler( new GRID_TRICKS( m_itemsGrid ) );
+    m_itemsGrid->Bind( wxEVT_GRID_CELL_CHANGING, &DIALOG_FOOTPRINT_PROPERTIES::OnGridCellChanging, this );
     m_itemsGrid->SetupColumnAutosizer( PFC_VALUE );
     m_itemsGrid->ShowHideColumns( "0 1 2 3 4 5 7" );
 
@@ -153,6 +156,7 @@ DIALOG_FOOTPRINT_PROPERTIES::DIALOG_FOOTPRINT_PROPERTIES( PCB_EDIT_FRAME* aParen
         m_BoardSideCtrl,
         m_cbLocked,
         m_componentType,
+        m_cbExcludeFromSim,
         m_boardOnly,
         m_cbDNP,
         m_excludeFromBOM,
@@ -178,6 +182,8 @@ DIALOG_FOOTPRINT_PROPERTIES::DIALOG_FOOTPRINT_PROPERTIES( PCB_EDIT_FRAME* aParen
 
 DIALOG_FOOTPRINT_PROPERTIES::~DIALOG_FOOTPRINT_PROPERTIES()
 {
+    m_itemsGrid->Unbind( wxEVT_GRID_CELL_CHANGING, &DIALOG_FOOTPRINT_PROPERTIES::OnGridCellChanging, this );
+
     // Prevents crash bug in wxGrid's d'tor
     m_itemsGrid->DestroyTable( m_fields );
 
@@ -293,6 +299,7 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataToWindow()
 
     m_boardOnly->SetValue( m_footprint->GetAttributes() & FP_BOARD_ONLY );
 
+    m_cbExcludeFromSim->SetValue( m_footprint->GetExcludedFromSimForVariant( variantName ) );
     m_excludeFromPosFiles->SetValue( m_footprint->GetExcludedFromPosFilesForVariant( variantName ) );
     m_excludeFromBOM->SetValue( m_footprint->GetExcludedFromBOMForVariant( variantName ) );
     m_cbDNP->SetValue( m_footprint->GetDNPForVariant( variantName ) );
@@ -328,11 +335,11 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataToWindow()
     if( m_footprint->GetDuplicatePadNumbersAreJumpers() )
         jumperGroups = _( "all pads with duplicate numbers" );
 
-    for( const std::set<wxString>& group : m_footprint->JumperPadGroups() )
+    for( const JUMPER_GROUP& group : m_footprint->JumperPadGroups().GetAll() )
     {
         wxString groupTxt;
 
-        for( const wxString& pinNumber : group )
+        for( const wxString& pinNumber : group.GetNames() )
         {
             if( !groupTxt.IsEmpty() )
                 groupTxt << ", ";
@@ -506,7 +513,13 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     if( !Validate() )
         return false;
 
-    if( !m_itemsGrid->CommitPendingChanges() )
+    if( !m_itemsGrid->CommitPendingChanges()
+        || !m_embeddedFiles->CommitPendingChanges() )
+    {
+        return false;
+    }
+
+    if( !m_3dPanel->Validate() )
         return false;
 
     KIGFX::PCB_VIEW*    view = m_frame->GetCanvas()->GetView();
@@ -515,11 +528,9 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     commit.Modify( m_footprint );
 
     // Make sure this happens inside a commit to capture any changed files
-    if( !m_3dPanel->TransferDataFromWindow() )
-        return false;
+    (void) m_3dPanel->TransferDataFromWindow();
 
-    if( !m_embeddedFiles->TransferDataFromWindow() )
-        return false;
+    (void) m_embeddedFiles->TransferDataFromWindow();
 
     // Clear out embedded files that are no longer in use
     std::set<wxString> files;
@@ -558,30 +569,21 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     if( board )
         variantName = board->GetCurrentVariant();
 
-    // Save base field values before deletion so we can detect variant changes
+    // Save base field values before the update so we can detect variant changes
     std::map<wxString, wxString> baseFieldValues;
 
     for( PCB_FIELD* existing : m_footprint->GetFields() )
         baseFieldValues[existing->GetName()] = existing->GetText();
 
-    for( PCB_FIELD* existing : m_footprint->GetFields() )
-    {
-        if( board )
-            board->UncacheItemById( existing->m_Uuid );
+    std::vector<PCB_FIELD> newFields;
+    int                    ordinal = 42;   // Arbitrarily larger than any mandatory FIELD_T ids.
 
-        if( EDA_GROUP* parentGroup = existing->GetParentGroup() )
-            parentGroup->RemoveItem( existing );
-
-        delete existing;
-    }
-
-    m_footprint->GetFields().clear();
-
-    int ordinal = 42;   // Arbitrarily larger than any mandatory FIELD_T ids.
+    // The vector holds the fields by value, so it must not reallocate while newField is bound
+    newFields.reserve( m_fields->size() );
 
     for( PCB_FIELD& field : *m_fields )
     {
-        PCB_FIELD* newField = field.CloneField();
+        PCB_FIELD& newField = newFields.emplace_back( field );
         wxString   newText = commit.GetBoard()->ConvertCrossReferencesToKIIDs( field.GetText() );
 
         if( !variantName.IsEmpty() )
@@ -597,28 +599,51 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
             if( variant )
                 variant->SetFieldValue( field.GetName(), newText );
 
-            newField->SetText( baseText );
+            newField.SetText( baseText );
         }
         else
         {
-            newField->SetText( newText );
+            newField.SetText( newText );
         }
 
         if( !field.IsMandatory() )
-            newField->SetOrdinal( ordinal++ );
+            newField.SetOrdinal( ordinal++, FIELD_T::USER );
+    }
 
-        m_footprint->Add( newField );
-        view->Add( newField );
+    std::vector<PCB_FIELD*> addedFields;
+    std::vector<PCB_FIELD*> detachedFields;
 
-        if( EDA_GROUP* parentGroup = newField->GetParentGroup() )
-            parentGroup->AddItem( newField );
+    m_footprint->UpdateFields( newFields, addedFields, detachedFields );
 
-        if( newField->IsSelected() )
+    for( PCB_FIELD* field : detachedFields )
+    {
+        if( EDA_GROUP* parentGroup = field->GetParentGroup() )
+            parentGroup->RemoveItem( field );
+
+        delete field;
+    }
+
+    for( PCB_FIELD* field : m_footprint->GetFields() )
+    {
+        // Reused fields are already known to the view and to their group
+        if( alg::contains( addedFields, field ) )
+        {
+            view->Add( field );
+
+            if( EDA_GROUP* parentGroup = field->GetParentGroup() )
+                parentGroup->AddItem( field );
+        }
+        else
+        {
+            view->Update( field );
+        }
+
+        if( field->IsSelected() )
         {
             // The old copy was in the selection list, but this one is not.  Remove the
             // out-of-sync selection flag so we can re-add the field to the selection.
-            newField->ClearSelected();
-            selectionTool->AddItemToSel( newField, true );
+            field->ClearSelected();
+            selectionTool->AddItemToSel( field, true );
         }
     }
 
@@ -671,12 +696,16 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
 
         if( variant )
         {
+            variant->SetExcludedFromSim( m_cbExcludeFromSim->GetValue() );
             variant->SetExcludedFromPosFiles( m_excludeFromPosFiles->GetValue() );
             variant->SetExcludedFromBOM( m_excludeFromBOM->GetValue() );
             variant->SetDNP( m_cbDNP->GetValue() );
         }
 
-        // Preserve base attribute flags for these three properties
+        // Preserve base attribute flags for these four properties
+        if( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_SIM )
+            attributes |= FP_EXCLUDE_FROM_SIM;
+
         if( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_POS_FILES )
             attributes |= FP_EXCLUDE_FROM_POS_FILES;
 
@@ -688,6 +717,9 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     }
     else
     {
+        if( m_cbExcludeFromSim->GetValue() )
+            attributes |= FP_EXCLUDE_FROM_SIM;
+
         if( m_excludeFromPosFiles->GetValue() )
             attributes |= FP_EXCLUDE_FROM_POS_FILES;
 
@@ -743,7 +775,7 @@ void DIALOG_FOOTPRINT_PROPERTIES::OnAddField( wxCommandEvent&  )
     m_itemsGrid->OnAddRow(
             [&]() -> std::pair<int, int>
             {
-                PCB_FIELD newField( m_footprint, FIELD_T::USER, GetUserFieldName( m_fields->size(), DO_TRANSLATE ) );
+                PCB_FIELD newField( m_footprint, FIELD_T::USER, GetUserFieldName( m_fields->size(), TRANSLATED ) );
 
                 newField.SetVisible( false );
                 newField.SetLayer( m_footprint->GetLayer() == F_Cu ? F_Fab : B_Fab );
@@ -778,14 +810,47 @@ void DIALOG_FOOTPRINT_PROPERTIES::OnDeleteField( wxCommandEvent&  )
             },
             [&]( int row )
             {
-                m_fields->erase( m_fields->begin() + row );
-
-                // notify the grid
-                wxGridTableMessage msg( m_fields, wxGRIDTABLE_NOTIFY_ROWS_DELETED, row, 1 );
-                m_itemsGrid->ProcessTableMessage( msg );
+                m_fields->DeleteRows( row );
             } );
 
     OnModify();
+}
+
+
+void DIALOG_FOOTPRINT_PROPERTIES::OnGridCellChanging( wxGridEvent& aEvent )
+{
+    wxGridCellEditor* editor = m_itemsGrid->GetCellEditor( aEvent.GetRow(), aEvent.GetCol() );
+    wxControl*        control = editor->GetControl();
+
+    if( control && control->GetValidator() && !control->GetValidator()->Validate( control ) )
+    {
+        aEvent.Veto();
+        m_delayedFocusGrid = m_itemsGrid;
+        m_delayedFocusRow = aEvent.GetRow();
+        m_delayedFocusColumn = aEvent.GetCol();
+    }
+    else if( aEvent.GetCol() == PFC_NAME )
+    {
+        wxString newName = aEvent.GetString();
+
+        for( int row = 0; row < m_itemsGrid->GetNumberRows(); ++row )
+        {
+            if( row == aEvent.GetRow() )
+                continue;
+
+            if( FieldNamesAreDuplicates( newName, m_itemsGrid->GetCellValue( row, PFC_NAME ) ) )
+            {
+                aEvent.Veto();
+                m_delayedFocusGrid = m_itemsGrid;
+                m_delayedFocusRow = aEvent.GetRow();
+                m_delayedFocusColumn = aEvent.GetCol();
+                m_delayedErrorMessage = wxString::Format( _( "Field name '%s' already in use." ), newName );
+                break;
+            }
+        }
+    }
+
+    editor->DecRef();
 }
 
 

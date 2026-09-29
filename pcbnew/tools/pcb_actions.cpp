@@ -22,6 +22,7 @@
 #include "pcb_actions.h"
 #include "tool/tool_action.h"
 #include "tool/tool_event.h"
+#include <tool/arc_draw_mode.h>
 #include <pcbnew_id.h>
 #include <bitmaps.h>
 #include <layer_ids.h>
@@ -31,6 +32,7 @@
 #include <tool/tool_manager.h>
 #include <tools/pcb_picker_tool.h>
 #include <tools/pcb_selection_tool.h>
+#include <constraints/pcb_constraint.h>
 #include <router/pns_router.h>
 #include <router/pns_routing_settings.h>
 #include <geometry/geometry_utils.h>
@@ -59,6 +61,231 @@ TOOL_ACTION PCB_ACTIONS::convertToZone( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Create Zone from Selection..." ) )
         .Tooltip( _( "Creates a copper zone from the selection" ) )
         .Icon( BITMAPS::add_zone ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintParallel( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addParallel" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Parallel" ) )
+        .Tooltip( _( "Constrain the two selected segments to be parallel" ) )
+        .Icon( BITMAPS::constraint_parallel )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::PARALLEL ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintPerpendicular( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addPerpendicular" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Perpendicular" ) )
+        .Tooltip( _( "Constrain the two selected segments to be perpendicular" ) )
+        .Icon( BITMAPS::constraint_perpendicular )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::PERPENDICULAR ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintEqualLength( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addEqualLength" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Equal Length" ) )
+        .Tooltip( _( "Constrain the two selected segments to be of equal length" ) )
+        .Icon( BITMAPS::constraint_equal_length )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::EQUAL_LENGTH ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintCollinear( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addCollinear" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Collinear" ) )
+        .Tooltip( _( "Constrain the two selected segments to be collinear" ) )
+        .Icon( BITMAPS::constraint_collinear )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::COLLINEAR ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintAngular( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addAngular" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Angular Dimension" ) )
+        .Tooltip( _( "Constrain the angle between the two selected segments" ) )
+        .Icon( BITMAPS::constraint_angular_dimension )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::ANGULAR_DIMENSION ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintTangent( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addTangent" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Tangent" ) )
+        .Tooltip( _( "Constrain the selected line and curve, or two curves, to touch tangentially" ) )
+        .Icon( BITMAPS::constraint_tangent )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::TANGENT ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintHorizontal( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addHorizontal" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Horizontal" ) )
+        .Tooltip( _( "Constrain the selected segment to be horizontal" ) )
+        .Icon( BITMAPS::constraint_horizontal )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::HORIZONTAL ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintVertical( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addVertical" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Vertical" ) )
+        .Tooltip( _( "Constrain the selected segment to be vertical" ) )
+        .Icon( BITMAPS::constraint_vertical )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::VERTICAL ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintFixedLength( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addFixedLength" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Fixed Length" ) )
+        .Tooltip( _( "Lock the selected segment to its current length" ) )
+        .Icon( BITMAPS::constraint_fixed_length )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::FIXED_LENGTH ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintConcentric( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addConcentric" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Concentric" ) )
+        .Tooltip( _( "Constrain the two selected circles, arcs or ellipses to share a center" ) )
+        .Icon( BITMAPS::constraint_concentric )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::CONCENTRIC ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintEqualRadius( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addEqualRadius" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Equal Radius" ) )
+        .Tooltip( _( "Constrain the two selected circles or arcs to be of equal radius" ) )
+        .Icon( BITMAPS::constraint_equal_radius )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::EQUAL_RADIUS ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintFixedRadius( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addFixedRadius" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Fixed Radius" ) )
+        .Tooltip( _( "Lock the selected circle or arc to its current radius" ) )
+        .Icon( BITMAPS::constraint_fixed_radius )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::FIXED_RADIUS ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintArcAngle( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addArcAngle" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Arc Angle" ) )
+        .Tooltip( _( "Drive the selected arc's swept angle" ) )
+        .Icon( BITMAPS::constraint_arc_angle )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::ARC_ANGLE ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintFixedPosition( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addFixedPosition" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Fix in Place..." ) )
+        .Tooltip( _( "Click a point to pin it where it is, grounding the shapes constrained to it" ) )
+        .Icon( BITMAPS::constraint_fixed_position )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::FIXED_POSITION ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintCoincident( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addCoincident" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Coincident..." ) )
+        .Tooltip( _( "Click two shape endpoints to make them coincide" ) )
+        .Icon( BITMAPS::constraint_coincident )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::COINCIDENT ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintPointOnLine( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addPointOnLine" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Point on Line..." ) )
+        .Tooltip( _( "Click an endpoint, then a segment or circle, to put the point on it" ) )
+        .Icon( BITMAPS::constraint_point_on_line )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::POINT_ON_LINE ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintMidpoint( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addMidpoint" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Midpoint..." ) )
+        .Tooltip( _( "Click an endpoint, then a segment, to put the point at its midpoint" ) )
+        .Icon( BITMAPS::constraint_midpoint )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::MIDPOINT ) );
+
+TOOL_ACTION PCB_ACTIONS::addConstraintSymmetric( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.addSymmetric" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Symmetric..." ) )
+        .Tooltip( _( "Click two endpoints, then a segment axis, to mirror them across it" ) )
+        .Icon( BITMAPS::constraint_symmetric )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PCB_CONSTRAINT_TYPE::SYMMETRIC ) );
+
+TOOL_ACTION PCB_ACTIONS::showConstraints( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.showConstraints" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Always Show Geometric Constraints" ) )
+        .Tooltip( _( "Always show the geometric-constraint diagnostics overlay" ) )
+        .Flags( AF_NONE )
+        .Icon( BITMAPS::measurement ) );
+
+TOOL_ACTION PCB_ACTIONS::hideConstraints( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.hideConstraints" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Show Geometric Constraints on Hover Only" ) )
+        .Tooltip( _( "Reveal a shape's geometric constraints only while hovering it" ) )
+        .Flags( AF_NONE )
+        .Icon( BITMAPS::measurement ) );
+
+TOOL_ACTION PCB_ACTIONS::manageConstraints( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.manageConstraints" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Geometric Constraints..." ) )
+        .Tooltip( _( "List, locate and delete the board's geometric constraints" ) )
+        .Icon( BITMAPS::measurement ) );
+
+TOOL_ACTION PCB_ACTIONS::removeConstraints( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.removeConstraints" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Remove Geometric Constraints" ) )
+        .Tooltip( _( "Remove geometric constraints referencing the selected items" ) )
+        .Icon( BITMAPS::measurement ) );
+
+TOOL_ACTION PCB_ACTIONS::showConstraintsPanel( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.EditorControl.showConstraintsPanel" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Geometric Constraints" ) )
+        .Tooltip( _( "Show/hide the geometric constraints panel" ) )
+        .Icon( BITMAPS::measurement ) );
+
+TOOL_ACTION PCB_ACTIONS::toggleAutoConstraints( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ConstraintEditor.toggleAutoConstraints" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Automatic Constraints" ) )
+        .Tooltip( _( "Automatically add geometric constraints while drawing" ) )
+        .Icon( BITMAPS::constraint_auto )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE ) );
 
 TOOL_ACTION PCB_ACTIONS::convertToKeepout( TOOL_ACTION_ARGS()
         .Name( "pcbnew.Convert.convertToKeepout" )
@@ -119,6 +346,17 @@ TOOL_ACTION PCB_ACTIONS::drawPolygon( TOOL_ACTION_ARGS()
         .Flags( AF_ACTIVATE )
         .Parameter( ZONE_MODE::GRAPHIC_POLYGON ) );
 
+TOOL_ACTION PCB_ACTIONS::drawViaStitchArea( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.drawViaStitchArea" )
+        .Scope( AS_GLOBAL )
+        .DefaultHotkey( MD_SHIFT + MD_CTRL + 'N' )
+        .LegacyHotkeyName( "Draw Via Stitch area" )
+        .FriendlyName( _( "Draw Via Stitch area" ) )
+        .Tooltip( _( "Draw a via stitch area" ) )
+        .Icon( BITMAPS::add_via_stitch )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ZONE_MODE::STITCH ) );
+
 TOOL_ACTION PCB_ACTIONS::drawRectangle( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveDrawing.rectangle" )
         .Scope( AS_GLOBAL )
@@ -165,6 +403,71 @@ TOOL_ACTION PCB_ACTIONS::drawArc( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::add_arc )
         .Flags( AF_ACTIVATE ) );
 
+TOOL_ACTION PCB_ACTIONS::drawArcCenter( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.arcCenter" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Center, Start, End" ) )
+        .Tooltip( _( "Draw arcs by clicking the center, the start point, then the end point" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_center )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::CENTER_START_END ) );
+
+TOOL_ACTION PCB_ACTIONS::drawArcStartEndMid( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.arcStartEndMid" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Start, End, Midpoint" ) )
+        .Tooltip( _( "Draw arcs by clicking the start point, the end point, then a point on the arc" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_start_end_mid )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::START_END_MID ) );
+
+TOOL_ACTION PCB_ACTIONS::drawArcStartEndCenter( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.arcStartEndCenter" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Start, End, Center" ) )
+        .Tooltip( _( "Draw arcs by clicking the start point, the end point, then the center" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_start_end_center )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::START_END_CENTER ) );
+
+TOOL_ACTION PCB_ACTIONS::drawArcTangent( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.arcTangent" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Tangent" ) )
+        .Tooltip( _( "Draw arcs tangent to the previous arc or to the line or arc ending at the start point" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_tangent )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::TANGENT ) );
+
+TOOL_ACTION PCB_ACTIONS::drawArcStartDirEnd( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.arcStartDirEnd" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Start, Direction, End" ) )
+        .Tooltip( _( "Draw arcs by clicking the start point, a point giving the start direction, then the end point" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_start_dir_end )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::START_DIR_END ) );
+
+const TOOL_ACTION& PCB_ACTIONS::DrawArcForMode( ARC_DRAW_MODE aMode )
+{
+    switch( aMode )
+    {
+    case ARC_DRAW_MODE::CENTER_START_END: return drawArcCenter;
+    case ARC_DRAW_MODE::START_END_MID:    return drawArcStartEndMid;
+    case ARC_DRAW_MODE::START_END_CENTER: return drawArcStartEndCenter;
+    case ARC_DRAW_MODE::TANGENT:          return drawArcTangent;
+    case ARC_DRAW_MODE::START_DIR_END:    return drawArcStartDirEnd;
+    }
+
+    return drawArcCenter;
+}
+
+
 TOOL_ACTION PCB_ACTIONS::drawBezier( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveDrawing.bezier" )
         .Scope( AS_GLOBAL )
@@ -201,6 +504,28 @@ TOOL_ACTION PCB_ACTIONS::placeStackup( TOOL_ACTION_ARGS()
         .Tooltip( _( "Add a board stackup table on a graphic layer" ) )
         .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Flags( AF_ACTIVATE ) );
+
+TOOL_ACTION PCB_ACTIONS::placeDrillChart( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.placeDrillChart" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Add Drill Chart" ) )
+        .Tooltip( _( "Add a drill chart that tracks the board's holes" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE ) );
+
+TOOL_ACTION PCB_ACTIONS::placeDrillMap( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.placeDrillMap" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Add Drill Map" ) )
+        .Tooltip( _( "Draw drill symbols at the holes on a documentation layer" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Flags( AF_ACTIVATE ) );
+
+TOOL_ACTION PCB_ACTIONS::showDrillGroups( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.showDrillGroups" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Drill Groups..." ) )
+        .Tooltip( _( "Inspect drill groups and assign symbols" ) ) );
 
 TOOL_ACTION PCB_ACTIONS::placePoint( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveDrawing.placePoint" )
@@ -362,6 +687,22 @@ TOOL_ACTION PCB_ACTIONS::drawVia( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::add_via )
         .Flags( AF_ACTIVATE ) );
 
+TOOL_ACTION PCB_ACTIONS::placeViaStack( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveDrawing.viaStack" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Place Microvia Stack" ) )
+        .Tooltip( _( "Place a stacked or staggered microvia stack" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_via_stack )
+        .Flags( AF_ACTIVATE ) );
+
+TOOL_ACTION PCB_ACTIONS::makeViaStack( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Generator.makeViaStack" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Create Stack from Selection" ) )
+        .Tooltip( _( "Wrap the selected microvias and traces into a microvia stack" ) )
+        .Icon( BITMAPS::add_via_stack ) );
+
 TOOL_ACTION PCB_ACTIONS::drawRuleArea( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveDrawing.ruleArea" )
         .Scope( AS_GLOBAL )
@@ -431,12 +772,6 @@ TOOL_ACTION PCB_ACTIONS::decWidth( TOOL_ACTION_ARGS()
         .LegacyHotkeyName( "Decrease Line Width" )
         .FriendlyName( _( "Decrease Line Width" ) ) );
 
-TOOL_ACTION PCB_ACTIONS::arcPosture( TOOL_ACTION_ARGS()
-        .Name( "pcbnew.InteractiveDrawing.arcPosture" )
-        .Scope( AS_CONTEXT )
-        .DefaultHotkey( '/' )
-        .LegacyHotkeyName( "Switch Track Posture" )
-        .FriendlyName( _( "Switch Arc Posture" ) ) );
 
 TOOL_ACTION PCB_ACTIONS::changeDimensionArrows( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveDrawing.changeDimensionArrows" )
@@ -463,14 +798,6 @@ TOOL_ACTION PCB_ACTIONS::magneticSnapToggle( TOOL_ACTION_ARGS()
         .DefaultHotkey( MD_SHIFT + 'S' )
         .FriendlyName( _( "Toggle Snapping Between Active and All Layers" ) )
         .Tooltip( _( "Toggles between snapping on all visible layers and only the active area" ) ) );
-
-TOOL_ACTION PCB_ACTIONS::deleteLastPoint( TOOL_ACTION_ARGS()
-        .Name( "pcbnew.InteractiveDrawing.deleteLastPoint" )
-        .Scope( AS_CONTEXT )
-        .DefaultHotkey( WXK_BACK )
-        .FriendlyName( _( "Delete Last Point" ) )
-        .Tooltip( _( "Delete the last point added to the current item" ) )
-        .Icon( BITMAPS::undo ) );
 
 TOOL_ACTION PCB_ACTIONS::closeOutline( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveDrawing.closeOutline" )
@@ -595,6 +922,12 @@ TOOL_ACTION PCB_ACTIONS::toggleExcludeFromBOM( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Exclude from Bill of Materials" ) )
         .Tooltip( _( "Toggle the exclude from bill of materials attribute" ) ) );
+
+TOOL_ACTION PCB_ACTIONS::toggleExcludeFromSim( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveEdit.toggleExcludeFromSim" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Exclude from Simulation" ) )
+        .Tooltip( _( "Toggle the exclude from simulation attribute" ) ) );
 
 TOOL_ACTION PCB_ACTIONS::toggleExcludeFromPosFiles( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveEdit.toggleExcludeFromPosFiles" )
@@ -843,6 +1176,20 @@ TOOL_ACTION PCB_ACTIONS::extendLines( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Extend Lines to Meet" ) )
         .Tooltip( _( "Extend lines to meet each other" ) ) );
 
+TOOL_ACTION PCB_ACTIONS::extendGraphic( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.GraphicEdit.extend" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Extend Line or Arc" ) )
+        .Tooltip( _( "Hover a graphical line or arc to extend it until it meets another" ) )
+        .Flags( AF_ACTIVATE ) );
+
+TOOL_ACTION PCB_ACTIONS::trimGraphic( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.GraphicEdit.trim" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Trim Shape" ) )
+        .Tooltip( _( "Hover the part of a graphical shape to remove between the nearest crossings" ) )
+        .Flags( AF_ACTIVATE ) );
+
 TOOL_ACTION PCB_ACTIONS::mergePolygons( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveEdit.mergePolygons" )
         .Scope( AS_GLOBAL )
@@ -882,6 +1229,21 @@ TOOL_ACTION PCB_ACTIONS::properties( TOOL_ACTION_ARGS()
         .LegacyHotkeyName( "Edit Item" )
         .FriendlyName( _( "Properties..." ) )
         .Icon( BITMAPS::edit ) );
+
+TOOL_ACTION PCB_ACTIONS::matchProperties( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.MatchProperties.match" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Match Properties" ) )
+        .Tooltip( _( "Copy selected properties from a source item to compatible target items" ) )
+        .Flags( AF_ACTIVATE ) );
+
+// Context scope so the hotkey only takes over from Preferences while the tool has the pointer.
+TOOL_ACTION PCB_ACTIONS::matchPropertiesSettings( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.MatchProperties.settings" )
+        .Scope( AS_CONTEXT )
+        .DefaultHotkey( MD_CTRL + ',' )
+        .FriendlyName( _( "Match Properties Settings..." ) )
+        .Tooltip( _( "Choose the properties copied by Match Properties" ) ) );
 
 // ARRAY
 //
@@ -969,12 +1331,26 @@ TOOL_ACTION PCB_ACTIONS::exportFootprint( TOOL_ACTION_ARGS()
         .Tooltip( _( "Export edited footprint to file" ) )
         .Icon( BITMAPS::export_module ) );
 
+TOOL_ACTION PCB_ACTIONS::exportFootprintAsSVG( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ModuleEditor.exportFootprintAsSVG" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Export Current Footprint as SVG..." ) )
+        .Tooltip( _( "Export the current footprint to an SVG file" ) )
+        .Icon( BITMAPS::export_svg ) );
+
 TOOL_ACTION PCB_ACTIONS::compareFpLibraryWithFile( TOOL_ACTION_ARGS()
         .Name( "pcbnew.ModuleEditor.CompareFpLibraryWithFile" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Compare Library with File..." ) )
         .Tooltip( _( "Diff the current footprint library against another .pretty directory" ) )
         .Icon( BITMAPS::library ) );
+
+TOOL_ACTION PCB_ACTIONS::showLibFootprintFieldsTable( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.ModuleEditor.showLibraryFootprintFieldsTable" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Bulk Edit Footprint Fields..." ) )
+        .Tooltip( _( "Edit a table of fields from all footprints in the library" ) )
+        .Icon( BITMAPS::table ) );
 
 TOOL_ACTION PCB_ACTIONS::footprintProperties( TOOL_ACTION_ARGS()
         .Name( "pcbnew.ModuleEditor.footprintProperties" )
@@ -987,7 +1363,7 @@ TOOL_ACTION PCB_ACTIONS::padTable( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Pad Table..." ) )
         .Tooltip( _( "Displays pad table for bulk editing of pads" ) )
-        .Icon( BITMAPS::pin_table ) );
+        .Icon( BITMAPS::pad_table ) );
 
 TOOL_ACTION PCB_ACTIONS::checkFootprint( TOOL_ACTION_ARGS()
         .Name( "pcbnew.ModuleEditor.checkFootprint" )
@@ -1228,21 +1604,6 @@ TOOL_ACTION PCB_ACTIONS::defaultPadProperties( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::options_pad ) );
 
 
-// SCRIPTING TOOL
-//
-
-TOOL_ACTION PCB_ACTIONS::pluginsShowFolder( TOOL_ACTION_ARGS()
-        .Name( "pcbnew.ScriptingTool.pluginsShowFolder" )
-        .Scope( AS_GLOBAL )
-#ifdef __WXMAC__
-        .FriendlyName( _( "Reveal Plugin Folder in Finder" ) )
-        .Tooltip( _( "Reveals the plugins folder in a Finder window" ) )
-#else
-        .FriendlyName( _( "Open Plugin Directory" ) )
-        .Tooltip( _( "Opens the directory in the default system file manager" ) )
-#endif
-        .Icon( BITMAPS::directory_open ) );
-
 // BOARD_EDITOR_CONTROL
 //
 TOOL_ACTION PCB_ACTIONS::appendBoard( TOOL_ACTION_ARGS()
@@ -1302,6 +1663,13 @@ TOOL_ACTION PCB_ACTIONS::exportSpecctraDSN( TOOL_ACTION_ARGS()
         .Tooltip( _( "Export Specctra DSN routing info" ) )
         .Icon( BITMAPS::export_dsn ) );
 
+TOOL_ACTION PCB_ACTIONS::editFootprintFields( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.EditorControl.editFootprintFields" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Bulk Edit Footprint Fields..." ) )
+        .Tooltip( _( "Edit a table of fields from all footprints in the board" ) )
+        .Icon( BITMAPS::spreadsheet ) );
+
 TOOL_ACTION PCB_ACTIONS::generateGerbers( TOOL_ACTION_ARGS()
         .Name( "pcbnew.EditorControl.generateGerbers" )
         .Scope( AS_GLOBAL )
@@ -1357,6 +1725,13 @@ TOOL_ACTION PCB_ACTIONS::generateBOM( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Bill of Materials..." ) )
         .Tooltip( _( "Create bill of materials from board" ) )
         .Icon( BITMAPS::post_bom ) );
+
+TOOL_ACTION PCB_ACTIONS::generateBOMLegacy( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.EditorControl.generateBOMLegacy" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Generate Legacy Bill of Materials..." ) )
+        .Tooltip( _( "Generate a bill of materials for the current board using the legacy exporter" ) )
+        .Icon( BITMAPS::file_bom ) );
 
 TOOL_ACTION PCB_ACTIONS::exportGenCAD( TOOL_ACTION_ARGS()
         .Name( "pcbnew.EditorControl.exportGenCAD" )
@@ -2798,6 +3173,15 @@ TOOL_ACTION PCB_ACTIONS::routerAutorouteSelected( TOOL_ACTION_ARGS()
         .Flags( AF_ACTIVATE )
         .Parameter( PNS::PNS_MODE_ROUTE_SINGLE ) );
 
+TOOL_ACTION PCB_ACTIONS::routerOptimizeSelected( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveRouter.OptimizeSelected" )
+        .Scope( AS_GLOBAL )
+        .DefaultHotkey( MD_SHIFT + 'T' )
+        .FriendlyName( _( "Optimize Selected Track(s)" ) )
+        .Tooltip( _( "Simplify selected routed track(s)." ) )
+        .Flags( AF_ACTIVATE )
+        .Parameter( PNS::PNS_MODE_ROUTE_SINGLE ) );
+
 TOOL_ACTION PCB_ACTIONS::cancelCurrentItem( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveRouter.CancelCurrentItem" )
         .Scope( AS_GLOBAL )
@@ -2885,6 +3269,20 @@ TOOL_ACTION PCB_ACTIONS::generatorsShowManager( TOOL_ACTION_ARGS()
         .Tooltip( _( "Show a manager dialog for Generator objects" ) )
         .Icon( BITMAPS::pin_table ) );
 
+TOOL_ACTION PCB_ACTIONS::excludeStitchVia( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Generator.excludeStitchVia" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Exclude From Stitching" ) )
+        .Tooltip( _( "Remove the selected via from its via-stitch generator and prevent "
+                     "it from being regenerated" ) ) );
+
+TOOL_ACTION PCB_ACTIONS::clearStitchViaExclusions( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.Generator.clearStitchViaExclusions" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Clear Via Stitching Exclusions" ) )
+        .Tooltip( _( "Restore all vias previously excluded from the selected via-stitch "
+                     "generators" ) ) );
+
 
 // LENGTH_TUNER_TOOL
 //
@@ -2945,6 +3343,15 @@ TOOL_ACTION PCB_ACTIONS::showDiffPhaseSkew( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::tune_diff_pair_skew_legend ) );
 
 
+/// Grid Item
+TOOL_ACTION PCB_ACTIONS::placeSubGrid( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.GridItem.place" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Place Sub-grid" ) )
+        .Tooltip( _( "Adds a subgrid to the board" ) )
+        .Icon( BITMAPS::add_grid_item ) );
+
+
 const TOOL_EVENT& PCB_EVENTS::SnappingModeChangedByKeyEvent()
 {
     static TOOL_EVENT event = TOOL_EVENT( TC_MESSAGE, TA_ACTION,
@@ -2960,4 +3367,19 @@ const TOOL_EVENT& PCB_EVENTS::LayerPairPresetChangedByKeyEvent()
                                           "pcbnew.Control.layerPairPresetChangedByKey" );
 
     return event;
+}
+
+
+const std::vector<const TOOL_ACTION*>& PCB_ACTIONS::ConstraintAddActions()
+{
+    static const std::vector<const TOOL_ACTION*> actions = {
+        &addConstraintParallel,      &addConstraintPerpendicular, &addConstraintEqualLength,
+        &addConstraintCollinear,     &addConstraintAngular,       &addConstraintTangent,
+        &addConstraintHorizontal,    &addConstraintVertical,      &addConstraintFixedLength,
+        &addConstraintConcentric,    &addConstraintEqualRadius,   &addConstraintFixedRadius,
+        &addConstraintArcAngle,      &addConstraintCoincident,    &addConstraintPointOnLine,
+        &addConstraintMidpoint,      &addConstraintSymmetric,     &addConstraintFixedPosition
+    };
+
+    return actions;
 }

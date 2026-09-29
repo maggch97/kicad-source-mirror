@@ -246,13 +246,27 @@ BOOST_AUTO_TEST_CASE( IsSafeUrlDirect )
     BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "javascript:alert(1)" ) ) );
     BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "data:text/html,<script>" ) ) );
     BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "\\\\server\\share\\foo.exe" ) ) );
+    BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "\\\\server\\share\\foo.exe?bar" ) ) );
+    BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "\\\\server\\share\\foo.exe#bar" ) ) );
     BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "mailto:user@example.com" ) ) );
     BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "file:///foo.exe" ) ) );
     BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "file:///FOO.EXE" ) ) );
     BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "file:///foo.bat" ) ) );
+    BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "file:///foo.exe?bar" ) ) );
+    BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "file:///foo.exe#bar" ) ) );
+
+    // The OS launches the decoded path, so the filter must judge that form
+    BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "file:///foo%2Eexe" ) ) );
+    BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "file:///foo%2eexe" ) ) );
+    BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "\\\\server\\share\\foo%2Eexe" ) ) );
+
+    // Windows ignores trailing dots and spaces when resolving a file name
+    BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "file:///foo.exe." ) ) );
+    BOOST_CHECK( !HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "file:///foo.exe%20" ) ) );
 
     BOOST_CHECK( HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "\\\\server\\share\\foo.pdf" ) ) );
     BOOST_CHECK( HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "\\\\server\\share\\Spec.PDF" ) ) );
+    BOOST_CHECK( HYPERLINK_DV_RENDERER::IsSafeUrl( wxString( "file:///foo%20bar.pdf" ) ) );
 }
 
 

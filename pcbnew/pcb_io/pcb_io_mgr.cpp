@@ -22,6 +22,7 @@
 #include <wx/uri.h>
 
 #include <config.h>
+#include <board.h>
 #include <footprint.h>
 #include <kiway_player.h>
 #include <wildcards_and_files_ext.h>
@@ -49,6 +50,7 @@
 #include <pcb_io/sprint_layout/pcb_io_sprint_layout.h>
 #include <pcb_io/diptrace/pcb_io_diptrace.h>
 #include <pcb_io/autotrax/pcb_io_autotrax.h>
+#include <pcb_io/pads/pcb_io_pads_binary.h>
 #include <reporter.h>
 #include <libraries/library_table_parser.h>
 
@@ -112,6 +114,41 @@ PCB_IO_MGR::PCB_FILE_T PCB_IO_MGR::EnumFromStr( const wxString& aType )
 }
 
 
+bool PCB_IO_MGR::ImportPopulatesProjectSettings( PCB_FILE_T aFileType )
+{
+    switch( aFileType )
+    {
+    case ALLEGRO:
+        return true;
+
+    default:
+        return false;
+    }
+}
+
+
+bool PCB_IO_MGR::ImportGeneratesProjectLibrary( PCB_FILE_T aFileType )
+{
+    switch( aFileType )
+    {
+    case CADSTAR_PCB_ARCHIVE:
+    case EAGLE:
+    case EASYEDA:
+    case EASYEDAPRO:
+    case EASYEDAPRO_V3:
+    case GEDA_PCB:
+    case ALTIUM_DESIGNER:
+    case ALTIUM_CIRCUIT_MAKER:
+    case ALTIUM_CIRCUIT_STUDIO:
+    case ALLEGRO:
+        return true;
+
+    default:
+        return false;
+    }
+}
+
+
 // The KIWAY_PLAYER::OpenProjectFiles() API knows nothing about plugins, so
 // determine how to load the BOARD here
 PCB_IO_MGR::PCB_FILE_T PCB_IO_MGR::FindPluginTypeFromBoardPath( const wxString& aFileName, int aCtl )
@@ -167,24 +204,24 @@ PCB_IO_MGR::PCB_FILE_T PCB_IO_MGR::GuessPluginTypeFromLibPath( const wxString& a
 }
 
 
-BOARD* PCB_IO_MGR::Load( PCB_FILE_T aFileType, const wxString& aFileName, BOARD* aAppendToMe,
-                     const std::map<std::string, UTF8>* aProperties, PROJECT* aProject,
-                     PROGRESS_REPORTER* aProgressReporter )
+std::unique_ptr<BOARD> PCB_IO_MGR::Load( PCB_FILE_T aFileType, const wxString& aFileName,
+                                         const std::map<std::string, UTF8>* aProperties, PROJECT* aProject,
+                                         PROGRESS_REPORTER* aProgressReporter )
 {
     IO_RELEASER<PCB_IO> pi( FindPlugin( aFileType ) );
 
     if( pi )  // test pi->plugin
     {
         pi->SetProgressReporter( aProgressReporter );
-        return pi->LoadBoard( aFileName, aAppendToMe, aProperties, aProject );
+        return pi->LoadBoard( aFileName, aProperties, aProject );
     }
 
     THROW_IO_ERROR( wxString::Format( FMT_NOTFOUND, ShowType( aFileType ).GetData() ) );
 }
 
 
-void PCB_IO_MGR::Save( PCB_FILE_T aFileType, const wxString& aFileName, BOARD* aBoard,
-                   const std::map<std::string, UTF8>* aProperties )
+void PCB_IO_MGR::Save( PCB_FILE_T aFileType, const wxString& aFileName, BOARD& aBoard,
+                       const std::map<std::string, UTF8>* aProperties )
 {
     IO_RELEASER<PCB_IO> pi( FindPlugin( aFileType ) );
 
@@ -391,4 +428,9 @@ static PCB_IO_MGR::REGISTER_PLUGIN registerAutotraxPlugin(
         PCB_IO_MGR::AUTOTRAX,
         wxT( "Protel Autotrax" ),
         []() -> PCB_IO* { return new PCB_IO_AUTOTRAX; } );
+
+static PCB_IO_MGR::REGISTER_PLUGIN registerPadsBinaryPlugin(
+        PCB_IO_MGR::PADS_BINARY,
+        wxT( "PADS Binary" ),
+        []() -> PCB_IO* { return new PCB_IO_PADS_BINARY(); } );
 // clang-format on

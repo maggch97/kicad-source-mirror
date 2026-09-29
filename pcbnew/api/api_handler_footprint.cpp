@@ -76,14 +76,39 @@ tl::expected<bool, ApiResponseStatus> API_HANDLER_FOOTPRINT::validateDocumentInt
     if( aDocument.type() != DocumentType::DOCTYPE_FOOTPRINT )
     {
         ApiResponseStatus e;
-        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
-        e.set_error_message( "the requested document is not a footprint" );
+        e.set_status( ApiStatusCode::AS_UNHANDLED );
         return tl::unexpected( e );
     }
 
+    // An empty library nickname addresses an unsaved new footprint
+    if( aDocument.lib_id().library_nickname().empty() )
+    {
+        BOARD* board = this->board();
+
+        if( !board || !board->GetFirstFootprint() )
+        {
+            ApiResponseStatus e;
+            e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+            e.set_error_message( "no footprint is currently open" );
+            return tl::unexpected( e );
+        }
+
+        return true;
+    }
+
     LIB_ID target_fp = footprintContext()->GetLoadedFPID();
-    std::string actual_lib  = target_fp.GetUniStringLibNickname().ToStdString();                                                                            
+
+    if( !target_fp.IsValid() )
+    {
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+        e.set_error_message( "no footprint is currently open" );
+        return tl::unexpected( e );
+    }
+
+    std::string actual_lib  = target_fp.GetUniStringLibNickname().ToStdString();
     std::string actual_name = target_fp.GetUniStringLibItemName().ToStdString();
+
     if( 0 != aDocument.lib_id().library_nickname().compare( actual_lib ) )
     {
         ApiResponseStatus e;
@@ -105,16 +130,15 @@ tl::expected<bool, ApiResponseStatus> API_HANDLER_FOOTPRINT::validateDocumentInt
     return true;
 }
 
+
 HANDLER_RESULT<FOOTPRINT*> API_HANDLER_FOOTPRINT::validateAndGetFootprint(
         const DocumentSpecifier& aDocument )
 {
+    if( HANDLER_RESULT<bool> documentValidation = validateDocument( aDocument ); !documentValidation )
+        return tl::unexpected( documentValidation.error() );
+
     if( std::optional<ApiResponseStatus> busy = checkForBusy() )
         return tl::unexpected( *busy );
-
-    HANDLER_RESULT<bool> documentValidation = validateDocument( aDocument );
-
-    if( !documentValidation )
-        return tl::unexpected( documentValidation.error() );
 
     FOOTPRINT* editorFootprint = board()->GetFirstFootprint();
 
@@ -129,9 +153,13 @@ HANDLER_RESULT<FOOTPRINT*> API_HANDLER_FOOTPRINT::validateAndGetFootprint(
     return editorFootprint;
 }
 
+
 HANDLER_RESULT<Empty> API_HANDLER_FOOTPRINT::handleOpenLibraryItem(
     const HANDLER_CONTEXT<OpenLibraryItem>& aCtx )
 {
+    if( std::optional<ApiResponseStatus> headless = checkForHeadless( "OpenLibraryItem" ) )
+        return tl::unexpected( *headless );
+
     if( aCtx.Request.type() != DocumentType::DOCTYPE_FOOTPRINT )
     {
         ApiResponseStatus e;
@@ -172,6 +200,7 @@ HANDLER_RESULT<Empty> API_HANDLER_FOOTPRINT::handleOpenLibraryItem(
     return Empty();
 }
 
+
 HANDLER_RESULT<GetOpenDocumentsResponse> API_HANDLER_FOOTPRINT::handleGetOpenDocuments(
         const HANDLER_CONTEXT<GetOpenDocuments>& aCtx )
 {
@@ -186,6 +215,9 @@ HANDLER_RESULT<GetOpenDocumentsResponse> API_HANDLER_FOOTPRINT::handleGetOpenDoc
     common::types::DocumentSpecifier doc;
 
     LIB_ID fpid = footprintContext()->GetLoadedFPID();
+
+    if( !board()->GetFirstFootprint() )
+        return response;
 
     doc.set_type( DocumentType::DOCTYPE_FOOTPRINT );
     doc.mutable_lib_id()->set_library_nickname( fpid.GetUniStringLibNickname() );
@@ -273,27 +305,40 @@ HANDLER_RESULT<Empty> API_HANDLER_FOOTPRINT::handleSaveCopyOfDocument(
 HANDLER_RESULT<Empty> API_HANDLER_FOOTPRINT::handleRevertDocument(
         const HANDLER_CONTEXT<RevertDocument>& aCtx )
 {
+    if( std::optional<ApiResponseStatus> headless = checkForHeadless( "RevertDocument" ) )
+        return tl::unexpected( *headless );
+
+    if( HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.document() ); !documentValidation )
+        return tl::unexpected( documentValidation.error() );
+
     if( std::optional<ApiResponseStatus> busy = checkForBusy() )
         return tl::unexpected( *busy );
 
-    HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.document() );
-
-    if( !documentValidation )
-        return tl::unexpected( documentValidation.error() );
-
-    frame()->GetScreen()->SetContentModified( false );
-    frame()->RevertFootprint(); // dialog is suppressed by ^
+    frame()->RevertFootprint( /* aSkipConfirmation = */ true );
 
     return Empty();
 }
 
 
+// Footprint types that are directly retrievable by GetItems
+static const std::vector<KICAD_T> s_allowedFootprintTypes = {
+        PCB_PAD_T,
+        PCB_SHAPE_T,
+        PCB_FIELD_T,
+        PCB_TEXT_T,
+        PCB_TEXTBOX_T,
+        PCB_TABLE_T,
+        PCB_TABLECELL_T,
+        PCB_DIMENSION_T,
+        PCB_ZONE_T,
+        PCB_GROUP_T,
+        PCB_BARCODE_T
+};
+
+
 HANDLER_RESULT<GetItemsResponse> API_HANDLER_FOOTPRINT::handleGetItems(
         const HANDLER_CONTEXT<GetItems>& aCtx )
 {
-    if( std::optional<ApiResponseStatus> busy = checkForBusy() )
-        return tl::unexpected( *busy );
-
     if( !validateItemHeaderDocument( aCtx.Request.header() ) )
     {
         ApiResponseStatus e;
@@ -302,6 +347,9 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_FOOTPRINT::handleGetItems(
         return tl::unexpected( e );
     }
 
+    if( std::optional<ApiResponseStatus> busy = checkForBusy() )
+        return tl::unexpected( *busy );
+
     GetItemsResponse response;
 
     FOOTPRINT* footprint = board()->GetFirstFootprint();
@@ -309,14 +357,13 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_FOOTPRINT::handleGetItems(
     std::set<KICAD_T> typesRequested, typesInserted;
     bool handledAnything = false;
 
-    for( int typeRaw : aCtx.Request.types() )
+    std::vector<KICAD_T> requestedTypes = parseRequestedItemTypes( aCtx.Request.types() );
+
+    if( aCtx.Request.types().empty() )
+        requestedTypes.assign( s_allowedFootprintTypes.begin(), s_allowedFootprintTypes.end() );
+
+    for( KICAD_T type : requestedTypes )
     {
-        auto typeMessage = static_cast<common::types::KiCadObjectType>( typeRaw );
-        KICAD_T type = FromProtoEnum<KICAD_T>( typeMessage );
-
-        if( type == TYPE_NOT_INIT )
-            continue;
-
         typesRequested.emplace( type );
 
         if( typesInserted.count( type ) )
@@ -350,6 +397,7 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_FOOTPRINT::handleGetItems(
         case PCB_TEXT_T:
         case PCB_TEXTBOX_T:
         case PCB_BARCODE_T:
+        case PCB_TABLE_T:
         {
             handledAnything = true;
             bool inserted = false;
@@ -365,6 +413,31 @@ HANDLER_RESULT<GetItemsResponse> API_HANDLER_FOOTPRINT::handleGetItems(
 
             if( inserted )
                 typesInserted.insert( type );
+
+            break;
+        }
+
+        case PCB_TABLECELL_T:
+        {
+            handledAnything = true;
+            bool inserted = false;
+
+            for( BOARD_ITEM* item : footprint->GraphicalItems() )
+            {
+                if( item->Type() != PCB_TABLE_T )
+                    continue;
+
+                item->RunOnChildren(
+                        [&]( BOARD_ITEM* child )
+                        {
+                            items.emplace_back( child );
+                            inserted = true;
+                        },
+                        RECURSE_MODE::NO_RECURSE );
+            }
+
+            if( inserted )
+                typesInserted.insert( PCB_TABLECELL_T );
 
             break;
         }

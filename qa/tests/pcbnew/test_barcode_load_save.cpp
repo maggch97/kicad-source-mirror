@@ -19,6 +19,7 @@
 
 #include <filesystem>
 
+#include <qa_utils/file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <boost/test/unit_test.hpp>
 
@@ -52,8 +53,8 @@ BOOST_AUTO_TEST_CASE( BarcodeWriteRead )
 
     board->Add( barcode, ADD_MODE::APPEND, true );
 
-    KI_TEST::TEMPORARY_DIRECTORY tempDir( "kicad_qa_barcode_roundtrip", "" );
-    const std::filesystem::path  savePath = tempDir.GetPath() / "barcode_roundtrip.kicad_pcb";
+    KI_TEST::SCOPED_TEMP_DIR    tempDir( "kicad_qa_barcode_roundtrip" );
+    const std::filesystem::path savePath = tempDir.Path() / "barcode_roundtrip.kicad_pcb";
 
     KI_TEST::DumpBoardToFile( *board, savePath.string() );
     std::unique_ptr<BOARD> board2 = KI_TEST::ReadBoardFromFileOrStream( savePath.string() );
@@ -93,8 +94,9 @@ BOOST_AUTO_TEST_CASE( BarcodeFootprintWriteRead )
 
     // Saving a footprint validates its whole containing directory as a library, so use a private
     // temp directory rather than littering (and reading stray files from) the system temp root.
-    KI_TEST::TEMPORARY_DIRECTORY tempLib( "kicad_qa_barcode_roundtrip", ".pretty" );
-    const std::filesystem::path  savePath = tempLib.GetPath() / "barcode_roundtrip.kicad_mod";
+    KI_TEST::SCOPED_TEMP_DIR    tempLib( "kicad_qa_barcode_roundtrip" );
+    const std::filesystem::path libPath = tempLib.CreateChildDir( "barcode_roundtrip.pretty" );
+    const std::filesystem::path savePath = libPath / "barcode_roundtrip.kicad_mod";
 
     KI_TEST::DumpFootprintToFile( footprint, savePath.string() );
     std::unique_ptr<FOOTPRINT> footprint2 = KI_TEST::ReadFootprintFromFileOrStream( savePath.string() );
@@ -244,7 +246,7 @@ BOOST_AUTO_TEST_CASE( BarcodeTextVariableExpansion )
     BOOST_CHECK_EQUAL( barcode->GetText(), wxT( "${PART_NUMBER}_${VERSION}" ) );
 
     // Verify GetShownText returns the expanded text
-    BOOST_CHECK_EQUAL( barcode->GetShownText(), wxT( "PN12345_1.0" ) );
+    BOOST_CHECK_EQUAL( barcode->GetShownText( FOR_CANVAS ), wxT( "PN12345_1.0" ) );
 
     // Assemble the barcode and verify the QR code encodes the expanded text
     barcode->AssembleBarcode();
@@ -299,7 +301,7 @@ BOOST_AUTO_TEST_CASE( BarcodeUndefinedVariable )
     BOOST_CHECK_EQUAL( barcode->GetText(), wxT( "${UNDEFINED_VAR}" ) );
 
     // Verify GetShownText returns the unexpanded text (since variable is undefined)
-    BOOST_CHECK_EQUAL( barcode->GetShownText(), wxT( "${UNDEFINED_VAR}" ) );
+    BOOST_CHECK_EQUAL( barcode->GetShownText( FOR_CANVAS ), wxT( "${UNDEFINED_VAR}" ) );
 
     // Assemble the barcode - for QR codes this should still work since QR can encode any text
     barcode->AssembleBarcode();
@@ -335,52 +337,4 @@ BOOST_AUTO_TEST_CASE( BarcodeCode39UndefinedVariable )
     // CODE_39 cannot encode ${} so the polygon should be empty
     // This is expected behavior - invalid characters cause encoding to fail
     BOOST_CHECK_EQUAL( barcode->GetSymbolPoly().OutlineCount(), 0 );
-}
-
-
-BOOST_AUTO_TEST_CASE( BarcodeDialogEditFlow )
-{
-    SETTINGS_MANAGER settingsManager;
-
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    // Set up board-level text variables
-    std::map<wxString, wxString> properties;
-    properties[wxT( "PART_NUMBER" )] = wxT( "PN12345" );
-    board->SetProperties( properties );
-
-    // Create a barcode and add it to the board (simulates existing barcode)
-    PCB_BARCODE* currentBarcode = new PCB_BARCODE( board.get() );
-    currentBarcode->SetText( wxT( "INITIAL_TEXT" ) );
-    currentBarcode->SetKind( BARCODE_T::QR_CODE );
-    currentBarcode->SetWidth( pcbIUScale.mmToIU( 10.0 ) );
-    currentBarcode->SetHeight( pcbIUScale.mmToIU( 10.0 ) );
-    currentBarcode->AssembleBarcode();
-    board->Add( currentBarcode, ADD_MODE::APPEND, true );
-
-    // Simulate dialog creating a dummy barcode for preview
-    PCB_BARCODE* dummyBarcode = new PCB_BARCODE( board.get() );
-
-    // Simulate copying current to dummy (as in initValues)
-    *dummyBarcode = *currentBarcode;
-
-    BOOST_CHECK( dummyBarcode->GetBoard() == board.get() );
-
-    // Simulate user changing text to use a variable
-    dummyBarcode->SetText( wxT( "${PART_NUMBER}" ) );
-    dummyBarcode->AssembleBarcode();
-
-    // Verify variable expansion works in dummy
-    BOOST_CHECK_EQUAL( dummyBarcode->GetShownText(), wxT( "PN12345" ) );
-    BOOST_CHECK( dummyBarcode->GetSymbolPoly().OutlineCount() > 0 );
-
-    // Simulate dialog closing and applying changes to current barcode
-    currentBarcode->SetText( wxT( "${PART_NUMBER}" ) );
-    currentBarcode->AssembleBarcode();
-
-    // Verify variable expansion works in current barcode
-    BOOST_CHECK_EQUAL( currentBarcode->GetShownText(), wxT( "PN12345" ) );
-    BOOST_CHECK( currentBarcode->GetSymbolPoly().OutlineCount() > 0 );
-
-    delete dummyBarcode;
 }

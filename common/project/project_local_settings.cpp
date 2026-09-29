@@ -26,7 +26,7 @@
 #include <settings/json_settings_internals.h>
 #include <settings/parameters.h>
 
-const int projectLocalSettingsVersion = 5;
+const int projectLocalSettingsVersion = 7;
 
 
 PROJECT_LOCAL_SETTINGS::PROJECT_LOCAL_SETTINGS( PROJECT* aProject, const wxString& aFilename ) :
@@ -136,6 +136,7 @@ PROJECT_LOCAL_SETTINGS::PROJECT_LOCAL_SETTINGS( PROJECT* aProject, const wxStrin
                 ret["zones"]       = m_PcbSelectionFilter.zones;
                 ret["keepouts"]    = m_PcbSelectionFilter.keepouts;
                 ret["dimensions"]  = m_PcbSelectionFilter.dimensions;
+                ret["gridItems"]   = m_PcbSelectionFilter.gridItems;
                 ret["otherItems"]  = m_PcbSelectionFilter.otherItems;
 
                 return ret;
@@ -155,6 +156,7 @@ PROJECT_LOCAL_SETTINGS::PROJECT_LOCAL_SETTINGS( PROJECT* aProject, const wxStrin
                 SetIfPresent( aVal, "zones", m_PcbSelectionFilter.zones );
                 SetIfPresent( aVal, "keepouts", m_PcbSelectionFilter.keepouts );
                 SetIfPresent( aVal, "dimensions", m_PcbSelectionFilter.dimensions );
+                SetIfPresent( aVal, "gridItems", m_PcbSelectionFilter.gridItems );
                 SetIfPresent( aVal, "otherItems", m_PcbSelectionFilter.otherItems );
             },
             {
@@ -168,6 +170,7 @@ PROJECT_LOCAL_SETTINGS::PROJECT_LOCAL_SETTINGS( PROJECT* aProject, const wxStrin
                 { "zones", true },
                 { "keepouts", true },
                 { "dimensions", true },
+                { "gridItems", true },
                 { "otherItems", true }
             } ) );
 
@@ -517,6 +520,51 @@ PROJECT_LOCAL_SETTINGS::PROJECT_LOCAL_SETTINGS( PROJECT* aProject, const wxStrin
                     }
 
                     At( ptr ) = newLayers;
+                    m_wasMigrated = true;
+                }
+
+                return true;
+            } );
+
+    registerMigration( 5, 6,
+            [&]()
+            {
+                // Schema version 5 to 6: LAYER_GRID_ITEMS added to visibility controls
+
+                std::string ptr( "board.visible_items" );
+
+                if( Contains( ptr ) )
+                {
+                    if( At( ptr ).is_array() && !At( ptr ).empty() )
+                        At( ptr ).push_back( VisibilityLayerToString( VISIBILITY_LAYER::SUBGRIDS ) );
+                    else
+                        At( "board" ).erase( "visible_items" );
+
+                    m_wasMigrated = true;
+                }
+
+                return true;
+            } );
+
+    registerMigration( 6, 7,
+            [&]()
+            {
+                // Schema version 6 to 7: LAYER_VIA_STITCHING added to visibility controls
+
+                std::string ptr( "board.visible_items" );
+
+                if( Contains( ptr ) )
+                {
+                    if( At( ptr ).is_array() && !At( ptr ).empty() )
+                    {
+                        At( ptr ).push_back(
+                                VisibilityLayerToString( VISIBILITY_LAYER::VIA_STITCHING ) );
+                    }
+                    else
+                    {
+                        At( "board" ).erase( "visible_items" );
+                    }
+
                     m_wasMigrated = true;
                 }
 

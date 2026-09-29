@@ -160,6 +160,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     submenuFabOutputs->Add( PCB_ACTIONS::generateReportFile );
     submenuFabOutputs->Add( PCB_ACTIONS::generateD356File );
     submenuFabOutputs->Add( PCB_ACTIONS::generateBOM );
+    submenuFabOutputs->Add( PCB_ACTIONS::generateBOMLegacy );
     fileMenu->Add( submenuFabOutputs );
 
     fileMenu->AppendSeparator();
@@ -203,6 +204,8 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     editMenu->Add( PCB_ACTIONS::findByProperties );
 
     editMenu->AppendSeparator();
+    editMenu->Add( PCB_ACTIONS::extendGraphic );
+    editMenu->Add( PCB_ACTIONS::trimGraphic );
     editMenu->Add( PCB_ACTIONS::editTracksAndVias );
     editMenu->Add( PCB_ACTIONS::editTextAndGraphics );
     editMenu->Add( PCB_ACTIONS::editTeardrops );
@@ -230,6 +233,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     showHidePanels->Add( PCB_ACTIONS::showSearch,                 ACTION_MENU::CHECK );
     showHidePanels->Add( PCB_ACTIONS::showLayersManager,          ACTION_MENU::CHECK );
     showHidePanels->Add( PCB_ACTIONS::showNetInspector,           ACTION_MENU::CHECK );
+    showHidePanels->Add( PCB_ACTIONS::showConstraintsPanel,       ACTION_MENU::CHECK );
 
     if( ADVANCED_CFG::GetCfg().m_EnablePcbDesignBlocks )
         showHidePanels->Add( PCB_ACTIONS::showDesignBlockPanel, ACTION_MENU::CHECK, _( "Design Blocks" ) );
@@ -297,6 +301,8 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
 
     placeMenu->Add( PCB_ACTIONS::placeFootprint );
     placeMenu->Add( PCB_ACTIONS::drawVia );
+    placeMenu->Add( PCB_ACTIONS::placeViaStack );
+    placeMenu->Add( PCB_ACTIONS::makeViaStack );
     placeMenu->Add( PCB_ACTIONS::drawZone );
     placeMenu->Add( PCB_ACTIONS::drawCopperThievingZone );
     placeMenu->Add( PCB_ACTIONS::drawRuleArea );
@@ -338,16 +344,34 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     dimensionSubmenu->Add( PCB_ACTIONS::drawLeader );
     placeMenu->Add( dimensionSubmenu );
 
+    // Mirrors the selection tool's Constraints context submenu so the feature is reachable without
+    // right-clicking; an unsuitable selection is reported by the tool via the info bar.  The action
+    // list is shared (PCB_ACTIONS::ConstraintAddActions) so this menu cannot drift from the context
+    // one.  The pane itself is reached from View > Panels, so no toggle is repeated here.
+    ACTION_MENU* constraintsSubmenu = new ACTION_MENU( false, selTool );
+    constraintsSubmenu->SetTitle( _( "Geometric Constraints" ) );
+    constraintsSubmenu->SetIcon( BITMAPS::measurement );
+
+    for( const TOOL_ACTION* action : PCB_ACTIONS::ConstraintAddActions() )
+        constraintsSubmenu->Add( *action );
+
+    constraintsSubmenu->AppendSeparator();
+    constraintsSubmenu->Add( PCB_ACTIONS::removeConstraints );
+    placeMenu->Add( constraintsSubmenu );
+
     placeMenu->AppendSeparator();
     placeMenu->Add( PCB_ACTIONS::placeCharacteristics );
     placeMenu->Add( PCB_ACTIONS::placeStackup );
+    placeMenu->Add( PCB_ACTIONS::placeDrillChart );
+    placeMenu->Add( PCB_ACTIONS::placeDrillMap );
 
     placeMenu->AppendSeparator();
     placeMenu->Add( PCB_ACTIONS::drillOrigin );
     placeMenu->Add( PCB_ACTIONS::drillResetOrigin );
     placeMenu->Add( ACTIONS::gridSetOrigin );
     placeMenu->Add( ACTIONS::gridResetOrigin );
-
+    placeMenu->AppendSeparator();
+    placeMenu->Add( PCB_ACTIONS::placeSubGrid );
     placeMenu->AppendSeparator();
     ACTION_MENU* autoplaceSubmenu = new ACTION_MENU( false, selTool );
     autoplaceSubmenu->SetTitle( _( "Auto-Place Footprints" ) );
@@ -411,11 +435,13 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
 
     toolsMenu->AppendSeparator();
     toolsMenu->Add( PCB_ACTIONS::drcRuleEditor );
+    toolsMenu->Add( PCB_ACTIONS::showDrillGroups );
 
     toolsMenu->AppendSeparator();
     toolsMenu->Add( ACTIONS::showFootprintEditor );
     toolsMenu->Add( PCB_ACTIONS::updateFootprints );
     toolsMenu->Add( PCB_ACTIONS::migrate3DModels );
+    toolsMenu->Add( PCB_ACTIONS::editFootprintFields );
 
     //Zones management
     toolsMenu->AppendSeparator();
@@ -454,8 +480,11 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     submenuActionPlugins->SetTitle( _( "External Plugins" ) );
     submenuActionPlugins->SetIcon( BITMAPS::puzzle_piece );
 
+    if( Pgm().GetCommonSettings()->m_Api.enable_server && AddApiPluginMenuItems( submenuActionPlugins ) > 0 )
+        submenuActionPlugins->AppendSeparator();
+
     submenuActionPlugins->Add( ACTIONS::pluginsReload );
-    submenuActionPlugins->Add( PCB_ACTIONS::pluginsShowFolder );
+    submenuActionPlugins->Add( ACTIONS::pluginsShowFolder );
 
     toolsMenu->AppendSeparator();
     toolsMenu->Add( submenuActionPlugins );

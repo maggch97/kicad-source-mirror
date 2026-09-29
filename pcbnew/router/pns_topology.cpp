@@ -85,7 +85,7 @@ const TOPOLOGY::JOINT_SET TOPOLOGY::ConnectedJoints( const JOINT* aStart )
 
         for( ITEM* item : current->LinkList() )
         {
-            if( item->OfKind( ITEM::SEGMENT_T ) )
+            if( item->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T ) )
             {
                 const JOINT* a = m_world->FindJoint( item->Anchor( 0 ), item );;
                 const JOINT* b = m_world->FindJoint( item->Anchor( 1 ), item );;
@@ -123,18 +123,33 @@ bool TOPOLOGY::NearestUnconnectedAnchorPoint( const LINE* aTrack, VECTOR2I& aPoi
     if( !jt || m_world->GetRuleResolver()->NetCode( jt->Net() ) <= 0 )
        return false;
 
+    ITEM* connected = nullptr;
+
     if( ( !track.EndsWithVia() && jt->LinkCount() >= 2 )
             || ( track.EndsWithVia() && jt->LinkCount() >= 3 ) ) // we got something connected
     {
+        // tmpNode's own track is freed on return, skip it to avoid a dangling anchor item
+        for( ITEM* link : jt->LinkList() )
+        {
+            if( !link->BelongsTo( tmpNode.get() ) )
+            {
+                connected = link;
+                break;
+            }
+        }
+    }
+
+    if( connected )
+    {
         end = jt->Pos();
         aLayers = jt->Layers();
-        aItem = jt->LinkList()[0];
+        aItem = connected;
     }
     else
     {
         int anchor;
 
-        TOPOLOGY topo( tmpNode.get() );
+        TOPOLOGY topo( tmpNode.get(), m_iface );
         ITEM* it = topo.NearestUnconnectedItem( jt, &anchor );
 
         if( !it )
@@ -169,7 +184,8 @@ bool TOPOLOGY::LeadingRatLine( const LINE* aTrack, SHAPE_LINE_CHAIN& aRatLine )
 
 ITEM* TOPOLOGY::NearestUnconnectedItem( const JOINT* aStart, int* aAnchor, int aKindMask )
 {
-    std::set<ITEM*> disconnected;
+    std::set<ITEM*>          disconnected;
+    std::vector<const ITEM*> joined;
 
     m_world->AllItemsInNet( aStart->Net(), disconnected );
 
@@ -179,8 +195,14 @@ ITEM* TOPOLOGY::NearestUnconnectedItem( const JOINT* aStart, int* aAnchor, int a
         {
             if( disconnected.find( link ) != disconnected.end() )
                 disconnected.erase( link );
+
+            joined.push_back( link );
         }
     }
+
+    // The router does not model zones, so the board decides what they already join us to
+    if( m_iface )
+        m_iface->RemoveBoardConnected( joined, disconnected );
 
     int best_dist = INT_MAX;
     ITEM* best = nullptr;
@@ -1027,7 +1049,7 @@ bool TOPOLOGY::AssembleDiffPair( ITEM* aStart, DIFF_PAIR& aPair )
     if( !coupledNet || !startItem )
         return false;
 
-    LINE lp = m_world->AssembleLine( startItem );
+    LINE lp = m_world->AssembleLine( startItem, nullptr, false, false, false );
 
     std::vector<ITEM*> pItems;
     std::vector<ITEM*> nItems;
@@ -1070,7 +1092,7 @@ bool TOPOLOGY::AssembleDiffPair( ITEM* aStart, DIFF_PAIR& aPair )
                 if( n_seg->Width() != p_seg->Width() )
                     continue;
 
-                if( !p_seg->Seg().ApproxParallel( n_seg->Seg(), DP_PARALLELITY_THRESHOLD ) )
+                if( !p_seg->Seg().ApproxParallel( n_seg->Seg(), DIFF_PAIR::DP_PARALLELITY_THRESHOLD ) )
                     continue;
 
                 SEG p_clip, n_clip;
@@ -1091,7 +1113,7 @@ bool TOPOLOGY::AssembleDiffPair( ITEM* aStart, DIFF_PAIR& aPair )
                 VECTOR2I    centerDiff = n_arc->CArc().GetCenter() - p_arc->CArc().GetCenter();
                 SEG::ecoord centerDist_sq = centerDiff.SquaredEuclideanNorm();
 
-                if( centerDist_sq > SEG::Square( DP_PARALLELITY_THRESHOLD ) )
+                if( centerDist_sq > SEG::Square( DIFF_PAIR::DP_PARALLELITY_THRESHOLD ) )
                     continue;
 
                 dist_sq = SEG::Square( p_arc->CArc().GetRadius() - n_arc->CArc().GetRadius() );
@@ -1140,7 +1162,7 @@ bool TOPOLOGY::AssembleDiffPair( ITEM* aStart, DIFF_PAIR& aPair )
     if( !coupledItem )
         return false;
 
-    LINE ln = m_world->AssembleLine( coupledItem );
+    LINE ln = m_world->AssembleLine( coupledItem, nullptr, false, false, false );
 
     if( m_world->GetRuleResolver()->DpNetPolarity( refNet ) < 0 )
         std::swap( lp, ln );
@@ -1161,15 +1183,13 @@ bool TOPOLOGY::AssembleDiffPair( ITEM* aStart, DIFF_PAIR& aPair )
         gap = (int) std::abs( refArc->CArc().GetRadius() - coupledArc->CArc().GetRadius() ) - lp.Width();
     }
 
-    aPair = DIFF_PAIR( lp, ln );
-    aPair.SetWidth( lp.Width() );
+    aPair = DIFF_PAIR( lp, ln, DP_DIMENSIONS( lp.Width(), gap ) );
     aPair.SetLayers( lp.Layers() );
-    aPair.SetGap( gap );
 
     return true;
 }
 
-const TOPOLOGY::CLUSTER TOPOLOGY::AssembleCluster( ITEM* aStart, int aLayer, double aAreaExpansionLimit, NET_HANDLE aExcludedNet )
+const TOPOLOGY::CLUSTER TOPOLOGY::AssembleCluster( ITEM* aStart, int aLayer, double aAreaExpansionLimit, NET_HANDLE aExcludedNet, int aOverrideClearance )
 {
     CLUSTER cluster;
     std::deque<ITEM*> pending;
@@ -1177,7 +1197,7 @@ const TOPOLOGY::CLUSTER TOPOLOGY::AssembleCluster( ITEM* aStart, int aLayer, dou
     COLLISION_SEARCH_OPTIONS opts;
 
     opts.m_differentNetsOnly = false;
-    opts.m_overrideClearance = 0;
+    opts.m_overrideClearance = aOverrideClearance;
 
     pending.push_back( aStart );
 

@@ -1,5 +1,5 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6)
+// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6a)
 // http://www.wxformbuilder.org/
 //
 // PLEASE DO *NOT* EDIT THIS FILE!
@@ -105,10 +105,19 @@ DIALOG_DIMENSION_PROPERTIES_BASE::DIALOG_DIMENSION_PROPERTIES_BASE( wxWindow* pa
 
 	gbSizerFormat->Add( m_txtValue, wxGBPosition( 0, 1 ), wxGBSpan( 1, 1 ), wxEXPAND|wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_cbOverrideValue = new wxCheckBox( m_sizerFormat->GetStaticBox(), wxID_ANY, _("Override value"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_cbOverrideValue->SetToolTip( _("When checked, the actual measurement is ignored and any value can be entered") );
+	wxBoxSizer* bSizerValueMode;
+	bSizerValueMode = new wxBoxSizer( wxHORIZONTAL );
 
-	gbSizerFormat->Add( m_cbOverrideValue, wxGBPosition( 0, 2 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL|wxLEFT, 5 );
+	wxString m_choiceValueModeChoices[] = { _("Driven"), _("Driving"), _("Arbitrary") };
+	int m_choiceValueModeNChoices = sizeof( m_choiceValueModeChoices ) / sizeof( wxString );
+	m_choiceValueMode = new wxChoice( m_sizerFormat->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, m_choiceValueModeNChoices, m_choiceValueModeChoices, 0 );
+	m_choiceValueMode->SetSelection( 0 );
+	m_choiceValueMode->SetToolTip( _("Driven follows the measured geometry; Driving forces the geometry to the entered length; Arbitrary shows custom text") );
+
+	bSizerValueMode->Add( m_choiceValueMode, 0, wxALIGN_CENTER_VERTICAL, 5 );
+
+
+	gbSizerFormat->Add( bSizerValueMode, wxGBPosition( 0, 2 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL|wxLEFT, 5 );
 
 
 	gbSizerFormat->Add( 40, 0, wxGBPosition( 0, 3 ), wxGBSpan( 1, 1 ), 0, 5 );
@@ -476,7 +485,6 @@ DIALOG_DIMENSION_PROPERTIES_BASE::DIALOG_DIMENSION_PROPERTIES_BASE( wxWindow* pa
 	this->Connect( wxEVT_INIT_DIALOG, wxInitDialogEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnInitDlg ) );
 	m_cbUnits->Connect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnDimensionUnitsChange ), NULL, this );
 	m_fontCtrl->Connect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onFontSelected ), NULL, this );
-	m_bold->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onBoldToggle ), NULL, this );
 	m_alignLeft->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onAlignButton ), NULL, this );
 	m_alignCenter->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onAlignButton ), NULL, this );
 	m_alignRight->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onAlignButton ), NULL, this );
@@ -484,7 +492,6 @@ DIALOG_DIMENSION_PROPERTIES_BASE::DIALOG_DIMENSION_PROPERTIES_BASE( wxWindow* pa
 	m_txtTextPosX->Connect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );
 	m_txtTextHeight->Connect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );
 	m_txtTextPosY->Connect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );
-	m_txtTextThickness->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onThickness ), NULL, this );
 	m_txtTextThickness->Connect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );
 	m_cbTextOrientation->Connect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );
 	m_txtLineThickness->Connect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );
@@ -497,7 +504,6 @@ DIALOG_DIMENSION_PROPERTIES_BASE::~DIALOG_DIMENSION_PROPERTIES_BASE()
 	this->Disconnect( wxEVT_INIT_DIALOG, wxInitDialogEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnInitDlg ) );
 	m_cbUnits->Disconnect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnDimensionUnitsChange ), NULL, this );
 	m_fontCtrl->Disconnect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onFontSelected ), NULL, this );
-	m_bold->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onBoldToggle ), NULL, this );
 	m_alignLeft->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onAlignButton ), NULL, this );
 	m_alignCenter->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onAlignButton ), NULL, this );
 	m_alignRight->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onAlignButton ), NULL, this );
@@ -505,7 +511,6 @@ DIALOG_DIMENSION_PROPERTIES_BASE::~DIALOG_DIMENSION_PROPERTIES_BASE()
 	m_txtTextPosX->Disconnect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );
 	m_txtTextHeight->Disconnect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );
 	m_txtTextPosY->Disconnect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );
-	m_txtTextThickness->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::onThickness ), NULL, this );
 	m_txtTextThickness->Disconnect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );
 	m_cbTextOrientation->Disconnect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );
 	m_txtLineThickness->Disconnect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( DIALOG_DIMENSION_PROPERTIES_BASE::OnOkClick ), NULL, this );

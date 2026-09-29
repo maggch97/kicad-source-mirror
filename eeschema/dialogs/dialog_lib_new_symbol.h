@@ -31,6 +31,7 @@ class DIALOG_LIB_NEW_SYMBOL : public DIALOG_LIB_NEW_SYMBOL_BASE
 {
 public:
     DIALOG_LIB_NEW_SYMBOL( EDA_DRAW_FRAME* aParent, const wxArrayString& aSymbolNames,
+                           const std::function<int( const wxString& aItem )>& aDisplayStyleCallback,
                            const wxString& aInheritFromSymbolName,
                            std::function<bool( const wxString& newName )> aValidator );
 
@@ -101,17 +102,17 @@ public:
     void SetPinNameInside( bool show ) { m_checkShowPinNameInside->SetValue( show ); }
     bool GetPinNameInside() { return m_checkShowPinNameInside->GetValue(); }
 
-protected:
     bool TransferDataToWindow() override;
     bool TransferDataFromWindow() override;
 
-    virtual void onPowerCheckBox( wxCommandEvent& aEvent ) override;
-    virtual void onCheckTransferUserFields( wxCommandEvent& aEvent ) override;
+protected:
+    void onPowerCheckBox( wxCommandEvent& aEvent ) override;
+    void onCheckTransferUserFields( wxCommandEvent& aEvent ) override;
 
 private:
     void onParentSymbolSelect( wxCommandEvent& aEvent );
 
-    void syncControls( bool aIsDerivedPart );
+    void syncControls();
 
 private:
     UNIT_BINDER                                    m_pinTextPosition;

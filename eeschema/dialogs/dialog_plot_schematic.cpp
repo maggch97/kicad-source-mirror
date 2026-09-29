@@ -56,7 +56,7 @@ DIALOG_PLOT_SCHEMATIC::DIALOG_PLOT_SCHEMATIC( SCH_EDIT_FRAME* aEditFrame ) :
 
 DIALOG_PLOT_SCHEMATIC::DIALOG_PLOT_SCHEMATIC( SCH_EDIT_FRAME* aEditFrame, wxWindow* aParent,
                                               JOB_EXPORT_SCH_PLOT* aJob ) :
-        DIALOG_PLOT_SCHEMATIC_BASE( aEditFrame ),
+        DIALOG_PLOT_SCHEMATIC_BASE( aParent ),
         m_editFrame( aEditFrame ),
         m_defaultLineWidth( aEditFrame, m_lineWidthLabel, m_lineWidthCtrl, m_lineWidthUnits ),
         m_job( aJob )
@@ -413,7 +413,7 @@ wxString DIALOG_PLOT_SCHEMATIC::getOutputPath()
             };
 
     wxString path = m_outputPath->GetValue();
-    path = ExpandTextVars( path, &textResolver );
+    path = ExpandTextVars( path, &textResolver, INTERNAL );
     path = ExpandEnvVarSubstitutions( path, &Prj() );
 
     fn.SetPath( path );

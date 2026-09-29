@@ -19,6 +19,7 @@
 
 #include "footprint_utils.h"
 
+#include <core/mirror.h>
 #include <trigo.h>
 
 #include <footprint.h>
@@ -38,37 +39,51 @@ bool ComputeFootprintShift( const FOOTPRINT& aExisting, const FOOTPRINT& aNew, V
     // but these would be hard to unambiguously match in the general case and pad numbers should
     // cover 99% of cases.
 
-    const auto getUniquelyNumberedPads = []( const FOOTPRINT& fp ) -> std::unordered_map<wxString, VECTOR2I>
-    {
-        std::unordered_map<wxString, VECTOR2I> result;
-        std::unordered_set<wxString>           seenDuplicate;
-
-        for( PAD* pad : fp.Pads() )
-        {
-            const wxString& number = pad->GetNumber();
-
-            // Already seen a pad with this number, so not unique
-            // (and it won't be found in result)
-            if( seenDuplicate.find( number ) != seenDuplicate.end() )
-                continue;
-
-            // Already have a pad with this number, so not unique.
-            // Remove the previous entry from the result and mark this number as seen.
-            if( result.find( number ) != result.end() )
+    const auto getUniquelyNumberedPads =
+            []( const FOOTPRINT& fp ) -> std::unordered_map<wxString, VECTOR2I>
             {
-                result.erase( number );
-                seenDuplicate.insert( number );
-                continue;
-            }
+                std::unordered_map<wxString, VECTOR2I> result;
+                std::unordered_set<wxString>           seenDuplicate;
 
-            result[number] = pad->GetFPRelativePosition();
-        }
+                for( PAD* pad : fp.Pads() )
+                {
+                    const wxString& number = pad->GetNumber();
 
-        return result;
-    };
+                    // Already seen a pad with this number, so not unique
+                    // (and it won't be found in result)
+                    if( seenDuplicate.find( number ) != seenDuplicate.end() )
+                        continue;
+
+                    // Already have a pad with this number, so not unique.
+                    // Remove the previous entry from the result and mark this number as seen.
+                    if( result.find( number ) != result.end() )
+                    {
+                        result.erase( number );
+                        seenDuplicate.insert( number );
+                        continue;
+                    }
+
+                    // Use the exact library-frame position. PAD::GetFPRelativePosition()
+                    // applies the footprint transform in integer coordinates, which can
+                    // cause rounding errors.
+                    result[number] = pad->GetLibraryPosition();
+                }
+
+                return result;
+            };
 
     std::unordered_map<wxString, VECTOR2I> existingPads = getUniquelyNumberedPads( aExisting );
     std::unordered_map<wxString, VECTOR2I> newPads = getUniquelyNumberedPads( aNew );
+
+    // Pads of footprints on opposite sides are mirror images in the library frame, so they
+    // cannot be aligned by a rotation and translation.  Mirror the new pads onto the existing
+    // footprint's side to match. FOOTPRINT::Flip() always mirrors children about the
+    // footprint's library origin, whatever the flip centre, so this mirror is about (0,0).
+    if( aExisting.IsFlipped() != aNew.IsFlipped() )
+    {
+        for( auto& [number, pos] : newPads )
+            MIRROR( pos.y, 0 );
+    }
 
     std::vector<VECTOR2I> existingPoints;
     std::vector<VECTOR2I> newPoints;

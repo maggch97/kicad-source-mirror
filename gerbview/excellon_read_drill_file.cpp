@@ -393,9 +393,8 @@ bool EXCELLON_IMAGE::TestFileIsExcellon( const wxString& aFullFileName )
                     foundM30 = true; // Found M30 after % = good
 
             // Check for % on its own line at end of header
-            if( ( letter = strstr( line, "%" ) ) != nullptr )
-                if( ( letter[1] == '\r' ) || ( letter[1] == '\n' ) )
-                    foundPercent = true;
+            if( strcmp( line, "%" ) == 0 )
+                foundPercent = true;
 
             // Check for T<number>
             if( ( letter = strstr( line, "T" ) ) != nullptr )
@@ -755,6 +754,10 @@ void EXCELLON_IMAGE::readFileFormat( char*& aText )
         return;
 
     mantissaDigits = *aText - '0';
+
+    // The coordinate scale table supports at most eight fractional digits.
+    if( mantissaDigits > 8 )
+        return;
 
     m_hasFormat = true;
     m_FmtLen.x = m_FmtLen.y = characteristicDigits + mantissaDigits;

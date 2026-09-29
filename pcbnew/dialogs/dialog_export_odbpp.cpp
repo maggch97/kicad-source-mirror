@@ -397,7 +397,7 @@ void DIALOG_EXPORT_ODBPP::GenerateODBPPFiles( const JOB_EXPORT_PCB_ODB& aJob, BO
                     IO_RELEASER<PCB_IO> pi( PCB_IO_MGR::FindPlugin( PCB_IO_MGR::ODBPP ) );
                     pi->SetReporter( aReporter );
                     pi->SetProgressReporter( aProgressReporter );
-                    pi->SaveBoard( tempFile.GetFullPath(), aBoard, &props );
+                    pi->SaveBoard( tempFile.GetFullPath(), *aBoard, &props );
                     return true;
                 }
                 catch( const IO_ERROR& ioe )

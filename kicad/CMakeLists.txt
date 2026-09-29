@@ -56,6 +56,7 @@ set( KICAD_SRCS
 set( KICAD_CLI_SRCS
     cli/command.cpp
     cli/command_api_server.cpp
+    cli/command_export_bom.cpp
     cli/command_jobset_run.cpp
     cli/command_pcb_export_base.cpp
     cli/command_pcb_diff.cpp
@@ -75,12 +76,14 @@ set( KICAD_CLI_SRCS
     cli/command_pcb_export_hpgl.cpp
     cli/command_pcb_export_ipc2581.cpp
     cli/command_pcb_export_ipcd356.cpp
+    cli/command_pcb_export_idf.cpp
     cli/command_pcb_export_odb.cpp
     cli/command_pcb_export_pdf.cpp
     cli/command_pcb_export_png.cpp
     cli/command_pcb_export_pos.cpp
     cli/command_pcb_export_ps.cpp
     cli/command_pcb_export_stats.cpp
+    cli/command_pcb_export_stackup.cpp
     cli/command_pcb_export_svg.cpp
     cli/command_pcb_upgrade.cpp
     cli/command_pcb_import.cpp
@@ -89,7 +92,6 @@ set( KICAD_CLI_SRCS
     cli/command_fp_export_svg.cpp
     cli/command_fp_upgrade.cpp
     cli/command_sch_upgrade.cpp
-    cli/command_sch_export_bom.cpp
     cli/command_sch_export_pythonbom.cpp
     cli/command_sch_export_netlist.cpp
     cli/command_sch_export_plot.cpp
@@ -122,7 +124,7 @@ if( APPLE )
         MACOSX_PACKAGE_LOCATION Resources
         )
     set( MACOSX_BUNDLE_ICON_FILE kicad.icns )
-    set( MACOSX_BUNDLE_GUI_IDENTIFIER org.kicad.kicad )
+    set( MACOSX_BUNDLE_GUI_IDENTIFIER ${KICAD_BUNDLE_ID} )
     set( MACOSX_BUNDLE_NAME kicad )
 endif()
 
@@ -300,13 +302,6 @@ if( APPLE )
             file( REMOVE_RECURSE ${KICAD_BIN}/bin )
             file( REMOVE_RECURSE ${KICAD_BIN}/lib )
         endif()
-
-        cmake_policy( SET CMP0012 NEW )
-        if ( ${KICAD_APPLE_MAKE_RELOCATEABLE_BUNDLE} )
-            message( STATUS \"Making the finished bundle relocateable...\" )
-            include( ${KICAD_CMAKE_MODULE_PATH}/InstallSteps/RefixupMacOS.cmake )
-            refix_kicad_bundle( ${OSX_BUNDLE_INSTALL_DIR} )
-        endif( )
 
         " COMPONENT Runtime
         )

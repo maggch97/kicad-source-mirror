@@ -24,6 +24,7 @@
  * takes them back on detach.
  */
 
+#include <sch_render_settings.h>
 #include <symbol_edit_frame.h>
 
 #include <kidialog.h>
@@ -76,9 +77,8 @@ std::vector<KIID> SYMBOL_EDIT_FRAME::captureSymbolSelectionKiids() const
 {
     std::vector<KIID> kiids;
 
-    SCH_SELECTION_TOOL* selTool = m_toolManager
-                                          ? m_toolManager->GetTool<SCH_SELECTION_TOOL>()
-                                          : nullptr;
+    SCH_SELECTION_TOOL* selTool = m_toolManager ? m_toolManager->GetTool<SCH_SELECTION_TOOL>()
+                                                : nullptr;
 
     if( !selTool )
         return kiids;
@@ -98,9 +98,8 @@ void SYMBOL_EDIT_FRAME::restoreSymbolSelectionKiids( const std::vector<KIID>& aK
     if( aKiids.empty() )
         return;
 
-    SCH_SELECTION_TOOL* selTool = m_toolManager
-                                          ? m_toolManager->GetTool<SCH_SELECTION_TOOL>()
-                                          : nullptr;
+    SCH_SELECTION_TOOL* selTool = m_toolManager ? m_toolManager->GetTool<SCH_SELECTION_TOOL>()
+                                                : nullptr;
     SCH_SCREEN*         screen = GetScreen();
 
     if( !selTool || !screen )
@@ -183,25 +182,19 @@ void SYMBOL_EDIT_FRAME::activateSymbolTab( SYMBOL_EDITOR_TAB_CONTEXT* aContext )
     m_bodyStyle = aContext->GetBodyStyle();
 
     // Install the new screen before SetScreen, whose ResetTools would otherwise deref the freed one.
-    m_toolManager->SetEnvironment( aContext->GetScreen(), GetCanvas()->GetView(),
-                                   GetCanvas()->GetViewControls(), GetSettings(), this );
+    m_toolManager->SetEnvironment( aContext->GetScreen(), GetCanvas()->GetView(), GetCanvas()->GetViewControls(),
+                                   GetSettings(), this );
     SetScreen( aContext->GetScreen() );
-
-    SetCurLib( aContext->GetLibrary() );
 
     if( m_symbol )
     {
-        wxLogTrace( wxT( "KICAD_TABS_DBG" ),
-                    wxT( "activateSymbolTab SelectLibId '%s'" ),
+        wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "activateSymbolTab SelectLibId '%s'" ),
                     m_symbol->GetLibId().Format().wx_str() );
         GetLibTree()->SelectLibId( m_symbol->GetLibId() );
     }
 
-    m_SyncPinEdit = m_symbol && m_symbol->IsRoot() && m_symbol->IsMultiUnit()
-                    && !m_symbol->UnitsLocked();
-
-    m_toolManager->SetEnvironment( GetScreen(), GetCanvas()->GetView(),
-                                   GetCanvas()->GetViewControls(), GetSettings(), this );
+    m_toolManager->SetEnvironment( GetScreen(), GetCanvas()->GetView(), GetCanvas()->GetViewControls(),
+                                   GetSettings(), this );
 
     GetRenderSettings()->m_ShowUnit = m_unit;
     GetRenderSettings()->m_ShowBodyStyle = m_bodyStyle;
@@ -227,12 +220,12 @@ void SYMBOL_EDIT_FRAME::activateSymbolTab( SYMBOL_EDITOR_TAB_CONTEXT* aContext )
 
     restoreSymbolSelectionKiids( aContext->SavedSelection() );
 
-    UpdateTitle();
     RebuildSymbolUnitAndBodyStyleLists();
 
     if( m_propertiesPanel )
         m_propertiesPanel->UpdateData();
 
+    updateInfoBar();
     UpdateSymbolMsgPanelInfo();
     GetCanvas()->Refresh();
 }
@@ -383,11 +376,9 @@ SYMBOL_EDITOR_TAB_CONTEXT* SYMBOL_EDIT_FRAME::symbolTabContextForIndex( int aIdx
 }
 
 
-SYMBOL_EDITOR_TAB_CONTEXT* SYMBOL_EDIT_FRAME::findOrCreateSymbolTab( const wxString& aLib,
-                                                                    const wxString& aName,
-                                                                    int aUnit, int aBodyStyle,
-                                                                    bool aAsPreview,
-                                                                    bool* aWasCreated )
+SYMBOL_EDITOR_TAB_CONTEXT* SYMBOL_EDIT_FRAME::findOrCreateSymbolTab( const wxString& aLib, const wxString& aName,
+                                                                     int aUnit, int aBodyStyle, bool aAsPreview,
+                                                                     bool* aWasCreated )
 {
     const wxString key = SYMBOL_EDITOR_TAB_CONTEXT::MakeTabKey( aLib, aName );
     const int      unit = aUnit > 0 ? aUnit : 1;
@@ -405,8 +396,7 @@ SYMBOL_EDITOR_TAB_CONTEXT* SYMBOL_EDIT_FRAME::findOrCreateSymbolTab( const wxStr
         if( !buffer )
             return nullptr;
 
-        m_tabContexts.push_back(
-                std::make_unique<SYMBOL_EDITOR_TAB_CONTEXT>( aLib, aName, buffer ) );
+        m_tabContexts.push_back( std::make_unique<SYMBOL_EDITOR_TAB_CONTEXT>( aLib, aName, buffer ) );
         ctx = m_tabContexts.back().get();
 
         if( aWasCreated )
@@ -429,11 +419,8 @@ SYMBOL_EDITOR_TAB_CONTEXT* SYMBOL_EDIT_FRAME::findOrCreateSymbolTab( const wxStr
             const std::vector<EDITOR_TABS_MODEL::ENTRY>& entries = m_tabsPanel->Model().Entries();
             const int previewIdx = m_tabsPanel->Model().PreviewIndex();
 
-            if( previewIdx >= 0 && previewIdx < static_cast<int>( entries.size() )
-                    && entries[previewIdx].key != key )
-            {
+            if( previewIdx >= 0 && previewIdx < static_cast<int>( entries.size() ) && entries[previewIdx].key != key )
                 replacedKey = entries[previewIdx].key;
-            }
         }
 
         m_tabsPanel->AddTab( key, aName, aAsPreview );
@@ -452,9 +439,8 @@ SYMBOL_EDITOR_TAB_CONTEXT* SYMBOL_EDIT_FRAME::findOrCreateSymbolTab( const wxStr
 
 SYMBOL_EDITOR_TAB_CONTEXT*
 SYMBOL_EDIT_FRAME::findOrCreateSymbolInstanceTab( LIB_SYMBOL* aSymbol, SCH_SCREEN* aScreen,
-                                                  const KIID&     aSchematicSymbolUUID,
-                                                  const wxString& aReference, int aUnit,
-                                                  int aBodyStyle )
+                                                  const KIID& aSchematicSymbolUUID, const wxString& aReference,
+                                                  int aUnit, int aBodyStyle )
 {
     const wxString key = SYMBOL_EDITOR_TAB_CONTEXT::MakeInstanceTabKey( aSchematicSymbolUUID );
     const int      unit = aUnit > 0 ? aUnit : 1;
@@ -469,23 +455,20 @@ SYMBOL_EDIT_FRAME::findOrCreateSymbolInstanceTab( LIB_SYMBOL* aSymbol, SCH_SCREE
         existing->SetUnit( unit );
         existing->SetBodyStyle( bodyStyle );
 
-        if( m_tabsPanel )
-            m_tabsPanel->AddTab( key, existing->GetReference(), false );
-        else
-            activateSymbolTab( existing );
+        activateSymbolTab( existing );
 
         return existing;
     }
 
-    m_tabContexts.push_back( std::make_unique<SYMBOL_EDITOR_TAB_CONTEXT>(
-            aSymbol, aScreen, aSchematicSymbolUUID, aReference ) );
+    m_tabContexts.push_back( std::make_unique<SYMBOL_EDITOR_TAB_CONTEXT>( aSymbol, aScreen, aSchematicSymbolUUID,
+                                                                          aReference ) );
     SYMBOL_EDITOR_TAB_CONTEXT* ctx = m_tabContexts.back().get();
 
     ctx->SetUnit( unit );
     ctx->SetBodyStyle( bodyStyle );
 
     if( m_tabsPanel )
-        m_tabsPanel->AddTab( key, aReference, false );
+        m_tabsPanel->AddTab( key, ctx->GetDisplayName(), false );
     else
         activateSymbolTab( ctx );
 
@@ -502,8 +485,7 @@ bool SYMBOL_EDIT_FRAME::promptAndCloseSymbolTab( int aIdx )
 
     if( ctx->IsModified() && !m_silentSymbolTabClose )
     {
-        wxString msg = wxString::Format( _( "Save changes to '%s' before closing?" ),
-                                         ctx->GetDisplayName() );
+        wxString msg = wxString::Format( _( "Save changes to '%s' before closing?" ), ctx->GetDisplayName( true ) );
 
         KIDIALOG dlg( this, msg, _( "Confirmation" ), wxYES_NO | wxCANCEL | wxICON_WARNING );
         dlg.SetYesNoCancelLabels( _( "Save" ), _( "Discard Changes" ), _( "Cancel" ) );
@@ -521,7 +503,6 @@ bool SYMBOL_EDIT_FRAME::promptAndCloseSymbolTab( int aIdx )
             if( IsLibraryTreeShown() )
                 m_treePane->GetLibTree()->RefreshLibTree();
 
-            UpdateTitle();
             break;
 
         case wxID_NO:
@@ -596,8 +577,7 @@ bool SYMBOL_EDIT_FRAME::promptToSaveInactiveInstanceTabs()
 
     for( SYMBOL_EDITOR_TAB_CONTEXT* ctx : dirty )
     {
-        wxString msg = wxString::Format( _( "Save changes to '%s' before closing?" ),
-                                         ctx->GetDisplayName() );
+        wxString msg = wxString::Format( _( "Save changes to '%s' before closing?" ), ctx->GetDisplayName() );
 
         KIDIALOG dlg( this, msg, _( "Confirmation" ), wxYES_NO | wxCANCEL | wxICON_WARNING );
         dlg.SetYesNoCancelLabels( _( "Save" ), _( "Discard Changes" ), _( "Cancel" ) );
@@ -696,7 +676,6 @@ void SYMBOL_EDIT_FRAME::RenameSymbolTab( const LIB_ID& aOldId, const LIB_ID& aNe
 
         ctx->SetName( newName );
         m_tabsPanel->RenameTab( oldKey, newKey, newName );
-        UpdateTitle();
     }
 }
 
@@ -715,11 +694,9 @@ void SYMBOL_EDIT_FRAME::restoreSymbolTabsFromSettings()
 
     for( const SYMBOL_EDITOR_SETTINGS::OPEN_TAB& tab : m_settings->m_OpenTabs )
     {
-        if( !m_libMgr->LibraryExists( tab.lib )
-                || !m_libMgr->SymbolExists( tab.name, tab.lib ) )
+        if( !m_libMgr->LibraryExists( tab.lib ) || !m_libMgr->SymbolExists( tab.name, tab.lib ) )
         {
-            wxLogTrace( "KICAD_TABS", "Dropping unresolved persisted symbol tab '%s:%s'.",
-                        tab.lib, tab.name );
+            wxLogTrace( "KICAD_TABS", "Dropping unresolved persisted symbol tab '%s:%s'.", tab.lib, tab.name );
             continue;
         }
 
@@ -728,8 +705,7 @@ void SYMBOL_EDIT_FRAME::restoreSymbolTabsFromSettings()
 
         if( !ctx )
         {
-            wxLogTrace( "KICAD_TABS", "Dropping persisted symbol tab '%s:%s'; buffer unavailable.",
-                        tab.lib, tab.name );
+            wxLogTrace( "KICAD_TABS", "Dropping persisted symbol tab '%s:%s'; buffer unavailable.", tab.lib, tab.name );
             continue;
         }
 
@@ -744,8 +720,7 @@ void SYMBOL_EDIT_FRAME::restoreSymbolTabsFromSettings()
     if( activeIdx >= 0 )
         m_tabsPanel->SelectTab( activeIdx );
 
-    wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "restoreSymbolTabsFromSettings exit (activeIdx=%d)" ),
-                activeIdx );
+    wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "restoreSymbolTabsFromSettings exit (activeIdx=%d)" ), activeIdx );
 }
 
 

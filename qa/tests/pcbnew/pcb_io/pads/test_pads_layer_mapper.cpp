@@ -221,6 +221,29 @@ BOOST_AUTO_TEST_CASE( ParseLayerName_Copper )
     BOOST_CHECK( mapper.ParseLayerName( "Inner 1" ) == PADS_LAYER_TYPE::COPPER_INNER );
     BOOST_CHECK( mapper.ParseLayerName( "Internal" ) == PADS_LAYER_TYPE::COPPER_INNER );
     BOOST_CHECK( mapper.ParseLayerName( "Mid Layer" ) == PADS_LAYER_TYPE::COPPER_INNER );
+
+    // A name that merely contains one of the words above is not copper. "Top Overlay" is
+    // silkscreen rather than unknown because the exact-name table is consulted first.
+    BOOST_CHECK( mapper.ParseLayerName( "Top Overlay" ) == PADS_LAYER_TYPE::SILKSCREEN_TOP );
+    BOOST_CHECK( mapper.ParseLayerName( "Top Notes" ) == PADS_LAYER_TYPE::UNKNOWN );
+    BOOST_CHECK( mapper.ParseLayerName( "Topology" ) == PADS_LAYER_TYPE::UNKNOWN );
+    BOOST_CHECK( mapper.ParseLayerName( "Bot Assy Text" ) == PADS_LAYER_TYPE::UNKNOWN );
+
+    // Ordinary PADS copper layer names. A binary file that under-reports its layer count has only
+    // the name to go on, and an unrecognised one lands on Dwgs_User.
+    BOOST_CHECK( mapper.ParseLayerName( "Top Copper" ) == PADS_LAYER_TYPE::COPPER_TOP );
+    BOOST_CHECK( mapper.ParseLayerName( "Top Layer" ) == PADS_LAYER_TYPE::COPPER_TOP );
+    BOOST_CHECK( mapper.ParseLayerName( "Bottom Copper" ) == PADS_LAYER_TYPE::COPPER_BOTTOM );
+    BOOST_CHECK( mapper.ParseLayerName( "Bottom Layer" ) == PADS_LAYER_TYPE::COPPER_BOTTOM );
+    BOOST_CHECK( mapper.ParseLayerName( "Bot Cu" ) == PADS_LAYER_TYPE::COPPER_BOTTOM );
+
+    BOOST_CHECK( mapper.ParseLayerName( "Internal 1" ) == PADS_LAYER_TYPE::COPPER_INNER );
+    BOOST_CHECK( mapper.ParseLayerName( "Inner1" ) == PADS_LAYER_TYPE::COPPER_INNER );
+    BOOST_CHECK( mapper.ParseLayerName( "Mid1" ) == PADS_LAYER_TYPE::COPPER_INNER );
+    BOOST_CHECK( mapper.ParseLayerName( "Inner" ) == PADS_LAYER_TYPE::COPPER_INNER );
+
+    BOOST_CHECK( mapper.ParseLayerName( "Internally Routed" ) == PADS_LAYER_TYPE::UNKNOWN );
+    BOOST_CHECK( mapper.ParseLayerName( "Middle East Notes" ) == PADS_LAYER_TYPE::UNKNOWN );
 }
 
 

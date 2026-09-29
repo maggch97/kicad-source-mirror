@@ -37,13 +37,16 @@
 #include <pcb_text.h>
 #include <pcb_track.h>
 #include <zone.h>
+#include <board_connected_item.h>
 #include <netinfo.h>
 #include <netclass.h>
 #include <board_design_settings.h>
 #include <project/net_settings.h>
 #include <reporter.h>
 
+#include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <map>
 #include <set>
@@ -59,10 +62,7 @@ struct ALLEGRO_IMPORT_FIXTURE
     {
         std::string dataPath = KI_TEST::AllegroBoardFile( aFileName );
 
-        std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-        m_allegroPlugin.LoadBoard( dataPath, board.get(), nullptr, nullptr );
-
-        return board;
+        return m_allegroPlugin.LoadBoard( dataPath );
     }
 
     PCB_IO_ALLEGRO m_allegroPlugin;
@@ -542,6 +542,146 @@ BOOST_AUTO_TEST_CASE( CopperText )
 
     BOOST_CHECK_MESSAGE( foundTestingText, "Board should contain 'TESTING' text on F.Cu" );
     BOOST_CHECK_EQUAL( copperTextCount, 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( CoincidentGraphicsAreDropped )
+{
+    // Allegro stacks graphics that land on top of each other, on some designs a third of all
+    // items. They draw the same picture, so the importer keeps only the first of each
+    std::unique_ptr<BOARD> board = LoadAllegroBoard( "TRS80_POWER/TRS80_POWER.brd" );
+
+    const auto netOf = []( const BOARD_ITEM* aItem )
+    {
+        const BOARD_CONNECTED_ITEM* connected = dynamic_cast<const BOARD_CONNECTED_ITEM*>( aItem );
+        return connected ? connected->GetNetCode() : NETINFO_LIST::UNCONNECTED;
+    };
+
+    const auto coincident = [&]( const BOARD_ITEM* aFirst, const BOARD_ITEM* aSecond )
+    {
+        if( aFirst->Type() != aSecond->Type() || aFirst->GetLayer() != aSecond->GetLayer()
+            || netOf( aFirst ) != netOf( aSecond ) )
+        {
+            return false;
+        }
+
+        if( aFirst->Type() == PCB_SHAPE_T )
+        {
+            return static_cast<const PCB_SHAPE*>( aFirst )->Compare(
+                           static_cast<const PCB_SHAPE*>( aSecond ) ) == 0;
+        }
+
+        if( aFirst->Type() == PCB_TEXT_T )
+        {
+            return static_cast<const PCB_TEXT*>( aFirst )->Compare(
+                           static_cast<const PCB_TEXT*>( aSecond ) ) == 0;
+        }
+
+        return false;
+    };
+
+    const auto countCoincident = [&]( const DRAWINGS& aItems )
+    {
+        int count = 0;
+
+        for( size_t ii = 0; ii < aItems.size(); ++ii )
+        {
+            for( size_t jj = ii + 1; jj < aItems.size(); ++jj )
+            {
+                if( coincident( aItems[ii], aItems[jj] ) )
+                    count++;
+            }
+        }
+
+        return count;
+    };
+
+    BOOST_REQUIRE( !board->Drawings().empty() );
+    BOOST_CHECK_EQUAL( countCoincident( board->Drawings() ), 0 );
+
+    BOOST_REQUIRE( !board->Footprints().empty() );
+
+    for( FOOTPRINT* footprint : board->Footprints() )
+        BOOST_CHECK_EQUAL( countCoincident( footprint->GraphicalItems() ), 0 );
+}
+
+
+BOOST_AUTO_TEST_CASE( ImportIsRepeatable )
+{
+    // Item ids are derived from the Allegro block keys, so importing a design twice has to
+    // produce the same ids. Random ids reshuffle the whole saved file on every import, because
+    // the s-expr writer orders items by uuid
+    const auto collectIds = []( const BOARD& aBoard )
+    {
+        std::vector<wxString> ids;
+
+        std::function<void( const BOARD_ITEM* )> walk =
+                [&]( const BOARD_ITEM* aItem )
+                {
+                    ids.push_back( aItem->m_Uuid.AsString() );
+
+                    // Group members are collected where they live on the board
+                    if( aItem->Type() == PCB_GROUP_T )
+                        return;
+
+                    aItem->RunOnChildren(
+                            [&]( BOARD_ITEM* aChild )
+                            {
+                                walk( aChild );
+                            },
+                            RECURSE_MODE::NO_RECURSE );
+                };
+
+        for( const BOARD_ITEM* item : const_cast<BOARD&>( aBoard ).GetItemSet() )
+            walk( item );
+
+        std::sort( ids.begin(), ids.end() );
+        return ids;
+    };
+
+    std::unique_ptr<BOARD> first = LoadAllegroBoard( "ProiectBoard/ProiectBoard.brd" );
+    std::unique_ptr<BOARD> second = LoadAllegroBoard( "ProiectBoard/ProiectBoard.brd" );
+
+    const std::vector<wxString> firstIds = collectIds( *first );
+    const std::vector<wxString> secondIds = collectIds( *second );
+
+    BOOST_REQUIRE( !firstIds.empty() );
+    BOOST_CHECK_EQUAL( firstIds.size(), secondIds.size() );
+    BOOST_CHECK( firstIds == secondIds );
+
+    BOOST_CHECK( std::adjacent_find( firstIds.begin(), firstIds.end() ) == firstIds.end() );
+}
+
+
+// The 3D model assignment lives on the Allegro package definition, so every placed instance
+// of a package that names one carries it
+BOOST_AUTO_TEST_CASE( Footprint3DModels )
+{
+    std::unique_ptr<BOARD> board = LoadAllegroBoard( "led_youtube/led_youtube.brd" );
+    BOOST_REQUIRE( board );
+
+    std::map<wxString, FP_3DMODEL> models;
+
+    for( FOOTPRINT* fp : board->Footprints() )
+    {
+        BOOST_REQUIRE_EQUAL( fp->Models().size(), 1u );
+        models.emplace( fp->Models().front().m_Filename, fp->Models().front() );
+    }
+
+    BOOST_REQUIRE_EQUAL( models.size(), 3u );
+    BOOST_CHECK_EQUAL( models.count( wxS( "led3d.stp" ) ), 1u );
+    BOOST_CHECK_EQUAL( models.count( wxS( "AC0805FR-07360RL.STEP" ) ), 1u );
+    BOOST_REQUIRE_EQUAL( models.count( wxS( "22272021.stp" ) ), 1u );
+
+    // Placement of the connector package is "MM,0.020000,-1.270000,1.580007,90.000,-0.000,90.000"
+    const FP_3DMODEL& conn = models.at( wxS( "22272021.stp" ) );
+
+    BOOST_CHECK_CLOSE( conn.m_Offset.x, 0.02, 1e-6 );
+    BOOST_CHECK_CLOSE( conn.m_Offset.y, -1.27, 1e-6 );
+    BOOST_CHECK_CLOSE( conn.m_Offset.z, 1.580007, 1e-6 );
+    BOOST_CHECK_CLOSE( conn.m_Rotation.x, -90.0, 1e-6 );
+    BOOST_CHECK_SMALL( conn.m_Rotation.y, 1e-9 );
+    BOOST_CHECK_CLOSE( conn.m_Rotation.z, -90.0, 1e-6 );
 }
 
 
@@ -2448,11 +2588,11 @@ BOOST_AUTO_TEST_CASE( UIImportPath_NullBoard )
     CAPTURING_REPORTER reporter;
     plugin.SetReporter( &reporter );
 
-    BOARD* rawBoard = nullptr;
+    std::unique_ptr<BOARD> board;
 
     try
     {
-        rawBoard = plugin.LoadBoard( dataPath, nullptr, nullptr, nullptr );
+        board = plugin.LoadBoard( dataPath );
     }
     catch( const IO_ERROR& e )
     {
@@ -2465,9 +2605,7 @@ BOOST_AUTO_TEST_CASE( UIImportPath_NullBoard )
 
     reporter.PrintAllMessages( "UIImportPath_NullBoard" );
 
-    BOOST_REQUIRE_MESSAGE( rawBoard != nullptr, "LoadBoard with nullptr aAppendToMe must return a valid board" );
-
-    std::unique_ptr<BOARD> board( rawBoard );
+    BOOST_REQUIRE_MESSAGE( board != nullptr, "LoadBoard must return a valid board" );
 
     BOOST_CHECK_GT( board->GetNetCount(), 0 );
     BOOST_CHECK_GT( board->Footprints().size(), 0 );
@@ -2848,11 +2986,9 @@ BOOST_AUTO_TEST_CASE( LegacyNetclassFlags )
     CAPTURING_REPORTER reporter;
     plugin.SetReporter( &reporter );
 
-    BOARD* rawBoard = plugin.LoadBoard( dataPath, nullptr, nullptr, nullptr );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( dataPath );
 
-    BOOST_REQUIRE( rawBoard );
-
-    std::unique_ptr<BOARD> board( rawBoard );
+    BOOST_REQUIRE( board );
 
     BOOST_CHECK_MESSAGE( board->m_LegacyNetclassesLoaded,
                          "m_LegacyNetclassesLoaded must be true after Allegro import" );

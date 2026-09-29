@@ -112,6 +112,7 @@ public:
     /**
      * Find all visible items that touch or are within the rectangle \a aRect.
      *
+     * @param[in] aRect is the area to query.
      * @param aResult result of the search, containing VIEW_ITEMs associated with their layers.
      *                Sorted according to the rendering order (items that are on top of the
      *                rendering stack as first).
@@ -122,6 +123,7 @@ public:
     /**
      * Run a function on all visible items that touch or are within the rectangle \a aRect.
      *
+     * @param aRect is the area to query.
      * @param aFunc the function to be executed; return true to continue, false to end query.
      */
     void Query( const BOX2I& aRect, const std::function<bool( VIEW_ITEM* )>& aFunc ) const;
@@ -210,7 +212,7 @@ public:
     }
 
     /**
-     * Set the painter object used by the view for drawing #VIEW_ITEMS.
+     * Set the painter object used by the view for drawing #VIEW_ITEM objects.
      */
     inline void SetPainter( PAINTER* aPainter )
     {
@@ -218,7 +220,7 @@ public:
     }
 
     /**
-     * Return the painter object used by the view for drawing #VIEW_ITEMS.
+     * Return the painter object used by the view for drawing #VIEW_ITEM objects.
      *
      * @return Pointer to the currently used Painter instance.
      */
@@ -434,7 +436,9 @@ public:
         return it->second.visible;
     }
 
-    inline bool IsLayerVisibleCached( int aLayer ) const
+    void SyncLayerVisibilityCache();
+
+    bool IsLayerVisibleCached( int aLayer ) const
     {
         return m_layerVisibilityCache[ aLayer ];
     }
@@ -535,7 +539,7 @@ public:
     /**
      * Sorts m_orderedLayers after layer rendering order has changed.
      * Must be called after calling SetLayerOrder with aAutoSort = false
-     */ 
+     */
     void SortOrderedLayers();
 
     /**
@@ -789,7 +793,7 @@ protected:
         int                     id;              ///< Layer ID.
         RENDER_TARGET           target;          ///< Where the layer should be rendered.
 
-        ///< Layers that have to be enabled to show the layer.
+        /// Layers that have to be enabled to show the layer.
         std::set<int>           requiredLayers;
 
         bool operator< ( const VIEW_LAYER& aOther ) const
@@ -797,6 +801,17 @@ protected:
             return id < aOther.id;
         }
     };
+
+    /**
+     * Detach a single #VIEW_ITEM from this view.
+     *
+     * Child items are left alone. Composite-aware traversal belongs to the Add() and Remove()
+     * overrides that know about the item hierarchy, so callers that have already handled the
+     * children use this instead of Remove().
+     *
+     * @param aItem is the item to detach. It is ignored if it belongs to a different view.
+     */
+    void unlinkItem( VIEW_ITEM* aItem );
 
     /// Redraw contents within rectangle \a aRect.
     void redrawRect( const BOX2I& aRect );
@@ -853,6 +868,8 @@ protected:
     /// Update colors that are used for an item to be drawn.
     void updateItemColor( VIEW_ITEM* aItem, int aLayer );
 
+    void recolorGroup( VIEW_ITEM* aItem, int aLayer, int aGroup );
+
     /// Update all information needed to draw an item.
     void updateItemGeometry( VIEW_ITEM* aItem, int aLayer );
 
@@ -870,8 +887,6 @@ protected:
 
     /// Check if every layer required by the aLayerId layer is enabled.
     bool areRequiredLayersEnabled( int aLayerId ) const;
-
-    void syncLayerVisibilityCache();
 
     // Function objects that need to access VIEW/VIEW_ITEM private/protected members
     struct CLEAR_LAYER_CACHE_VISITOR;

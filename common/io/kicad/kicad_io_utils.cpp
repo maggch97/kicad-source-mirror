@@ -19,6 +19,9 @@
 
 #include "io/kicad/kicad_io_utils.h"
 
+#include <wx/buffer.h>
+#include <wx/ffile.h>
+
 // For some reason wxWidgets is built with wxUSE_BASE64 unset so expose the wxWidgets
 // base64 code.
 #define wxUSE_BASE64 1
@@ -26,6 +29,7 @@
 
 #include <fmt/format.h>
 
+#include <eda_item.h>
 #include <kiid.h>
 #include <richio.h>
 #include <string_utils.h>
@@ -49,6 +53,16 @@ void FormatOptBool( OUTPUTFORMATTER* aOut, const wxString& aKey, std::optional<b
 void FormatUuid( OUTPUTFORMATTER* aOut, const KIID& aUuid )
 {
     aOut->Print( "(uuid %s)", aOut->Quotew( aUuid.AsString() ).c_str() );
+}
+
+
+void FormatCustomProperties( OUTPUTFORMATTER* aOut, const EDA_ITEM& aItem )
+{
+    if( !aItem.HasCustomProperties() )
+        return;
+
+    for( const auto& [key, value] : aItem.GetCustomProperties() )
+        aOut->Print( "(custom_property %s %s)", aOut->Quotew( key ).c_str(), aOut->Quotew( value ).c_str() );
 }
 
 
@@ -339,3 +353,28 @@ void Prettify( std::string& aSource, FORMAT_MODE aMode )
 }
 
 } // namespace KICAD_FORMAT
+
+
+bool LoadFileToMemory( const wxString& aFileName, wxMemoryBuffer& aBuffer )
+{
+    wxFFile file( aFileName, wxS( "rb" ) );
+
+    if( !file.IsOpened() )
+        return false;
+
+    wxFileOffset size = file.Length();
+
+    if( size <= 0 )
+        return false;
+
+    void* data = aBuffer.GetWriteBuf( size );
+
+    if( file.Read( data, size ) != static_cast<size_t>( size ) )
+    {
+        aBuffer.UngetWriteBuf( 0 );
+        return false;
+    }
+
+    aBuffer.UngetWriteBuf( size );
+    return true;
+}

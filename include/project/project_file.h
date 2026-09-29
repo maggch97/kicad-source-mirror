@@ -27,6 +27,7 @@
 #include <project/board_project_settings.h>
 #include <settings/json_settings.h>
 #include <settings/nested_settings.h>
+#include <template_fieldnames.h>
 
 class BOARD_DESIGN_SETTINGS;
 class ERC_SETTINGS;
@@ -35,7 +36,6 @@ class COMPONENT_CLASS_SETTINGS;
 class TUNING_PROFILES;
 class LAYER_PAIR_SETTINGS;
 class SCHEMATIC_SETTINGS;
-class TEMPLATES;
 
 /**
  * For files like sheets and boards, a pair of that object KIID and display name
@@ -106,7 +106,15 @@ public:
 
     bool LoadFromFile( const wxString& aDirectory = "" ) override;
 
+    bool Store() override;
+
     bool SaveToFile( const wxString& aDirectory = "", bool aForce = false ) override;
+
+    /**
+     * Serialize to the bytes SaveToFile would write, without touching the file.
+     * @return the document, or an empty string on error
+     */
+    std::string SerializeToString();
 
     bool SaveAs( const wxString& aDirectory, const wxString& aFile );
 
@@ -181,6 +189,9 @@ public:
 
     std::map<wxString, wxString> m_TextVars;
 
+    /// Project and global field name templates shared by project editors.
+    TEMPLATES m_TemplateFieldNames;
+
     /**
      * Eeschema params
      */
@@ -198,6 +209,9 @@ public:
 
     /// Bus alias definitions for the schematic project
     std::map<wxString, std::vector<wxString>> m_BusAliases;
+
+    /// An explicit alias table was loaded or set, including a deliberately empty table.
+    bool m_BusAliasesDefined = false;
 
     /**
      * CvPcb params
@@ -254,6 +268,8 @@ public:
 
     struct IP2581_BOM             m_IP2581Bom;      /// IPC-2581 BOM settings
 
+    IDF_EXPORT_SETTINGS           m_IdfExportSettings;
+
 private:
     /**
      * Schema version 2: Bump for KiCad 9 layer numbering changes.
@@ -266,6 +282,9 @@ private:
      * Schema version 3: move layer presets to use named render layers.
      */
     bool migrateSchema2To3();
+
+    /// Schema version 4 distinguishes explicit empty alias tables from older default writes.
+    bool migrateSchema3To4();
 
     /// An list of schematic sheets in this project
     std::vector<FILE_INFO_PAIR> m_sheets;

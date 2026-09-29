@@ -99,7 +99,7 @@ public:
 
     void SetReporter( REPORTER* aReporter ) { m_reporter = aReporter; }
 
-    ///< Enable dry run mode (just report, no changes to PCB).
+    /// Enable dry run mode (just report, no changes to PCB).
     void SetIsDryRun( bool aEnabled ) { m_isDryRun = aEnabled; }
 
     void SetReplaceFootprints( bool aEnabled ) { m_replaceFootprints = aEnabled; }
@@ -137,6 +137,16 @@ public:
      */
     static void ApplyChainAssignments( BOARD* aBoard, const NETLIST& aNetlist, REPORTER* aReporter,
                                        bool aDryRun );
+
+    /**
+     * Mirror the netlist's chain-to-class and chain-to-netclass maps into the project's
+     * NET_SETTINGS.
+     *
+     * Both maps are rebuilt from scratch so removed or renamed chains do not leave stale entries.
+     * Drops the chain-derived per-net assignments with them; the caller must follow with
+     * BOARD::SynchronizeNetsAndNetClasses() to rebuild those.
+     */
+    static void ApplyChainNetclasses( BOARD* aBoard, const NETLIST& aNetlist );
 
 private:
     void cacheNetname( PAD* aPad, const wxString& aNetname );

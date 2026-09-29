@@ -443,12 +443,8 @@ bool CONNECTIVITY_DATA::IsConnectedOnLayer( const BOARD_CONNECTED_ITEM *aItem, i
         {
             CN_ZONE_LAYER* zoneLayer = dynamic_cast<CN_ZONE_LAYER*>( connected );
 
-            // lyIdx is compatible with StartLayer() and EndLayer() notation in CN_ITEM
-            // items, where B_Cu is set to INT_MAX (std::numeric_limits<int>::max())
-            int lyIdx = aLayer;
-
-            if( aLayer == B_Cu )
-                lyIdx = std::numeric_limits<int>::max();
+            // StartLayer() and EndLayer() are copper layer ordinals, not PCB_LAYER_IDs
+            int lyIdx = static_cast<int>( CopperLayerToOrdinal( ToLAYER_ID( aLayer ) ) );
 
             if( connected->Valid()
                     && connected->StartLayer() <= lyIdx && connected->EndLayer() >= lyIdx
@@ -483,6 +479,16 @@ bool CONNECTIVITY_DATA::IsConnectedOnLayer( const BOARD_CONNECTED_ITEM *aItem, i
                     {
                         continue;
                     }
+                }
+
+                // A pad or a via spans several layers, so touching us is not the same as
+                // touching us here
+                if( connectedItem->Type() == PCB_PAD_T || connectedItem->Type() == PCB_VIA_T )
+                {
+                    const BOARD_CONNECTED_ITEM* other = static_cast<const BOARD_CONNECTED_ITEM*>( connectedItem );
+
+                    if( !ItemsTouchOnLayer( aItem, other, ToLAYER_ID( aLayer ) ) )
+                        continue;
                 }
 
                 if( aItem->Type() == PCB_PAD_T && zoneLayer )
@@ -702,6 +708,29 @@ void CONNECTIVITY_DATA::GetConnectedPadsAndVias( const BOARD_CONNECTED_ITEM* aIt
 }
 
 
+void CONNECTIVITY_DATA::GetZoneIslandConnections( const ZONE* aZone, PCB_LAYER_ID aLayer,
+                                                  std::vector<std::set<const BOARD_ITEM*>>* aIslands )
+{
+    aIslands->clear();
+
+    for( CN_ITEM* citem : m_connAlgo->ItemEntry( aZone ).GetItems() )
+    {
+        CN_ZONE_LAYER* island = dynamic_cast<CN_ZONE_LAYER*>( citem );
+
+        if( !island || !island->Valid() || island->GetLayer() != aLayer )
+            continue;
+
+        std::set<const BOARD_ITEM*>& connected = aIslands->emplace_back();
+
+        for( CN_ITEM* other : island->ConnectedItems() )
+        {
+            if( other->Valid() )
+                connected.insert( other->Parent() );
+        }
+    }
+}
+
+
 unsigned int CONNECTIVITY_DATA::GetNodeCount( int aNet ) const
 {
     int sum = 0;
@@ -814,7 +843,7 @@ bool CONNECTIVITY_DATA::TestTrackEndpointDangling( PCB_TRACK* aTrack, bool aIgno
                 continue;
 
             if( zone )
-                rtree = zone->GetBoard()->m_CopperZoneRTreeCache[ zone ].get();
+                rtree = zone->GetBoard()->GetCopperZoneRTree( zone );
 
             if( rtree )
             {

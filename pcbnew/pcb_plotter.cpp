@@ -22,6 +22,12 @@
 #include <plotters/plotter.h>
 #include <plotters/plotters_pslike.h>
 #include <board.h>
+#include <board_loader.h>
+#include <footprint.h>
+#include <pad.h>
+#include <project.h>
+#include <board_tables/generated_table_refresh.h>
+#include <pcb_drill_chart.h>
 #include <reporter.h>
 #include <pcbplot.h>
 #include <wx/filename.h>
@@ -66,18 +72,28 @@ bool PCB_PLOTTER::Plot( const wxString& aOutputPath, const LSEQ& aLayersToPlot,
                         std::optional<wxString> aSheetName, std::optional<wxString> aSheetPath,
                         std::vector<wxString>* aOutputFiles )
 {
-    std::function<bool( wxString* )> textResolver = [&]( wxString* token ) -> bool
-    {
-        // Handles board->GetTitleBlock() *and* board->GetProject()
-        return m_board->ResolveTextVar( token, 0 );
-    };
+    std::function<bool( wxString* )> textResolver =
+            [&]( wxString* token ) -> bool
+            {
+                // Handles board->GetTitleBlock() *and* board->GetProject()
+                return m_board->ResolveTextVar( token, 0 );
+            };
 
     // sanity, ensure one layer to print
     if( aLayersToPlot.size() < 1 )
     {
-        m_reporter->Report( _( "No layers selected for plotting." ), RPT_SEVERITY_ERROR );
+        if( m_reporter )
+            m_reporter->Report( _( "No layers selected for plotting." ), RPT_SEVERITY_ERROR );
+
         return false;
     }
+
+    // The one path GUI plotting, PNG, PS and every CLI plot job share. Common layers are
+    // included or a chart plotted as one slips past the policy
+    LSET plotted( { aLayersToPlot } );
+    plotted |= LSET( { aCommonLayers } );
+
+    RefreshGeneratedTables( *m_board );
 
     PAGE_INFO existingPageInfo = m_board->GetPageSettings();
     VECTOR2I  existingAuxOrigin = m_board->GetDesignSettings().GetAuxOrigin();
@@ -99,8 +115,9 @@ bool PCB_PLOTTER::Plot( const wxString& aOutputPath, const LSEQ& aLayersToPlot,
         m_board->SetPageSettings( currPageInfo );
         m_plotOpts.SetUseAuxOrigin( true );
 
-        VECTOR2I origin = bbox.GetOrigin();
-        m_board->GetDesignSettings().SetAuxOrigin( origin );
+        // Keep the origin at the board origin so it lands on the SVG origin. The SVG
+        // plotter was given the bounding box to build its viewBox from elsewhere.
+        m_board->GetDesignSettings().SetAuxOrigin( VECTOR2I( 0, 0 ) );
     }
 
     // To reuse logic, in single plot mode, we want to kick any extra layers from the main list to commonLayers
@@ -220,7 +237,7 @@ bool PCB_PLOTTER::Plot( const wxString& aOutputPath, const LSEQ& aLayersToPlot,
         if( plotter )
         {
             plotter->SetLayer( layer );
-            plotter->SetTitle( ExpandTextVars( m_board->GetTitleBlock().GetTitle(), &textResolver ) );
+            plotter->SetTitle( ExpandTextVars( m_board->GetTitleBlock().GetTitle(), &textResolver, FOR_GUI ) );
 
             if( m_plotOpts.m_PDFMetadata )
             {
@@ -291,8 +308,11 @@ bool PCB_PLOTTER::Plot( const wxString& aOutputPath, const LSEQ& aLayersToPlot,
                 delete plotter;
                 plotter = nullptr;
 
-                msg.Printf( _( "Plotted to '%s'." ), fn.GetFullPath() );
-                m_reporter->Report( msg, RPT_SEVERITY_ACTION );
+                if( m_reporter )
+                {
+                    m_reporter->Report( wxString::Format( _( "Plotted to '%s'." ), fn.GetFullPath() ),
+                                        RPT_SEVERITY_ACTION );
+                }
 
                 if( aOutputFiles )
                     aOutputFiles->push_back( fn.GetFullPath() );
@@ -300,8 +320,11 @@ bool PCB_PLOTTER::Plot( const wxString& aOutputPath, const LSEQ& aLayersToPlot,
         }
         else
         {
-            msg.Printf( _( "Failed to create file '%s'." ), fn.GetFullPath() );
-            m_reporter->Report( msg, RPT_SEVERITY_ERROR );
+            if( m_reporter )
+            {
+                m_reporter->Report( wxString::Format( _( "Failed to create file '%s'." ), fn.GetFullPath() ),
+                                    RPT_SEVERITY_ERROR );
+            }
 
             success = false;
         }
@@ -324,7 +347,8 @@ bool PCB_PLOTTER::Plot( const wxString& aOutputPath, const LSEQ& aLayersToPlot,
             aOutputFiles->push_back( fn.GetFullPath() );
     }
 
-    m_reporter->ReportTail( _( "Done." ), RPT_SEVERITY_INFO );
+    if( m_reporter )
+        m_reporter->ReportTail( _( "Done." ), RPT_SEVERITY_INFO );
 
     if( m_plotOpts.GetFormat() == PLOT_FORMAT::SVG && m_plotOpts.GetSvgFitPagetoBoard() )
     {
@@ -452,7 +476,7 @@ void PCB_PLOTTER::PlotJobToPlotOpts( PCB_PLOT_PARAMS& aOpts, JOB_EXPORT_PCB_PLOT
         aOpts.m_PDFBackFPPropertyPopups = pdfJob->m_pdfBackFPPropertyPopups;
         aOpts.m_PDFMetadata = pdfJob->m_pdfMetadata;
         aOpts.m_PDFSingle = pdfJob->m_pdfSingle;
-        aOpts.m_PDFBackgroundColor = COLOR4D( pdfJob->m_pdfBackgroundColor );
+        aOpts.m_backgroundColor = COLOR4D( pdfJob->m_pdfBackgroundColor );
     }
 
     if( aJob->m_plotFormat == JOB_EXPORT_PCB_PLOT::PLOT_FORMAT::POST )
@@ -464,11 +488,32 @@ void PCB_PLOTTER::PlotJobToPlotOpts( PCB_PLOT_PARAMS& aOpts, JOB_EXPORT_PCB_PLOT
         aOpts.SetA4Output( psJob->m_forceA4 );
     }
 
+    wxString theme = aJob->m_colorTheme;
+
+    // Theme may be empty when running from a job in GUI context, so use the GUI settings.
+    if( theme.IsEmpty() )
+    {
+        if( PCBNEW_SETTINGS* pcbSettings = GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" ) )
+            theme = pcbSettings->m_ColorTheme;
+    }
+
+    COLOR_SETTINGS* colors = ::GetColorSettings( theme );
+
+    if( colors->GetFilename() != theme && !aOpts.GetBlackAndWhite() )
+    {
+        aReporter.Report( wxString::Format( _( "Color theme '%s' not found, will use theme from PCB Editor.\n" ),
+                                            theme ),
+                          RPT_SEVERITY_WARNING );
+    }
+
     if( aJob->m_plotFormat == JOB_EXPORT_PCB_PLOT::PLOT_FORMAT::PNG )
     {
         JOB_EXPORT_PCB_PNG* pngJob = static_cast<JOB_EXPORT_PCB_PNG*>( aJob );
         aOpts.SetPngDPI( pngJob->m_dpi );
         aOpts.SetPngAntialias( pngJob->m_antialias );
+
+        if( pngJob->m_useBackgroundColor )
+            aOpts.SetBackgroundColor( colors->GetColor( LAYER_PCB_BACKGROUND ) );
     }
 
     aOpts.SetUseAuxOrigin( aJob->m_useDrillOrigin );
@@ -501,24 +546,57 @@ void PCB_PLOTTER::PlotJobToPlotOpts( PCB_PLOT_PARAMS& aOpts, JOB_EXPORT_PCB_PLOT
     case JOB_EXPORT_PCB_PLOT::PLOT_FORMAT::PNG:    aOpts.SetFormat( PLOT_FORMAT::PNG );    break;
     }
 
-    wxString theme = aJob->m_colorTheme;
-
-    // Theme may be empty when running from a job in GUI context, so use the GUI settings.
-    if( theme.IsEmpty() )
-    {
-        if( PCBNEW_SETTINGS* pcbSettings = GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" ) )
-            theme = pcbSettings->m_ColorTheme;
-    }
-
-    COLOR_SETTINGS* colors = ::GetColorSettings( theme );
-
-    if( colors->GetFilename() != theme && !aOpts.GetBlackAndWhite() )
-    {
-        aReporter.Report( wxString::Format( _( "Color theme '%s' not found, will use theme from PCB Editor.\n" ),
-                                            theme ),
-                          RPT_SEVERITY_WARNING );
-    }
-
     aOpts.SetColorSettings( colors );
     aOpts.SetOutputDirectory( aJob->GetConfiguredOutputPath() );
+}
+
+
+bool PlotFootprintToSVG( const FOOTPRINT& aFootprint, PROJECT& aProject,
+                         const std::map<wxString, wxString>* aVarOverrides, PCB_PLOT_PARAMS& aPlotOpts,
+                         const LSEQ& aLayersToPlot, const LSEQ& aLayersOnAll, const wxString& aFileName,
+                         REPORTER* aReporter )
+{
+    // Plot the footprint by placing it at the origin of a temporary board; the SVG
+    // fit-to-board options make the footprint origin land on the SVG origin and size the
+    // page/viewBox to the footprint's bounding box.
+
+    // The hack for now is we create fake boards containing the footprint and plot the board
+    // until we refactor better plot api later
+    std::unique_ptr<BOARD> brd = BOARD_LOADER::CreateEmptyBoard( &aProject );
+
+    if( aVarOverrides )
+        brd->GetProject()->ApplyTextVars( *aVarOverrides );
+
+    brd->SynchronizeProperties();
+
+    FOOTPRINT* fp = dynamic_cast<FOOTPRINT*>( aFootprint.Clone() );
+
+    if( fp == nullptr )
+        return false;
+
+    fp->SetLink( niluuid );
+    fp->SetFlags( IS_NEW );
+    fp->SetParent( brd.get() );
+
+    for( PAD* pad : fp->Pads() )
+    {
+        pad->SetLocalRatsnestVisible( false );
+        pad->SetNetCode( 0 );
+    }
+
+    fp->SetOrientation( ANGLE_0 );
+    fp->SetPosition( VECTOR2I( 0, 0 ) );
+
+    brd->Add( fp, ADD_MODE::INSERT, true );
+
+    aPlotOpts.SetFormat( PLOT_FORMAT::SVG );
+    aPlotOpts.SetPlotFrameRef( false );
+    aPlotOpts.SetSvgFitPageToBoard( true );
+    aPlotOpts.SetMirror( false );
+    aPlotOpts.SetSkipPlotNPTH_Pads( false );
+
+    PCB_PLOTTER plotter( brd.get(), aReporter, aPlotOpts );
+
+    return plotter.Plot( aFileName, aLayersToPlot, aLayersOnAll, false, true, wxEmptyString, wxEmptyString,
+                         wxEmptyString );
 }

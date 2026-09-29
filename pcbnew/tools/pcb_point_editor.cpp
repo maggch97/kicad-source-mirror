@@ -52,12 +52,16 @@ using namespace std::placeholders;
 #include <pcb_group.h>
 #include <pcb_dimension.h>
 #include <pcb_barcode.h>
+#include <pcb_grid_item.h>
 #include <pcb_textbox.h>
 #include <pcb_tablecell.h>
 #include <pcb_table.h>
 #include <pad.h>
 #include <zone.h>
 #include <footprint.h>
+#include <board.h>
+#include <constraints/board_constraint_adapter.h>
+#include <constraints/constraint_builder.h>
 #include <footprint_editor_settings.h>
 #include <connectivity/connectivity_data.h>
 #include <progress_reporter.h>
@@ -72,36 +76,41 @@ static void appendDirection( std::vector<VECTOR2I>& aDirections, const VECTOR2I&
         aDirections.push_back( aDirection );
 }
 
-static std::vector<VECTOR2I> getConstraintDirections( EDIT_CONSTRAINT<EDIT_POINT>* aConstraint )
+static std::vector<VECTOR2I> getConstraintDirections( EDIT_RELATION* aRelation )
 {
     std::vector<VECTOR2I> directions;
 
-    if( !aConstraint )
+    if( !aRelation )
         return directions;
 
-    if( dynamic_cast<EC_90DEGREE*>( aConstraint ) )
+    switch( aRelation->Kind() )
     {
+    case EDIT_RELATION_KIND::ANGLE_STEP_90:
         appendDirection( directions, VECTOR2I( 1, 0 ) );
         appendDirection( directions, VECTOR2I( 0, 1 ) );
-    }
-    else if( dynamic_cast<EC_45DEGREE*>( aConstraint ) )
-    {
+        break;
+
+    case EDIT_RELATION_KIND::ANGLE_STEP_45:
         appendDirection( directions, VECTOR2I( 1, 0 ) );
         appendDirection( directions, VECTOR2I( 0, 1 ) );
         appendDirection( directions, VECTOR2I( 1, 1 ) );
         appendDirection( directions, VECTOR2I( 1, -1 ) );
-    }
-    else if( dynamic_cast<EC_VERTICAL*>( aConstraint ) )
-    {
+        break;
+
+    case EDIT_RELATION_KIND::SAME_X:
         appendDirection( directions, VECTOR2I( 0, 1 ) );
-    }
-    else if( dynamic_cast<EC_HORIZONTAL*>( aConstraint ) )
-    {
+        break;
+
+    case EDIT_RELATION_KIND::SAME_Y:
         appendDirection( directions, VECTOR2I( 1, 0 ) );
-    }
-    else if( EC_LINE* lineConstraint = dynamic_cast<EC_LINE*>( aConstraint ) )
-    {
-        appendDirection( directions, lineConstraint->GetLineVector() );
+        break;
+
+    case EDIT_RELATION_KIND::POINT_ON_LINE:
+        appendDirection( directions, aRelation->Direction() );
+        break;
+
+    default:
+        break;
     }
 
     return directions;
@@ -127,6 +136,63 @@ enum RECT_LINES
 };
 
 
+static std::optional<CONSTRAINT_MEMBER> constraintMemberForEditPoint(
+        PCB_SHAPE* aShape, EDIT_POINTS* aPoints, EDIT_POINT* aEditedPoint )
+{
+    if( !aShape || !aPoints || !aEditedPoint )
+        return std::nullopt;
+
+    SHAPE_T type = aShape->GetShape();
+    VECTOR2I position = aEditedPoint->GetPosition();
+
+    if( type == SHAPE_T::SEGMENT || type == SHAPE_T::ARC || type == SHAPE_T::BEZIER )
+    {
+        if( position == aShape->GetStart() )
+            return CONSTRAINT_MEMBER( aShape->m_Uuid, CONSTRAINT_ANCHOR::START );
+
+        if( position == aShape->GetEnd() )
+            return CONSTRAINT_MEMBER( aShape->m_Uuid, CONSTRAINT_ANCHOR::END );
+
+        if( type == SHAPE_T::ARC && position == aShape->GetCenter() )
+            return CONSTRAINT_MEMBER( aShape->m_Uuid, CONSTRAINT_ANCHOR::CENTER );
+    }
+    else if( type == SHAPE_T::CIRCLE && position == aShape->GetCenter() )
+    {
+        return CONSTRAINT_MEMBER( aShape->m_Uuid, CONSTRAINT_ANCHOR::CENTER );
+    }
+    else if( type == SHAPE_T::RECTANGLE && aPoints->PointsSize() >= RECT_MAX_POINTS )
+    {
+        for( unsigned i = RECT_TOP_LEFT; i <= RECT_BOT_LEFT; ++i )
+        {
+            if( aEditedPoint == &aPoints->Point( i ) )
+                return CONSTRAINT_MEMBER( aShape->m_Uuid, CONSTRAINT_ANCHOR::VERTEX, i );
+        }
+
+        for( unsigned i = 0; i < aPoints->LinesSize() && i < 4; ++i )
+        {
+            if( aEditedPoint == &aPoints->Line( i ) )
+                return CONSTRAINT_MEMBER( aShape->m_Uuid, CONSTRAINT_ANCHOR::VERTEX, i );
+        }
+    }
+    else if( type == SHAPE_T::POLY && ConstraintPolygonIsModelable( aShape ) )
+    {
+        for( unsigned i = 0; i < aPoints->PointsSize(); ++i )
+        {
+            if( aEditedPoint == &aPoints->Point( i ) )
+                return CONSTRAINT_MEMBER( aShape->m_Uuid, CONSTRAINT_ANCHOR::VERTEX, i );
+        }
+
+        for( unsigned i = 0; i < aPoints->LinesSize(); ++i )
+        {
+            if( aEditedPoint == &aPoints->Line( i ) )
+                return CONSTRAINT_MEMBER( aShape->m_Uuid, CONSTRAINT_ANCHOR::VERTEX, i );
+        }
+    }
+
+    return std::nullopt;
+}
+
+
 enum DIMENSION_POINTS
 {
     DIM_START,
@@ -143,7 +209,7 @@ enum DIMENSION_POINTS
 };
 
 
-///< Text boxes have different point counts depending on their orientation.
+/// Text boxes have different point counts depending on their orientation.
 enum TEXTBOX_POINT_COUNT
 {
     WHEN_RECTANGLE = RECT_MAX_POINTS,
@@ -255,13 +321,17 @@ public:
         aPoints.Point( RECT_RADIUS ).SetDrawCircle();
 
         aPoints.AddLine( aPoints.Point( RECT_TOP_LEFT ), aPoints.Point( RECT_TOP_RIGHT ) );
-        aPoints.Line( RECT_TOP ).SetConstraint( new EC_PERPLINE( aPoints.Line( RECT_TOP ) ) );
+        aPoints.Line( RECT_TOP ).SetRelation(
+                EDIT_RELATION::PerpendicularTranslation( aPoints.Line( RECT_TOP ) ) );
         aPoints.AddLine( aPoints.Point( RECT_TOP_RIGHT ), aPoints.Point( RECT_BOT_RIGHT ) );
-        aPoints.Line( RECT_RIGHT ).SetConstraint( new EC_PERPLINE( aPoints.Line( RECT_RIGHT ) ) );
+        aPoints.Line( RECT_RIGHT ).SetRelation(
+                EDIT_RELATION::PerpendicularTranslation( aPoints.Line( RECT_RIGHT ) ) );
         aPoints.AddLine( aPoints.Point( RECT_BOT_RIGHT ), aPoints.Point( RECT_BOT_LEFT ) );
-        aPoints.Line( RECT_BOT ).SetConstraint( new EC_PERPLINE( aPoints.Line( RECT_BOT ) ) );
+        aPoints.Line( RECT_BOT ).SetRelation(
+                EDIT_RELATION::PerpendicularTranslation( aPoints.Line( RECT_BOT ) ) );
         aPoints.AddLine( aPoints.Point( RECT_BOT_LEFT ), aPoints.Point( RECT_TOP_LEFT ) );
-        aPoints.Line( RECT_LEFT ).SetConstraint( new EC_PERPLINE( aPoints.Line( RECT_LEFT ) ) );
+        aPoints.Line( RECT_LEFT ).SetRelation(
+                EDIT_RELATION::PerpendicularTranslation( aPoints.Line( RECT_LEFT ) ) );
     }
 
     static void UpdateItem( PCB_SHAPE& aRectangle, const EDIT_POINT& aEditedPoint,
@@ -349,7 +419,8 @@ public:
         for( unsigned i = 0; i < aPoints.LinesSize(); ++i )
         {
             if( !isModified( aEditedPoint, aPoints.Line( i ) ) )
-                aPoints.Line( i ).SetConstraint( new EC_PERPLINE( aPoints.Line( i ) ) );
+                aPoints.Line( i ).SetRelation(
+                        EDIT_RELATION::PerpendicularTranslation( aPoints.Line( i ) ) );
         }
     }
 
@@ -403,14 +474,15 @@ public:
      * Update the coordinates of 4 corners of a rectangle, according to constraints and the
      * moved corner
      *
-     * @param aPoints the points list
-     *
-     * @param aTopLeft [in/out] is the RECT_TOPLEFT to constraint
-     * @param aTopRight [in/out] is the RECT_TOPRIGHT to constraint
-     * @param aBotLeft [in/out] is the RECT_BOTLEFT to constraint
-     * @param aBotRight [in/out] is the RECT_BOTRIGHT to constraint
+     * @param aEditedPoint
+     * @param aEditPoints the points list
+     * @param[in,out] aTopLeft is the RECT_TOPLEFT to constraint
+     * @param[in,out] aTopRight is the RECT_TOPRIGHT to constraint
+     * @param[in,out] aBotLeft is the RECT_BOTLEFT to constraint
+     * @param[in,out] aBotRight is the RECT_BOTRIGHT to constraint
      * @param aHole the location of the pad's hole
      * @param aHoleSize the pad's hole size (or {0,0} if it has no hole)
+     * @param aMinSize
      */
     static void PinEditedCorner( const EDIT_POINT& aEditedPoint, const EDIT_POINTS& aEditPoints,
                                 VECTOR2I& aTopLeft, VECTOR2I& aTopRight, VECTOR2I& aBotLeft, VECTOR2I& aBotRight,
@@ -540,6 +612,30 @@ public:
 
 private:
     ZONE& m_zone;
+};
+
+
+class GENERATOR_POLY_POINT_EDIT_BEHAVIOR : public POLYGON_POINT_EDIT_BEHAVIOR
+{
+public:
+    GENERATOR_POLY_POINT_EDIT_BEHAVIOR( PCB_GENERATOR_POLY& aGen ) :
+            POLYGON_POINT_EDIT_BEHAVIOR( aGen.Outline() ),
+            m_gen( aGen )
+    {
+    }
+
+    void UpdateItem( const EDIT_POINT& aEditedPoint, EDIT_POINTS& aPoints, COMMIT& aCommit,
+                     std::vector<EDA_ITEM*>& aUpdatedItems ) override
+    {
+        // Defer to the base class to update the polygon
+        POLYGON_POINT_EDIT_BEHAVIOR::UpdateItem( aEditedPoint, aPoints, aCommit, aUpdatedItems );
+
+        // Flag the generator has to be updated based on potential outline change
+        m_gen.MarkDirty();
+    }
+
+private:
+    PCB_GENERATOR_POLY& m_gen;
 };
 
 
@@ -700,7 +796,7 @@ public:
         auto set45Constraint =
                 [&]( int a, int b )
                 {
-                    aPoints.Point( a ).SetConstraint( new EC_45DEGREE( aPoints.Point( a ), aPoints.Point( b ) ) );
+                    aPoints.Point( a ).SetRelation( EDIT_RELATION::Angle45( aPoints.Point( b ) ) );
                 };
 
         RECTANGLE_POINT_EDIT_BEHAVIOR::MakePoints( makeDummyRect(), aPoints );
@@ -746,6 +842,196 @@ private:
 };
 
 
+class GRID_POINT_EDIT_BEHAVIOR : public POINT_EDIT_BEHAVIOR
+{
+public:
+    GRID_POINT_EDIT_BEHAVIOR( PCB_GRID_ITEM& aGridItem ) :
+            m_gridItem( aGridItem )
+    {
+    }
+
+    void MakePoints( EDIT_POINTS& aPoints ) override
+    {
+        // Index 0: centre (drag = translate).
+        aPoints.AddPoint( m_gridItem.GetPosition() );
+
+        switch( m_gridItem.GetGridItemType() )
+        {
+        case PCB_GRID_TYPE::POLAR:
+            aPoints.AddPoint( toWorld( radiusEndLocal() ) );
+            aPoints.AddPoint( toWorld( arcEndLocal() ) );
+            aPoints.AddPoint( toWorld( arcMidLocal() ) );
+            break;
+
+        case PCB_GRID_TYPE::CARTESIAN:
+            aPoints.AddPoint( toWorld( cornerLocal( 0, 0 ) ) );
+            aPoints.AddPoint( toWorld( cornerLocal( 1, 0 ) ) );
+            aPoints.AddPoint( toWorld( cornerLocal( 1, 1 ) ) );
+            aPoints.AddPoint( toWorld( cornerLocal( 0, 1 ) ) );
+            break;
+
+        default:
+            wxFAIL_MSG( wxT( "MakePoints: unhandled PCB_GRID_TYPE" ) );
+            break;
+        }
+    }
+
+    bool UpdatePoints( EDIT_POINTS& aPoints ) override
+    {
+        switch( m_gridItem.GetGridItemType() )
+        {
+        case PCB_GRID_TYPE::POLAR:
+            if( aPoints.PointsSize() != 4 )
+                return false;
+
+            aPoints.Point( 0 ).SetPosition( m_gridItem.GetPosition() );
+            aPoints.Point( 1 ).SetPosition( toWorld( radiusEndLocal() ) );
+            aPoints.Point( 2 ).SetPosition( toWorld( arcEndLocal() ) );
+            aPoints.Point( 3 ).SetPosition( toWorld( arcMidLocal() ) );
+            return true;
+
+        case PCB_GRID_TYPE::CARTESIAN:
+            if( aPoints.PointsSize() != 5 )
+                return false;
+
+            aPoints.Point( 0 ).SetPosition( m_gridItem.GetPosition() );
+            aPoints.Point( 1 ).SetPosition( toWorld( cornerLocal( 0, 0 ) ) );
+            aPoints.Point( 2 ).SetPosition( toWorld( cornerLocal( 1, 0 ) ) );
+            aPoints.Point( 3 ).SetPosition( toWorld( cornerLocal( 1, 1 ) ) );
+            aPoints.Point( 4 ).SetPosition( toWorld( cornerLocal( 0, 1 ) ) );
+            return true;
+
+        default:
+            wxFAIL_MSG( wxT( "UpdatePoints: unhandled PCB_GRID_TYPE" ) );
+            return false;
+        }
+    }
+
+    void UpdateItem( const EDIT_POINT& aEditedPoint, EDIT_POINTS& aPoints, COMMIT& aCommit,
+                     std::vector<EDA_ITEM*>& aUpdatedItems ) override
+    {
+        // Centre handle: translate the whole grid.
+        if( isModified( aEditedPoint, aPoints.Point( 0 ) ) )
+        {
+            m_gridItem.SetPosition( aEditedPoint.GetPosition() );
+            return;
+        }
+
+        const VECTOR2I local = toLocal( aEditedPoint.GetPosition() );
+
+        switch( m_gridItem.GetGridItemType() )
+        {
+        case PCB_GRID_TYPE::POLAR:
+        {
+            // World offset from grid centre.
+            const VECTOR2I worldOff = aEditedPoint.GetPosition() - m_gridItem.GetPosition();
+            const double   dragAngle = std::atan2( worldOff.y, worldOff.x );
+            const int      newRadius = std::max( 1, KiROUND( std::hypot( worldOff.x, worldOff.y ) ) );
+            const double   orientOld = m_gridItem.GetOrientation().AsRadians();
+            const double   phiMaxOld = m_gridItem.GetPhiExtent().AsRadians();
+
+            // KiCad screen rotation: a local point at phi lands at world math-angle
+            // (phi - orient).  Each handle drag pins exactly one endpoint and follows
+            // the (already-snapped) cursor; the unmoved endpoint stays put.
+            const auto wrap2pi = []( double a )
+            {
+                while( a < 0 )
+                    a += 2 * M_PI;
+                while( a >= 2 * M_PI )
+                    a -= 2 * M_PI;
+                return a;
+            };
+
+            if( isModified( aEditedPoint, aPoints.Point( 1 ) ) ) // radius end (phi=0)
+            {
+                // phi=0 follows the cursor; the phi=phiMax end stays at world angle
+                // (phiMaxOld - orientOld).
+                const double newOrient = -dragAngle;
+                const double newPhiMax = wrap2pi( phiMaxOld - orientOld - dragAngle );
+
+                m_gridItem.SetOrientation( EDA_ANGLE( newOrient, RADIANS_T ) );
+                m_gridItem.SetPhiExtentDegrees( newPhiMax * 180.0 / M_PI );
+            }
+            else if( isModified( aEditedPoint, aPoints.Point( 2 ) ) ) // arc end (phi=phiMax)
+            {
+                // phi=phiMax follows the cursor; the phi=0 end (orient direction) stays.
+                const double newPhiMax = wrap2pi( dragAngle + orientOld );
+
+                m_gridItem.SetPhiExtentDegrees( newPhiMax * 180.0 / M_PI );
+            }
+            else if( isModified( aEditedPoint, aPoints.Point( 3 ) ) ) // arc mid (bisector)
+            {
+                // Bisector follows the cursor; phiMax unchanged (whole wedge rotates).
+                const double newOrient = phiMaxOld / 2.0 - dragAngle;
+
+                m_gridItem.SetOrientation( EDA_ANGLE( newOrient, RADIANS_T ) );
+            }
+
+            m_gridItem.SetRadiusExtent( newRadius );
+            break;
+        }
+
+        case PCB_GRID_TYPE::CARTESIAN:
+        {
+            // Dragging a corner resizes symmetrically about the centre.
+            const int newHalfX = std::max( 1, std::abs( local.x ) );
+            const int newHalfY = std::max( 1, std::abs( local.y ) );
+
+            // SetExtent takes size/2 directly, bypassing the property panel's
+            // total-width 2x / /2 accessor dance.
+            m_gridItem.SetExtent( VECTOR2I( newHalfX, newHalfY ) );
+            break;
+        }
+
+        default:
+            wxFAIL_MSG( wxT( "UpdateItem: unhandled PCB_GRID_TYPE" ) );
+            break;
+        }
+    }
+
+private:
+    VECTOR2I toLocal( const VECTOR2I& aWorld ) const
+    {
+        VECTOR2I local = aWorld - m_gridItem.GetPosition();
+        RotatePoint( local, -m_gridItem.GetOrientation() );
+        return local;
+    }
+
+    VECTOR2I toWorld( const VECTOR2I& aLocal ) const
+    {
+        VECTOR2I world = aLocal;
+        RotatePoint( world, m_gridItem.GetOrientation() );
+        return m_gridItem.GetPosition() + world;
+    }
+
+    // aX / aY in {0, 1}: 0 = negative half, 1 = positive half.
+    VECTOR2I cornerLocal( int aX, int aY ) const
+    {
+        const int sx = ( aX == 0 ) ? -1 : +1;
+        const int sy = ( aY == 0 ) ? -1 : +1;
+        return VECTOR2I( sx * m_gridItem.GetExtent().x, sy * m_gridItem.GetExtent().y );
+    }
+
+    VECTOR2I radiusEndLocal() const { return VECTOR2I( m_gridItem.GetRadiusExtent(), 0 ); }
+
+    VECTOR2I arcEndLocal() const
+    {
+        const double phi = m_gridItem.GetPhiExtent().AsRadians();
+        const int    r = m_gridItem.GetRadiusExtent();
+        return VECTOR2I( KiROUND( r * std::cos( phi ) ), KiROUND( r * std::sin( phi ) ) );
+    }
+
+    VECTOR2I arcMidLocal() const
+    {
+        const double phi = m_gridItem.GetPhiExtent().AsRadians() / 2.0;
+        const int    r = m_gridItem.GetRadiusExtent();
+        return VECTOR2I( KiROUND( r * std::cos( phi ) ), KiROUND( r * std::sin( phi ) ) );
+    }
+
+    PCB_GRID_ITEM& m_gridItem;
+};
+
+
 class PCB_TABLECELL_POINT_EDIT_BEHAVIOR : public EDA_TABLECELL_POINT_EDIT_BEHAVIOR
 {
 public:
@@ -753,6 +1039,22 @@ public:
             EDA_TABLECELL_POINT_EDIT_BEHAVIOR( aCell ),
             m_cell( aCell )
     {}
+
+    void MakePoints( EDIT_POINTS& aPoints ) override
+    {
+        aPoints.AddPoint( edgeMidpoint( COL_WIDTH ) );
+        aPoints.AddPoint( edgeMidpoint( ROW_HEIGHT ) );
+    }
+
+    bool UpdatePoints( EDIT_POINTS& aPoints ) override
+    {
+        wxCHECK( aPoints.PointsSize() == TABLECELL_MAX_POINTS, false );
+
+        aPoints.Point( COL_WIDTH ).SetPosition( edgeMidpoint( COL_WIDTH ) );
+        aPoints.Point( ROW_HEIGHT ).SetPosition( edgeMidpoint( ROW_HEIGHT ) );
+
+        return true;
+    }
 
     void UpdateItem( const EDIT_POINT& aEditedPoint, EDIT_POINTS& aPoints, COMMIT& aCommit,
                      std::vector<EDA_ITEM*>& aUpdatedItems ) override
@@ -763,61 +1065,55 @@ public:
         aCommit.Modify( &table );
         aUpdatedItems.push_back( &table );
 
-        if( !m_cell.GetTextAngle().IsHorizontal() )
+        if( isModified( aEditedPoint, aPoints.Point( COL_WIDTH ) ) )
         {
-            if( isModified( aEditedPoint, aPoints.Point( ROW_HEIGHT ) ) )
-            {
-                m_cell.SetEnd( VECTOR2I( m_cell.GetEndX(), aPoints.Point( ROW_HEIGHT ).GetY() ) );
+            m_cell.SetEnd( VECTOR2I( unturned( aPoints.Point( COL_WIDTH ).GetPosition() ).x, m_cell.GetEndY() ) );
 
-                int colWidth = std::abs( m_cell.GetRectangleHeight() );
+            int colWidth = m_cell.GetRectangleWidth();
 
-                for( int ii = 0; ii < m_cell.GetColSpan() - 1; ++ii )
-                    colWidth -= table.GetColWidth( m_cell.GetColumn() + ii );
+            for( int ii = 0; ii < m_cell.GetColSpan() - 1; ++ii )
+                colWidth -= table.GetColWidth( m_cell.GetColumn() + ii );
 
-                table.SetColWidth( m_cell.GetColumn() + m_cell.GetColSpan() - 1, colWidth );
-            }
-            else if( isModified( aEditedPoint, aPoints.Point( COL_WIDTH ) ) )
-            {
-                m_cell.SetEnd( VECTOR2I( aPoints.Point( COL_WIDTH ).GetX(), m_cell.GetEndY() ) );
-
-                int rowHeight = m_cell.GetRectangleWidth();
-
-                for( int ii = 0; ii < m_cell.GetRowSpan() - 1; ++ii )
-                    rowHeight -= table.GetRowHeight( m_cell.GetRow() + ii );
-
-                table.SetRowHeight( m_cell.GetRow() + m_cell.GetRowSpan() - 1, rowHeight );
-            }
+            table.SetColWidth( m_cell.GetColumn() + m_cell.GetColSpan() - 1, colWidth );
         }
-        else
+        else if( isModified( aEditedPoint, aPoints.Point( ROW_HEIGHT ) ) )
         {
-            if( isModified( aEditedPoint, aPoints.Point( COL_WIDTH ) ) )
-            {
-                m_cell.SetEnd( VECTOR2I( aPoints.Point( COL_WIDTH ).GetX(), m_cell.GetEndY() ) );
+            m_cell.SetEnd( VECTOR2I( m_cell.GetEndX(), unturned( aPoints.Point( ROW_HEIGHT ).GetPosition() ).y ) );
 
-                int colWidth = m_cell.GetRectangleWidth();
+            int rowHeight = m_cell.GetRectangleHeight();
 
-                for( int ii = 0; ii < m_cell.GetColSpan() - 1; ++ii )
-                    colWidth -= table.GetColWidth( m_cell.GetColumn() + ii );
+            for( int ii = 0; ii < m_cell.GetRowSpan() - 1; ++ii )
+                rowHeight -= table.GetRowHeight( m_cell.GetRow() + ii );
 
-                table.SetColWidth( m_cell.GetColumn() + m_cell.GetColSpan() - 1, colWidth );
-            }
-            else if( isModified( aEditedPoint, aPoints.Point( ROW_HEIGHT ) ) )
-            {
-                m_cell.SetEnd( VECTOR2I( m_cell.GetEndX(), aPoints.Point( ROW_HEIGHT ).GetY() ) );
-
-                int rowHeight = m_cell.GetRectangleHeight();
-
-                for( int ii = 0; ii < m_cell.GetRowSpan() - 1; ++ii )
-                    rowHeight -= table.GetRowHeight( m_cell.GetRow() + ii );
-
-                table.SetRowHeight( m_cell.GetRow() + m_cell.GetRowSpan() - 1, rowHeight );
-            }
+            table.SetRowHeight( m_cell.GetRow() + m_cell.GetRowSpan() - 1, rowHeight );
         }
 
         table.Normalize();
     }
 
 private:
+    // A cell keeps its rectangle square to the board and carries the turn in its text angle, so
+    // the handles belong on the edges it is drawn with, not on the stored rectangle.
+    VECTOR2I edgeMidpoint( TABLECELL_POINTS aPoint ) const
+    {
+        std::vector<VECTOR2I> corners = m_cell.GetCorners();
+
+        return aPoint == COL_WIDTH ? ( corners[1] + corners[2] ) / 2 : ( corners[2] + corners[3] ) / 2;
+    }
+
+    // Bring a dragged handle back into the frame the rectangle is stored in.
+    VECTOR2I unturned( const VECTOR2I& aPoint ) const
+    {
+        BOX2I box;
+        box.Merge( m_cell.GetStart() );
+        box.Merge( m_cell.GetEnd() );
+
+        VECTOR2I pt = aPoint;
+        RotatePoint( pt, box.GetCenter(), -m_cell.GetDrawRotation() );
+
+        return pt;
+    }
+
     PCB_TABLECELL& m_cell;
 };
 
@@ -1209,10 +1505,12 @@ public:
         if( m_dimension.Type() == PCB_DIM_ALIGNED_T )
         {
             // Dimension height setting - edit points should move only along the feature lines
-            aPoints.Point( DIM_CROSSBARSTART ).SetConstraint( new EC_LINE( aPoints.Point( DIM_CROSSBARSTART ),
-                                                                           aPoints.Point( DIM_START ) ) );
-            aPoints.Point( DIM_CROSSBAREND ).SetConstraint( new EC_LINE( aPoints.Point( DIM_CROSSBAREND ),
-                                                                         aPoints.Point( DIM_END ) ) );
+            aPoints.Point( DIM_CROSSBARSTART )
+                    .SetRelation( EDIT_RELATION::PointOnLine(
+                            aPoints.Point( DIM_CROSSBARSTART ), aPoints.Point( DIM_START ) ) );
+            aPoints.Point( DIM_CROSSBAREND )
+                    .SetRelation( EDIT_RELATION::PointOnLine(
+                            aPoints.Point( DIM_CROSSBAREND ), aPoints.Point( DIM_END ) ) );
         }
     }
 
@@ -1290,20 +1588,24 @@ private:
             m_dimension.SetStart( aEditedPoint.GetPosition() );
             m_dimension.Update();
 
-            aPoints.Point( DIM_CROSSBARSTART ).SetConstraint( new EC_LINE( aPoints.Point( DIM_CROSSBARSTART ),
-                                                                           aPoints.Point( DIM_START ) ) );
-            aPoints.Point( DIM_CROSSBAREND ).SetConstraint( new EC_LINE( aPoints.Point( DIM_CROSSBAREND ),
-                                                                         aPoints.Point( DIM_END ) ) );
+            aPoints.Point( DIM_CROSSBARSTART )
+                    .SetRelation( EDIT_RELATION::PointOnLine(
+                            aPoints.Point( DIM_CROSSBARSTART ), aPoints.Point( DIM_START ) ) );
+            aPoints.Point( DIM_CROSSBAREND )
+                    .SetRelation( EDIT_RELATION::PointOnLine(
+                            aPoints.Point( DIM_CROSSBAREND ), aPoints.Point( DIM_END ) ) );
         }
         else if( isModified( aEditedPoint, aPoints.Point( DIM_END ) ) )
         {
             m_dimension.SetEnd( aEditedPoint.GetPosition() );
             m_dimension.Update();
 
-            aPoints.Point( DIM_CROSSBARSTART ).SetConstraint( new EC_LINE( aPoints.Point( DIM_CROSSBARSTART ),
-                                                                           aPoints.Point( DIM_START ) ) );
-            aPoints.Point( DIM_CROSSBAREND ).SetConstraint( new EC_LINE( aPoints.Point( DIM_CROSSBAREND ),
-                                                                         aPoints.Point( DIM_END ) ) );
+            aPoints.Point( DIM_CROSSBARSTART )
+                    .SetRelation( EDIT_RELATION::PointOnLine(
+                            aPoints.Point( DIM_CROSSBARSTART ), aPoints.Point( DIM_START ) ) );
+            aPoints.Point( DIM_CROSSBAREND )
+                    .SetRelation( EDIT_RELATION::PointOnLine(
+                            aPoints.Point( DIM_CROSSBAREND ), aPoints.Point( DIM_END ) ) );
         }
         else if( isModified( aEditedPoint, aPoints.Point( DIM_TEXT ) ) )
         {
@@ -1404,8 +1706,7 @@ public:
 
         aPoints.Point( DIM_START ).SetSnapConstraint( ALL_LAYERS );
 
-        aPoints.Point( DIM_END ).SetConstraint(new EC_45DEGREE( aPoints.Point( DIM_END ),
-                                                                 aPoints.Point( DIM_START ) ) );
+        aPoints.Point( DIM_END ).SetRelation( EDIT_RELATION::Angle45( aPoints.Point( DIM_START ) ) );
         aPoints.Point( DIM_END ).SetSnapConstraint( IGNORE_SNAPS );
     }
 
@@ -1461,12 +1762,12 @@ public:
         aPoints.Point( DIM_START ).SetSnapConstraint( ALL_LAYERS );
         aPoints.Point( DIM_END ).SetSnapConstraint( ALL_LAYERS );
 
-        aPoints.Point( DIM_KNEE ).SetConstraint( new EC_LINE( aPoints.Point( DIM_START ),
-                                                              aPoints.Point( DIM_END ) ) );
+        aPoints.Point( DIM_KNEE )
+                .SetRelation( EDIT_RELATION::PointOnLine( aPoints.Point( DIM_START ),
+                                                          aPoints.Point( DIM_END ) ) );
         aPoints.Point( DIM_KNEE ).SetSnapConstraint( IGNORE_SNAPS );
 
-        aPoints.Point( DIM_TEXT ).SetConstraint( new EC_45DEGREE( aPoints.Point( DIM_TEXT ),
-                                                                  aPoints.Point( DIM_KNEE ) ) );
+        aPoints.Point( DIM_TEXT ).SetRelation( EDIT_RELATION::Angle45( aPoints.Point( DIM_KNEE ) ) );
         aPoints.Point( DIM_TEXT ).SetSnapConstraint( IGNORE_SNAPS );
     }
 
@@ -1491,8 +1792,9 @@ public:
             m_dimension.SetStart( aEditedPoint.GetPosition() );
             m_dimension.Update();
 
-            aPoints.Point( DIM_KNEE ).SetConstraint( new EC_LINE( aPoints.Point( DIM_START ),
-                                                                  aPoints.Point( DIM_END ) ) );
+            aPoints.Point( DIM_KNEE )
+                    .SetRelation( EDIT_RELATION::PointOnLine( aPoints.Point( DIM_START ),
+                                                              aPoints.Point( DIM_END ) ) );
         }
         else if( isModified( aEditedPoint, aPoints.Point( DIM_END ) ) )
         {
@@ -1505,8 +1807,9 @@ public:
             m_dimension.SetTextPos( m_dimension.GetTextPos() + kneeDelta );
             m_dimension.Update();
 
-            aPoints.Point( DIM_KNEE ).SetConstraint( new EC_LINE( aPoints.Point( DIM_START ),
-                                                                  aPoints.Point( DIM_END ) ) );
+            aPoints.Point( DIM_KNEE )
+                    .SetRelation( EDIT_RELATION::PointOnLine( aPoints.Point( DIM_START ),
+                                                              aPoints.Point( DIM_END ) ) );
         }
         else if( isModified( aEditedPoint, aPoints.Point( DIM_KNEE ) ) )
         {
@@ -1556,8 +1859,7 @@ public:
         aPoints.Point( DIM_START ).SetSnapConstraint( ALL_LAYERS );
         aPoints.Point( DIM_END ).SetSnapConstraint( ALL_LAYERS );
 
-        aPoints.Point( DIM_TEXT ).SetConstraint( new EC_45DEGREE( aPoints.Point( DIM_TEXT ),
-                                                                  aPoints.Point( DIM_END ) ) );
+        aPoints.Point( DIM_TEXT ).SetRelation( EDIT_RELATION::Angle45( aPoints.Point( DIM_END ) ) );
         aPoints.Point( DIM_TEXT ).SetSnapConstraint( IGNORE_SNAPS );
     }
 
@@ -1972,6 +2274,12 @@ std::shared_ptr<EDIT_POINTS> PCB_POINT_EDITOR::makePoints( EDA_ITEM* aItem )
         m_editorBehavior = std::make_unique<BARCODE_POINT_EDIT_BEHAVIOR>( barcode );
         break;
     }
+    case PCB_GRID_ITEM_T:
+    {
+        PCB_GRID_ITEM& grid = static_cast<PCB_GRID_ITEM&>( *aItem );
+        m_editorBehavior = std::make_unique<GRID_POINT_EDIT_BEHAVIOR>( grid );
+        break;
+    }
     case PCB_TEXTBOX_T:
     {
         PCB_TEXTBOX& textbox = static_cast<PCB_TEXTBOX&>( *aItem );
@@ -2062,7 +2370,7 @@ std::shared_ptr<EDIT_POINTS> PCB_POINT_EDITOR::makePoints( EDA_ITEM* aItem )
         if( m_isFootprintEditor )
         {
             PAD& pad = static_cast<PAD&>( *aItem );
-            PCB_LAYER_ID activeLayer = m_frame ? m_frame->GetActiveLayer() : PADSTACK::ALL_LAYERS;
+            PCB_LAYER_ID activeLayer = m_frame ? m_frame->GetActiveLayer() : PADSTACK::TEMP_ALL_LAYERS;
 
             // Point editor only handles copper shape changes
             if( !IsCopperLayer( activeLayer ) )
@@ -2082,8 +2390,17 @@ std::shared_ptr<EDIT_POINTS> PCB_POINT_EDITOR::makePoints( EDA_ITEM* aItem )
 
     case PCB_GENERATOR_T:
     {
-        PCB_GENERATOR* generator = static_cast<PCB_GENERATOR*>( aItem );
-        m_editorBehavior = std::make_unique<GENERATOR_POINT_EDIT_BEHAVIOR>( *generator );
+        if( dynamic_cast<PCB_GENERATOR_POLY*>( aItem ) )
+        {
+            PCB_GENERATOR_POLY* generator = static_cast<PCB_GENERATOR_POLY*>( aItem );
+            m_editorBehavior = std::make_unique<GENERATOR_POLY_POINT_EDIT_BEHAVIOR>( *generator );
+            break;
+        }
+        else
+        {
+            PCB_GENERATOR* generator = static_cast<PCB_GENERATOR*>( aItem );
+            m_editorBehavior = std::make_unique<GENERATOR_POINT_EDIT_BEHAVIOR>( *generator );
+        }
         break;
     }
 
@@ -2192,8 +2509,9 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
     }
 
     BOARD_ITEM* item = static_cast<BOARD_ITEM*>( selection.Front() );
+    bool        overrideLocks = editFrame->GetOverrideLocks();
 
-    if( !item || item->IsLocked() )
+    if( !item || ( item->IsLocked() && !overrideLocks ) )
         return 0;
 
     Activate();
@@ -2201,6 +2519,8 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
     getViewControls()->ShowCursor( true );
 
     PCB_GRID_HELPER grid( m_toolMgr, editFrame->GetMagneticItemsSettings() );
+    grid.SetPointEditProfile( true );
+    m_constraintDragSession.reset();
 
     // Use the original object as a construction item
     std::vector<std::unique_ptr<BOARD_ITEM>> clones;
@@ -2230,7 +2550,7 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
             }
         }
 
-        if( allShapes && shapes.size() > 1 && !anyLocked )
+        if( allShapes && shapes.size() > 1 && ( !anyLocked || overrideLocks ) )
         {
             m_editorBehavior = std::make_unique<SHAPE_GROUP_POINT_EDIT_BEHAVIOR>(
                     std::move( shapes ), item );
@@ -2284,14 +2604,14 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
 
                 if( inDrag && m_editedPoint )
                 {
-                    EDIT_CONSTRAINT<EDIT_POINT>* constraint = nullptr;
+                    EDIT_RELATION* relation = nullptr;
 
                     if( m_altConstraint )
-                        constraint = m_altConstraint.get();
+                        relation = m_altConstraint.get();
                     else if( m_editedPoint->IsConstrained() )
-                        constraint = m_editedPoint->GetConstraint();
+                        relation = m_editedPoint->GetRelation();
 
-                    directions = getConstraintDirections( constraint );
+                    directions = getConstraintDirections( relation );
                 }
 
                 if( directions.empty() )
@@ -2313,11 +2633,30 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
 
     BOARD_COMMIT commit( editFrame );
 
+    auto installFeasibilityCallback =
+            [&]()
+            {
+                grid.SetFeasibilityCallback( {} );
+
+                if( !m_constraintDragSession || dynamic_cast<EDIT_LINE*>( m_editedPoint ) )
+                    return;
+
+                std::shared_ptr<BOARD_CONSTRAINT_DRAG_SESSION> session = m_constraintDragSession;
+
+                grid.SetFeasibilityCallback(
+                        [session]( const SNAP_SOURCE_CONTEXT& aContext,
+                                   const std::vector<SNAP_CANDIDATE>& aCandidates )
+                        {
+                            return session->ResolveCandidates( aContext, aCandidates );
+                        } );
+            };
+
     // Main loop: keep receiving events
     while( TOOL_EVENT* evt = Wait() )
     {
         grid.SetSnap( !evt->Modifier( MD_SHIFT ) );
         grid.SetUseGrid( getView()->GetGAL()->GetGridSnapping() && !evt->DisableGridSnapping() );
+        installFeasibilityCallback();
 
         if( editFrame->IsType( FRAME_PCB_EDITOR ) )
             m_arcEditMode = editFrame->GetPcbNewSettings()->m_ArcEditMode;
@@ -2358,6 +2697,20 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
                 m_original = *m_editedPoint;    // Save the original position
                 getViewControls()->SetAutoPan( true );
                 inDrag = true;
+
+                if( PCB_SHAPE* shape = dynamic_cast<PCB_SHAPE*>( item ) )
+                {
+                    if( std::optional<CONSTRAINT_MEMBER> member =
+                                constraintMemberForEditPoint( shape, m_editPoints.get(), m_editedPoint ) )
+                    {
+                        m_constraintDragSession = std::make_shared<BOARD_CONSTRAINT_DRAG_SESSION>();
+
+                        if( !m_constraintDragSession->Build( board(), *member ) )
+                            m_constraintDragSession.reset();
+
+                        installFeasibilityCallback();
+                    }
+                }
 
                 if( m_editedPoint->GetGridConstraint() != SNAP_BY_GRID )
                     grid.SetAuxAxes( true, m_original.GetPosition() );
@@ -2403,6 +2756,17 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
                 updateSnapLineDirections();
             }
 
+            if( need_constraint )
+            {
+                VECTOR2I origin = m_altConstraint ? m_altConstrainer.GetPosition()
+                                                  : m_original.GetPosition();
+                grid.SetAngleRestriction( origin, Is45Limited() ? 45.0 : 90.0 );
+            }
+            else
+            {
+                grid.SetAngleRestriction( std::nullopt, 0.0 );
+            }
+
             // For polygon lines, Ctrl temporarily toggles between CONVERGING and FIXED_LENGTH modes
 
             if( line )
@@ -2425,16 +2789,15 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
 
                 if( isPoly )
                 {
-                    EC_CONVERGING* constraint =
-                            dynamic_cast<EC_CONVERGING*>( line->GetConstraint() );
+                    POLYGON_EDGE_DRAG_POLICY* policy = line->GetDragPolicy();
 
-                    if( constraint )
+                    if( policy )
                     {
                         POLYGON_LINE_MODE targetMode = ctrlHeld ? POLYGON_LINE_MODE::FIXED_LENGTH
                                                                 : POLYGON_LINE_MODE::CONVERGING;
 
-                        if( constraint->GetMode() != targetMode )
-                            constraint->SetMode( targetMode );
+                        if( policy->GetMode() != targetMode )
+                            policy->SetMode( targetMode );
                     }
                 }
             }
@@ -2454,12 +2817,12 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
             {
                 if( grid.GetUseGrid() )
                 {
-                    EC_CONVERGING* convergingConstraint =
-                            line ? dynamic_cast<EC_CONVERGING*>( line->GetConstraint() ) : nullptr;
+                    POLYGON_EDGE_DRAG_POLICY* dragPolicy =
+                            line ? line->GetDragPolicy() : nullptr;
 
                     bool snappedAlongPerp = false;
 
-                    if( convergingConstraint )
+                    if( dragPolicy )
                     {
                         // For a polygon edge, the line moves only perpendicular to itself.
                         // Snapping pos.x and pos.y independently to the axis-aligned grid
@@ -2468,8 +2831,8 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
                         // half-grid threshold first), causing the rendered edge to flicker
                         // between two positions. Quantize the perpendicular displacement
                         // directly so each grid step produces one stable line position.
-                        const VECTOR2I& origCenter = convergingConstraint->GetOriginalCenter();
-                        const VECTOR2I& perpVec = convergingConstraint->GetPerpVector();
+                        const VECTOR2I& origCenter = dragPolicy->GetOriginalCenter();
+                        const VECTOR2I& perpVec = dragPolicy->GetPerpVector();
                         double perpLen = VECTOR2D( perpVec ).EuclideanNorm();
 
                         if( perpLen > 0 )
@@ -2495,14 +2858,16 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
 
                     if( !snappedAlongPerp )
                     {
-                        VECTOR2I gridPt = grid.BestSnapAnchor( pos, {}, grid.GetItemGrid( item ),
-                                                                { item } );
+                        VECTOR2I gridPt =
+                                grid.ResolveSnap( pos, {}, grid.GetItemGrid( item ), { item } )
+                                        .position;
 
                         VECTOR2I last = m_editedPoint->GetPosition();
                         VECTOR2I delta = pos - last;
-                        VECTOR2I deltaGrid = gridPt - grid.BestSnapAnchor( last, {},
-                                                                           grid.GetItemGrid( item ),
-                                                                           { item } );
+                        VECTOR2I deltaGrid =
+                                gridPt
+                                - grid.ResolveSnap( last, {}, grid.GetItemGrid( item ), { item } )
+                                          .position;
 
                         if( abs( delta.x ) > grid.GetGrid().x / 2 )
                             pos.x = last.x + deltaGrid.x;
@@ -2557,7 +2922,9 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
 
                         if( m_editedPoint->GetGridConstraint() == SNAP_TO_GRID && grid.GetSnap() )
                         {
-                            VECTOR2I gridded = grid.BestSnapAnchor( snapped, {}, grid.GetItemGrid( item ), { item } );
+                            VECTOR2I gridded =
+                                    grid.ResolveSnap( snapped, {}, grid.GetItemGrid( item ), { item } )
+                                            .position;
                             double   griddedAng = SEG( gridded, prev ).Angle( SEG( gridded, next ) ).AsDegrees();
 
                             snapped = std::abs( griddedAng - snapAng ) < 2.0 ? gridded : pos;
@@ -2575,38 +2942,109 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
             }
 
             bool constraintSnapped = false;
+            std::vector<VECTOR2I> stationarySelfPoints;
+            std::vector<SEG>      stationarySelfSegments;
+
+            if( item->Type() == PCB_ZONE_T
+                || ( item->Type() == PCB_SHAPE_T
+                     && static_cast<PCB_SHAPE*>( item )->GetShape() == SHAPE_T::POLY ) )
+            {
+                const EDIT_LINE* editedLine = dynamic_cast<const EDIT_LINE*>( m_editedPoint );
+
+                for( unsigned i = 0; i < m_editPoints->PointsSize(); ++i )
+                {
+                    const EDIT_POINT& point = m_editPoints->Point( i );
+
+                    if( &point != m_editedPoint
+                        && ( !editedLine
+                             || ( &point != &editedLine->GetOrigin()
+                                  && &point != &editedLine->GetEnd() ) ) )
+                    {
+                        stationarySelfPoints.push_back( point.GetPosition() );
+                    }
+                }
+
+                for( unsigned i = 0; i < m_editPoints->LinesSize(); ++i )
+                {
+                    const EDIT_LINE& stationaryLine = m_editPoints->Line( i );
+
+                    if( &stationaryLine != editedLine
+                        && &stationaryLine.GetOrigin() != m_editedPoint
+                        && &stationaryLine.GetEnd() != m_editedPoint
+                        && ( !editedLine
+                             || ( &stationaryLine.GetOrigin() != &editedLine->GetOrigin()
+                                  && &stationaryLine.GetOrigin() != &editedLine->GetEnd()
+                                  && &stationaryLine.GetEnd() != &editedLine->GetOrigin()
+                                  && &stationaryLine.GetEnd() != &editedLine->GetEnd() ) ) )
+                    {
+                        stationarySelfSegments.emplace_back(
+                                stationaryLine.GetOrigin().GetPosition(),
+                                stationaryLine.GetEnd().GetPosition() );
+                    }
+                }
+            }
+            else if( PCB_SHAPE* shape = dynamic_cast<PCB_SHAPE*>( item ) )
+            {
+                int editedIndex = getEditedPointIndex();
+
+                if( shape->GetShape() == SHAPE_T::RECTANGLE && m_editPoints->PointsSize() >= RECT_MAX_POINTS
+                    && editedIndex >= RECT_TOP_LEFT && editedIndex <= RECT_BOT_LEFT )
+                {
+                    int opposite = ( editedIndex + 2 ) % 4;
+                    stationarySelfPoints.push_back( m_editPoints->Point( opposite ).GetPosition() );
+                }
+                else if( shape->GetShape() == SHAPE_T::RECTANGLE && m_editPoints->LinesSize() >= 4 )
+                {
+                    for( unsigned i = 0; i < m_editPoints->LinesSize() && i < 4; ++i )
+                    {
+                        if( m_editedPoint != &m_editPoints->Line( i ) )
+                            continue;
+
+                        const EDIT_LINE& opposite = m_editPoints->Line( ( i + 2 ) % 4 );
+                        stationarySelfPoints.push_back( opposite.GetOrigin().GetPosition() );
+                        stationarySelfPoints.push_back( opposite.GetEnd().GetPosition() );
+                        stationarySelfSegments.emplace_back( opposite.GetOrigin().GetPosition(),
+                                                             opposite.GetEnd().GetPosition() );
+                        break;
+                    }
+                }
+                else if( shape->GetShape() == SHAPE_T::ARC )
+                {
+                    constexpr int arcStart = 0;
+                    constexpr int arcMid = 1;
+                    constexpr int arcEnd = 2;
+                    constexpr int arcCenter = 3;
+
+                    if( m_arcEditMode == ARC_EDIT_MODE::KEEP_ENDPOINTS_OR_START_DIRECTION )
+                    {
+                        if( editedIndex != arcStart )
+                            stationarySelfPoints.push_back( m_editPoints->Point( arcStart ).GetPosition() );
+
+                        if( editedIndex != arcEnd )
+                            stationarySelfPoints.push_back( m_editPoints->Point( arcEnd ).GetPosition() );
+                    }
+                    else if( editedIndex == arcStart || editedIndex == arcMid || editedIndex == arcEnd )
+                    {
+                        stationarySelfPoints.push_back( m_editPoints->Point( arcCenter ).GetPosition() );
+                    }
+                }
+            }
+
+            grid.SetStationarySelfGeometry( std::move( stationarySelfPoints ),
+                                            std::move( stationarySelfSegments ) );
 
             // Apply 45 degree or other constraints
             if( !m_angleSnapActive && m_altConstraint )
             {
-                m_editedPoint->SetPosition( pos );
-                m_altConstraint->Apply( grid );
+                m_editedPoint->SetPosition(
+                        grid.ResolveSnap( pos, snapLayers, grid.GetItemGrid( item ), { item } )
+                                .position );
                 constraintSnapped = true;
-
-                // For constrained lines (like zone edges), try to snap to nearby anchors
-                // that lie on the constraint line
-                if( grid.GetSnap() && !snapLayers.empty() )
-                {
-                    VECTOR2I constrainedPos = m_editedPoint->GetPosition();
-                    VECTOR2I snapPos = grid.BestSnapAnchor( constrainedPos, snapLayers,
-                                                            grid.GetItemGrid( item ), { item } );
-
-                    if( snapPos != constrainedPos )
-                    {
-                        m_editedPoint->SetPosition( snapPos );
-                        m_altConstraint->Apply( grid );
-                        VECTOR2I projectedPos = m_editedPoint->GetPosition();
-                        const int snapTolerance = KiROUND( getView()->ToWorld( 5 ) );
-
-                        if( ( projectedPos - snapPos ).EuclideanNorm() > snapTolerance )
-                            m_editedPoint->SetPosition( constrainedPos );
-                    }
-                }
             }
             else if( !m_angleSnapActive && m_editedPoint->IsConstrained() )
             {
                 m_editedPoint->SetPosition( pos );
-                m_editedPoint->ApplyConstraint( grid );
+                m_editedPoint->ApplyRelation( grid );
                 constraintSnapped = true;
 
                 // For constrained lines (like zone edges), try to snap to nearby anchors
@@ -2615,31 +3053,28 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
                 if( grid.GetSnap() && !snapLayers.empty() )
                 {
                     VECTOR2I constrainedPos = m_editedPoint->GetPosition();
-                    VECTOR2I snapPos = grid.BestSnapAnchor( constrainedPos, snapLayers,
-                                                            grid.GetItemGrid( item ), { item } );
+                    VECTOR2I snapPos =
+                            grid.ResolveSnap( constrainedPos, snapLayers, grid.GetItemGrid( item ),
+                                              { item } )
+                                    .position;
 
-                    // If we found a snap anchor different from the constrained position,
-                    // check if setting the point there and reapplying the constraint
-                    // results in a position close to the snap point
+                    // Require the relation to preserve the discrete anchor exactly.
                     if( snapPos != constrainedPos )
                     {
                         m_editedPoint->SetPosition( snapPos );
-                        m_editedPoint->ApplyConstraint( grid );
+                        m_editedPoint->ApplyRelation( grid );
                         VECTOR2I projectedPos = m_editedPoint->GetPosition();
 
-                        // If the projection is close to the snap anchor, use it
-                        // Otherwise revert to the original constrained position
-                        const int snapTolerance = KiROUND( getView()->ToWorld( 5 ) );
-
-                        if( ( projectedPos - snapPos ).EuclideanNorm() > snapTolerance )
+                        if( projectedPos != snapPos )
                             m_editedPoint->SetPosition( constrainedPos );
                     }
                 }
             }
             else if( !m_angleSnapActive && m_editedPoint->GetGridConstraint() == SNAP_TO_GRID )
             {
-                m_editedPoint->SetPosition( grid.BestSnapAnchor( pos, snapLayers, grid.GetItemGrid( item ),
-                                                                 { item } ) );
+                m_editedPoint->SetPosition(
+                        grid.ResolveSnap( pos, snapLayers, grid.GetItemGrid( item ), { item } )
+                                .position );
             }
             else
             {
@@ -2751,6 +3186,7 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
             }
 
             inDrag = false;
+            m_constraintDragSession.reset();
             frame()->UndoRedoBlock( false );
             updateSnapLineDirections();
 
@@ -2775,6 +3211,7 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
                 }
 
                 inDrag = false;
+                m_constraintDragSession.reset();
                 frame()->UndoRedoBlock( false );
                 updateSnapLineDirections();
             }
@@ -2817,14 +3254,20 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
         }
     }
 
-    if( PCB_SHAPE* shape= dynamic_cast<PCB_SHAPE*>( item ) )
+    // IS_MOVING is only still set if the loop broke mid-drag, and a null m_editPoints means
+    // Reset() ran while we were suspended, so the board and item have already been destroyed
+    if( inDrag && m_editPoints )
     {
-        shape->ClearFlags( IS_MOVING );
-        shape->UpdateHatching();
+        if( PCB_SHAPE* shape = dynamic_cast<PCB_SHAPE*>( m_editPoints->GetParent() ) )
+        {
+            shape->ClearFlags( IS_MOVING );
+            shape->UpdateHatching();
+        }
     }
 
     m_preview.FreeItems();
     m_radiusHelper = nullptr;
+    m_constraintDragSession.reset();
 
     if( getView()->HasItem( &m_preview ) )
         getView()->Remove( &m_preview );
@@ -2902,6 +3345,188 @@ void PCB_POINT_EDITOR::updateItem( BOARD_COMMIT& aCommit )
     {
         wxCHECK( m_editedPoint, /* void */ );
         m_editorBehavior->UpdateItem( *m_editedPoint, *m_editPoints, aCommit, updatedItems );
+    }
+
+    // Re-derive any geometry constrained to the dragged segment endpoint (issue #2329).  The
+    // behavior above has already moved the dragged point to the cursor, so its current endpoint
+    // position is the pin target for the solver.
+    auto anyConstraints =
+            [&]() -> bool
+            {
+                if( !board() )
+                    return false;
+
+                if( !board()->Constraints().empty() )
+                    return true;
+
+                // In the footprint editor the constraints live on the footprint, not the board.
+                for( FOOTPRINT* fp : board()->Footprints() )
+                {
+                    if( !fp->Constraints().empty() )
+                        return true;
+                }
+
+                return false;
+            };
+
+    if( item->Type() == PCB_SHAPE_T && m_editedPoint && anyConstraints() )
+    {
+        PCB_SHAPE* shape = static_cast<PCB_SHAPE*>( item );
+        SHAPE_T    type = shape->GetShape();
+        VECTOR2I   cursor = m_editedPoint->GetPosition();
+
+        std::optional<CONSTRAINT_MEMBER>                      member;
+        std::optional<std::pair<CONSTRAINT_MEMBER, VECTOR2I>> coDragged;
+
+        // Match dragged point to a constraint anchor segment bezier and arc expose endpoints
+        // arc and circle also expose a centre bezier has none so centre test stays arc only
+        if( type == SHAPE_T::SEGMENT || type == SHAPE_T::ARC || type == SHAPE_T::BEZIER )
+        {
+            if( cursor == shape->GetStart() )
+                member = CONSTRAINT_MEMBER( shape->m_Uuid, CONSTRAINT_ANCHOR::START );
+            else if( cursor == shape->GetEnd() )
+                member = CONSTRAINT_MEMBER( shape->m_Uuid, CONSTRAINT_ANCHOR::END );
+            else if( type == SHAPE_T::ARC && cursor == shape->GetCenter() )
+                member = CONSTRAINT_MEMBER( shape->m_Uuid, CONSTRAINT_ANCHOR::CENTER );
+        }
+        else if( type == SHAPE_T::CIRCLE )
+        {
+            if( cursor == shape->GetCenter() )
+                member = CONSTRAINT_MEMBER( shape->m_Uuid, CONSTRAINT_ANCHOR::CENTER );
+        }
+        else if( type == SHAPE_T::RECTANGLE && m_editPoints->PointsSize() >= RECT_MAX_POINTS )
+        {
+            // Only corner handles map to vertex anchors centre radius and side handles reshape whole rect
+            // corners kept in min max order so ordinal equals vertex index solve target reads post clamp position
+            for( unsigned i = RECT_TOP_LEFT; i <= RECT_BOT_LEFT; ++i )
+            {
+                if( isModified( m_editPoints->Point( i ) ) )
+                {
+                    if( std::optional<CONSTRAINT_ANCHOR_POINT> corner = ConstraintShapeVertex( shape, (int) i ) )
+                    {
+                        member = CONSTRAINT_MEMBER( shape->m_Uuid, corner->anchor, corner->index );
+                        cursor = corner->pos;
+                    }
+
+                    break;
+                }
+            }
+
+            // Side handle drags one edge param aliased by both corners side i runs corner i to i plus 1 mod 4
+            // pinning corner i covers dragged plus one perpendicular param opposite corner hold covers the rest
+            if( !member.has_value() )
+            {
+                for( unsigned i = 0; i < m_editPoints->LinesSize() && i < 4; ++i )
+                {
+                    if( isModified( m_editPoints->Line( i ) ) )
+                    {
+                        if( std::optional<CONSTRAINT_ANCHOR_POINT> corner = ConstraintShapeVertex( shape, (int) i ) )
+                        {
+                            member = CONSTRAINT_MEMBER( shape->m_Uuid, corner->anchor, corner->index );
+                            cursor = corner->pos;
+                        }
+
+                        break;
+                    }
+                }
+            }
+        }
+        else if( type == SHAPE_T::POLY && ConstraintPolygonIsModelable( shape ) )
+        {
+            // Editor builds one edit point per outline vertex in order so dragged ordinal is vertex index
+            // holds even when a drag lands a vertex on top of another where position match would be ambiguous
+            for( unsigned i = 0; i < m_editPoints->PointsSize(); ++i )
+            {
+                if( isModified( m_editPoints->Point( i ) ) )
+                {
+                    if( std::optional<CONSTRAINT_ANCHOR_POINT> vertex = ConstraintShapeVertex( shape, (int) i ) )
+                    {
+                        member = CONSTRAINT_MEMBER( shape->m_Uuid, vertex->anchor, vertex->index );
+                        cursor = vertex->pos;
+                    }
+
+                    break;
+                }
+            }
+
+            // Edge handle moves two adjacent vertices one member cannot express both so second vertex
+            // rides as a co dragged pin line i runs vertex i to i plus 1 mod count positions read back post move
+            if( !member.has_value() )
+            {
+                for( unsigned i = 0; i < m_editPoints->LinesSize(); ++i )
+                {
+                    if( isModified( m_editPoints->Line( i ) ) )
+                    {
+                        int next = ( (int) i + 1 ) % (int) m_editPoints->PointsSize();
+
+                        std::optional<CONSTRAINT_ANCHOR_POINT> v0 = ConstraintShapeVertex( shape, (int) i );
+                        std::optional<CONSTRAINT_ANCHOR_POINT> v1 = ConstraintShapeVertex( shape, next );
+
+                        if( v0 && v1 )
+                        {
+                            member = CONSTRAINT_MEMBER( shape->m_Uuid, v0->anchor, v0->index );
+                            cursor = v0->pos;
+                            coDragged = { CONSTRAINT_MEMBER( shape->m_Uuid, v1->anchor, v1->index ), v1->pos };
+                        }
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        bool isCurve = type == SHAPE_T::CIRCLE || type == SHAPE_T::ARC || type == SHAPE_T::ELLIPSE
+                       || type == SHAPE_T::ELLIPSE_ARC;
+
+        std::vector<PCB_SHAPE*> modified;
+
+        // Failed or diverged solve leaves neighbors untouched below so nothing is half moved this frame
+        // moved shapes report in modified moved dimensions do not so refresh view here or they freeze
+        auto stageNeighbor = [&]( BOARD_ITEM* aItem )
+        {
+            aCommit.Modify( aItem );
+
+            if( aItem->Type() != PCB_SHAPE_T )
+                updatedItems.push_back( aItem );
+        };
+
+        if( member.has_value() )
+        {
+            if( !m_constraintDragSession || !m_constraintDragSession->Matches( *member ) )
+            {
+                m_constraintDragSession = std::make_shared<BOARD_CONSTRAINT_DRAG_SESSION>();
+
+                if( !m_constraintDragSession->Build( board(), *member ) )
+                    m_constraintDragSession.reset();
+            }
+
+            if( m_constraintDragSession )
+            {
+                m_constraintDragSession->Solve( cursor, &modified, stageNeighbor,
+                                                /* aIncludeDragged */ false,
+                                                /* aStabilize */ false, {}, coDragged );
+            }
+            else
+            {
+                SolveCluster( board(), member.value(), cursor, &modified, stageNeighbor,
+                              /* aIncludeDragged */ false, /* aStabilize */ false, {}, coDragged );
+            }
+        }
+        else if( isCurve )
+        {
+            // Radius or axis handle not a constrained point resize hold keeps new radius but yields
+            // to a real radius constraint full dof hold below would fight it so curves use this instead
+            ReSolveAfterShapeResize( board(), shape, &modified, stageNeighbor );
+        }
+        else if( type == SHAPE_T::RECTANGLE || ( type == SHAPE_T::POLY && ConstraintPolygonIsModelable( shape ) ) )
+        {
+            // Only whole shape handles centre and corner radius grips land here side corner and edge
+            // drags pinned members above already treated like a properties edit new geometry wins neighbors follow
+            ReSolveShapeClustersHoldingEdited( board(), { shape }, &modified, stageNeighbor );
+        }
+
+        for( PCB_SHAPE* neighbor : modified )
+            updatedItems.push_back( neighbor );
     }
 
     // Perform any post-edit actions that the item may require
@@ -3083,10 +3708,10 @@ void PCB_POINT_EDITOR::setAltConstraint( bool aEnabled )
         {
             // For polygon lines, toggle the mode on the existing constraint rather than
             // creating a new one. This preserves the original reference positions.
-            EC_CONVERGING* constraint = dynamic_cast<EC_CONVERGING*>( line->GetConstraint() );
+            POLYGON_EDGE_DRAG_POLICY* policy = line->GetDragPolicy();
 
-            if( constraint )
-                constraint->SetMode( POLYGON_LINE_MODE::FIXED_LENGTH );
+            if( policy )
+                policy->SetMode( POLYGON_LINE_MODE::FIXED_LENGTH );
 
             // Don't set m_altConstraint - we're modifying the line's own constraint
         }
@@ -3096,9 +3721,9 @@ void PCB_POINT_EDITOR::setAltConstraint( bool aEnabled )
             m_altConstrainer = get45DegConstrainer();
 
             if( Is90Limited() )
-                m_altConstraint.reset( new EC_90DEGREE( *m_editedPoint, m_altConstrainer ) );
+                m_altConstraint = EDIT_RELATION::Angle90( m_altConstrainer );
             else
-                m_altConstraint.reset( new EC_45DEGREE( *m_editedPoint, m_altConstrainer ) );
+                m_altConstraint = EDIT_RELATION::Angle45( m_altConstrainer );
         }
     }
     else
@@ -3106,10 +3731,10 @@ void PCB_POINT_EDITOR::setAltConstraint( bool aEnabled )
         if( line && isPoly )
         {
             // Restore the line's constraint to CONVERGING mode
-            EC_CONVERGING* constraint = dynamic_cast<EC_CONVERGING*>( line->GetConstraint() );
+            POLYGON_EDGE_DRAG_POLICY* policy = line->GetDragPolicy();
 
-            if( constraint )
-                constraint->SetMode( POLYGON_LINE_MODE::CONVERGING );
+            if( policy )
+                policy->SetMode( POLYGON_LINE_MODE::CONVERGING );
         }
 
         m_altConstraint.reset();
@@ -3283,6 +3908,15 @@ int PCB_POINT_EDITOR::addCorner( const TOOL_EVENT& aEvent )
 
         zoneOutline->InsertVertex( nextNearestIdx, nearestPoint );
 
+        // Zones cannot carry constraint members but shape polygons can insertion shifts ordinals at or
+        // past new vertex issue 2329 members only exist on hole free polys index past outline count is a hole vertex
+        if( graphicItem && nextNearestIdx < (unsigned) zoneOutline->COutline( 0 ).PointCount() )
+        {
+            RemapPolygonVertexMembers( frame->GetBoard(), graphicItem->m_Uuid, (int) nextNearestIdx, 1,
+                                       [&]( BOARD_ITEM* aConstraint ) { commit.Modify( aConstraint ); },
+                                       [&]( BOARD_ITEM* aConstraint ) { commit.Remove( aConstraint ); } );
+        }
+
         if( item->Type() == PCB_ZONE_T )
             static_cast<ZONE*>( item )->HatchBorder();
 
@@ -3387,6 +4021,15 @@ int PCB_POINT_EDITOR::removeCorner( const TOOL_EVENT& aEvent )
             // the usual case: remove just the corner when there are >3 vertices
             commit.Modify( item );
             polygon->RemoveVertex( vertexIdx );
+
+            // Members only exist on hole free shape polygons where contour relative ordinal is member
+            // index removed vertex member retires its constraint later ordinals shift down issue 2329
+            if( item->Type() == PCB_SHAPE_T && vertexIdx.m_contour == 0 )
+            {
+                RemapPolygonVertexMembers( frame->GetBoard(), item->m_Uuid, vertexIdx.m_vertex, -1,
+                                           [&]( BOARD_ITEM* aConstraint ) { commit.Modify( aConstraint ); },
+                                           [&]( BOARD_ITEM* aConstraint ) { commit.Remove( aConstraint ); } );
+            }
         }
         else
         {
@@ -3499,6 +4142,17 @@ int PCB_POINT_EDITOR::chamferCorner( const TOOL_EVENT& aEvent )
             // The two end points of the chamfer are the new corners
             polygon->InsertVertex( nearestIdx, chamferResult->m_updated_seg_b->B );
             polygon->InsertVertex( nearestIdx, chamferResult->m_updated_seg_a->B );
+
+            // Chamfered corner constraints retire members past it net one higher insert pass must run
+            // first threshold nearestIdx plus 1 deleting first nets negative one instead issue 2329
+            if( item->Type() == PCB_SHAPE_T && nearestIdx < (unsigned) polygon->COutline( 0 ).PointCount() )
+            {
+                auto modify = [&]( BOARD_ITEM* aConstraint ) { commit.Modify( aConstraint ); };
+                auto remove = [&]( BOARD_ITEM* aConstraint ) { commit.Remove( aConstraint ); };
+
+                RemapPolygonVertexMembers( frame->GetBoard(), item->m_Uuid, (int) nearestIdx + 1, 2, modify, remove );
+                RemapPolygonVertexMembers( frame->GetBoard(), item->m_Uuid, (int) nearestIdx, -1, modify, remove );
+            }
         }
     }
 

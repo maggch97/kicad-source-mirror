@@ -65,9 +65,14 @@ void TOOLS_HOLDER::PushTool( const TOOL_EVENT& aEvent )
     TOOL_ACTION* action = m_toolManager->GetActionManager()->FindAction( actionName );
 
     if( action )
+    {
         DisplayToolMsg( action->GetFriendlyName() );
+        SelectToolbarAction( *action );
+    }
     else
+    {
         DisplayToolMsg( actionName );
+    }
 }
 
 
@@ -88,24 +93,30 @@ void TOOLS_HOLDER::PopTool( const TOOL_EVENT& aEvent )
 
             // If there's something underneath us, and it's now the top of the stack, then
             // re-activate it
-            if( ( --i ) >= 0 && i == (int)m_toolStack.size() - 1 )
+            if( ( --i ) >= 0 && i == (int) m_toolStack.size() - 1 )
             {
                 std::string  back = m_toolStack[ i ];
-                TOOL_ACTION* action = m_toolManager->GetActionManager()->FindAction( back );
 
-                if( action )
+                if( back != actionName )
                 {
-                    // Pop the action as running it will push it back onto the stack
-                    m_toolStack.pop_back();
+                    TOOL_ACTION* action = m_toolManager->GetActionManager()->FindAction( back );
 
-                    TOOL_EVENT evt = action->MakeEvent();
-                    evt.SetHasPosition( false );
-                    evt.SetReactivate( true );
-                    GetToolManager()->PostEvent( evt );
+                    if( action )
+                    {
+                        // Pop the action as running it will push it back onto the stack
+                        m_toolStack.pop_back();
+
+                        TOOL_EVENT evt = action->MakeEvent();
+                        evt.SetHasPosition( false );
+                        evt.SetReactivate( true );
+                        GetToolManager()->PostEvent( evt );
+                    }
                 }
             }
             else
+            {
                 DisplayToolMsg( ACTIONS::selectionTool.GetFriendlyName() );
+            }
 
             return;
         }

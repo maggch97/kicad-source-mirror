@@ -22,6 +22,8 @@
 #include <panel_setup_defaults.h>
 #include <panel_setup_constraints.h>
 #include <panel_setup_tracks_and_vias.h>
+#include <panel_setup_via_stacks.h>
+#include <panel_setup_drill_chart.h>
 #include <panel_setup_mask_and_paste.h>
 #include <../board_stackup_manager/panel_board_stackup.h>
 #include <../board_stackup_manager/panel_board_finish.h>
@@ -45,6 +47,7 @@
 #include <panel_text_variables.h>
 #include <project.h>
 #include <project/project_file.h>
+#include <project/net_settings.h>
 #include <settings/settings_manager.h>
 #include <widgets/resettable_panel.h>
 #include <widgets/wx_progress_reporters.h>
@@ -78,6 +81,7 @@ DIALOG_BOARD_SETUP::DIALOG_BOARD_SETUP( PCB_EDIT_FRAME* aFrame, wxWindow* aParen
         m_maskAndPastePage( 0 ),
         m_constraintsPage( 0 ),
         m_tracksAndViasPage( 0 ),
+        m_viaStacksPage( 0 ),
         m_teardropsPage( 0 ),
         m_tuningPatternsPage( 0 ),
         m_netclassesPage( 0 ),
@@ -129,6 +133,13 @@ DIALOG_BOARD_SETUP::DIALOG_BOARD_SETUP( PCB_EDIT_FRAME* aFrame, wxWindow* aParen
                 return new PANEL_SETUP_MASK_AND_PASTE( aParent, m_frame );
             }, _( "Solder Mask/Paste" ) );
 
+    m_drillChartPage = m_treebook->GetPageCount();
+    m_treebook->AddLazySubPage(
+            [this]( wxWindow* aParent ) -> wxWindow*
+            {
+                return new PANEL_SETUP_DRILL_CHART( aParent, m_frame );
+            }, _( "Drill Chart" ) );
+
     m_treebook->AddPage( new wxPanel( GetTreebook() ), _( "Text & Graphics" ) );
 
     m_defaultsPage = m_treebook->GetPageCount();
@@ -166,6 +177,14 @@ DIALOG_BOARD_SETUP::DIALOG_BOARD_SETUP( PCB_EDIT_FRAME* aFrame, wxWindow* aParen
             {
                 return new PANEL_SETUP_TRACKS_AND_VIAS( aParent, m_frame );
             },  _( "Pre-defined Sizes" ) );
+
+    m_viaStacksPage = m_treebook->GetPageCount();
+    m_treebook->AddLazySubPage(
+            [this]( wxWindow* aParent ) -> wxWindow*
+            {
+                return new PANEL_SETUP_VIA_STACKS( aParent, m_frame );
+            },
+            _( "Microvia Stacks" ) );
 
     m_zonesPage = m_treebook->GetPageCount();
     m_treebook->AddLazySubPage(
@@ -284,6 +303,44 @@ DIALOG_BOARD_SETUP::~DIALOG_BOARD_SETUP()
 }
 
 
+bool DIALOG_BOARD_SETUP::TransferDataFromWindow()
+{
+    if( !PAGED_DIALOG::TransferDataFromWindow() )
+        return false;
+
+    // References to renamed profiles can only be fixed up after all pages have saved
+    auto* tuningProfiles =
+            static_cast<PANEL_SETUP_TUNING_PROFILES*>( m_treebook->GetResolvedPage( m_tuningProfilesPage ) );
+
+    if( tuningProfiles )
+    {
+        const std::map<wxString, wxString> renames = tuningProfiles->TakeProfileRenames();
+
+        if( !renames.empty() )
+        {
+            std::shared_ptr<NET_SETTINGS>& netSettings = m_frame->Prj().GetProjectFile().NetSettings();
+
+            auto remapProfile = [&renames]( const std::shared_ptr<NETCLASS>& aNetclass )
+            {
+                auto it = renames.find( aNetclass->GetTuningProfile() );
+
+                if( it != renames.end() )
+                    aNetclass->SetTuningProfile( it->second );
+            };
+
+            remapProfile( netSettings->GetDefaultNetclass() );
+
+            for( const auto& [name, netclass] : netSettings->GetNetclasses() )
+                remapProfile( netclass );
+
+            netSettings->ClearAllCaches();
+        }
+    }
+
+    return true;
+}
+
+
 void DIALOG_BOARD_SETUP::onPageChanged( wxBookCtrlEvent& aEvent )
 {
     PAGED_DIALOG::onPageChanged( aEvent );
@@ -317,6 +374,7 @@ void DIALOG_BOARD_SETUP::onPageChanged( wxBookCtrlEvent& aEvent )
         }
         else if( page == m_netclassesPage || m_currentPage == m_tuningProfilesPage )
         {
+            m_netClasses->RemapDelayProfileNames( m_tuningProfiles->TakeProfileRenames() );
             m_netClasses->UpdateDelayProfileNames( m_tuningProfiles->GetDelayProfileNames() );
         }
         else if( page == m_tuningProfilesPage )
@@ -382,7 +440,7 @@ void DIALOG_BOARD_SETUP::onAuxiliaryAction( wxCommandEvent& aEvent )
 
         pi->SetProgressReporter( &progressReporter );
 
-        otherBoard.reset( pi->LoadBoard( boardFn.GetFullPath(), nullptr ) );
+        otherBoard = pi->LoadBoard( boardFn.GetFullPath() );
 
         if( importDlg.m_LayersOpt->GetValue() )
         {
@@ -392,6 +450,11 @@ void DIALOG_BOARD_SETUP::onAuxiliaryAction( wxCommandEvent& aEvent )
             okToProceed = m_layers->CheckCopperLayerCount( loadedBoard, otherBoard.get() );
         }
     }
+    catch( const IO_CANCELLED& )
+    {
+        // A user-cancelled load is not an error.
+        return;
+    }
     catch( const IO_ERROR& ioe )
     {
         // You wouldn't think boardFn.GetFullPath() would throw, but we get a stack buffer
@@ -399,11 +462,8 @@ void DIALOG_BOARD_SETUP::onAuxiliaryAction( wxCommandEvent& aEvent )
         // cost us much.
         try
         {
-            if( ioe.Problem() != wxT( "CANCEL" ) )
-            {
-                wxString msg = wxString::Format( _( "Error loading board file:\n%s" ), boardFn.GetFullPath() );
-                DisplayErrorMessage( this, msg, ioe.What() );
-            }
+            wxString msg = wxString::Format( _( "Error loading board file:\n%s" ), boardFn.GetFullPath() );
+            DisplayErrorMessage( this, msg, ioe.What() );
         }
         catch(...)
         {
@@ -467,7 +527,10 @@ void DIALOG_BOARD_SETUP::onAuxiliaryAction( wxCommandEvent& aEvent )
         }
 
         if( importDlg.m_TracksAndViasOpt->GetValue() )
+        {
             RESOLVE_PAGE( PANEL_SETUP_TRACKS_AND_VIAS, m_tracksAndViasPage )->ImportSettingsFrom( other );
+            RESOLVE_PAGE( PANEL_SETUP_VIA_STACKS, m_viaStacksPage )->ImportSettingsFrom( other );
+        }
 
         if( importDlg.m_ZonesOpt->GetValue() )
             RESOLVE_PAGE( PANEL_SETUP_ZONES, m_zonesPage )->ImportSettingsFrom( other );

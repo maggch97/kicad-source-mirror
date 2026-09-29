@@ -33,6 +33,7 @@ wxString LayerName( int aLayer )
     switch( aLayer )
     {
     // PCB_LAYER_ID
+    case UNSELECTED_LAYER:
     case UNDEFINED_LAYER:                 return _( "undefined" );
 
     // Copper
@@ -139,12 +140,13 @@ wxString LayerName( int aLayer )
     case LAYER_RATSNEST:                return _( "Ratsnest" );
     case LAYER_DRC_WARNING:             return _( "DRC warnings" );
     case LAYER_DRC_ERROR:               return _( "DRC errors" );
-    case LAYER_DRC_SHAPES:              return _( "DRC shapes" );
     case LAYER_DRC_EXCLUSION:           return _( "DRC exclusions" );
     case LAYER_MARKER_SHADOWS:          return _( "DRC marker shadows" );
-    case LAYER_DRC_HIGHLIGHTED:          return _( "DRC highlighted" );
+    case LAYER_DRC_HIGHLIGHTED:         return _( "DRC highlighted" );
     case LAYER_ANCHOR:                  return _( "Anchors" );
     case LAYER_POINTS:                  return _( "Points" );
+    case LAYER_SUBGRIDS:                return _( "Grids" );
+    case LAYER_VIA_STITCHING:           return _( "Via stitching" );
     case LAYER_DRAWINGSHEET:            return _( "Drawing sheet" );
     case LAYER_PAGE_LIMITS:             return _( "Page limits" );
     case LAYER_CURSOR:                  return _( "Cursor" );
@@ -155,6 +157,10 @@ wxString LayerName( int aLayer )
     case LAYER_SELECT_OVERLAY:          return _( "Selection highlight" );
     case LAYER_LOCKED_ITEM_SHADOW:      return _( "Locked item shadow" );
     case LAYER_CONFLICTS_SHADOW:        return _( "Courtyard collision shadow" );
+    case LAYER_CONSTRAINT_SHADOW:       return _( "Constrained item shadow" );
+    case LAYER_CONSTRAINT_UNDER:        return _( "Under-constrained tint" );
+    case LAYER_CONSTRAINT_WELL:         return _( "Fully constrained tint" );
+    case LAYER_CONSTRAINT_OVER:         return _( "Over-constrained tint" );
     case LAYER_BOARD_OUTLINE_AREA:      return _( "Board outline area" );
     case NETNAMES_LAYER_ID_START:       return _( "Track net names" );
     case LAYER_PAD_NETNAMES:            return _( "Pad net names" );
@@ -284,6 +290,10 @@ PCB_LAYER_ID Map3DLayerToPCBLayer( int aLayer )
     case LAYER_3D_USER_DRAWINGS:     return Dwgs_User;
     case LAYER_3D_USER_ECO1:         return Eco1_User;
     case LAYER_3D_USER_ECO2:         return Eco2_User;
+    case LAYER_3D_F_FAB:             return F_Fab;
+    case LAYER_3D_B_FAB:             return B_Fab;
+    case LAYER_3D_F_COURTYARD:       return F_CrtYd;
+    case LAYER_3D_B_COURTYARD:       return B_CrtYd;
     case LAYER_3D_USER_1:            return User_1;
     case LAYER_3D_USER_2:            return User_2;
     case LAYER_3D_USER_3:            return User_3;
@@ -350,6 +360,10 @@ int MapPCBLayerTo3DLayer( PCB_LAYER_ID aLayer )
     case Dwgs_User: return LAYER_3D_USER_DRAWINGS;
     case Eco1_User: return LAYER_3D_USER_ECO1;
     case Eco2_User: return LAYER_3D_USER_ECO2;
+    case F_Fab:     return LAYER_3D_F_FAB;
+    case B_Fab:     return LAYER_3D_B_FAB;
+    case F_CrtYd:   return LAYER_3D_F_COURTYARD;
+    case B_CrtYd:   return LAYER_3D_B_COURTYARD;
     case User_1:    return LAYER_3D_USER_1;
     case User_2:    return LAYER_3D_USER_2;
     case User_3:    return LAYER_3D_USER_3;

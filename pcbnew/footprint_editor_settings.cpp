@@ -32,6 +32,7 @@
 #include <settings/json_settings_internals.h>
 #include <settings/parameters.h>
 #include <settings/settings_manager.h>
+#include <settings/snap_settings_params.h>
 #include <base_units.h>
 
 #include <wx/config.h>
@@ -53,10 +54,13 @@ FOOTPRINT_EDITOR_SETTINGS::FOOTPRINT_EDITOR_SETTINGS() :
         m_DisplayInvertYAxis( false ),
         m_RotationAngle( ANGLE_90 ),
         m_AngleSnapMode( LEADER_MODE::DEG45 ),
+        m_AutoConstraints( true ),
         m_ArcEditMode( ARC_EDIT_MODE::KEEP_CENTER_ADJUST_ANGLE_RADIUS ),
         m_LibWidth( 250 ),
         m_LastExportPath()
 {
+    addMatchPropertiesParam();
+
     m_MagneticItems.pads      = MAGNETIC_OPTIONS::CAPTURE_ALWAYS;
     m_MagneticItems.tracks    = MAGNETIC_OPTIONS::NO_EFFECT;
     m_MagneticItems.graphics  = true;
@@ -115,6 +119,38 @@ FOOTPRINT_EDITOR_SETTINGS::FOOTPRINT_EDITOR_SETTINGS() :
     m_params.emplace_back( new PARAM<bool>( "editing.magnetic_all_layers",
             &m_MagneticItems.allLayers, false ) );
 
+    AddSnapInferenceParams( m_params, m_SnapInference );
+
+    m_params.emplace_back( new PARAM_MAP<int>( "lib_field_editor.field_widths",
+            &m_LibFieldEditor.field_widths, {} ) );
+
+    m_params.emplace_back( new PARAM<int>( "lib_field_editor.selection_mode",
+            &m_LibFieldEditor.selection_mode, 0 ) );
+
+    m_params.emplace_back( new PARAM<int>( "lib_field_editor.sash_pos",
+            &m_LibFieldEditor.sash_pos, 400 ) );
+
+    m_params.emplace_back( new PARAM<int>( "lib_field_editor.variant_sash_pos",
+            &m_LibFieldEditor.variant_sash_pos, 500 ) );
+
+    m_params.emplace_back( new PARAM<bool>( "lib_field_editor.sidebar_collapsed",
+            &m_LibFieldEditor.sidebar_collapsed, false ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "lib_field_editor.bom_export_filename",
+            &m_LibFieldEditorBom.m_BomExportFileName, "${PROJECTNAME}.csv" ) );
+
+    m_params.emplace_back( new PARAM<BOM_PRESET>( "lib_field_editor.bom_settings",
+            &m_LibFieldEditorBom.m_BomSettings, {} ) );
+
+    m_params.emplace_back( new PARAM_LIST<BOM_PRESET>( "lib_field_editor.bom_presets",
+            &m_LibFieldEditorBom.m_BomPresets, {} ) );
+
+    m_params.emplace_back( new PARAM<BOM_FMT_PRESET>( "lib_field_editor.bom_fmt_settings",
+            &m_LibFieldEditorBom.m_BomFmtSettings, BOM_FMT_PRESET::CSV() ) );
+
+    m_params.emplace_back( new PARAM_LIST<BOM_FMT_PRESET>( "lib_field_editor.bom_fmt_presets",
+            &m_LibFieldEditorBom.m_BomFmtPresets, {} ) );
+
     m_params.emplace_back( new PARAM<bool>( "editing.polar_coords",
             &m_PolarCoords, false ) );
 
@@ -139,6 +175,8 @@ FOOTPRINT_EDITOR_SETTINGS::FOOTPRINT_EDITOR_SETTINGS() :
     m_params.emplace_back( new PARAM<int>( "editing.fp_angle_snap_mode",
             reinterpret_cast<int*>( &m_AngleSnapMode ),
             static_cast<int>( LEADER_MODE::DEG45 ) ) );
+
+    m_params.emplace_back( new PARAM<bool>( "editing.auto_constraints", &m_AutoConstraints, true ) );
 
     m_params.emplace_back( new PARAM_LAYER_PRESET( "pcb_display.layer_presets", &m_LayerPresets ) );
 

@@ -77,6 +77,8 @@ public:
         return GetHatchLineWidth() * 40;
     }
 
+    void UpdateHatching() const override;
+
     void SetFilled( bool aFilled ) override;
 
     const BOX2I GetBoundingBox() const override;
@@ -94,7 +96,7 @@ public:
     void BeginEdit( const VECTOR2I& aStartPoint ) override  { beginEdit( aStartPoint ); }
     bool ContinueEdit( const VECTOR2I& aPosition ) override { return continueEdit( aPosition ); }
     void CalcEdit( const VECTOR2I& aPosition ) override     { calcEdit( aPosition ); }
-    void EndEdit( bool aClosed = false ) override           { endEdit(); }
+    void EndEdit( bool aClosed = false ) override           { endEdit( aClosed ); }
     void SetEditState( int aState )                         { setEditState( aState ); }
 
     void Move( const VECTOR2I& aOffset ) override;

@@ -97,8 +97,8 @@ static const COLOR4D inductorAreaFill( 0.3, 0.3, 0.5, 0.3 );
 static const COLOR4D inductorAreaStroke( 0.4, 1.0, 1.0, 1.0 );
 static const double  inductorAreaStrokeWidth = 1.0;
 
-///< Aspect of the preview rectangle - this is hardcoded in the
-///< microwave backend for now
+/// Aspect of the preview rectangle - this is hardcoded in the
+/// microwave backend for now
 static const double  inductorAreaAspect = 0.5;
 
 
@@ -110,7 +110,8 @@ int MICROWAVE_TOOL::drawMicrowaveInductor( const TOOL_EVENT& aEvent )
     KIGFX::VIEW_CONTROLS& controls = *getViewControls();
     PCB_EDIT_FRAME&       frame = *getEditFrame<PCB_EDIT_FRAME>();
 
-    frame.PushTool( aEvent );
+    TOOL_EVENT         originalEvent = aEvent;          // This can change out from under us when the event loop runs
+    SCOPED_TOOL_PUSHER raii( &frame, originalEvent );
 
     auto setCursor =
             [&]()
@@ -155,11 +156,8 @@ int MICROWAVE_TOOL::drawMicrowaveInductor( const TOOL_EVENT& aEvent )
             if( originSet )
                 cleanup();
             else
-            {
-                frame.PopTool( aEvent );
                 break;
-            }
-        }
+    }
         else if( evt->IsActivate() )
         {
             if( originSet )
@@ -167,17 +165,16 @@ int MICROWAVE_TOOL::drawMicrowaveInductor( const TOOL_EVENT& aEvent )
 
             if( evt->IsMoveTool() )
             {
-                // leave ourselves on the stack so we come back after the move
-                break;
+                // Make sure we come back after the move tool is done
+                frame.PushTool( originalEvent );
             }
-            else
-            {
-                frame.PopTool( aEvent );
-                break;
-            }
+
+            break;
         }
         // A click or drag starts
-        else if( !originSet && ( evt->IsClick( BUT_LEFT ) || evt->IsDrag( BUT_LEFT ) ) )
+        else if( !originSet && (   evt->IsClick( BUT_LEFT )
+                                || evt->IsAction( &ACTIONS::cursorClick )
+                                || evt->IsDrag( BUT_LEFT ) ) )
         {
             tpGeomMgr.SetOrigin( cursorPos );
             tpGeomMgr.SetEnd( cursorPos );
@@ -188,7 +185,9 @@ int MICROWAVE_TOOL::drawMicrowaveInductor( const TOOL_EVENT& aEvent )
         }
         // another click after origin set is the end
         // left up is also the end, as you'll only get that after a drag
-        else if( originSet && ( evt->IsClick( BUT_LEFT ) || evt->IsMouseUp( BUT_LEFT ) ) )
+        else if( originSet && (   evt->IsClick( BUT_LEFT )
+                               || evt->IsAction( &ACTIONS::cursorClick )
+                               || evt->IsMouseUp( BUT_LEFT ) ) )
         {
             // second click, we're done:
             // delegate to the point-to-point inductor creator function
@@ -202,9 +201,10 @@ int MICROWAVE_TOOL::drawMicrowaveInductor( const TOOL_EVENT& aEvent )
             view.SetVisible( &previewRect, false );
             view.Update( &previewRect, KIGFX::GEOMETRY );
         }
-        // any move or drag once the origin was set updates
-        // the end point
-        else if( originSet && ( evt->IsMotion() || evt->IsDrag( BUT_LEFT ) ) )
+        // any move or drag once the origin was set updates the end point
+        else if( originSet && (   evt->IsMotion()
+                               || evt->IsAction( &ACTIONS::refreshPreview )
+                               || evt->IsDrag( BUT_LEFT ) ) )
         {
             tpGeomMgr.SetAngleSnap( GetAngleSnapMode() );
             tpGeomMgr.SetEnd( cursorPos );

@@ -30,6 +30,7 @@
 #include <geometry/shape_segment.h>
 #include <geometry/shape_simple.h>
 #include <geometry/shape_ellipse.h>
+#include <geometry/shape_line_chain.h>
 #include <macros.h>
 #include <trigo.h>
 #include <widgets/msgpanel.h>
@@ -48,11 +49,9 @@ const std::map<LINE_STYLE, struct LINE_STYLE_DESC> lineTypeNames = {
 
 void STROKE_PARAMS::Stroke( const SHAPE* aShape, LINE_STYLE aLineStyle, int aWidth,
                             const KIGFX::RENDER_SETTINGS* aRenderSettings,
-                            const std::function<void( const VECTOR2I& a,
-                                                      const VECTOR2I& b )>& aStroker )
+                            const std::function<void( const VECTOR2I& a, const VECTOR2I& b )>& aStroker )
 {
-    double strokes[6] = { aWidth * 1.0, aWidth * 1.0, aWidth * 1.0, aWidth * 1.0, aWidth * 1.0,
-                          aWidth * 1.0 };
+    double strokes[6] = { aWidth * 1.0, aWidth * 1.0, aWidth * 1.0, aWidth * 1.0, aWidth * 1.0, aWidth * 1.0 };
     int    wrapAround = 6;
 
     switch( aLineStyle )
@@ -133,6 +132,60 @@ void STROKE_PARAMS::Stroke( const SHAPE* aShape, LINE_STYLE aLineStyle, int aWid
             SEG seg = poly->GetSegment( (int) ii );
             SHAPE_SEGMENT line( seg.A, seg.B );
             STROKE_PARAMS::Stroke( &line, aLineStyle, aWidth, aRenderSettings, aStroker );
+        }
+
+        break;
+    }
+
+    case SH_LINE_CHAIN:
+    {
+        const SHAPE_LINE_CHAIN* chain = static_cast<const SHAPE_LINE_CHAIN*>( aShape );
+
+        double patternLength = 0.0;
+
+        for( int ii = 0; ii < wrapAround; ++ii )
+            patternLength += strokes[ii];
+
+        // A zero-width shape makes every element zero long, and the walk would never advance.
+        if( patternLength <= 0.0 )
+            break;
+
+        int    element = 0;
+        double remaining = strokes[0];
+
+        for( int ii = 0; ii < chain->SegmentCount(); ++ii )
+        {
+            SEG      seg = chain->CSegment( ii );
+            VECTOR2D segVec( seg.B - seg.A );
+            double   segLength = segVec.EuclideanNorm();
+
+            if( segLength == 0.0 )
+                continue;
+
+            // The pattern carries across the vertices, so calculations MUST be done in
+            // doubles to keep from accumulating rounding errors along the chain.
+            VECTOR2D step = segVec / segLength;
+            VECTOR2D start( seg.A );
+            double   walked = 0.0;
+
+            while( walked < segLength )
+            {
+                double   length = std::min( remaining, segLength - walked );
+                VECTOR2D next = start + step * length;
+
+                if( element % 2 == 0 )
+                    aStroker( KiROUND( start ), KiROUND( next ) );
+
+                walked += length;
+                remaining -= length;
+                start = next;
+
+                if( remaining <= 0.0 )
+                {
+                    element++;
+                    remaining = strokes[element % wrapAround];
+                }
+            }
         }
 
         break;
@@ -401,6 +454,18 @@ void STROKE_PARAMS::GetMsgPanelInfo( UNITS_PROVIDER* aUnitsProvider,
 
     if( aIncludeWidth )
         aList.emplace_back( _( "Line Width" ), aUnitsProvider->MessageTextFromValue( GetWidth() ) );
+}
+
+
+bool STROKE_PARAMS::operator<(const STROKE_PARAMS& aOther) const
+{
+    if( m_width != aOther.m_width )
+        return m_width < aOther.m_width;
+
+    if( m_lineStyle != aOther.m_lineStyle )
+        return m_lineStyle < aOther.m_lineStyle;
+
+    return m_color < aOther.m_color;
 }
 
 

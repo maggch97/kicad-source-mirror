@@ -56,7 +56,7 @@ class PROPERTY_BASE;
 template<typename T>
 class ENUM_MAP;
 
-///< Common property types
+/// Common property types
 enum PROPERTY_DISPLAY
 {
     PT_DEFAULT,    ///< Default property for a given type
@@ -66,11 +66,11 @@ enum PROPERTY_DISPLAY
     PT_DEGREE,     ///< Angle expressed in degrees
     PT_DECIDEGREE, ///< Angle expressed in decidegrees
     PT_RATIO,
-    PT_TIME, ///< Time expressed in ps
+    PT_TIME,       ///< Time expressed in ps
     PT_NET,        ///< Net selection property
 };
 
-///< Macro to generate unique identifier for a type
+/// Macro to generate unique identifier for a type
 #define TYPE_HASH( x ) typeid( x ).hash_code()
 #define TYPE_NAME( x ) typeid( x ).name()
 //#define TYPE_HASH( x ) typeid( std::decay<x>::type ).hash_code()
@@ -195,7 +195,7 @@ public:
 class PROPERTY_BASE
 {
 private:
-    ///< Used to generate unique IDs.  Must come up front so it's initialized before ctor.
+    /// Used to generate unique IDs.  Must come up front so it's initialized before ctor.
 
 public:
     PROPERTY_BASE( const wxString& aName, PROPERTY_DISPLAY aDisplay = PT_DEFAULT,
@@ -207,6 +207,7 @@ public:
             m_hideFromLibraryEditors( false ),
             m_hideFromDesignEditors( false ),
             m_hideFromRulesEditor( false ),
+            m_copyable( false ),
             m_availFunc( [](INSPECTABLE*)->bool { return true; } ),
             m_writeableFunc( [](INSPECTABLE*)->bool { return true; } ),
             m_validator( NullValidator )
@@ -279,6 +280,11 @@ public:
         return *this;
     }
 
+    virtual bool IgnoreValue() const
+    {
+        return false;
+    }
+
     virtual bool Writeable( INSPECTABLE* aObject ) const
     {
         return m_writeableFunc( aObject );
@@ -340,6 +346,19 @@ public:
     PROPERTY_BASE& SetIsHiddenFromDesignEditors( bool aIsHidden = true )
     {
         m_hideFromDesignEditors = aIsHidden;
+        return *this;
+    }
+
+    /**
+     * True for a property that says how an item looks, not what or where it is.
+     *
+     * Opt-in.  The safe answer for anything unexamined is no.  Identity, position, size and
+     * connectivity stay off.  Copying those between items would move or rewire them.
+     */
+    bool IsCopyable() const { return m_copyable; }
+    PROPERTY_BASE& SetIsCopyable( bool aIsCopyable = true )
+    {
+        m_copyable = aIsCopyable;
         return *this;
     }
 
@@ -412,7 +431,12 @@ protected:
 
         // We don't currently have a bool type, so change it to a numeric
         if( a.CheckType<bool>() )
+        {
+            if constexpr( std::is_same_v<T, bool> )
+                return a.RawAs<bool>();
+
             a = a.RawAs<bool>() ? 1 : 0;
+        }
 
         if ( !( std::is_enum<T>::value && a.CheckType<int>() ) && !a.CheckType<T>() )
             throw std::invalid_argument( "Invalid requested type" );
@@ -444,6 +468,7 @@ private:
     bool m_hideFromDesignEditors;       // Do not show in Properties Manager of schematic or
                                         //   board editors
     bool m_hideFromRulesEditor;         // Do not show in Custom Rules editor autocomplete
+    bool m_copyable;                    // May be copied from one item to another
 
     /// Optional group identifier
     wxString m_group;
@@ -548,20 +573,49 @@ protected:
         return res;
     }
 
-    ///< Set method
+    /// Set method
     std::unique_ptr<SETTER_BASE<Owner, T>> m_setter;
 
-    ///< Get method
+    /// Get method
     std::unique_ptr<GETTER_BASE<Owner, T>> m_getter;
 
-    ///< Owner class type-id
+    /// Owner class type-id
     const size_t m_ownerHash;
 
-    ///< Base class type-id
+    /// Base class type-id
     const size_t m_baseHash;
 
-    ///< Property value type-id
+    /// Property value type-id
     const size_t m_typeHash;
+};
+
+
+template<typename Owner, typename T, typename Base = Owner>
+class DUMMY_PROPERTY : public PROPERTY_BASE
+{
+public:
+    using BASE_TYPE = typename std::decay<T>::type;
+
+    DUMMY_PROPERTY( const wxString& aName ) :
+            PROPERTY_BASE( aName )
+    {
+    }
+
+    size_t OwnerHash() const override { return TYPE_HASH( Owner ); }
+    size_t BaseHash() const override { return TYPE_HASH( Base ); }
+    size_t TypeHash() const override { return TYPE_HASH( BASE_TYPE ); }
+
+    bool IgnoreValue() const override { return true; }
+
+protected:
+    void setter( void* obj, wxAny& v ) override
+    {
+    }
+
+    wxAny getter( const void* obj ) const override
+    {
+        return wxAny();
+    }
 };
 
 
@@ -829,7 +883,7 @@ private:
     DECLARE_ENUM_TO_WXANY( type )                                                           \
     IMPLEMENT_ENUM_TO_WXANY( type )
 
-///< Macro to define read-only fields (no setter method available)
+/// Macro to define read-only fields (no setter method available)
 #define NO_SETTER( owner, type ) ( ( void ( owner::* )( type ) ) nullptr )
 
 /*

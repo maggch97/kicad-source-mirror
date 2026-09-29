@@ -24,7 +24,6 @@
 #include <wx/debug.h>
 #include <wx/dir.h>
 #include <wx/filename.h>
-#include <wx/snglinst.h>
 #include <wx/stdpaths.h>
 #include <wx/utils.h>
 
@@ -45,6 +44,7 @@
 #include <project/project_archiver.h>
 #include <project/project_file.h>
 #include <project/project_local_settings.h>
+#include <reporter.h>
 #include <settings/color_settings.h>
 #include <settings/common_settings.h>
 #include <settings/json_settings_internals.h>
@@ -1000,7 +1000,8 @@ bool SETTINGS_MANAGER::extractVersion( const std::string& aVersionString, int* a
 }
 
 
-bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
+// Every m_projects read and write goes through this so separator or extension variants share one slot
+static wxString projectKey( const wxString& aFullPath )
 {
     // Normalize path to current project extension. Users may open legacy .pro files,
     // or the OS may hand us a .kicad_sch/.kicad_pcb via file association or drag-and-drop.
@@ -1009,7 +1010,14 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
     if( path.HasName() && path.GetExt() != FILEEXT::ProjectFileExtension )
         path.SetExt( FILEEXT::ProjectFileExtension );
 
-    wxString fullPath = path.GetFullPath();
+    return path.GetFullPath();
+}
+
+
+bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
+{
+    wxString   fullPath = projectKey( aFullPath );
+    wxFileName path( fullPath );
 
     // If already loaded, we are all set.  This might be called more than once over a project's
     // lifetime in case the project is first loaded by the KiCad manager and then Eeschema or
@@ -1017,15 +1025,14 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
     if( m_projects.count( fullPath ) )
         return true;
 
-    LOCKFILE lockFile( fullPath );
+    // A passive load only inspects the lock rather than taking it
+    LOCKFILE lockFile = aSetActive ? LOCKFILE( fullPath ) : LOCKFILE::Inspect( fullPath );
 
     if( !lockFile.Valid() )
-    {
         wxLogTrace( traceSettings, wxT( "Project %s is locked; opening read-only" ), fullPath );
-    }
 
     // No MDI yet
-    if( aSetActive && !m_projects.empty() )
+    if( aSetActive && !m_projects_list.empty() )
     {
         // Cancel any in-progress library preloads and wait for them to finish before
         // modifying m_projects_list. Background preload threads access Prj() which becomes
@@ -1041,18 +1048,17 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
         if( PgmOrNull() )
             Pgm().GetLibraryManager().AbortAsyncLoads();
 
-        PROJECT* oldProject = m_projects.begin()->second;
+        // The map is ordered by path, so its first entry may be a passive project
+        PROJECT* oldProject = m_projects_list.front().get();
         unloadProjectFile( oldProject, false );
-        m_projects.erase( m_projects.begin() );
 
-        auto it = std::find_if( m_projects_list.begin(), m_projects_list.end(),
-                                [&]( const std::unique_ptr<PROJECT>& ptr )
-                                {
-                                    return ptr.get() == oldProject;
-                                } );
+        std::erase_if( m_projects,
+                       [&]( const std::pair<const wxString, PROJECT*>& aEntry )
+                       {
+                           return aEntry.second == oldProject;
+                       } );
 
-        wxASSERT( it != m_projects_list.end() );
-        m_projects_list.erase( it );
+        m_projects_list.erase( m_projects_list.begin() );
     }
 
     wxLogTrace( traceSettings, wxT( "Load project %s" ), fullPath );
@@ -1092,16 +1098,18 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
 
     bool success = loadProjectFile( *project );
 
-    if( success )
-    {
-        project->SetReadOnly( !lockFile.Valid() || project->GetProjectFile().IsReadOnly() );
+    project->SetReadOnly( !lockFile.Valid() || project->GetProjectFile().IsReadOnly() );
 
-        if( lockFile && aSetActive )
-            project->SetProjectLock( new LOCKFILE( std::move( lockFile ) ) );
-    }
+    if( lockFile.Valid() && aSetActive )
+        project->SetProjectLock( new LOCKFILE( std::move( lockFile ) ) );
 
-    m_projects_list.push_back( std::move( project ) );
-    m_projects[fullPath] = m_projects_list.back().get();
+    m_projects[fullPath] = project.get();
+
+    // Prj() is the list front, so passive projects must not take that slot
+    if( aSetActive )
+        m_projects_list.insert( m_projects_list.begin(), std::move( project ) );
+    else
+        m_projects_list.push_back( std::move( project ) );
 
     wxString fn( path.GetName() );
 
@@ -1235,12 +1243,31 @@ bool SETTINGS_MANAGER::IsProjectOpenNotDummy() const
 }
 
 
+void SETTINGS_MANAGER::SyncGlobalFieldNameTemplatesToProjects()
+{
+    // We don't technically support multiple projects, but hit them all for when we do
+    for( const auto& projectFileEntry : m_project_files )
+    {
+        PROJECT_FILE* projectFile = projectFileEntry.second;
+
+        projectFile->m_TemplateFieldNames.DeleteFieldNameTemplates( TEMPLATES::SCOPE::GLOBAL );
+
+        for( const TEMPLATE_FIELDNAME& fieldName :
+             m_common_settings->m_FieldNameTemplates.GetTemplateFieldNames(
+                     TEMPLATES::SCOPE::GLOBAL ) )
+        {
+            projectFile->m_TemplateFieldNames.AddTemplateFieldName(
+                    fieldName, TEMPLATES::SCOPE::GLOBAL );
+        }
+    }
+}
+
+
 PROJECT* SETTINGS_MANAGER::GetProject( const wxString& aFullPath ) const
 {
-    if( m_projects.count( aFullPath ) )
-        return m_projects.at( aFullPath );
+    auto it = m_projects.find( projectKey( aFullPath ) );
 
-    return nullptr;
+    return it != m_projects.end() ? it->second : nullptr;
 }
 
 
@@ -1292,17 +1319,18 @@ void SETTINGS_MANAGER::SaveProjectAs( const wxString& aFullPath, PROJECT* aProje
         aProject = &Prj();
 
     wxString oldName = aProject->GetProjectFullName();
+    wxString newName = projectKey( aFullPath );
 
-    if( aFullPath.IsSameAs( oldName ) )
+    if( newName.IsSameAs( oldName ) )
     {
-        SaveProject( aFullPath, aProject );
+        SaveProject( oldName, aProject );
         return;
     }
 
     // Changing this will cause UnloadProject to not save over the "old" project when loading below
-    aProject->setProjectFullName( aFullPath );
+    aProject->setProjectFullName( newName );
 
-    wxFileName fn( aFullPath );
+    wxFileName fn( newName );
 
     PROJECT_FILE* project = m_project_files.at( oldName );
 
@@ -1370,7 +1398,11 @@ bool SETTINGS_MANAGER::loadProjectFile( PROJECT& aProject )
 
     wxString path( fullFn.GetPath() );
 
-    return file->LoadFromFile( path );
+    bool success = file->LoadFromFile( path );
+
+    SyncGlobalFieldNameTemplatesToProjects();
+
+    return success;
 }
 
 
@@ -1570,7 +1602,7 @@ bool SETTINGS_MANAGER::BackupProject( REPORTER& aReporter, wxFileName& aTarget )
 
     wxLogTrace( traceSettings, wxT( "Backing up project to %s" ), aTarget.GetPath() );
 
-    return PROJECT_ARCHIVER::Archive( Prj().GetProjectPath(), aTarget.GetFullPath(), aReporter );
+    return PROJECT_ARCHIVER::Archive( Prj().GetProjectPath(), aTarget.GetFullPath(), aReporter, false );
 }
 
 
@@ -1726,19 +1758,29 @@ bool SETTINGS_MANAGER::TriggerBackupIfNeeded( REPORTER& aReporter ) const
         }
     }
 
-    // Step 2: Stay under the total size limit
+    // Step 2: Stay under the total size limit.  files[0] is the archive just written and is
+    // never pruned; a retention limit trims history and must not leave the project with none
     if( settings.limit_total_size > 0 )
     {
-        wxULongLong totalSize = 0;
+        const wxULongLong limit( settings.limit_total_size );
+        wxULongLong       totalSize = 0;
 
         for( const wxString& file : files )
             totalSize += wxFileName::GetSize( file );
 
-        while( !files.empty() && totalSize > static_cast<wxULongLong>( settings.limit_total_size ) )
+        while( files.size() > 1 && totalSize > limit )
         {
             totalSize -= wxFileName::GetSize( files.back() );
             wxRemoveFile( files.back() );
             files.pop_back();
+        }
+
+        if( totalSize > limit )
+        {
+            aReporter.Report( _( "One backup of this project is larger than the total backup size "
+                                 "limit.  KiCad kept the new backup; increase the limit in "
+                                 "Preferences." ),
+                              RPT_SEVERITY_WARNING );
         }
     }
 

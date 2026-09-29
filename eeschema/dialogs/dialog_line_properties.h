@@ -18,11 +18,13 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef DIALOG_LINE_PROPERTIES_H
-#define DIALOG_LINE_PROPERTIES_H
+#pragma once
+
+#include <memory>
 
 #include <dialog_line_properties_base.h>
 #include <widgets/unit_binder.h>
+#include <line_ending.h>
 
 
 class SCH_EDIT_FRAME;
@@ -37,13 +39,46 @@ public:
     bool TransferDataToWindow() override;
     bool TransferDataFromWindow() override;
 
+protected:
+    void resetDefaults( wxCommandEvent& event ) override;
+
+private:
+    void createLineEndingControls( SCH_EDIT_FRAME* aParent );
+
 private:
     SCH_EDIT_FRAME*       m_frame;
     std::deque<SCH_LINE*> m_lines;
 
     UNIT_BINDER           m_width;
 
-    void resetDefaults( wxCommandEvent& event ) override;
-};
+    wxStaticText*     m_startShapeLabel;
+    wxBitmapComboBox* m_startShapeChoice;
+    wxStaticText*     m_endShapeLabel;
+    wxBitmapComboBox* m_endShapeChoice;
+    wxStaticText*     m_startLengthLabel;
+    wxTextCtrl*       m_startLengthCtrl;
+    wxStaticText*     m_startLengthUnits;
+    wxStaticText*     m_endLengthLabel;
+    wxTextCtrl*       m_endLengthCtrl;
+    wxStaticText*     m_endLengthUnits;
+    wxStaticText*     m_startWidthLabel;
+    wxTextCtrl*       m_startWidthCtrl;
+    wxStaticText*     m_startWidthUnits;
+    wxStaticText*     m_endWidthLabel;
+    wxTextCtrl*       m_endWidthCtrl;
+    wxStaticText*     m_endWidthUnits;
+    wxStaticText*     m_startThicknessLabel;
+    wxTextCtrl*       m_startThicknessCtrl;
+    wxStaticText*     m_startThicknessUnits;
+    wxStaticText*     m_endThicknessLabel;
+    wxTextCtrl*       m_endThicknessCtrl;
+    wxStaticText*     m_endThicknessUnits;
+    wxStaticText*     m_endingsHelpLabel;
 
-#endif // DIALOG_LINE_PROPERTIES_H
+    std::unique_ptr<UNIT_BINDER> m_startLength;
+    std::unique_ptr<UNIT_BINDER> m_startWidth;
+    std::unique_ptr<UNIT_BINDER> m_startThickness;
+    std::unique_ptr<UNIT_BINDER> m_endLength;
+    std::unique_ptr<UNIT_BINDER> m_endWidth;
+    std::unique_ptr<UNIT_BINDER> m_endThickness;
+};

@@ -30,6 +30,11 @@ class DRC_ITEM;
 class MSG_PANEL_ITEM;
 
 
+namespace kiapi::board
+{
+class DrcMarker;
+}
+
 class PCB_MARKER : public BOARD_ITEM, public MARKER_BASE
 {
 public:
@@ -44,9 +49,11 @@ public:
 
     const KIID GetUUID() const override { return m_Uuid; }
 
-    wxString SerializeToString() const;
+    void Serialize( google::protobuf::Any& aContainer ) const override;
+    bool Deserialize( const google::protobuf::Any& aContainer ) override;
 
-    static PCB_MARKER* DeserializeFromString( const wxString& data );
+    static PCB_MARKER* FromProto( const kiapi::board::DrcMarker& aMsg );
+    static PCB_MARKER* FromLegacyString( const wxString& aData );
 
     void Move( const VECTOR2I& aMoveVector ) override
     {
@@ -89,15 +96,15 @@ public:
         return HitTestMarker( aPoly, aContained );
     }
 
-    EDA_ITEM* Clone() const override
-    {
-        return new PCB_MARKER( *this );
-    }
+    EDA_ITEM* Clone() const override;
 
     GAL_LAYER_ID GetColorLayer() const;
 
-    std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer,
-                                              FLASHING aFlash = FLASHING::DEFAULT ) const override;
+    std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
+                                              FLASHING aFlash = FLASHING::DEFAULT,
+                                              DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const override;
+
+    double GetCoverageArea( int aTextMargin ) const override;
 
     void TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance,
                                   int aError, ERROR_LOC aErrorLoc, bool ignoreLineWidth ) const override;
@@ -146,7 +153,7 @@ public:
         return wxT( "PCB_MARKER" );
     }
 
-    std::vector<PCB_SHAPE> GetShapes() const;
+    std::vector<PCB_SHAPE> GetErrorLegendShapes() const;
 
     void SetPath( const std::vector<PCB_SHAPE>& aShapes, const VECTOR2I& aStart, const VECTOR2I& aEnd )
     {

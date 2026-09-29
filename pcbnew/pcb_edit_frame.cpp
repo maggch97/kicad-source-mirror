@@ -43,6 +43,7 @@
 #include <pcb_edit_frame.h>
 #include <3d_viewer/eda_3d_viewer_frame.h>
 #include <api/api_handler_common.h>
+#include <api/api_handler_libraries.h>
 #include <api/api_handler_pcb.h>
 #include <api/api_plugin_manager.h>
 #include <api/api_server.h>
@@ -52,6 +53,8 @@
 #include <confirm.h>
 #include <footprint.h>
 #include <footprint_utils.h>
+#include <footprint_library_adapter.h>
+#include <project_pcb.h>
 #include <lset.h>
 #include <trace_helpers.h>
 #include <pcbnew_id.h>
@@ -60,11 +63,17 @@
 #include <footprint_edit_frame.h>
 #include <dialog_find.h>
 #include <dialogs/dialog_find_by_properties.h>
+#include <dialogs/dialog_footprint_fields_table.h>
 #include <dialog_footprint_properties.h>
 #include <dialogs/dialog_exchange_footprints.h>
 #include <dialogs/dialog_migrate_3d_models.h>
 #include <dialog_board_setup.h>
 #include <dialogs/dialog_dimension_properties.h>
+#include <board_tables/generated_table_refresh.h>
+#include <pcb_drill_chart.h>
+#include <pcb_drill_map.h>
+#include <dialogs/dialog_generated_table_properties.h>
+#include <dialogs/panel_drill_chart_options.h>
 #include <dialogs/dialog_table_properties.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <pad.h>
@@ -79,6 +88,7 @@
 #include <wildcards_and_files_ext.h>
 #include <functional>
 #include <pcb_barcode.h>
+#include <pcb_grid_item.h>
 #include <pcb_painter.h>
 #include <project/project_file.h>
 #include <project/project_local_settings.h>
@@ -104,10 +114,12 @@
 #include <tools/pcb_group_tool.h>
 #include <tools/generator_tool.h>
 #include <tools/diff_phase_skew_tool.h>
+#include <generators/via_stitch_tool.h>
 #include <tools/drc_tool.h>
 #include <tools/drc_rule_editor_tool.h>
 #include <tools/global_edit_tool.h>
 #include <tools/convert_tool.h>
+#include <tools/constraint_edit_tool.h>
 #include <tools/drawing_tool.h>
 #include <tools/pcb_control.h>
 #include <tools/pcb_design_block_control.h>
@@ -124,6 +136,8 @@
 #include <tools/position_relative_tool.h>
 #include <tools/zone_filler_tool.h>
 #include <tools/multichannel_tool.h>
+#include <tools/match_properties_tool.h>
+#include <tools/graphic_edit_tool.h>
 #include <router/router_tool.h>
 #include <autorouter/autoplace_tool.h>
 #include <netlist_reader/netlist_reader.h>
@@ -132,6 +146,7 @@
 #include <widgets/appearance_controls.h>
 #include <widgets/pcb_design_block_pane.h>
 #include <widgets/pcb_search_pane.h>
+#include <widgets/panel_constraints.h>
 #include <widgets/wx_infobar.h>
 #include <widgets/panel_selection_filter.h>
 #include <widgets/pcb_properties_panel.h>
@@ -150,6 +165,8 @@
 #include <richio.h>
 
 using namespace std::placeholders;
+
+wxDEFINE_EVENT( EDA_EVT_PCB_LAST_SCH_SHEET_CHANGED, wxCommandEvent );
 
 
 #define INSPECT_DRC_ERROR_DIALOG_NAME   wxT( "InspectDrcErrorDialog" )
@@ -177,6 +194,7 @@ BEGIN_EVENT_TABLE( PCB_EDIT_FRAME, PCB_BASE_FRAME )
     // Horizontal toolbar
     EVT_CHOICE( ID_AUX_TOOLBAR_PCB_TRACK_WIDTH, PCB_EDIT_FRAME::Tracks_and_Vias_Size_Event )
     EVT_CHOICE( ID_AUX_TOOLBAR_PCB_VIA_SIZE, PCB_EDIT_FRAME::Tracks_and_Vias_Size_Event )
+    EVT_CHOICE( ID_AUX_TOOLBAR_PCB_VIA_STACK, PCB_EDIT_FRAME::SelectViaStack_Event )
     EVT_CHOICE( ID_AUX_TOOLBAR_PCB_VARIANT_SELECT, PCB_EDIT_FRAME::onVariantSelected )
 
     // Tracks and vias sizes general options
@@ -206,6 +224,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
         m_inspectConstraintsDlg( nullptr ),
         m_footprintDiffDlg( nullptr ),
         m_boardSetupDlg( nullptr ),
+        m_footprintFieldsTableDialog( nullptr ),
         m_designBlocksPane( nullptr ),
         m_importProperties( nullptr ),
         m_eventCounterTimer( nullptr )
@@ -214,6 +233,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_showBorderAndTitleBlock = true;   // true to display sheet references
     m_SelTrackWidthBox = nullptr;
     m_SelViaSizeBox = nullptr;
+    m_SelViaStackBox = nullptr;
     m_CurrentVariantCtrl = nullptr;
     m_ShowLayerManagerTools = true;
     m_supportsAutoSave = true;
@@ -239,9 +259,9 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     }
 
     // Create GAL canvas
-    auto canvas = new PCB_DRAW_PANEL_GAL( this, -1, wxPoint( 0, 0 ), m_frameSize,
-                                          GetGalDisplayOptions(),
-                                          EDA_DRAW_PANEL_GAL::GAL_FALLBACK );
+    PCB_DRAW_PANEL_GAL* canvas = new PCB_DRAW_PANEL_GAL( this, -1, wxPoint( 0, 0 ), m_frameSize,
+                                                         GetGalDisplayOptions(),
+                                                         EDA_DRAW_PANEL_GAL::GAL_FALLBACK );
 
     SetCanvas( canvas );
     SetBoard( new BOARD() );
@@ -297,6 +317,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_searchPane = new PCB_SEARCH_PANE( this );
     m_netInspectorPanel = new PCB_NET_INSPECTOR_PANEL( this, this );
     m_designBlocksPane = new PCB_DESIGN_BLOCK_PANE( this, nullptr, m_designBlockHistoryList );
+    m_constraintsPanel = new PANEL_CONSTRAINTS( this );
 
     m_auimgr.SetManagedWindow( this );
 
@@ -305,14 +326,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     // Secondary infobar stacked above the main one.  Load-time notices (such as
     // the WRL -> STEP migration prompt) belong here so they aren't clobbered by
     // the main infobar's read-only warnings, DRC rule errors, etc.
-#if defined( __WXOSX_MAC__ )
-    m_loadNoticeInfoBar = new WX_INFOBAR( GetToolCanvas() );
-#else
-    m_loadNoticeInfoBar = new WX_INFOBAR( this, &m_auimgr );
-    m_auimgr.AddPane( m_loadNoticeInfoBar,
-                      EDA_PANE().InfoBar().Name( wxS( "LoadNoticeInfoBar" ) ).Top().Layer( 1 )
-                              .Row( 1 ) );
-#endif
+    m_loadNoticeInfoBar = new WX_INFOBAR( GetToolCanvas(), wxID_ANY, true );
 
     unsigned int auiFlags = wxAUI_MGR_DEFAULT;
 #if !defined( _WIN32 )
@@ -404,6 +418,16 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                       .DestroyOnClose( false )
                       .CloseButton( true ) );
 
+    m_auimgr.AddPane( m_constraintsPanel, EDA_PANE().Name( ConstraintsPaneName() )
+                      .Bottom().Layer( 1 )
+                      .Caption( _( "Geometric Constraints" ) ).PaneBorder( false )
+                      .MinSize( FromDIP( wxSize( 360, 120 ) ) )
+                      .BestSize( FromDIP( wxSize( 600, 200 ) ) )
+                      .FloatingSize( FromDIP( wxSize( 600, 240 ) ) )
+                      .DestroyOnClose( false )
+                      .CloseButton( true )
+                      .Hide() );
+
     RestoreAuiLayout();
 
     m_auimgr.GetPane( "LayersManager" ).Show( m_ShowLayerManagerTools );
@@ -413,19 +437,14 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_auimgr.GetPane( SearchPaneName() ).Show( m_ShowSearch );
     m_auimgr.GetPane( DesignBlocksPaneName() ).Show( GetPcbNewSettings()->m_AuiPanels.design_blocks_show );
 
-    // The selection filter doesn't need to grow in the vertical direction when docked
-    m_auimgr.GetPane( "SelectionFilter" ).dock_proportion = 0;
-    FinishAUIInitialization();
+    wxAuiPaneInfo& selectionFilterPane = m_auimgr.GetPane( wxS( "SelectionFilter" ) );
 
-    // FinishAUIInitialization only hides the primary "InfoBar" pane; the
-    // stacked load-notice bar has to be hidden explicitly.
-#if !defined( __WXOSX_MAC__ )
-    if( wxAuiPaneInfo& pane = m_auimgr.GetPane( wxS( "LoadNoticeInfoBar" ) ); pane.IsOk() )
-    {
-        pane.Hide();
-        m_auimgr.Update();
-    }
-#endif
+    // The selection filter doesn't need to grow in the vertical direction when docked
+    selectionFilterPane.dock_proportion = 0;
+
+    // wx 3.3.3 turns a -1 min height into 1, and a legacy perspective restores one
+    selectionFilterPane.min_size.y = m_selectionFilterPanel->GetBestSize().y;
+    FinishAUIInitialization();
 
     if( aui_cfg.right_panel_width > 0 )
     {
@@ -461,29 +480,29 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     m_appearancePanel->SetTabIndex( aui_cfg.appearance_panel_tab );
 
-    {
-        m_layerPairSettings = std::make_unique<LAYER_PAIR_SETTINGS>();
+    m_layerPairSettings = std::make_unique<LAYER_PAIR_SETTINGS>();
 
-        m_layerPairSettings->Bind( PCB_LAYER_PAIR_PRESETS_CHANGED, [&]( wxCommandEvent& aEvt )
-        {
-            // Update the project file list
-            std::span<const LAYER_PAIR_INFO> newPairInfos = m_layerPairSettings->GetLayerPairs();
-            Prj().GetProjectFile().m_LayerPairInfos =
-                    std::vector<LAYER_PAIR_INFO>{ newPairInfos.begin(), newPairInfos.end() };
-        });
+    m_layerPairSettings->Bind( PCB_LAYER_PAIR_PRESETS_CHANGED,
+            [&]( wxCommandEvent& aEvt )
+            {
+                // Update the project file list
+                std::span<const LAYER_PAIR_INFO> newPairInfos = m_layerPairSettings->GetLayerPairs();
+                Prj().GetProjectFile().m_LayerPairInfos = std::vector<LAYER_PAIR_INFO>{ newPairInfos.begin(),
+                                                                                        newPairInfos.end() };
+            } );
 
-        m_layerPairSettings->Bind( PCB_CURRENT_LAYER_PAIR_CHANGED, [&]( wxCommandEvent& aEvt )
-        {
-            const LAYER_PAIR& layerPair = m_layerPairSettings->GetCurrentLayerPair();
-            PCB_SCREEN& screen = *GetScreen();
+    m_layerPairSettings->Bind( PCB_CURRENT_LAYER_PAIR_CHANGED,
+            [&]( wxCommandEvent& aEvt )
+            {
+                const LAYER_PAIR& layerPair = m_layerPairSettings->GetCurrentLayerPair();
+                PCB_SCREEN& screen = *GetScreen();
 
-            screen.m_Route_Layer_TOP = layerPair.GetLayerA();
-            screen.m_Route_Layer_BOTTOM = layerPair.GetLayerB();
+                screen.m_Route_Layer_TOP = layerPair.GetLayerA();
+                screen.m_Route_Layer_BOTTOM = layerPair.GetLayerB();
 
-            // Update the toolbar icon
-            PrepareLayerIndicator();
-        });
-    }
+                // Update the toolbar icon
+                PrepareLayerIndicator();
+            } );
 
     GetToolManager()->PostAction( ACTIONS::zoomFitScreen );
 
@@ -505,8 +524,6 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
               // Do not forget to pass the Idle event to other clients:
               aEvent.Skip();
           } );
-
-    resolveCanvasType();
 
     setupUnits( config() );
 
@@ -530,9 +547,11 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     {
         m_apiHandlerCommon = std::make_unique<API_HANDLER_COMMON>();
         Pgm().GetApiServer().RegisterHandler( m_apiHandlerCommon.get() );
+        m_apiLibrariesHandler = std::make_unique<API_HANDLER_LIBRARIES>( LIBRARY_TABLE_TYPE::DESIGN_BLOCK );
+        Pgm().GetApiServer().RegisterHandler( m_apiLibrariesHandler.get() );
     }
 
-    GetCanvas()->SwitchBackend( m_canvasType );
+    resolveCanvasType();
     ActivateGalCanvas();
 
     // Default shutdown reason until a file is loaded
@@ -613,6 +632,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     DragAcceptFiles( true );
 
     Bind( EDA_EVT_CLOSE_DIALOG_BOOK_REPORTER, &PCB_EDIT_FRAME::onCloseModelessBookReporterDialogs, this );
+    Bind( EDA_EVT_CLOSE_DIALOG_FOOTPRINT_FIELDS_TABLE, &PCB_EDIT_FRAME::onCloseFootprintFieldsTableDialog, this );
 }
 
 
@@ -663,7 +683,8 @@ void PCB_EDIT_FRAME::StartCrossProbeFlash( const std::vector<BOARD_ITEM*>& aItem
     if( !m_crossProbeFlashTimer.GetOwner() )
         m_crossProbeFlashTimer.SetOwner( this );
 
-    bool started = m_crossProbeFlashTimer.Start( 500, wxTIMER_CONTINUOUS ); // 0.5s intervals -> 3s total for 6 phases
+    // 0.5s intervals -> 3s total for 6 phases
+    [[maybe_unused]] bool started = m_crossProbeFlashTimer.Start( 500, wxTIMER_CONTINUOUS );
     wxLogTrace( traceCrossProbeFlash, "StartCrossProbeFlash(PCB): timer start=%d id=%d",
                 (int) started, m_crossProbeFlashTimer.GetId() );
 }
@@ -694,8 +715,7 @@ void PCB_EDIT_FRAME::OnCrossProbeFlashTimer( wxTimerEvent& aEvent )
         {
             if( item->IsMoving() )
             {
-                wxLogTrace( traceCrossProbeFlash,
-                            "Timer(PCB) phase=%d: items are moving, stopping flash",
+                wxLogTrace( traceCrossProbeFlash, "Timer(PCB) phase=%d: items are moving, stopping flash",
                             m_crossProbeFlashPhase );
                 m_crossProbeFlashing = false;
                 m_crossProbeFlashTimer.Stop();
@@ -731,8 +751,7 @@ void PCB_EDIT_FRAME::OnCrossProbeFlashTimer( wxTimerEvent& aEvent )
     if( GetCanvas() )
     {
         GetCanvas()->ForceRefresh();
-        wxLogTrace( traceCrossProbeFlash, "Phase %d (PCB): forced canvas refresh",
-                    m_crossProbeFlashPhase );
+        wxLogTrace( traceCrossProbeFlash, "Phase %d (PCB): forced canvas refresh", m_crossProbeFlashPhase );
     }
 
     m_ProbingSchToPcb = prevGuard;
@@ -767,6 +786,12 @@ PCB_EDIT_FRAME::~PCB_EDIT_FRAME()
     // every cached TEXT_VAR_TRACKER* before the tracker is freed.
     detachTextVarTracker();
 
+    if( Kiface().IsSingle() )
+    {
+        Pgm().GetApiServer().DeregisterHandler( m_apiHandlerCommon.get() );
+        Pgm().GetApiServer().DeregisterHandler( m_apiLibrariesHandler.get() );
+    }
+
     if( ADVANCED_CFG::GetCfg().m_ShowEventCounters )
     {
         // Stop the timer during destruction early to avoid potential event race conditions (that
@@ -800,6 +825,23 @@ PCB_EDIT_FRAME::~PCB_EDIT_FRAME()
     // delete m_netInspectorPanel;
 
     delete m_exportNetlistAction;
+}
+
+
+void PCB_EDIT_FRAME::ToggleConstraintsPanel()
+{
+    wxAuiPaneInfo& pane = m_auimgr.GetPane( ConstraintsPaneName() );
+
+    if( !pane.IsOk() )
+        return;
+
+    bool show = !pane.IsShown();
+    pane.Show( show );
+
+    if( show && m_constraintsPanel )
+        m_constraintsPanel->RefreshList();
+
+    m_auimgr.Update();
 }
 
 
@@ -874,6 +916,8 @@ void PCB_EDIT_FRAME::redrawNetnames()
 
     KIGFX::VIEW* view = GetCanvas()->GetView();
     BOX2D        viewport = view->GetViewport();
+
+    view->SyncLayerVisibilityCache();   // Required for ViewGetLOD() calls.
 
     // Inflate to catch most of the track width
     BOX2I_MINMAX clipbox( BOX2ISafe( viewport.Inflate( pcbIUScale.mmToIU( 2.0 ) ) ) );
@@ -1032,9 +1076,13 @@ void PCB_EDIT_FRAME::setupTools()
     m_toolManager->RegisterTool( new PCB_VIEWER_TOOLS );
     m_toolManager->RegisterTool( new CONVERT_TOOL );
     m_toolManager->RegisterTool( new PCB_GROUP_TOOL );
+    m_toolManager->RegisterTool( new CONSTRAINT_EDIT_TOOL );
     m_toolManager->RegisterTool( new GENERATOR_TOOL );
+    m_toolManager->RegisterTool( new VIA_STITCH_TOOL );
     m_toolManager->RegisterTool( new PROPERTIES_TOOL );
     m_toolManager->RegisterTool( new MULTICHANNEL_TOOL );
+    m_toolManager->RegisterTool( new MATCH_PROPERTIES_TOOL );
+    m_toolManager->RegisterTool( new GRAPHIC_EDIT_TOOL );
     m_toolManager->RegisterTool( new EMBED_TOOL );
     m_toolManager->RegisterTool( new DRC_RULE_EDITOR_TOOL );
     m_toolManager->RegisterTool( new DIFF_PHASE_SKEW_TOOL );
@@ -1167,6 +1215,15 @@ void PCB_EDIT_FRAME::setupUIConditions()
 
     mgr->SetConditions( ACTIONS::toggleBoundingBoxes, CHECK( cond.BoundingBoxes() ) );
 
+    auto autoConstraintsCond =
+            []( const SELECTION& )
+            {
+                PCBNEW_SETTINGS* cfg = GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" );
+                return cfg && cfg->m_AutoConstraints;
+            };
+
+    mgr->SetConditions( PCB_ACTIONS::toggleAutoConstraints, CHECK( autoConstraintsCond ) );
+
     auto boardFlippedCond =
             [this]( const SELECTION& )
             {
@@ -1195,6 +1252,12 @@ void PCB_EDIT_FRAME::setupUIConditions()
             [this] ( const SELECTION& )
             {
                 return m_auimgr.GetPane( SearchPaneName() ).IsShown();
+            };
+
+    auto constraintsPaneCond =
+            [this] ( const SELECTION& )
+            {
+                return m_auimgr.GetPane( ConstraintsPaneName() ).IsShown();
             };
 
     auto designBlockCond =
@@ -1226,13 +1289,13 @@ void PCB_EDIT_FRAME::setupUIConditions()
     auto netHighlightCond =
             [this]( const SELECTION& )
             {
-                if( auto* canvas = GetCanvas() )
+                if( PCB_DRAW_PANEL_GAL* canvas = GetCanvas() )
                 {
-                    if( auto* view = canvas->GetView() )
+                    if( KIGFX::PCB_VIEW* view = canvas->GetView() )
                     {
-                        if( auto* painter = view->GetPainter() )
+                        if( KIGFX::PAINTER* painter = view->GetPainter() )
                         {
-                            if( auto* settings = painter->GetSettings() )
+                            if( RENDER_SETTINGS* settings = painter->GetSettings() )
                                 return !settings->GetHighlightNetCodes().empty();
                         }
                     }
@@ -1258,6 +1321,7 @@ void PCB_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( ACTIONS::showProperties,           CHECK( propertiesCond ) );
     mgr->SetConditions( PCB_ACTIONS::showNetInspector,     CHECK( netInspectorCond ) );
     mgr->SetConditions( PCB_ACTIONS::showSearch,           CHECK( searchPaneCond ) );
+    mgr->SetConditions( PCB_ACTIONS::showConstraintsPanel, CHECK( constraintsPaneCond ) );
     mgr->SetConditions( PCB_ACTIONS::showDesignBlockPanel, CHECK( designBlockCond ) );
 
     mgr->SetConditions( PCB_ACTIONS::saveBoardAsDesignBlock,     ENABLE( hasElements ) );
@@ -1418,6 +1482,7 @@ void PCB_EDIT_FRAME::setupUIConditions()
     CURRENT_EDIT_TOOL( PCB_ACTIONS::tuneSkew );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::showDiffPhaseSkew );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawVia );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::placeViaStack );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawZone );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawRuleArea );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawLine );
@@ -1426,6 +1491,7 @@ void PCB_EDIT_FRAME::setupUIConditions()
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawEllipse );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawEllipseArc );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawArc );
+    setArcModeConditions( PCB_ACTIONS::drawArc, isDRCIdle );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawPolygon );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drawBezier );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::placePoint );
@@ -1441,6 +1507,26 @@ void PCB_EDIT_FRAME::setupUIConditions()
     CURRENT_EDIT_TOOL( PCB_ACTIONS::drillOrigin );
     CURRENT_EDIT_TOOL( ACTIONS::gridSetOrigin );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::createArray );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::placeSubGrid );
+
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintCoincident );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintPointOnLine );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintMidpoint );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintSymmetric );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintFixedPosition );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintParallel );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintPerpendicular );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintCollinear );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintHorizontal );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintVertical );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintTangent );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintEqualLength );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintEqualRadius );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintConcentric );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintFixedLength );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintFixedRadius );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintArcAngle );
+    CURRENT_EDIT_TOOL( PCB_ACTIONS::addConstraintAngular );
 
     CURRENT_EDIT_TOOL( PCB_ACTIONS::microwaveCreateLine );
     CURRENT_EDIT_TOOL( PCB_ACTIONS::microwaveCreateGap );
@@ -1493,9 +1579,8 @@ void PCB_EDIT_FRAME::ResolveDRCExclusions( bool aCreateMarkers )
 bool PCB_EDIT_FRAME::canCloseWindow( wxCloseEvent& aEvent )
 {
     // Shutdown blocks must be determined and vetoed as early as possible
-    if( KIPLATFORM::APP::SupportsShutdownBlockReason()
-            && aEvent.GetId() == wxEVT_QUERY_END_SESSION
-            && IsContentModified() )
+    if( KIPLATFORM::APP::SupportsShutdownBlockReason() && aEvent.GetId() == wxEVT_QUERY_END_SESSION
+                                                       && IsContentModified() )
     {
         return false;
     }
@@ -1513,38 +1598,60 @@ bool PCB_EDIT_FRAME::canCloseWindow( wxCloseEvent& aEvent )
     }
 
     // Don't allow closing while the modal footprint chooser is open
-    auto* chooser = (FOOTPRINT_CHOOSER_FRAME*) Kiway().Player( FRAME_FOOTPRINT_CHOOSER, false );
+    // Use C-style cast due to Mac's inability to dynamic cast between compile modules
+    FOOTPRINT_CHOOSER_FRAME* chooser = (FOOTPRINT_CHOOSER_FRAME*) Kiway().Player( FRAME_FOOTPRINT_CHOOSER, false );
 
     if( chooser && chooser->IsModal() ) // Can close footprint chooser?
         return false;
 
     if( Kiface().IsSingle() )
     {
-        auto* fpEditor = (FOOTPRINT_EDIT_FRAME*) Kiway().Player( FRAME_FOOTPRINT_EDITOR, false );
+        // Use C-style cast due to Mac's inability to dynamic cast between compile modules
+        FOOTPRINT_EDIT_FRAME* fpEditor = (FOOTPRINT_EDIT_FRAME*) Kiway().Player( FRAME_FOOTPRINT_EDITOR, false );
 
-        if( fpEditor && !fpEditor->Close() )   // Can close footprint editor?
-            return false;
+        if( fpEditor )
+        {
+            bool cancel = !fpEditor->Close();   // Can close footprint editor?
 
-        auto* fpViewer = (FOOTPRINT_VIEWER_FRAME*) Kiway().Player( FRAME_FOOTPRINT_VIEWER, false );
+            // If fp editor had unsaved changes it will have been fronted.  Bring board editor back to front.
+            Raise();
+
+            if( cancel )
+                return false;
+        }
+
+        // Use C-style cast due to Mac's inability to dynamic cast between compile modules
+        FOOTPRINT_VIEWER_FRAME* fpViewer = (FOOTPRINT_VIEWER_FRAME*) Kiway().Player( FRAME_FOOTPRINT_VIEWER, false );
 
         if( fpViewer && !fpViewer->Close() )   // Can close footprint viewer?
             return false;
     }
     else
     {
-        auto* fpEditor = (FOOTPRINT_EDIT_FRAME*) Kiway().Player( FRAME_FOOTPRINT_EDITOR, false );
+        // Use C-style cast due to Mac's inability to dynamic cast between compile modules
+        FOOTPRINT_EDIT_FRAME* fpEditor = (FOOTPRINT_EDIT_FRAME*) Kiway().Player( FRAME_FOOTPRINT_EDITOR, false );
 
-        if( fpEditor && fpEditor->IsCurrentFPFromBoard() )
+        if( fpEditor )
         {
-            if( !fpEditor->CanCloseFPFromBoard( true ) )
+            bool cancel = !fpEditor->HandleUnsavedChanges( true );
+
+            // If fp editor had unsaved changes it will have been fronted.  Bring board editor back to front.
+            Raise();
+
+            if( cancel )
                 return false;
         }
     }
+
+    if( !CloseFootprintFieldsTableDialog() )
+        return false;
 
     if( IsContentModified() )
     {
         wxFileName fileName = GetBoard()->GetFileName();
         wxString msg = _( "Save changes to '%s' before closing?" );
+
+        wxSafeYield( this, true );      // Allow frame to come to front before showing "Save Changes?"
 
         if( !HandleUnsavedChanges( this, wxString::Format( msg, fileName.GetFullName() ),
                                    [&]() -> bool
@@ -1594,6 +1701,7 @@ void PCB_EDIT_FRAME::doCloseWindow()
 
     // Clean up mode-less dialogs.
     Unbind( EDA_EVT_CLOSE_DIALOG_BOOK_REPORTER, &PCB_EDIT_FRAME::onCloseModelessBookReporterDialogs, this );
+    Unbind( EDA_EVT_CLOSE_DIALOG_FOOTPRINT_FIELDS_TABLE, &PCB_EDIT_FRAME::onCloseFootprintFieldsTableDialog, this );
 
     wxWindow* drcDlg = wxWindow::FindWindowByName( DIALOG_DRC_WINDOW_NAME );
 
@@ -1641,9 +1749,15 @@ void PCB_EDIT_FRAME::doCloseWindow()
         m_footprintDiffDlg = nullptr;
     }
 
-    // Delete the auto save file if it exists.  Only sweep when the board was actually
-    // dirtied in this session; otherwise an existing autosave is a previous-session
-    // leftover the user explicitly deferred in the recovery dialog.
+    if( m_footprintFieldsTableDialog )
+    {
+        m_footprintFieldsTableDialog->Destroy();
+        m_footprintFieldsTableDialog = nullptr;
+    }
+
+    // Delete the auto save file if it exists.  Only sweep when the board was actually dirtied in this session;
+    // otherwise an existing autosave is a previous-session leftover the user explicitly deferred in the recovery
+    // dialog.
     if( !Prj().IsNullProject() && GetBoard() && IsContentModified() )
     {
         Kiway().LocalHistory().RemoveAutosaveFiles( Prj().GetProjectPath(), { GetBoard()->GetFileName() } );
@@ -1660,9 +1774,8 @@ void PCB_EDIT_FRAME::doCloseWindow()
         wxLogTrace( traceAutoSave, wxT( "Skipping auto-save of migrated local settings" ) );
     }
 
-    // Do not show the layer manager during closing to avoid flicker
-    // on some platforms (Windows) that generate useless redraw of items in
-    // the Layer Manager
+    // Do not show the layer manager during closing to avoid flicker on some platforms (Windows) that
+    // generate useless redraw of items in the Layer Manager
     if( m_ShowLayerManagerTools )
     {
         m_auimgr.GetPane( wxS( "LayersManager" ) ).Show( false );
@@ -1672,12 +1785,11 @@ void PCB_EDIT_FRAME::doCloseWindow()
     // Unlink the old project if needed
     GetBoard()->ClearProject();
 
-    // Delete board structs and undo/redo lists, to avoid crash on exit
-    // when deleting some structs (mainly in undo/redo lists) too late
+    // Delete board structs and undo/redo lists, to avoid crash on exit when deleting some structs
+    // (mainly in undo/redo lists) too late
     Clear_Pcb( false, true );
 
-    // do not show the window because ScreenPcb will be deleted and we do not
-    // want any paint event
+    // do not show the window because ScreenPcb will be deleted and we do not want any paint event
     Show( false );
 
     PCB_BASE_EDIT_FRAME::doCloseWindow();
@@ -1688,6 +1800,32 @@ void PCB_EDIT_FRAME::ActivateGalCanvas()
 {
     PCB_BASE_EDIT_FRAME::ActivateGalCanvas();
     GetCanvas()->UpdateColors();
+    GetCanvas()->Refresh();
+}
+
+
+void PCB_EDIT_FRAME::RefreshDrillSymbols( int aUpdateFlags )
+{
+    BOARD*       board = GetBoard();
+    KIGFX::VIEW* view = GetCanvas()->GetView();
+
+    board->RefreshDrillSymbolLayers();
+
+    for( PCB_TRACK* track : board->Tracks() )
+    {
+        if( track->Type() == PCB_VIA_T )
+            view->Update( track, aUpdateFlags );
+    }
+
+    for( FOOTPRINT* footprint : board->Footprints() )
+    {
+        for( PAD* pad : footprint->Pads() )
+        {
+            if( pad->HasHole() )
+                view->Update( pad, aUpdateFlags );
+        }
+    }
+
     GetCanvas()->Refresh();
 }
 
@@ -1732,8 +1870,8 @@ void PCB_EDIT_FRAME::ShowBoardSetupDialog( const wxString& aInitialPage, wxWindo
         {
             m_infoBar->RemoveAllButtons();
             m_infoBar->AddCloseButton();
-            m_infoBar->ShowMessage( _( "Could not load component class assignment rules" ),
-                                    wxICON_WARNING, WX_INFOBAR::MESSAGE_TYPE::GENERIC );
+            m_infoBar->ShowMessage( _( "Could not load component class assignment rules" ), wxICON_WARNING,
+                                    WX_INFOBAR::MESSAGE_TYPE::GENERIC );
         }
 
         // We don't know if anything was modified, so err on the side of requiring a save
@@ -1883,7 +2021,9 @@ void PCB_EDIT_FRAME::SaveSettings( APP_SETTINGS_BASE* aCfg )
         cfg->m_AuiPanels.design_blocks_show = designBlocksPane.IsShown();
 
         if( designBlocksPane.IsDocked() )
+        {
             cfg->m_AuiPanels.design_blocks_panel_docked_width = m_designBlocksPane->GetSize().x;
+        }
         else
         {
             cfg->m_AuiPanels.design_blocks_panel_float_height = designBlocksPane.floating_size.y;
@@ -1946,13 +2086,14 @@ void PCB_EDIT_FRAME::SetActiveLayer( PCB_LAYER_ID aLayer, bool aForceRedraw )
     * have their own set of independent clearance layers to allow track clearance
     * to be shown for more layers.
     */
-    const auto getClearanceLayerForActive = []( PCB_LAYER_ID aActiveLayer ) -> std::optional<int>
-    {
-        if( IsCopperLayer( aActiveLayer ) )
-            return CLEARANCE_LAYER_FOR( aActiveLayer );
+    const auto getClearanceLayerForActive =
+            []( PCB_LAYER_ID aActiveLayer ) -> std::optional<int>
+            {
+                if( IsCopperLayer( aActiveLayer ) )
+                    return CLEARANCE_LAYER_FOR( aActiveLayer );
 
-        return std::nullopt;
-    };
+                return std::nullopt;
+            };
 
     if( std::optional<int> oldClearanceLayer = getClearanceLayerForActive( oldLayer ) )
         GetCanvas()->GetView()->SetLayerVisible( *oldClearanceLayer, false );
@@ -2014,21 +2155,18 @@ void PCB_EDIT_FRAME::OnBoardLoaded()
         // STEP sibling.  Leaves ambiguous cases for the infobar below.
         DIALOG_MIGRATE_3D_MODELS::AutoMigrateByFilename( this );
 
-        const int unresolved = DIALOG_MIGRATE_3D_MODELS::CountUnresolvedWrlReferences( this );
-
-        if( unresolved > 0 )
+        if( int unresolved = DIALOG_MIGRATE_3D_MODELS::CountUnresolvedWrlReferences( this ) )
         {
-            wxString msg = wxString::Format( wxPLURAL( "%d WRL 3D model could not be matched "
-                                                       "to an equivalent STEP model.",
-                                                       "%d WRL 3D models could not be matched "
-                                                       "to equivalent STEP models.",
-                                                       unresolved ),
-                                             unresolved );
+            wxString msg = _( "WRL 3D model could not be matched to equivalent STEP model." );
 
-            wxHyperlinkCtrl* link = new wxHyperlinkCtrl( m_loadNoticeInfoBar, wxID_ANY,
-                                                         _( "Show options" ), wxEmptyString );
+            if( unresolved > 1 )
+            {
+                msg = wxString::Format( _( "%d WRL 3D models could not be matched to equivalent STEP models." ),
+                                        unresolved );
+            }
 
-            link->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& )>(
+            m_loadNoticeInfoBar->RemoveAllButtons();
+            m_loadNoticeInfoBar->AddLink( _( "Show options" ),
                     [this]( wxHyperlinkEvent& )
                     {
                         DIALOG_MIGRATE_3D_MODELS dlg( this );
@@ -2038,10 +2176,7 @@ void PCB_EDIT_FRAME::OnBoardLoaded()
                         // otherwise leave it so the user can try again.
                         if( DIALOG_MIGRATE_3D_MODELS::CountUnresolvedWrlReferences( this ) == 0 )
                             m_loadNoticeInfoBar->Dismiss();
-                    } ) );
-
-            m_loadNoticeInfoBar->RemoveAllButtons();
-            m_loadNoticeInfoBar->AddButton( link );
+                    } );
             m_loadNoticeInfoBar->AddCloseButton();
             m_loadNoticeInfoBar->ShowMessageFor( msg, 10000, wxICON_INFORMATION );
         }
@@ -2054,8 +2189,8 @@ void PCB_EDIT_FRAME::OnBoardLoaded()
     {
         m_infoBar->RemoveAllButtons();
         m_infoBar->AddCloseButton();
-        m_infoBar->ShowMessage( _( "Board file is read only." ),
-                                wxICON_WARNING, WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
+        m_infoBar->ShowMessage( _( "Board file is read only." ), wxICON_WARNING,
+                                WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
     }
 
     ReCreateLayerBox();
@@ -2092,8 +2227,24 @@ void PCB_EDIT_FRAME::OnBoardLoaded()
     // Display the loaded board:
     Zoom_Automatique( false );
 
-    // Invalidate painting as loading the DRC engine will cause clearances to become valid
-    GetCanvas()->GetView()->UpdateAllItems( KIGFX::ALL );
+    // The DRC engine above makes clearances computable, so only the items that draw a
+    // clearance outline are stale; marking every item re-tessellates the whole board
+    {
+        KIGFX::VIEW* view = GetCanvas()->GetView();
+        const auto&  opts = GetPcbNewSettings()->m_Display;
+
+        for( FOOTPRINT* footprint : GetBoard()->Footprints() )
+        {
+            for( PAD* pad : footprint->Pads() )
+                view->Update( pad, KIGFX::REPAINT );
+        }
+
+        if( opts.m_TrackClearance == SHOW_WITH_VIA_ALWAYS )
+        {
+            for( PCB_TRACK* track : GetBoard()->Tracks() )
+                view->Update( track, KIGFX::REPAINT );
+        }
+    }
 
     Refresh();
 
@@ -2184,16 +2335,22 @@ void PCB_EDIT_FRAME::OnModify()
     if( m_isClosing )
         return;
 
+    // A chart reports the board, so an edit that moved a hole has already made it wrong.
+    // Costs one integer comparison per chart when nothing drill related changed.
+    RefreshGeneratedTables( *GetBoard() );
+
     Update3DView( true, GetPcbNewSettings()->m_Display.m_Live3DRefresh );
 
     if( !GetTitle().StartsWith( wxT( "*" ) ) )
         UpdateTitle();
-
 }
 
 
 void PCB_EDIT_FRAME::HardRedraw()
 {
+    // The libraries were read once and then cached. A refresh is where they need to be refreshed
+    PROJECT_PCB::FootprintLibAdapter( &Prj() )->RefreshChangedLibraries();
+
     Update3DView( true, true );
 
     std::shared_ptr<CONNECTIVITY_DATA> connectivity = GetBoard()->GetConnectivity();
@@ -2304,7 +2461,7 @@ void PCB_EDIT_FRAME::ShowFindDialog()
 
     PCB_SELECTION& selection = m_toolManager->GetTool<PCB_SELECTION_TOOL>()->GetSelection();
 
-    if( selection.Size() == 1 )
+    if( selection.Size() == 1 && selection.Front() != m_findDialog->GetItem() )
     {
         EDA_ITEM* front = selection.Front();
 
@@ -2384,8 +2541,7 @@ int PCB_EDIT_FRAME::TestStandalone()
     if( !frame->IsShownOnScreen() )
     {
         wxEventBlocker blocker( this );
-        wxFileName fn( Prj().GetProjectPath(), Prj().GetProjectName(),
-                       FILEEXT::KiCadSchematicFileExtension );
+        wxFileName fn( Prj().GetProjectPath(), Prj().GetProjectName(), FILEEXT::KiCadSchematicFileExtension );
 
         // Maybe the file hasn't been converted to the new s-expression file format so
         // see if the legacy schematic file is still in play.
@@ -2414,17 +2570,15 @@ int PCB_EDIT_FRAME::TestStandalone()
 }
 
 
-bool PCB_EDIT_FRAME::FetchNetlistFromSchematic( NETLIST& aNetlist,
-                                                const wxString& aAnnotateMessage )
+bool PCB_EDIT_FRAME::FetchNetlistFromSchematic( NETLIST& aNetlist, const wxString& aAnnotateMessage )
 {
     int standalone = TestStandalone();
 
     if( standalone == 0 )
     {
-        DisplayErrorMessage( this, _( "Cannot update the PCB because PCB editor is opened in "
-                                      "stand-alone mode. In order to create or update PCBs from "
-                                      "schematics, you must launch the KiCad project manager and "
-                                      "create a project." ) );
+        DisplayErrorMessage( this, _( "Cannot update the PCB because PCB editor is opened in stand-alone mode. "
+                                      "In order to create or update PCBs from schematics, you must launch the "
+                                      "KiCad project manager and create a project." ) );
         return false;       // Not in standalone mode
     }
 
@@ -2437,6 +2591,26 @@ bool PCB_EDIT_FRAME::FetchNetlistFromSchematic( NETLIST& aNetlist,
 
     Kiway().ExpressMail( FRAME_SCH, MAIL_SCH_GET_NETLIST, payload, this );
 
+    // Sentinel reply means the user explicitly aborted; silently cancel and return focus to
+    // the schematic rather than re-showing the annotation error
+    if( payload == MAIL_SCH_GET_NETLIST_CANCELLED )
+    {
+        if( KIWAY_PLAYER* schFrame = Kiway().Player( FRAME_SCH, false ) )
+        {
+            if( schFrame->IsIconized() )
+                schFrame->Iconize( false );
+
+            schFrame->Raise();
+
+            // Raising the window does not set the focus on Linux.  This should work on
+            // any platform.
+            if( wxWindow::FindFocus() != schFrame )
+                schFrame->SetFocus();
+        }
+
+        return false;
+    }
+
     if( payload == aAnnotateMessage )
     {
         Raise();
@@ -2446,7 +2620,7 @@ bool PCB_EDIT_FRAME::FetchNetlistFromSchematic( NETLIST& aNetlist,
 
     try
     {
-        auto lineReader = new STRING_LINE_READER( payload, _( "Eeschema netlist" ) );
+        STRING_LINE_READER* lineReader = new STRING_LINE_READER( payload, _( "Eeschema netlist" ) );
         KICAD_NETLIST_READER netlistReader( lineReader, &aNetlist );
         netlistReader.LoadNetlist();
     }
@@ -2457,9 +2631,9 @@ bool PCB_EDIT_FRAME::FetchNetlistFromSchematic( NETLIST& aNetlist,
         // Do not translate extra_info strings.  These are for developers
         wxString extra_info = e.Problem() + wxT( " : " ) + e.What() + wxT( " at " ) + e.Where();
 
-        DisplayErrorMessage( this, _( "Received an error while reading netlist.  Please "
-                                      "report this issue to the KiCad team using the menu "
-                                      "Help->Report Bug."), extra_info );
+        DisplayErrorMessage( this, _( "Received an error while reading netlist.  Please report this issue to "
+                                      "the KiCad team using the menu Help->Report Bug." ),
+                             extra_info );
         return false;
     }
 
@@ -2570,17 +2744,12 @@ void PCB_EDIT_FRAME::CommonSettingsChanged( int aFlags )
     }
     catch( PARSE_ERROR& )
     {
-        wxHyperlinkCtrl* button = new wxHyperlinkCtrl( infobar, wxID_ANY, _( "Edit design rules" ),
-                                                       wxEmptyString );
-
-        button->Bind( wxEVT_COMMAND_HYPERLINK, std::function<void( wxHyperlinkEvent& aEvent )>(
+        infobar->RemoveAllButtons();
+        infobar->AddLink( _( "Edit design rules" ),
                 [&]( wxHyperlinkEvent& aEvent )
                 {
                     ShowBoardSetupDialog( _( "Custom Rules" ) );
-                } ) );
-
-        infobar->RemoveAllButtons();
-        infobar->AddButton( button );
+                } );
         infobar->AddCloseButton();
         infobar->ShowMessage( _( "Could not compile custom design rules." ), wxICON_ERROR,
                               WX_INFOBAR::MESSAGE_TYPE::DRC_RULES_ERROR );
@@ -2798,6 +2967,25 @@ DIALOG_BOOK_REPORTER* PCB_EDIT_FRAME::GetFootprintDiffDialog()
 }
 
 
+DIALOG_FOOTPRINT_FIELDS_TABLE* PCB_EDIT_FRAME::GetFootprintFieldsTableDialog()
+{
+    if( !m_footprintFieldsTableDialog )
+    {
+        auto* dlg = new DIALOG_FOOTPRINT_FIELDS_TABLE( this );
+
+        if( dlg->WasAborted() )
+        {
+            dlg->Destroy();
+            return nullptr;
+        }
+
+        m_footprintFieldsTableDialog = dlg;
+    }
+
+    return m_footprintFieldsTableDialog;
+}
+
+
 void PCB_EDIT_FRAME::onCloseModelessBookReporterDialogs( wxCommandEvent& aEvent )
 {
     if( m_inspectDrcErrorDlg && aEvent.GetString() == INSPECT_DRC_ERROR_DIALOG_NAME )
@@ -2842,10 +3030,41 @@ void PCB_EDIT_FRAME::onCloseModelessBookReporterDialogs( wxCommandEvent& aEvent 
 }
 
 
+bool PCB_EDIT_FRAME::CloseFootprintFieldsTableDialog()
+{
+    if( !m_footprintFieldsTableDialog )
+        return true;
+
+    DIALOG_FOOTPRINT_FIELDS_TABLE* dlg = m_footprintFieldsTableDialog;
+
+    if( !dlg->Close( false ) )
+        return false;
+
+    if( m_footprintFieldsTableDialog == dlg )
+    {
+        dlg->Destroy();
+        m_footprintFieldsTableDialog = nullptr;
+    }
+
+    return true;
+}
+
+
+void PCB_EDIT_FRAME::onCloseFootprintFieldsTableDialog( wxCommandEvent& aEvent )
+{
+    if( m_footprintFieldsTableDialog )
+    {
+        m_footprintFieldsTableDialog->Destroy();
+        m_footprintFieldsTableDialog = nullptr;
+    }
+}
+
+
 void PCB_EDIT_FRAME::onPluginAvailabilityChanged( wxCommandEvent& aEvt )
 {
     wxLogTrace( traceApi, "PCB frame: EDA_EVT_PLUGIN_AVAILABILITY_CHANGED" );
     RecreateToolbars();
+    ReCreateMenuBar();
     aEvt.Skip();
 }
 
@@ -2907,6 +3126,19 @@ void PCB_EDIT_FRAME::OnEditItemRequest( BOARD_ITEM* aItem )
         break;
     }
 
+    case PCB_DRILL_CHART_T:
+    {
+        // Not the generic table dialog, which would offer copper layers and direct editing of
+        // cells that the next rebuild discards
+        DIALOG_GENERATED_TABLE_PROPERTIES dlg( this, static_cast<PCB_DRILL_CHART*>( aItem ),
+                                               []( wxWindow* aParent )
+                                               {
+                                                   return new PANEL_DRILL_CHART_OPTIONS( aParent );
+                                               } );
+        dlg.ShowModal();
+        break;
+    }
+
     case PCB_PAD_T:
         ShowPadPropertiesDialog( static_cast<PAD*>( aItem ) );
         break;
@@ -2933,6 +3165,10 @@ void PCB_EDIT_FRAME::OnEditItemRequest( BOARD_ITEM* aItem )
 
     case PCB_SHAPE_T:
         ShowGraphicItemPropertiesDialog( static_cast<PCB_SHAPE*>( aItem ) );
+        break;
+
+    case PCB_GRID_ITEM_T:
+        ShowGridItemPropertiesDialog( static_cast<PCB_GRID_ITEM*>( aItem ) );
         break;
 
     case PCB_ZONE_T:

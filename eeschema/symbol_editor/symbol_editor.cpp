@@ -24,8 +24,10 @@
 #include <confirm.h>
 #include <kidialog.h>
 #include <kiway.h>
+#include <tool/tool_manager.h>
+#include <tool/actions.h>
 #include <widgets/wx_infobar.h>
-#include <tools/symbol_editor_drawing_tools.h>
+#include <sch_edit_frame.h>
 #include <symbol_edit_frame.h>
 #include <template_fieldnames.h>
 #include <wildcards_and_files_ext.h>
@@ -38,7 +40,9 @@
 #include <sch_io/kicad_sexpr/sch_io_kicad_sexpr.h>
 #include <dialogs/dialog_lib_new_symbol.h>
 #include <eda_list_dialog.h>
+#include <set>
 #include <wx/clipbrd.h>
+#include <wx/dirdlg.h>
 #include <wx/filedlg.h>
 #include <wx/log.h>
 #include <project_sch.h>
@@ -53,47 +57,7 @@
 
 void SYMBOL_EDIT_FRAME::UpdateTitle()
 {
-    wxString title;
-
-    if( GetCurSymbol() && IsSymbolFromSchematic() )
-    {
-        if( GetScreen() && GetScreen()->IsContentModified() )
-            title = wxT( "*" );
-
-        title += m_reference;
-        title += wxS( " " ) + _( "[from schematic]" );
-    }
-    else if( GetCurSymbol() )
-    {
-        if( GetScreen() && GetScreen()->IsContentModified() )
-            title = wxT( "*" );
-
-        title += UnescapeString( GetCurSymbol()->GetLibId().Format() );
-
-        if( m_libMgr && m_libMgr->LibraryExists( GetCurLib() ) && m_libMgr->IsLibraryReadOnly( GetCurLib() ) )
-            title += wxS( " " ) + _( "[Read Only Library]" );
-    }
-    else
-    {
-        title = _( "[no symbol loaded]" );
-    }
-
-    title += wxT( " \u2014 " ) + _( "Symbol Editor" );
-    SetTitle( title );
-}
-
-
-void SYMBOL_EDIT_FRAME::SelectActiveLibrary( const wxString& aLibrary )
-{
-    wxString selectedLib = aLibrary;
-
-    if( selectedLib.empty() )
-        selectedLib = SelectLibrary( _( "Select Symbol Library" ), _( "Library:" ) );
-
-    if( !selectedLib.empty() )
-        SetCurLib( selectedLib );
-
-    UpdateTitle();
+    SetTitle( _( "Symbol Editor" ) );
 }
 
 
@@ -128,11 +92,11 @@ bool SYMBOL_EDIT_FRAME::saveCurrentSymbol()
                 wxString msg2 = _( "You must save to a different location." );
 
                 if( OKOrCancelDialog( this, _( "Warning" ), msg, msg2 ) == wxID_OK )
-                    return saveLibrary( libName, true );
+                    return saveLibrary( libName, SAVE_LIBRARY_AS::NEW );
             }
             else
             {
-                return saveLibrary( libName, false );
+                return saveLibrary( libName, SAVE_LIBRARY_AS::ORIGINAL );
             }
         }
     }
@@ -148,8 +112,7 @@ bool SYMBOL_EDIT_FRAME::LoadSymbol( const LIB_ID& aLibId, int aUnit, int aBodySt
     SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
 
     // Some libraries can't be edited, so load the underlying chosen symbol
-    if( auto optRow = manager.GetRow( LIBRARY_TABLE_TYPE::SYMBOL, aLibId.GetLibNickname() );
-        optRow.has_value() )
+    if( auto optRow = manager.GetRow( LIBRARY_TABLE_TYPE::SYMBOL, aLibId.GetLibNickname() ); optRow.has_value() )
     {
         const LIBRARY_TABLE_ROW* row = *optRow;
         SCH_IO_MGR::SCH_FILE_T type = SCH_IO_MGR::EnumFromStr( row->Type() );
@@ -170,14 +133,16 @@ bool SYMBOL_EDIT_FRAME::LoadSymbol( const LIB_ID& aLibId, int aUnit, int aBodySt
                 wxString msg;
 
                 msg.Printf( _( "Error loading symbol %s from library '%s'." ),
-                            aLibId.GetUniStringLibId(), aLibId.GetUniStringLibItemName() );
+                            aLibId.GetUniStringLibId(),
+                            aLibId.GetUniStringLibItemName() );
                 DisplayErrorMessage( this, msg, ioe.What() );
                 return false;
             }
         }
     }
 
-    if( GetCurSymbol() && !IsSymbolFromSchematic()
+    if( GetCurSymbol()
+            && !IsSymbolFromSchematic()
             && GetCurSymbol()->GetLibId() == libId
             && GetUnit() == aUnit
             && GetBodyStyle() == aBodyStyle )
@@ -197,9 +162,7 @@ bool SYMBOL_EDIT_FRAME::LoadSymbol( const LIB_ID& aLibId, int aUnit, int aBodySt
         }
     }
 
-    SelectActiveLibrary( libId.GetLibNickname() );
-
-    if( LoadSymbolFromCurrentLib( libId.GetLibItemName(), aUnit, aBodyStyle ) )
+    if( LoadSymbolFromLib( libId.GetLibNickname(), libId.GetLibItemName(), aUnit, aBodyStyle ) )
     {
         m_treePane->GetLibTree()->SelectLibId( libId );
         m_treePane->GetLibTree()->ExpandLibId( libId );
@@ -222,30 +185,28 @@ void SYMBOL_EDIT_FRAME::centerItemIdleHandler( wxIdleEvent& aEvent )
 }
 
 
-bool SYMBOL_EDIT_FRAME::LoadSymbolFromCurrentLib( const wxString& aSymbolName, int aUnit, int aBodyStyle )
+bool SYMBOL_EDIT_FRAME::LoadSymbolFromLib( const wxString& aLibName, const wxString& aSymbolName, int aUnit,
+                                           int aBodyStyle )
 {
     LIB_SYMBOL* symbol = nullptr;
 
     try
     {
-        symbol = PROJECT_SCH::SymbolLibAdapter( &Prj() )->LoadSymbol( GetCurLib(), aSymbolName );
+        symbol = PROJECT_SCH::SymbolLibAdapter( &Prj() )->LoadSymbol( aLibName, aSymbolName );
     }
     catch( const IO_ERROR& ioe )
     {
         wxString msg;
 
         msg.Printf( _( "Error loading symbol %s from library '%s'." ),
-                    aSymbolName,
-                    GetCurLib() );
+                    UnescapeString( aSymbolName ),
+                    UnescapeString( aLibName ) );
         DisplayErrorMessage( this, msg, ioe.What() );
         return false;
     }
 
-    if( !symbol || !LoadOneLibrarySymbolAux( symbol, GetCurLib(), aUnit, aBodyStyle ) )
+    if( !symbol || !LoadOneLibrarySymbol( symbol, aLibName, aUnit, aBodyStyle ) )
         return false;
-
-    // Enable synchronized pin edit mode for symbols with interchangeable units
-    m_SyncPinEdit = GetCurSymbol()->IsMultiUnit() && !GetCurSymbol()->UnitsLocked();
 
     m_toolManager->RunAction( ACTIONS::zoomFitScreen );
 
@@ -255,8 +216,7 @@ bool SYMBOL_EDIT_FRAME::LoadSymbolFromCurrentLib( const wxString& aSymbolName, i
 }
 
 
-bool SYMBOL_EDIT_FRAME::LoadOneLibrarySymbolAux( LIB_SYMBOL* aEntry, const wxString& aLibrary,
-                                                 int aUnit, int aBodyStyle )
+bool SYMBOL_EDIT_FRAME::LoadOneLibrarySymbol( LIB_SYMBOL* aEntry, const wxString& aLibrary, int aUnit, int aBodyStyle )
 {
     bool rebuildMenuAndToolbar = false;
 
@@ -296,7 +256,6 @@ bool SYMBOL_EDIT_FRAME::LoadOneLibrarySymbolAux( LIB_SYMBOL* aEntry, const wxStr
         GetInfoBar()->Dismiss();
     }
 
-    UpdateTitle();
     RebuildSymbolUnitAndBodyStyleLists();
 
     // Only a freshly-created tab gets a clean undo history; re-focusing preserves the live stack.
@@ -342,6 +301,11 @@ void SYMBOL_EDIT_FRAME::CreateNewSymbol( const wxString& aInheritFrom )
             return;
     }
 
+    wxArrayString symbolNamesInLib;
+    wxArrayString derivedSymbols;
+    m_libMgr->GetSymbolNames( lib, symbolNamesInLib, SYMBOL_NAME_FILTER::ALL );
+    m_libMgr->GetSymbolNames( lib, derivedSymbols, SYMBOL_NAME_FILTER::DERIVED_ONLY );
+
     const auto validator =
             [&]( wxString newName ) -> bool
             {
@@ -370,10 +334,19 @@ void SYMBOL_EDIT_FRAME::CreateNewSymbol( const wxString& aInheritFrom )
                 return true;
             };
 
-    wxArrayString symbolNamesInLib;
-    m_libMgr->GetSymbolNames( lib, symbolNamesInLib );
+    const auto styler =
+            [&]( const wxString& aItem ) -> int
+            {
+                for( wxString& candidate : derivedSymbols )
+                {
+                    if( candidate.CmpNoCase( aItem ) == 0 )
+                        return ITALIC;
+                }
 
-    DIALOG_LIB_NEW_SYMBOL dlg( this, symbolNamesInLib, aInheritFrom, validator );
+                return 0;
+            };
+
+    DIALOG_LIB_NEW_SYMBOL dlg( this, symbolNamesInLib, styler, aInheritFrom, validator );
 
     dlg.SetMinSize( dlg.GetSize() );
 
@@ -424,27 +397,25 @@ void SYMBOL_EDIT_FRAME::Save()
         wxString msg2 = _( "You must save to a different location." );
 
         if( OKOrCancelDialog( this, _( "Warning" ), msg, msg2 ) == wxID_OK )
-            saveLibrary( libName, true );
+            saveLibrary( libName, SAVE_LIBRARY_AS::NEW );
     }
     else
     {
-        saveLibrary( libName, false );
+        saveLibrary( libName, SAVE_LIBRARY_AS::ORIGINAL );
     }
 
     if( IsLibraryTreeShown() )
         m_treePane->GetLibTree()->RefreshLibTree();
-
-    UpdateTitle();
 }
 
 
-void SYMBOL_EDIT_FRAME::SaveLibraryAs()
+void SYMBOL_EDIT_FRAME::SaveLibraryAs( SAVE_LIBRARY_AS aSaveAsType )
 {
     const wxString& libName = GetTargetLibId().GetLibNickname();
 
     if( !libName.IsEmpty() )
     {
-        saveLibrary( libName, true );
+        saveLibrary( libName, aSaveAsType );
         m_treePane->GetLibTree()->RefreshLibTree();
     }
 }
@@ -997,12 +968,13 @@ void SYMBOL_EDIT_FRAME::saveSymbolCopyAs( bool aOpenCopy )
     auto strategy = SYMBOL_SAVE_AS_HANDLER::CONFLICT_STRATEGY::OVERWRITE;
 
     std::vector<wxString> parentSymbolNames;
+
     if( symbol->IsDerived() )
     {
         // The parents are everything but the leaf symbol
         std::vector<std::shared_ptr<LIB_SYMBOL>> parentChain = GetParentChain( *symbol, false );
 
-        for( const auto& parent : parentChain )
+        for( const std::shared_ptr<LIB_SYMBOL>& parent : parentChain )
             parentSymbolNames.push_back( parent->GetName() );
     }
 
@@ -1182,7 +1154,7 @@ void SYMBOL_EDIT_FRAME::ExportSymbol()
         // The flattened symbol is most likely what the user would want.  As some point in
         // the future as more of the symbol library inheritance is implemented, this may have
         // to be changes to save symbols of inherited symbols.
-        pi->SaveSymbol( fn.GetFullPath(), flattenedSymbol.release() );
+        pi->SaveSymbol( fn.GetFullPath(), std::move( flattenedSymbol ) );
     }
     catch( const IO_ERROR& ioe )
     {
@@ -1206,7 +1178,10 @@ void SYMBOL_EDIT_FRAME::UpdateAfterSymbolProperties( wxString* aOldName )
 {
     wxCHECK( m_symbol, /* void */ );
 
-    wxString lib = m_symbol->GetLibNickname();
+    wxString lib;
+
+    if( !IsSymbolFromSchematic() )
+        lib = m_symbol->GetLibNickname();
 
     if( !lib.IsEmpty() && aOldName && *aOldName != m_symbol->GetName() )
     {
@@ -1234,7 +1209,9 @@ void SYMBOL_EDIT_FRAME::UpdateAfterSymbolProperties( wxString* aOldName )
         UpdateLibraryTree( treeItem, m_symbol );
 
     RebuildSymbolUnitAndBodyStyleLists();
-    UpdateTitle();
+
+    if( aOldName )
+        RenameSymbolTab( LIB_ID( lib, *aOldName ), m_symbol->GetLibId() );
 
     // N.B. The view needs to be rebuilt first as the Symbol Properties change may invalidate
     // the view pointers by rebuilting the field table
@@ -1252,8 +1229,14 @@ void SYMBOL_EDIT_FRAME::DeleteSymbolFromLibrary()
     if( toDelete.empty() )
         toDelete.emplace_back( GetTargetLibId() );
 
+    // A derived symbol selected together with its base is already gone once the base is removed
+    std::set<LIB_ID> removedWithBase;
+
     for( LIB_ID& libId : toDelete )
     {
+        if( removedWithBase.count( libId ) )
+            continue;
+
         if( m_libMgr->IsSymbolModified( libId.GetLibItemName(), libId.GetLibNickname() )
             && !IsOK( this, wxString::Format( _( "The symbol '%s' has been modified.\n"
                                                  "Do you want to remove it from the library?" ),
@@ -1303,6 +1286,9 @@ void SYMBOL_EDIT_FRAME::DeleteSymbolFromLibrary()
         }
 
         m_libMgr->RemoveSymbol( libId.GetLibItemName(), libId.GetLibNickname() );
+
+        for( const wxString& derivedName : derived )
+            removedWithBase.emplace( libId.GetLibNickname().wx_str(), derivedName );
     }
 
     m_treePane->GetLibTree()->RefreshLibTree();
@@ -1391,7 +1377,7 @@ void SYMBOL_EDIT_FRAME::DuplicateSymbol( bool aFromClipboard )
         ensureUniqueName( symbol, lib );
         m_libMgr->UpdateSymbol( symbol, lib );
 
-        LoadOneLibrarySymbolAux( symbol, lib, GetUnit(), GetBodyStyle() );
+        LoadOneLibrarySymbol( symbol, lib, GetUnit(), GetBodyStyle() );
     }
 
     SyncLibraries( false );
@@ -1464,7 +1450,7 @@ void SYMBOL_EDIT_FRAME::Revert( bool aConfirm )
     }
     else
     {
-        libId = m_libMgr->RevertSymbol( libId.GetLibItemName(), libId.GetLibNickname() );
+        libId = m_libMgr->RevertSymbol( libId );
 
         m_treePane->GetLibTree()->SelectLibId( libId );
         m_libMgr->ClearSymbolModified( libId.GetLibItemName(), libId.GetLibNickname() );
@@ -1514,14 +1500,13 @@ void SYMBOL_EDIT_FRAME::LoadSymbol( const wxString& aAlias, const wxString& aLib
     // Optimize default edit options for this symbol
     // Usually if units are locked, graphic items are specific to each unit
     // and if units are interchangeable, graphic items are common to units
-    SYMBOL_EDITOR_DRAWING_TOOLS* tools = GetToolManager()->GetTool<SYMBOL_EDITOR_DRAWING_TOOLS>();
-    tools->SetDrawSpecificUnit( symbol->UnitsLocked() );
+    SetDrawSpecificUnit( symbol->UnitsLocked() );
 
-    LoadOneLibrarySymbolAux( symbol, aLibrary, aUnit, 0 );
+    LoadOneLibrarySymbol( symbol, aLibrary, aUnit, 0 );
 }
 
 
-bool SYMBOL_EDIT_FRAME::saveLibrary( const wxString& aLibrary, bool aNewFile )
+bool SYMBOL_EDIT_FRAME::saveLibrary( const wxString& aLibrary, SAVE_LIBRARY_AS aSaveType )
 {
     wxFileName fn;
     wxString   msg;
@@ -1533,13 +1518,21 @@ bool SYMBOL_EDIT_FRAME::saveLibrary( const wxString& aLibrary, bool aNewFile )
 
     m_toolManager->RunAction( ACTIONS::cancelInteractive );
 
-    if( !aNewFile && ( aLibrary.empty() || !adapter->HasLibrary( aLibrary ) ) )
+    wxCHECK( adapter, false );
+
+    if( ( aSaveType == SAVE_LIBRARY_AS::ORIGINAL ) && ( aLibrary.empty() || !adapter->HasLibrary( aLibrary ) ) )
     {
         ShowInfoBarError( _( "No library specified." ) );
         return false;
     }
 
-    if( aNewFile )
+    bool newPackedLibrary = ( ( aSaveType == SAVE_LIBRARY_AS::ORIGINAL ) && wxFileName::FileExists( aLibrary ) ) ||
+                            ( aSaveType == SAVE_LIBRARY_AS::PACKED );
+
+    bool newUnpackedLibrary = ( ( aSaveType == SAVE_LIBRARY_AS::ORIGINAL ) && wxFileName::DirExists( aLibrary ) ) ||
+                              ( aSaveType == SAVE_LIBRARY_AS::UNPACKED );
+
+    if( newPackedLibrary )
     {
         SEARCH_STACK* search = PROJECT_SCH::SchSearchS( &prj );
 
@@ -1553,9 +1546,15 @@ bool SYMBOL_EDIT_FRAME::saveLibrary( const wxString& aLibrary, bool aNewFile )
         fn.SetExt( FILEEXT::KiCadSymbolLibFileExtension );
 
         wxString wildcards = FILEEXT::KiCadSymbolLibFileWildcard();
+        wxString dlgPrompt;
 
-        wxFileDialog dlg( this, wxString::Format( _( "Save Library '%s' As..." ), aLibrary ), default_path,
-                          fn.GetFullName(), wildcards, wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+        if( aSaveType == SAVE_LIBRARY_AS::ORIGINAL )
+            dlgPrompt.Printf( _( "Save Library '%s' As..." ), aLibrary );
+        else
+            dlgPrompt.Printf( _( "Save Library '%s' As Packed Library..." ), aLibrary );
+
+        wxFileDialog dlg( this, dlgPrompt, default_path, fn.GetFullName(), wildcards,
+                          wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
 
         SYMBOL_LIBRARY_SAVE_AS_FILEDLG_HOOK saveAsHook( type );
         dlg.SetCustomizeHook( saveAsHook );
@@ -1574,27 +1573,71 @@ bool SYMBOL_EDIT_FRAME::saveLibrary( const wxString& aLibrary, bool aNewFile )
 
         type = saveAsHook.GetOption();
     }
+    else if( newUnpackedLibrary )
+    {
+        SEARCH_STACK* search = PROJECT_SCH::SchSearchS( &prj );
+
+        // Get a new name for the library
+        wxString default_path = prj.GetRString( PROJECT::SCH_LIB_PATH );
+
+        if( !default_path )
+            default_path = search->LastVisitedPath();
+
+        wxString dlgPrompt;
+
+        if( aSaveType == SAVE_LIBRARY_AS::ORIGINAL )
+            dlgPrompt.Printf( _( "Save Library '%s' As..." ), aLibrary );
+        else
+            dlgPrompt.Printf( _( "Save Library '%s' As Unpacked Library..." ), aLibrary );
+
+        wxDirDialog dlg( this, dlgPrompt, default_path );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
+        if( dlg.ShowModal() == wxID_CANCEL )
+            return false;
+
+        fn.SetPath( dlg.GetPath() );
+    }
     else
     {
         std::optional<LIBRARY_TABLE_ROW*> optRow = adapter->GetRow( aLibrary );
         wxCHECK( optRow, false );
 
-        fn = LIBRARY_MANAGER::GetFullURI( *optRow, true );
-        fileType = SCH_IO_MGR::GuessPluginTypeFromLibPath( fn.GetFullPath() );
+        wxString libFileName = LIBRARY_MANAGER::GetFullURI( *optRow, true );
+
+        // wxFileName will parse any string with a dot(.) followed by any characters as a file extension.
+        // By default KiCad uses paths suffixed with .kicad_symdir which is interpreted as a file rather
+        // than a path.  Checking if the library is a file (packed) or a folder (unpacked) is required to
+        // ensure the correct save type is used.
+        if( wxFileName::DirExists( libFileName ) )
+            fn.SetPath( libFileName );
+        else
+            fn = libFileName;
+
+        fileType = SCH_IO_MGR::GuessPluginTypeFromLibPath( libFileName );
 
         if( fileType == SCH_IO_MGR::SCH_FILE_UNKNOWN )
             fileType = SCH_IO_MGR::SCH_KICAD;
     }
 
     // Verify the user has write privileges before attempting to save the library file.
-    if( !aNewFile && m_libMgr->IsLibraryReadOnly( aLibrary ) )
+    if( ( aSaveType == SAVE_LIBRARY_AS::ORIGINAL ) && m_libMgr->IsLibraryReadOnly( aLibrary ) )
         return false;
 
     ClearMsgPanel();
 
-    // Copy .kicad_symb file to .bak.
-    if( !backupFile( fn, "bak" ) )
-        return false;
+    // Only make a backup when saving to the original library.
+    if( aSaveType == SAVE_LIBRARY_AS::ORIGINAL )
+    {
+        wxString errMsg;
+
+        // Copy .kicad_symb file to .bak.
+        if( !backupLibrary( fn, errMsg ) )
+        {
+            return false;
+        }
+    }
 
     if( !m_libMgr->SaveLibrary( aLibrary, fn.GetFullPath(), fileType ) )
     {
@@ -1604,7 +1647,7 @@ bool SYMBOL_EDIT_FRAME::saveLibrary( const wxString& aLibrary, bool aNewFile )
         return false;
     }
 
-    if( !aNewFile )
+    if( aSaveType == SAVE_LIBRARY_AS::ORIGINAL )
     {
         m_libMgr->ClearLibraryModified( aLibrary );
 
@@ -1718,8 +1761,7 @@ bool SYMBOL_EDIT_FRAME::saveAllLibraries( bool aRequireConfirmation )
                     else
                     {
                         m_infoBar->Dismiss();
-                        m_infoBar->ShowMessageFor( msg + wxS( "  " ) + msg2,
-                                                   2000, wxICON_EXCLAMATION );
+                        m_infoBar->ShowMessageFor( msg + wxS( "  " ) + msg2, 5000, wxICON_EXCLAMATION );
 
                         while( m_infoBar->IsShownOnScreen() )
                             wxSafeYield();
@@ -1728,18 +1770,17 @@ bool SYMBOL_EDIT_FRAME::saveAllLibraries( bool aRequireConfirmation )
                         continue;
                     }
                 }
-                else if( saveLibrary( libNickname, false ) )
+                else if( saveLibrary( libNickname, SAVE_LIBRARY_AS::ORIGINAL ) )
                 {
                     continue;
                 }
 
-                if( !saveLibrary( libNickname, true ) )
+                if( !saveLibrary( libNickname, SAVE_LIBRARY_AS::NEW ) )
                     retv = false;
             }
         }
     }
 
-    UpdateTitle();
     return retv;
 }
 

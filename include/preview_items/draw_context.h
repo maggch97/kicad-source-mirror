@@ -21,6 +21,7 @@
 #define PREVIEW_PREVIEW_DRAW_CONTEXT__H_
 
 #include <gal/painter.h>
+#include <geometry/ellipse.h>
 #include <math/vector2d.h>
 
 namespace KIGFX
@@ -43,6 +44,15 @@ public:
     DRAW_CONTEXT( KIGFX::VIEW& aView );
 
     /**
+     * Draw a rectangle on the current layer.
+     *
+     * @param aC1 is the rectangle corner 1.
+     * @param aC2 is the rectangle corner 2.
+     * @param aDeEmphasised is the flag to indicate if the rectangle should be drawn deemphasised.
+     */
+    void DrawRectangle( const VECTOR2I& aC1, const VECTOR2I& aC2, bool aDeEmphasised );
+
+    /**
      * Draw a preview circle on the current layer.
      *
      * @param aOrigin circle origin.
@@ -63,6 +73,13 @@ public:
     void DrawCircleDashed( const VECTOR2I& aOrigin, double aRad, double aStepAngle,
                            double aFillAngle, bool aDeEmphasised );
 
+
+    /**
+     * Draw a preview ellipse on the current layer.
+     */
+    void DrawEllipse( const VECTOR2I& aOrigin, double aA, double aB, EDA_ANGLE aRot, bool aDeEmphasised );
+    void DrawEllipse( const ELLIPSE<int>& aEllipse, bool aDeEmphasised );
+
     /**
      * Draw a simple line on the current layer.
      *
@@ -81,7 +98,7 @@ public:
      * @param aDashFill     dash fill distance.
      * @param aDeEmphasised draw the line de-emphasized.
      */
-    void DrawLineDashed( const VECTOR2I& aStart, const VECTOR2I& aEn, int aDashStep,
+    void DrawLineDashed( const VECTOR2I& aStart, const VECTOR2I& aEnd, int aDashStep,
                          int aDashFill, bool aDeEmphasised );
 
     /**
@@ -92,8 +109,7 @@ public:
      * @param aEnd          line end point.
      * @param aDeEmphasised draw the line de-emphasized.
      */
-    void DrawLineWithAngleHighlight(
-            const VECTOR2I& aStart, const VECTOR2I& aEnd, bool aDeEmphasised );
+    void DrawLineWithAngleHighlight( const VECTOR2I& aStart, const VECTOR2I& aEnd, bool aDeEmphasised );
 
     /**
      * Draw an arc on the current layer, with a special highlight when
@@ -104,8 +120,7 @@ public:
      * @param aStartAngle the arc start angle.
      * @param aEndAngle   the arc end angle.
      */
-    void DrawArcWithAngleHighlight( const VECTOR2I& aOrigin, double aRad, double aStartAngle,
-                                    double aEndAngle );
+    void DrawArcWithAngleHighlight( const VECTOR2I& aOrigin, double aRad, double aStartAngle, double aEndAngle );
 
 private:
     /**
@@ -113,12 +128,12 @@ private:
      */
     COLOR4D getSpecialAngleColour() const;
 
-    ///< The GAL to draw into
+    /// The GAL to draw into
     KIGFX::GAL& m_gal;
 
     const KIGFX::RENDER_SETTINGS& m_render_settings;
 
-    ///< The current layer to draw onto
+    /// The current layer to draw onto
     GAL_LAYER_ID m_currLayer;
 
     /// The line width to use for items

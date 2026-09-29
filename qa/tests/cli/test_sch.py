@@ -21,6 +21,7 @@
 import utils
 import cairosvg
 import re
+import shutil
 from pathlib import Path
 import pytest
 from typing import List
@@ -187,20 +188,25 @@ def test_sch_export_pdf( kitest,
     kitest.add_attachment( output_filepath )
 
 
-@pytest.mark.parametrize("test_file,output_fn,compare_fn,line_skip_count,cli_args",
+@pytest.mark.parametrize("test_file,output_fn,compare_fn,line_skip_count,cli_args,expect_byte_order_mark",
                             [("cli/variants/variants.kicad_sch", "variants_default.bom.csv", "cli/variants/variants_default.bom.csv", 0,
-                              ["--exclude-dnp", "--fields", "Reference,Value", "--labels", "Refs,Value"]),
+                              ["--exclude-dnp", "--fields", "Reference,Value", "--labels", "Refs,Value"], False),
                              ("cli/variants/variants.kicad_sch", "variants_v1.bom.csv", "cli/variants/variants_v1.bom.csv", 0,
-                              ["--variant", "Variant 1", "--exclude-dnp", "--fields", "Reference,Value", "--labels", "Refs,Value"]),
+                              ["--variant", "Variant 1", "--exclude-dnp", "--fields", "Reference,Value", "--labels", "Refs,Value"], False),
                              ("cli/variants/variants.kicad_sch", "variants_v2.bom.csv", "cli/variants/variants_v2.bom.csv", 0,
-                              ["--variant", "Variant2", "--exclude-dnp", "--fields", "Reference,Value", "--labels", "Refs,Value"]),
+                              ["--variant", "Variant2", "--exclude-dnp", "--fields", "Reference,Value", "--labels", "Refs,Value"], False),
+                             ("cli/variants/variants.kicad_sch", "variants_default_bom_flag.bom.csv", "cli/variants/variants_default.bom.csv", 0,
+                              ["--include-byte-order-mark", "--exclude-dnp", "--fields", "Reference,Value", "--labels", "Refs,Value"], True),
+                             ("cli/variants/variants.kicad_sch", "variants_default_bom_preset.bom.csv", "cli/variants/variants_default.bom.csv", 0,
+                              ["--format-preset", "UTF-8 BOM", "--exclude-dnp", "--fields", "Reference,Value", "--labels", "Refs,Value"], True),
                              ])
 def test_sch_export_bom_variants( kitest: KiTestFixture,
                          test_file: str,
                          output_fn: str,
                          compare_fn: str,
                          line_skip_count: int,
-                         cli_args: List[str] ):
+                         cli_args: List[str],
+                         expect_byte_order_mark: bool ):
     """Test BOM export with variant support and DNP exclusion"""
     input_file = kitest.get_data_file_path( test_file )
     compare_filepath = kitest.get_data_file_path( compare_fn )
@@ -218,7 +224,11 @@ def test_sch_export_bom_variants( kitest: KiTestFixture,
     assert exitcode == 0
     assert stderr == ''
 
-    assert utils.textdiff_files( compare_filepath, output_filepath, line_skip_count )
+    if expect_byte_order_mark:
+        expected = b"\xef\xbb\xbf" + compare_filepath.read_bytes()
+        assert output_filepath.read_bytes() == expected
+    else:
+        assert utils.textdiff_files( compare_filepath, output_filepath, line_skip_count )
 
     kitest.add_attachment( output_filepath )
 
@@ -337,7 +347,8 @@ def test_sch_export_erc( kitest: KiTestFixture,
 
     # some of our netlist formats are not cross platform so skip for now
     if not skip_compare:
-        assert utils.textdiff_files( compare_filepath, output_filepath, line_skip_count )
+        assert utils.textdiff_files( compare_filepath, output_filepath, line_skip_count,
+                                     skip_line_regexes=[ r'^\s*"kicad_version":' ] )
 
     kitest.add_attachment( output_filepath )
 
@@ -401,3 +412,37 @@ def test_sch_export_bom( kitest,
         assert expected in actual_headers, f"Expected header '{expected}' not found in BOM output. Got: {actual_headers}"
 
     kitest.add_attachment( output_filepath )
+
+
+@pytest.mark.parametrize( "trace", [False, True] )
+def test_sch_child_input_validation( kitest: KiTestFixture, tmp_path: Path, monkeypatch, trace ):
+    for variable in ("WXTRACE", "KICAD_ENABLE_WXTRACE", "KICAD_FORCE_CONSOLE_TRACE"):
+        monkeypatch.delenv( variable, raising=False )
+
+    if trace:
+        monkeypatch.setenv( "WXTRACE", "KICAD_SETTINGS" )
+        monkeypatch.setenv( "KICAD_ENABLE_WXTRACE", "1" )
+        monkeypatch.setenv( "KICAD_FORCE_CONSOLE_TRACE", "1" )
+
+    source = kitest.get_data_file_path( "eeschema/issue23840" )
+    project = tmp_path / "project-é-100%%"
+    shutil.copytree( source, project )
+    child = project / "LEDs.kicad_sch"
+    output = tmp_path / "child.net"
+
+    stdout, stderr, exitcode = utils.run_and_capture(
+        [utils.kicad_cli(), "sch", "export", "netlist", "-o", str(output), str(child)] )
+
+    assert exitcode != 0
+    diagnostic = f"Schematic '{child}' is a hierarchical subsheet; load its root schematic."
+    assert diagnostic in stderr
+
+    if trace:
+        assert stderr.index( "(KICAD_SETTINGS) " ) < stderr.index( diagnostic )
+
+    assert not output.exists()
+
+    stdout, stderr, exitcode = utils.run_and_capture(
+        [utils.kicad_cli(), "sch", "upgrade", str(child)] )
+
+    assert exitcode == 0

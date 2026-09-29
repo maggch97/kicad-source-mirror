@@ -245,7 +245,7 @@ public:
 
     void EnableDepthTest( bool aEnabled = false ) override;
 
-    ///< @copydoc GAL::DrawGrid()
+    /// @copydoc GAL::DrawGrid()
     void DrawGrid() override;
 
     /// @copydoc GAL::BeginDrawing()
@@ -285,11 +285,31 @@ protected:
      *
      * @param aStartPoint is the start point of the line.
      * @param aEndPoint is the end point of the line.
+     * @param aColor is the colour to stroke it in.
      */
-    void drawGridLine( const VECTOR2D& aStartPoint, const VECTOR2D& aEndPoint );
-    void drawGridCross( const VECTOR2D& aPoint );
-    void drawGridPoint( const VECTOR2D& aPoint, double aWidth, double aHeight );
+    void drawGridLine( const VECTOR2D& aStartPoint, const VECTOR2D& aEndPoint,
+                       const COLOR4D& aColor );
+    void drawGridCross( const VECTOR2D& aPoint, const COLOR4D& aColor );
+    void drawGridPoint( const VECTOR2D& aPoint, double aWidth, double aHeight,
+                        const COLOR4D& aColor );
     void drawAxes( const VECTOR2D& aStartPoint, const VECTOR2D& aEndPoint );
+
+    /**
+     * Render m_gridSources precedence-ascending; each bounded source paints its coverage
+     * out first, so the last drawn wins.  Cairo has no stencil, so paint order stands in.
+     */
+    void drawGridSources();
+
+    /**
+     * Paint one source: coverage wash, grid content, then hairline.  The unbounded
+     * background source gets neither wash nor hairline.
+     */
+    void drawGridSource( const GRID_SOURCE& aSrc );
+
+    /**
+     * Fill or stroke a source's coverage region in its own frame, per the current state.
+     */
+    void drawGridCoverageShape( const GRID_SOURCE& aSrc );
 
 
     void flushPath();
@@ -386,6 +406,7 @@ class GAL_API CAIRO_GAL : public CAIRO_GAL_BASE, public wxWindow
 {
 public:
     /**
+     * @param aDisplayOptions are the options for the GAL.
      * @param aParent is the wxWidgets immediate wxWindow parent of this object.
      * @param aMouseListener is the wxEvtHandler that should receive the mouse events, this
      *                       can be can be any wxWindow, but is often a wxFrame container.
@@ -393,8 +414,7 @@ public:
      *                       can be any wxWindow, but is often a derived instance of this
      *                       class or a containing wxFrame.  The "paint event" here is a
      *                       wxCommandEvent holding EVT_GAL_REDRAW, as sent by PostPaint().
-     *
-     * @param aName is the name of this window for use by wxWindow::FindWindowByName().
+     * @param aName is the name of the Cairo canvas.
      */
     CAIRO_GAL( GAL_DISPLAY_OPTIONS& aDisplayOptions, wxWindow* aParent,
                wxEvtHandler* aMouseListener = nullptr, wxEvtHandler* aPaintListener = nullptr,
@@ -402,13 +422,23 @@ public:
 
     ~CAIRO_GAL();
 
-    ///< @copydoc GAL::IsVisible()
+    /// @copydoc GAL::IsVisible()
     bool IsVisible() const override
     {
         return IsShownOnScreen() && !GetClientRect().IsEmpty();
     }
 
     void ResizeScreen( int aWidth, int aHeight ) override;
+
+    /**
+     * Set areas, in canvas coordinates, that the frame blit must leave alone.
+     *
+     * The blit happens outside the paint cycle, so it would otherwise erase any window
+     * stacked over the canvas.
+     *
+     * @param aRects are the areas to preserve
+     */
+    void SetOverlayExclusions( const std::vector<wxRect>& aRects ) { m_overlayExclusions = aRects; }
 
     bool Show( bool aShow ) override;
 
@@ -505,7 +535,7 @@ public:
      */
     void onSetNativeCursor( wxSetCursorEvent& aEvent );
 
-    ///< Cairo-specific update handlers
+    /// Cairo-specific update handlers
     bool updatedGalDisplayOptions( const GAL_DISPLAY_OPTIONS& aOptions ) override;
 
 protected:
@@ -533,6 +563,8 @@ protected:
     COLOR4D             m_backgroundColor;     ///< Background color
 
     WX_CURSOR_TYPE      m_currentwxCursor;     ///< wx cursor showing the current native cursor
+
+    std::vector<wxRect> m_overlayExclusions;   ///< Areas the frame blit must leave alone
 };
 
 } // namespace KIGFX

@@ -94,35 +94,27 @@ bool PCB_IO_FABMASTER::CanReadBoard( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_FABMASTER::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                    const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_FABMASTER::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                  const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     m_props = aProperties;
 
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
+    // Must be set before Read()/Process(), which emit most of the parse diagnostics.
+    m_fabmaster.SetReporter( m_reporter );
 
-    // Give the filename to the board if it's new
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
+    m_board = &aBoard;
 
     if( m_progressReporter )
     {
         m_progressReporter->Report( wxString::Format( _( "Loading %s..." ), aFileName ) );
 
         if( !m_progressReporter->KeepRefreshing() )
-            THROW_IO_ERROR( _( "File import canceled by user." ) );
+            THROW_IO_CANCELLED();
     }
 
     if( !m_fabmaster.Read( aFileName.ToStdString() ) )
-    {
-        std::string readerr;
-
-        readerr = _( "Could not read file " ) + aFileName.ToStdString();
-        THROW_IO_ERROR( readerr );
-    }
+        THROW_IO_ERRORF( _( "Could not read file %s." ), aFileName );
 
     m_fabmaster.Process();
     m_fabmaster.LoadBoard( m_board, m_progressReporter );
-
-    return m_board;
 }

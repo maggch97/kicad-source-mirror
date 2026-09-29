@@ -18,11 +18,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <class_draw_panel_gal.h>
 #include <id.h>
 #include <kiplatform/ui.h>
 #include <widgets/wx_infobar.h>
 #include "wx/artprov.h"
-#include <wx/aui/framemanager.h>
 #include <wx/bmpbuttn.h>
 #include <wx/debug.h>
 #include <wx/hyperlink.h>
@@ -31,7 +31,6 @@
 #include <wx/stattext.h>
 #include <wx/timer.h>
 #include <wx/dcclient.h>
-#include <eda_base_frame.h>
 
 #ifdef __WXMSW__
 #include <dpi_scaling_common.h>
@@ -51,12 +50,12 @@ BEGIN_EVENT_TABLE( WX_INFOBAR, wxInfoBarGeneric )
 END_EVENT_TABLE()
 
 
-WX_INFOBAR::WX_INFOBAR( wxWindow* aParent, wxAuiManager* aMgr, wxWindowID aWinid )
+WX_INFOBAR::WX_INFOBAR( wxWindow* aParent, wxWindowID aWinid, bool aOverlay )
         : wxInfoBarGeneric( aParent, aWinid ),
           m_showTime( 0 ),
           m_updateLock( false ),
+          m_overlay( aOverlay ),
           m_showTimer( nullptr ),
-          m_auiManager( aMgr ),
           m_type( MESSAGE_TYPE::GENERIC )
 {
     m_showTimer = new wxTimer( this, ID_CLOSE_INFOBAR );
@@ -167,8 +166,9 @@ void WX_INFOBAR::ShowMessage( const wxString& aMessage, int aFlags )
 
     wxInfoBarGeneric::ShowMessage( m_message, aFlags );
 
-    if( m_auiManager )
-        updateAuiLayout( true );
+    // Force infoBar to full-width.  Yes, this should happen automatically, and it does -- sometimes.
+    FixSize();
+    stackOverlays();
 
     if( m_showTime > 0 )
         m_showTimer->StartOnce( m_showTime );
@@ -203,8 +203,8 @@ void WX_INFOBAR::Dismiss()
 
     wxInfoBarGeneric::Dismiss();
 
-    if( m_auiManager )
-        updateAuiLayout( false );
+    stackOverlays();
+    refreshParent();
 
     if( m_callback )
         (*m_callback)();
@@ -229,7 +229,49 @@ void WX_INFOBAR::onThemeChange( wxSysColourChangedEvent& aEvent )
 }
 
 
+// Big hack here.  We've had many bugs for a long time with the info bar not being full-width.  Things got
+// better in the 9.0 time-frame, but then started to degrade again in 10.0/11.0.
+//
+// This attempts to fix things by correcting the size every time the infobar is shown.  But even that has
+// flies in the ointment, as the "normal" infobar height is calculated before the icon is added to it, and
+// is shorter.
+//
+// So we have to squirrel away the icon, calculate the size, and then re-attach the icon.
+
+void WX_INFOBAR::FixSize()
+{
+    wxSizer* sizer = GetSizer();
+
+    if( !sizer || sizer->GetItemCount() == 0 )
+        return;
+
+#if wxCHECK_VERSION( 3, 3, 0 )
+    // On wx 3.3 item 0 is not the icon. It is a nested sizer that holds everything.
+    // Detaching it leaves the infobar empty. Then doSize() reads a null item and crashes.
+    doSize();
+    Layout();
+#else
+    wxWindow* icon = sizer->GetItem( (size_t) 0 )->GetWindow();
+    sizer->Detach( 0 );
+
+    doSize();
+
+    sizer->Prepend( icon, 0, wxLEFT | wxRIGHT, 5 );
+    Layout();
+#endif
+}
+
+
 void WX_INFOBAR::onSize( wxSizeEvent& aEvent )
+{
+    doSize();
+    stackOverlays();
+
+    aEvent.Skip();
+}
+
+
+void WX_INFOBAR::doSize()
 {
     int barWidth = GetSize().GetWidth();
     wxSizer* sizer = GetSizer();
@@ -262,15 +304,7 @@ void WX_INFOBAR::onSize( wxSizeEvent& aEvent )
             textCtrl->SetLabelText( m_message );
     }
 
-    // Calculate the horizontal size: because the infobar is shown on top of the draw canvas
-    // it is adjusted to the canvas width.
-    // On Mac, the canvas is the parent
-    // On other OS the parent is EDA_BASE_FRAME that contains the canvas
     int parentWidth = m_parent->GetClientSize().GetWidth();
-    EDA_BASE_FRAME* frame = dynamic_cast<EDA_BASE_FRAME*>( m_parent );
-
-    if( frame && frame->GetToolCanvas() )
-        parentWidth = frame->GetToolCanvas()->GetSize().GetWidth();
 
     if( barWidth != parentWidth )
         SetSize( parentWidth, GetSize().GetHeight() );
@@ -299,28 +333,56 @@ void WX_INFOBAR::onSize( wxSizeEvent& aEvent )
             textCtrl->Wrap( -1 );
         }
     }
-
-    aEvent.Skip();
 }
 
 
-void WX_INFOBAR::updateAuiLayout( bool aShow )
+void WX_INFOBAR::stackOverlays()
 {
-    wxASSERT( m_auiManager );
+    if( !m_overlay )
+        return;
 
-    wxAuiPaneInfo& pane = m_auiManager->GetPane( this );
+    int width = m_parent->GetClientSize().GetWidth();
+    int y = 0;
 
-    // If the infobar is in a pane, then show/hide the pane
-    if( pane.IsOk() )
+    for( wxWindow* child : m_parent->GetChildren() )
     {
-        if( aShow )
-            pane.Show();
-        else
-            pane.Hide();
+        WX_INFOBAR* bar = dynamic_cast<WX_INFOBAR*>( child );
+
+        if( !bar || !bar->IsShown() )
+            continue;
+
+        int height = bar->GetEffectiveMinSize().GetHeight();
+
+        bar->SetSize( 0, y, width, height );
+
+        // The GAL backend window is a sibling that raises itself whenever it is shown
+        bar->Raise();
+
+        y += height;
     }
 
-    // Update the AUI manager regardless
-    m_auiManager->Update();
+    if( EDA_DRAW_PANEL_GAL* canvas = dynamic_cast<EDA_DRAW_PANEL_GAL*>( m_parent ) )
+        canvas->UpdateOverlayExclusions();
+}
+
+
+void WX_INFOBAR::refreshParent()
+{
+    if( !m_overlay )
+        return;
+
+    // A GAL canvas skips repaints when no target is dirty, leaving the uncovered strip stale
+    if( EDA_DRAW_PANEL_GAL* canvas = dynamic_cast<EDA_DRAW_PANEL_GAL*>( m_parent ) )
+    {
+        canvas->ForceRefresh();
+
+        // ForceRefresh() gives up silently if the context is busy, so queue a backstop
+        canvas->RequestRefresh();
+    }
+    else
+    {
+        m_parent->Refresh();
+    }
 }
 
 
@@ -356,13 +418,14 @@ void WX_INFOBAR::AddButton( wxButton* aButton )
 }
 
 
-void WX_INFOBAR::AddButton( wxHyperlinkCtrl* aHypertextButton )
+void WX_INFOBAR::AddLink(const wxString& aLinkText, const std::function<void(wxHyperlinkEvent&)>& aFn )
 {
-    wxSizer* sizer = GetSizer();
+    wxSizer*         sizer = GetSizer();
+    wxHyperlinkCtrl* button = new wxHyperlinkCtrl( this, wxID_ANY, aLinkText, wxEmptyString );
 
-    wxASSERT( aHypertextButton );
+    button->Bind( wxEVT_COMMAND_HYPERLINK, aFn );
 
-    sizer->Add( aHypertextButton, wxSizerFlags().Centre().Border( wxRIGHT ).Shaped() );
+    sizer->Add( button, wxSizerFlags().Centre().Border( wxRIGHT ).Shaped() );
 
     if( IsShownOnScreen() )
     {
@@ -393,7 +456,7 @@ void WX_INFOBAR::RemoveAllButtons()
     if( sizer->GetItem( sizer->GetItemCount() - 1 )->IsSpacer() )
         return;
 
-    for( int i = sizer->GetItemCount() - 1; i >= 0; i-- )
+    for( int i = (int) sizer->GetItemCount() - 1; i >= 0; i-- )
     {
         wxSizerItem* sItem = sizer->GetItem( i );
 
@@ -401,7 +464,11 @@ void WX_INFOBAR::RemoveAllButtons()
         if( sItem->IsSpacer() )
             break;
 
-        delete sItem->GetWindow();
+        if( wxWindow* button = sItem->GetWindow() )
+        {
+            sizer->Detach( button );
+            button->Destroy();
+        }
     }
 }
 
@@ -520,6 +587,9 @@ void INFOBAR_REPORTER::Finalize()
     // Don't do anything if no message was ever given
     if( !m_infoBar || !m_messageSet )
         return;
+
+    // Consume the pending report
+    m_messageSet = false;
 
     // Short circuit if the message is empty and it is already hidden
     if( !HasMessage() && !m_infoBar->IsShownOnScreen() )

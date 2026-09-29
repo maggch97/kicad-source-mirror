@@ -64,7 +64,8 @@ enum class UNDO_REDO {
     DRILLORIGIN,        // origin changed (like CHANGED, contains the origin and a copy)
     GRIDORIGIN,         // origin changed (like CHANGED, contains the origin and a copy)
     PAGESETTINGS,       // page settings or title block changes
-    REPEAT_ITEM         // storage entry for the editor's global repeatItems list
+    REPEAT_ITEM,        // storage entry for the editor's global repeatItems list
+    VARIANTS            // one or more variants were added, deleted, or changed
 };
 
 
@@ -156,7 +157,7 @@ public:
     void ClearItemsList();
 
     /**
-     * Delete the list of pickers AND the data pointed by #m_PickedItem or #m_PickedItemLink
+     * Delete the list of pickers AND the data pointed by #ITEM_PICKER::m_pickedItem or #ITEM_PICKER::m_link.
      * according to the type of undo/redo command recorded.
      */
     void ClearListAndDeleteItems( std::function<void(EDA_ITEM*)> aItemDeleter );

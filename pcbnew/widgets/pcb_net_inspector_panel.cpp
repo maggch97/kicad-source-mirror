@@ -25,6 +25,8 @@
 #include <board_design_settings.h>
 #include <confirm.h>
 #include <connectivity/connectivity_algo.h>
+#include <connectivity/connectivity_data.h>
+#include <ratsnest/ratsnest_data.h>
 #include <dialogs/dialog_text_entry.h>
 #include <footprint.h>
 #include <length_delay_calculation/length_delay_calculation.h>
@@ -159,7 +161,11 @@ void PCB_NET_INSPECTOR_PANEL::buildColumns()
                                 true );
     }
 
-    m_columns.emplace_back( 9u, UNDEFINED_LAYER, _( "Pad Count" ), _( "Pad Count" ), CSV_COLUMN_DESC::CSV_NONE, false );
+    m_columns.emplace_back( 9u, UNDEFINED_LAYER, _( "Unrouted Length" ), _( "Unrouted Length" ),
+                            CSV_COLUMN_DESC::CSV_NONE, true );
+
+    m_columns.emplace_back( 10u, UNDEFINED_LAYER, _( "Pad Count" ), _( "Pad Count" ), CSV_COLUMN_DESC::CSV_NONE,
+                            false );
 
     const std::vector<std::function<void( void )>> add_col{
         [&]()
@@ -215,6 +221,13 @@ void PCB_NET_INSPECTOR_PANEL::buildColumns()
             m_netsList->AppendTextColumn( m_columns[COLUMN_PAD_DIE_LENGTH].display_name,
                                           m_columns[COLUMN_PAD_DIE_LENGTH], wxDATAVIEW_CELL_INERT, -1, wxALIGN_CENTER,
                                           wxDATAVIEW_COL_RESIZABLE|wxDATAVIEW_COL_REORDERABLE|wxDATAVIEW_COL_SORTABLE );
+        },
+        [&]()
+        {
+            m_netsList->AppendTextColumn( m_columns[COLUMN_UNROUTED_LENGTH].display_name,
+                                          m_columns[COLUMN_UNROUTED_LENGTH], wxDATAVIEW_CELL_INERT, -1, wxALIGN_CENTER,
+                                          wxDATAVIEW_COL_RESIZABLE | wxDATAVIEW_COL_REORDERABLE
+                                                  | wxDATAVIEW_COL_SORTABLE );
         },
         [&]()
         {
@@ -470,8 +483,6 @@ void PCB_NET_INSPECTOR_PANEL::buildNetsList( const bool rebuildColumns )
 
     m_netsList->Freeze();
 
-    m_dataModel->SetIsTimeDomain( m_showTimeDomainDetails );
-
     PROJECT_LOCAL_SETTINGS& localSettings = Pgm().GetSettingsManager().Prj().GetLocalSettings();
     PANEL_NET_INSPECTOR_SETTINGS* cfg = &localSettings.m_NetInspectorPanel;
 
@@ -483,6 +494,9 @@ void PCB_NET_INSPECTOR_PANEL::buildNetsList( const bool rebuildColumns )
     m_groupByNetclass = cfg->group_by_netclass;
     m_groupByNetChain = cfg->group_by_net_chain;
     m_groupByConstraint = cfg->group_by_constraint;
+
+    // Must follow the settings load so the model reflects this board's mode, not the previous one
+    m_dataModel->SetIsTimeDomain( m_showTimeDomainDetails );
 
     // Attempt to keep any expanded groups open
     if( m_boardLoaded && !m_boardLoading )
@@ -698,6 +712,32 @@ PCB_NET_INSPECTOR_PANEL::calculateNets( const std::vector<NETINFO_ITEM*>& aNetCo
 {
     std::vector<std::unique_ptr<LIST_ITEM>> results;
 
+    // A chain total needs every member net, so pull in the siblings.
+    std::vector<NETINFO_ITEM*> netCodes( aNetCodes );
+    std::set<wxString>         chains;
+
+    for( NETINFO_ITEM* net : netCodes )
+    {
+        if( !net->GetNetChain().IsEmpty() )
+            chains.insert( net->GetNetChain() );
+    }
+
+    if( !chains.empty() )
+    {
+        for( NETINFO_ITEM* net : m_board->GetNetInfo() )
+        {
+            if( chains.count( net->GetNetChain() ) )
+                netCodes.push_back( net );
+        }
+
+        std::sort( netCodes.begin(), netCodes.end(),
+                   []( const NETINFO_ITEM* a, const NETINFO_ITEM* b )
+                   {
+                       return a->GetNetCode() < b->GetNetCode();
+                   } );
+        netCodes.erase( std::unique( netCodes.begin(), netCodes.end() ), netCodes.end() );
+    }
+
     LENGTH_DELAY_CALCULATION*   calc = m_board->GetLengthCalculation();
     const std::vector<CN_ITEM*> conItems = relevantConnectivityItems();
 
@@ -708,9 +748,9 @@ PCB_NET_INSPECTOR_PANEL::calculateNets( const std::vector<NETINFO_ITEM*>& aNetCo
     std::vector<NETINFO_ITEM*>                                          foundNets;
 
     auto itemItr = conItems.begin();
-    auto netCodeItr = aNetCodes.begin();
+    auto netCodeItr = netCodes.begin();
 
-    while( itemItr != conItems.end() && netCodeItr != aNetCodes.end() )
+    while( itemItr != conItems.end() && netCodeItr != netCodes.end() )
     {
         const int curNetCode = ( *netCodeItr )->GetNetCode();
         const int curItemNetCode = ( *itemItr )->Net();
@@ -734,7 +774,7 @@ PCB_NET_INSPECTOR_PANEL::calculateNets( const std::vector<NETINFO_ITEM*>& aNetCo
         else if( curItemNetCode > curNetCode )
         {
             // Fast-forward through required net codes
-            while( netCodeItr != aNetCodes.end() && curItemNetCode > ( *netCodeItr )->GetNetCode() )
+            while( netCodeItr != netCodes.end() && curItemNetCode > ( *netCodeItr )->GetNetCode() )
                 ++netCodeItr;
         }
     }
@@ -777,12 +817,20 @@ PCB_NET_INSPECTOR_PANEL::calculateNets( const std::vector<NETINFO_ITEM*>& aNetCo
                     new_item->SetViaDelay( lengthDetails.ViaDelay );
                     new_item->SetLayerWireLengths( *lengthDetails.LayerLengths );
 
+                    // Estimated unrouted length: sum of the optimized ratsnest airline edges
+                    // for this net, as maintained by the connectivity engine.  Uses the
+                    // unsorted accessor to avoid the stable sort in RN_NET::GetEdges().
+                    int64_t unroutedLength = 0;
+
+                    if( RN_NET* rnNet = m_board->GetConnectivity()->GetRatsnestForNet( netCode ) )
+                        unroutedLength = rnNet->GetTotalAirlineLength();
+
+                    new_item->SetUnroutedLength( unroutedLength );
+
                     if( m_showTimeDomainDetails )
                         new_item->SetLayerWireDelays( *lengthDetails.LayerDelays );
 
                     new_item->SetNetChainName( foundNets[i]->GetNetChain() );
-                    new_item->SetNetChainLength( lengthDetails.TotalLength() );
-                    new_item->SetNetChainDelay( lengthDetails.TotalDelay() );
 
                     std::scoped_lock lock( resultsMutex );
                     results.emplace_back( std::move( new_item ) );
@@ -948,11 +996,15 @@ void PCB_NET_INSPECTOR_PANEL::OnBoardChanged()
 
     const PROJECT_LOCAL_SETTINGS& localSettings = Pgm().GetSettingsManager().Prj().GetLocalSettings();
     auto&                   cfg = localSettings.m_NetInspectorPanel;
-    m_searchCtrl->SetValue( cfg.filter_text );
+    // ChangeValue avoids the wxEVT_TEXT that SetValue fires, which doubled buildNetsList() below
+    m_searchCtrl->ChangeValue( cfg.filter_text );
 
-    buildNetsList( true );
-
-    m_boardLoading = false;
+    // Skip the full net solve while hidden; OnShowPanel() rebuilds from scratch when revealed
+    if( IsShown() )
+    {
+        buildNetsList( true );
+        m_boardLoading = false;
+    }
 }
 
 
@@ -1073,6 +1125,7 @@ void PCB_NET_INSPECTOR_PANEL::updateNets( const std::vector<NETINFO_ITEM*>& aNet
             curListItem->SetViaCount( newListItem->GetViaCount() );
             curListItem->SetViaLength( newListItem->GetViaLength() );
             curListItem->SetViaDelay( newListItem->GetViaDelay() );
+            curListItem->SetUnroutedLength( newListItem->GetUnroutedLength() );
             curListItem->SetLayerWireLengths( newListItem->GetLayerWireLengths() );
             curListItem->SetNetChainName( newListItem->GetNetChainName() );
             curListItem->SetNetChainLength( newListItem->GetNetChainLength() );
@@ -1179,7 +1232,17 @@ void PCB_NET_INSPECTOR_PANEL::OnBoardHighlightNetChanged( BOARD& aBoard )
 
 void PCB_NET_INSPECTOR_PANEL::OnShowPanel()
 {
-    buildNetsList();
+    // A board loaded while hidden still owes its first full build, columns included
+    if( m_boardLoading )
+    {
+        buildNetsList( true );
+        m_boardLoading = false;
+    }
+    else
+    {
+        buildNetsList();
+    }
+
     OnBoardHighlightNetChanged( *m_board );
 }
 

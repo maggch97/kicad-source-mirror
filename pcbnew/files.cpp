@@ -38,12 +38,12 @@
 #include <footprint_import_reconciler.h>
 #include <footprint_library_adapter.h>
 #include <import_proj_properties.h>
+#include <import_net_names.h>
 #include <kiface_base.h>
 #include <macros.h>
 #include <trace_helpers.h>
 #include <length_delay_calculation/length_delay_calculation.h>
 #include <lockfile.h>
-#include <wx/snglinst.h>
 #include <netlist_reader/pcb_netlist.h>
 #include <pcbnew_id.h>
 #include <wildcards_and_files_ext.h>
@@ -105,9 +105,8 @@ static const wxChar* const traceAllegroPerf = wxT( "KICAD_ALLEGRO_PERF" );
  * Show a wxFileDialog asking for a #BOARD filename to open.
  *
  * @param aParent is a wxFrame passed to wxFileDialog.
- * @param aCtl is where to put the OpenProjectFiles() control bits.
  * @param aFileName on entry is a probable choice, on return is the chosen filename.
- * @param aKicadFilesOnly true to list KiCad pcb files plugins only, false to list import plugins.
+ * @param aCtl is where to put the OpenProjectFiles() control bits.
  * @return  true if chosen, else false if user aborted.
  */
 bool AskLoadBoardFileName( PCB_EDIT_FRAME* aParent, wxString* aFileName, int aCtl = 0 )
@@ -320,9 +319,7 @@ int BOARD_EDITOR_CONTROL::Revert( const TOOL_EVENT& aEvent )
 
     m_frame->ReleaseFile();
 
-    m_frame->OpenProjectFiles( std::vector<wxString>( 1, fn.GetFullPath() ), KICTL_REVERT );
-
-    return 0;
+    return m_frame->OpenProjectFiles( std::vector<wxString>( 1, fn.GetFullPath() ), KICTL_REVERT );
 }
 
 
@@ -330,6 +327,9 @@ int BOARD_EDITOR_CONTROL::New( const TOOL_EVENT& aEvent )
 {
     // Only standalone mode can directly load a new document
     if( !Kiface().IsSingle() )
+        return false;
+
+    if( !m_frame->CloseFootprintFieldsTableDialog() )
         return false;
 
     if( m_frame->IsContentModified() )
@@ -492,16 +492,6 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
     std::unique_ptr<LOCKFILE> lock = std::make_unique<LOCKFILE>( fullFileName );
 
-    if( !lock->Valid() && lock->IsLockedByMe() )
-    {
-        // If we cannot acquire the lock but we appear to be the one who locked it, check to
-        // see if there is another KiCad instance running.  If not, then we can override the
-        // lock.  This could happen if KiCad crashed or was interrupted.
-
-        if( !Pgm().SingleInstance()->IsAnotherRunning() )
-            lock->OverrideLock();
-    }
-
     if( !lock->Valid() )
     {
         // If project-level lock override was already granted, silently override this file's lock
@@ -522,6 +512,9 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
             lock->OverrideLock();
         }
     }
+
+    if( !CloseFootprintFieldsTableDialog() )
+        return false;
 
     if( IsContentModified() )
     {
@@ -688,19 +681,26 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
                         {
                             if( !ADVANCED_CFG::GetCfg().m_ImportSkipLayerMapping )
                             {
-                                mappable_pi->RegisterCallback( std::bind( DIALOG_MAP_LAYERS::RunModal,
-                                                                          this,
-                                                                          std::placeholders::_1 ) );
+                                const auto layerMapCallback =
+                                        [this]( const std::vector<INPUT_LAYER_DESC>& aLayers )
+                                        {
+                                            return DIALOG_MAP_LAYERS::RunModal( this, aLayers );
+                                        };
+
+                                mappable_pi->RegisterCallback( layerMapCallback );
                             }
                         }
 
                         if( PROJECT_CHOOSER_PLUGIN* chooser_pi =
                                     dynamic_cast<PROJECT_CHOOSER_PLUGIN*>( &aPlugin ) )
                         {
-                            chooser_pi->RegisterCallback(
-                                    std::bind( DIALOG_IMPORT_CHOOSE_PROJECT::RunModal,
-                                               this,
-                                               std::placeholders::_1 ) );
+                            const auto chooseProjectCallback =
+                                    [this]( const std::vector<IMPORT_PROJECT_DESC>& aProjects )
+                                    {
+                                        return DIALOG_IMPORT_CHOOSE_PROJECT::RunModal( this, aProjects );
+                                    };
+
+                            chooser_pi->RegisterCallback( chooseProjectCallback );
                         }
 
                         aPlugin.SetQueryUserCallback(
@@ -721,6 +721,20 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
             std::unique_ptr<BOARD> loaded =
                     BOARD_LOADER::Load( fullFileName, pluginType, &Prj(), loaderOptions );
+
+            if( loaded && props.count( IMPORT_PROJ_PROPS::NET_NAME_MAP ) )
+            {
+                std::optional<std::map<wxString, wxString>> netNames =
+                        IMPORT_PROJ_PROPS::SplitNetNameMap(
+                                props.at( IMPORT_PROJ_PROPS::NET_NAME_MAP ).wx_str() );
+
+                if( !netNames )
+                    THROW_IO_ERROR( _( "Invalid imported net-name map." ) );
+
+                if( !ApplyImportedNetNameMap( *loaded, *netNames, loadReporter ) )
+                    THROW_IO_ERROR( _( "Cannot apply imported net-name map to the board." ) );
+            }
+
             loadedBoard = loaded.release();
 
 #if USE_INSTRUMENTATION
@@ -736,14 +750,16 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
             failedLoad = true;
         }
+        catch( const IO_CANCELLED& )
+        {
+            // A user-cancelled load is not an error; abandon it without a dialog.
+            failedLoad = true;
+        }
         catch( const IO_ERROR& ioe )
         {
-            if( ioe.Problem() != wxT( "CANCEL" ) )
-            {
-                msg.Printf( _( "Error loading PCB '%s'." ), fullFileName );
-                progressReporter.Hide();
-                DisplayErrorMessage( this, msg, ioe.What() );
-            }
+            msg.Printf( _( "Error loading PCB '%s'." ), fullFileName );
+            progressReporter.Hide();
+            DisplayErrorMessage( this, msg, ioe.What() );
 
             failedLoad = true;
         }
@@ -1032,7 +1048,6 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
         GetBoard()->SynchronizeNetsAndNetClasses( false );
     }
 
-    wxString   upperTxt;
     wxString   lowerTxt;
 
     // On Windows, ensure the target file is writeable by clearing problematic attributes like
@@ -1044,7 +1059,7 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
     {
         IO_RELEASER<PCB_IO> pi( PCB_IO_MGR::FindPlugin( PCB_IO_MGR::KICAD_SEXP ) );
 
-        pi->SaveBoard( pcbFileName.GetFullPath(), GetBoard(), nullptr );
+        pi->SaveBoard( pcbFileName.GetFullPath(), *GetBoard(), nullptr );
     }
     catch( const IO_ERROR& ioe )
     {
@@ -1054,16 +1069,10 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
         return false;
     }
 
-    if( !Kiface().IsSingle() )
-    {
-        WX_STRING_REPORTER backupReporter;
+    WX_STRING_REPORTER backupReporter;
 
-        if( !GetSettingsManager()->TriggerBackupIfNeeded( backupReporter ) )
-        {
-            upperTxt = backupReporter.GetMessages();
-            SetStatusText( upperTxt, 1 );
-        }
-    }
+    if( !Kiface().IsSingle() )
+        GetSettingsManager()->TriggerBackupIfNeeded( backupReporter );
 
     GetBoard()->SetFileName( pcbFileName.GetFullPath() );
 
@@ -1084,6 +1093,12 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
 
     if( m_infoBar->IsShownOnScreen() && m_infoBar->HasCloseButton() )
         m_infoBar->Dismiss();
+
+    if( backupReporter.HasMessage() )
+    {
+        wxString backupMsg = backupReporter.GetMessages();
+        m_infoBar->ShowMessageFor( backupMsg.Trim(), 10000, wxICON_WARNING );
+    }
 
     GetScreen()->SetContentModified( false );
     UpdateTitle();
@@ -1131,6 +1146,7 @@ bool PCB_EDIT_FRAME::SavePcbCopy( const wxString& aFileName, bool aCreateProject
     SaveProjectLocalSettings();
 
     GetBoard()->SynchronizeNetsAndNetClasses( false );
+    GetBoard()->SynchronizeProperties();
 
     // On Windows, ensure the target file is writeable by clearing problematic attributes like
     // hidden or read-only. This can happen when files are synced via cloud services.
@@ -1143,7 +1159,7 @@ bool PCB_EDIT_FRAME::SavePcbCopy( const wxString& aFileName, bool aCreateProject
 
         wxASSERT( pcbFileName.IsAbsolute() );
 
-        pi->SaveBoard( pcbFileName.GetFullPath(), GetBoard(), nullptr );
+        pi->SaveBoard( pcbFileName.GetFullPath(), *GetBoard(), nullptr );
     }
     catch( const IO_ERROR& ioe )
     {
@@ -1189,7 +1205,9 @@ bool PCB_EDIT_FRAME::importFile( const wxString& aFileName, int aFileType,
 
     m_importProperties = aProperties;
 
-    switch( (PCB_IO_MGR::PCB_FILE_T) aFileType )
+    PCB_IO_MGR::PCB_FILE_T fileType = (PCB_IO_MGR::PCB_FILE_T) aFileType;
+
+    switch( fileType )
     {
     case PCB_IO_MGR::CADSTAR_PCB_ARCHIVE:
     case PCB_IO_MGR::EAGLE:
@@ -1200,11 +1218,17 @@ bool PCB_EDIT_FRAME::importFile( const wxString& aFileName, int aFileType,
     case PCB_IO_MGR::ALTIUM_DESIGNER:
     case PCB_IO_MGR::ALTIUM_CIRCUIT_MAKER:
     case PCB_IO_MGR::ALTIUM_CIRCUIT_STUDIO:
-        return OpenProjectFiles( std::vector<wxString>( 1, aFileName ), KICTL_NONKICAD_ONLY | KICTL_IMPORT_LIB );
-
+    case PCB_IO_MGR::ALLEGRO:
     case PCB_IO_MGR::SOLIDWORKS_PCB:
     case PCB_IO_MGR::PADS:
-        return OpenProjectFiles( std::vector<wxString>( 1, aFileName ), KICTL_NONKICAD_ONLY );
+    {
+        int ctl = KICTL_NONKICAD_ONLY;
+
+        if( PCB_IO_MGR::ImportGeneratesProjectLibrary( fileType ) )
+            ctl |= KICTL_IMPORT_LIB;
+
+        return OpenProjectFiles( std::vector<wxString>( 1, aFileName ), ctl );
+    }
 
     default:
         return false;
@@ -1215,33 +1239,10 @@ bool PCB_EDIT_FRAME::importFile( const wxString& aFileName, int aFileType,
 void PCB_EDIT_FRAME::reconcileImportedFootprintLibraries(
         std::vector<std::unique_ptr<FOOTPRINT>> aDefinitions, const wxString& aBoardPath )
 {
-    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &Prj() );
+    WX_STRING_REPORTER reporter;
 
-    if( !adapter )
-        return;
-
-    // manager pre-commits the cache nickname + source libs; standalone import derives from filename
-    wxString              cacheNick;
-    std::vector<wxString> sourceLibs;
-    IMPORT_PROJ_PROPS::ReadFootprintProps( m_importProperties, cacheNick, sourceLibs );
-
-    if( cacheNick.IsEmpty() )
-        cacheNick = IMPORT_PROJ_PROPS::MakeCacheNickname( wxFileName( aBoardPath ).GetName() );
-
-    WX_STRING_REPORTER          reporter;
-    FOOTPRINT_IMPORT_RECONCILER reconciler( *adapter, Prj().GetProjectPath(), &reporter );
-
-    // reconciliation failure must not abort the import
-    try
-    {
-        reconciler.Reconcile( GetBoard(), std::move( aDefinitions ), cacheNick, sourceLibs );
-    }
-    catch( const IO_ERROR& ioe )
-    {
-        reporter.Report( wxString::Format( _( "Could not reconcile imported footprint "
-                                              "libraries: %s" ), ioe.What() ),
-                         RPT_SEVERITY_ERROR );
-    }
+    ReconcileImportedFootprints( std::move( aDefinitions ), *GetBoard(), Prj(), aBoardPath,
+                                 m_importProperties, reporter );
 
     if( reporter.HasMessage() )
     {

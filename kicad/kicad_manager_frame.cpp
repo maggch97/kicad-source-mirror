@@ -76,7 +76,6 @@
 #include <wx/filedlg.h>
 #include <wx/dnd.h>
 #include <wx/process.h>
-#include <wx/snglinst.h>
 #include <algorithm>
 #include <atomic>
 #include <update_manager.h>
@@ -124,6 +123,7 @@ BEGIN_EVENT_TABLE( KICAD_MANAGER_FRAME, EDA_BASE_FRAME )
     EVT_MENU( ID_IMPORT_PCAD_PROJECT, KICAD_MANAGER_FRAME::OnImportPcadProjectFiles )
     EVT_MENU( ID_IMPORT_GEDA_PROJECT, KICAD_MANAGER_FRAME::OnImportGedaFiles )
     EVT_MENU( ID_IMPORT_DIPTRACE_PROJECT, KICAD_MANAGER_FRAME::OnImportDipTraceFiles )
+    EVT_MENU( ID_IMPORT_ORCAD_PROJECT, KICAD_MANAGER_FRAME::OnImportOrcadFiles )
     EVT_MENU( ID_COMPARE_PROJECT_BRANCHES,
               KICAD_MANAGER_FRAME::OnCompareProjectBranches )
 
@@ -626,13 +626,6 @@ void KICAD_MANAGER_FRAME::OnSize( wxSizeEvent& event )
     if( m_auimgr.GetManagedWindow() )
         m_auimgr.Update();
 
-    PrintPrjInfo();
-
-#if defined( _WIN32 )
-    KISTATUSBAR* statusBar = static_cast<KISTATUSBAR*>( GetStatusBar() );
-    statusBar->SetEllipsedTextField( m_FileWatcherInfo, 1 );
-#endif
-
     event.Skip();
 }
 
@@ -841,7 +834,11 @@ bool KICAD_MANAGER_FRAME::CloseProject( bool aSave )
         {
             unsigned long long int limit = Pgm().GetCommonSettings()->m_Backup.limit_total_size;
 
-            if( limit > 0 )
+            if( limit > 0 && Kiway().LocalHistory().IsCompacting() )
+            {
+                Kiway().LocalHistory().EnforceSizeLimitInBackground( Prj().GetProjectPath(), (size_t) limit );
+            }
+            else if( limit > 0 )
             {
                 WX_PROGRESS_REPORTER reporter( this, _( "Local History" ), 3, PR_NO_ABORT );
                 Kiway().LocalHistory().EnforceSizeLimit( Prj().GetProjectPath(), (size_t) limit, &reporter );
@@ -927,47 +924,27 @@ bool KICAD_MANAGER_FRAME::LoadProject( const wxFileName& aProjectFileName )
 
     wxString fullPath = aProjectFileName.GetFullPath();
 
-    // Check if a lock file already exists BEFORE we try to acquire it. We only want to warn
-    // the user if the lock file pre-existed, not if we're about to create it ourselves.
-    // The actual lock acquisition happens in SETTINGS_MANAGER::LoadProject().
-    wxFileName lockFn( fullPath );
-    lockFn.SetName( FILEEXT::LockFilePrefix + lockFn.GetName() );
-    lockFn.SetExt( lockFn.GetExt() + wxS( "." ) + FILEEXT::LockFileExtension );
-    bool lockFilePreExisted = lockFn.FileExists();
+    // Inspect only; SETTINGS_MANAGER::LoadProject() takes the real lock
+    LOCKFILE lockFile = LOCKFILE::Inspect( fullPath );
 
     bool lockOverrideGranted = false;
 
-    if( lockFilePreExisted )
+    if( !lockFile.Valid() )
     {
-        // A lock file exists. Create a LOCKFILE to read who owns it and decide what to do.
-        LOCKFILE lockFile( fullPath );
+        wxString msg;
+        msg.Printf( _( "Project '%s' is already open by '%s' at '%s'." ),
+                    fullPath,
+                    lockFile.GetUsername(),
+                    lockFile.GetHostname() );
 
-        if( !lockFile.Valid() && lockFile.IsLockedByMe() )
-        {
-            // If we cannot acquire the lock but we appear to be the one who locked it, check to
-            // see if there is another KiCad instance running. If not, then we can override the
-            // lock. This could happen if KiCad crashed or was interrupted.
-            if( !Pgm().SingleInstance()->IsAnotherRunning() )
-                lockFile.OverrideLock();
-        }
+        if( !AskOverrideLock( this, msg ) )
+            return false;  // User clicked Cancel - abort project loading entirely
 
-        if( !lockFile.Valid() )
-        {
-            wxString msg;
-            msg.Printf( _( "Project '%s' is already open by '%s' at '%s'." ),
-                        fullPath,
-                        lockFile.GetUsername(),
-                        lockFile.GetHostname() );
+        // Clear the lock so the load below can take it
+        LOCKFILE overridden( fullPath );
+        overridden.OverrideLock();
 
-            if( !AskOverrideLock( this, msg ) )
-                return false;  // User clicked Cancel - abort project loading entirely
-
-            lockFile.OverrideLock();
-            lockOverrideGranted = true;
-        }
-
-        // The LOCKFILE goes out of scope here and releases/removes the lock file.
-        // SETTINGS_MANAGER::LoadProject() will create the actual persistent lock.
+        lockOverrideGranted = true;
     }
 
     // Any open KIFACE's must be closed if they are not part of the new project.
@@ -1319,18 +1296,6 @@ void KICAD_MANAGER_FRAME::ProjectChanged()
     {
         LOCKFILE lockFile( file );
 
-        if( !lockFile.Valid() && lockFile.IsLockedByMe() )
-        {
-            // If we cannot acquire the lock but we appear to be the one who
-            // locked it, check to see if there is another KiCad instance running.
-            // If there is not, then we can override the lock.  This could happen if
-            // KiCad crashed or was interrupted
-            if( !Pgm().SingleInstance()->IsAnotherRunning() )
-            {
-                lockFile.OverrideLock();
-            }
-        }
-
         if( !lockFile.Valid() )
         {
             wxString msg;
@@ -1414,11 +1379,8 @@ void KICAD_MANAGER_FRAME::SaveSettings( APP_SETTINGS_BASE* aCfg )
 
 void KICAD_MANAGER_FRAME::PrintPrjInfo()
 {
-    // wxStatusBar's wxELLIPSIZE_MIDDLE flag doesn't work (at least on Mac).
-
-    wxString     status = wxString::Format( _( "Project: %s" ), Prj().GetProjectFullName() );
-    KISTATUSBAR* statusBar = static_cast<KISTATUSBAR*>( GetStatusBar() );
-    statusBar->SetEllipsedTextField( status, 0 );
+    wxString status = wxString::Format( _( "Project: %s" ), Prj().GetProjectFullName() );
+    SetStatusText( status, 0 );
 }
 
 

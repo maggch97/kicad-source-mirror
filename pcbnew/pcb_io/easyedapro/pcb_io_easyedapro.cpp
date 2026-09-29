@@ -20,6 +20,7 @@
 
 #include <io/easyedapro/easyedapro_import_utils.h>
 #include <io/easyedapro/easyedapro_parser.h>
+#include <memory>
 #include <pcb_io/easyedapro/pcb_io_easyedapro.h>
 #include <pcb_io/easyedapro/pcb_io_easyedapro_parser.h>
 #include <pcb_io/pcb_io.h>
@@ -94,16 +95,43 @@ bool PCB_IO_EASYEDAPRO::CanReadBoard( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_EASYEDAPRO::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                     const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+std::vector<std::pair<wxString, wxString>>
+PCB_IO_EASYEDAPRO::EnumerateProjectBoards( const wxString& aFileName ) const
+{
+    const nlohmann::json& projectIndex = EASYEDAPRO::ReadProjectOrDeviceFile( aFileName );
+    const nlohmann::json& pcbsIndex = projectIndex.at( "pcbs" );
+
+    std::vector<std::pair<wxString, wxString>> result;
+    result.reserve( pcbsIndex.size() );
+
+    for( const auto& [uuid, entry] : pcbsIndex.items() )
+    {
+        wxString title = wxString::FromUTF8( uuid );
+
+        if( entry.is_string() && !entry.get<std::string>().empty() )
+            title = wxString::FromUTF8( entry.get_ref<const std::string&>() );
+        else if( entry.is_object() )
+        {
+            auto titleIt = entry.find( "title" );
+
+            if( titleIt != entry.end() && titleIt->is_string() )
+                title = wxString::FromUTF8( titleIt->get_ref<const std::string&>() );
+        }
+
+        result.emplace_back( wxString::FromUTF8( uuid ), title );
+    }
+
+    return result;
+}
+
+
+void PCB_IO_EASYEDAPRO::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                   const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     m_props = aProperties;
+    m_importedDesignRules.clear();
 
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
-
-    // Give the filename to the board if it's new
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
+    m_board = &aBoard;
 
     // Collect the font substitution warnings (RAII - automatically reset on scope exit)
     FONTCONFIG_REPORTER_SCOPE fontconfigScope( &LOAD_INFO_REPORTER::GetInstance() );
@@ -113,7 +141,7 @@ BOARD* PCB_IO_EASYEDAPRO::LoadBoard( const wxString& aFileName, BOARD* aAppendTo
         m_progressReporter->Report( wxString::Format( _( "Loading %s..." ), aFileName ) );
 
         if( !m_progressReporter->KeepRefreshing() )
-            THROW_IO_ERROR( _( "File import canceled by user." ) );
+            THROW_IO_CANCELLED();
     }
 
     PCB_IO_EASYEDAPRO_PARSER parser( nullptr, nullptr );
@@ -144,18 +172,21 @@ BOARD* PCB_IO_EASYEDAPRO::LoadBoard( const wxString& aFileName, BOARD* aAppendTo
                 std::vector<IMPORT_PROJECT_DESC> chosen = m_choose_project_handler(
                         EASYEDAPRO::ProjectToSelectorDialog( project, true, false ) );
 
-                if( chosen.size() > 0 )
-                    pcbToLoad = chosen[0].PCBId;
+                // Quiet exit on cancel
+                if( chosen.size() == 0 )
+                    THROW_IO_CANCELLED();
+
+                pcbToLoad = chosen[0].PCBId;
             }
         }
 
         if( pcbToLoad.empty() )
-            return nullptr;
+            THROW_IO_ERROR( _( "No PCB was found in the project to import." ) );
 
         LoadAllDataFromProject( aFileName, project );
 
         if( !m_projectData )
-            return nullptr;
+            THROW_IO_ERROR( _( "Failed to load the project data." ) );
 
         auto cb = [&]( const wxString& name, const wxString& pcbUuid, wxInputStream& zip ) -> bool
         {
@@ -211,7 +242,7 @@ BOARD* PCB_IO_EASYEDAPRO::LoadBoard( const wxString& aFileName, BOARD* aAppendTo
                         wxString fpUuid = headData.at( "uuid" );
                         wxString fpTitle = headData.at( "title" );
 
-                        FOOTPRINT* footprint = parser.ParseFootprint( project, fpUuid, block );
+                        std::unique_ptr<FOOTPRINT> footprint = parser.ParseFootprint( project, fpUuid, block );
 
                         if( !footprint )
                             EASY_IT_CONTINUE;
@@ -219,7 +250,7 @@ BOARD* PCB_IO_EASYEDAPRO::LoadBoard( const wxString& aFileName, BOARD* aAppendTo
                         LIB_ID fpID = EASYEDAPRO::ToKiCadLibID( fpLibName, fpTitle );
                         footprint->SetFPID( fpID );
 
-                        m_projectData->m_Footprints.emplace( fpUuid, footprint );
+                        m_projectData->m_Footprints.emplace( fpUuid, std::move( footprint ) );
                     }
                     else if( docType == wxS( "PCB" ) )
                     {
@@ -241,13 +272,13 @@ BOARD* PCB_IO_EASYEDAPRO::LoadBoard( const wxString& aFileName, BOARD* aAppendTo
             parser.ParseBoard( m_board, project, m_projectData->m_Footprints,
                                m_projectData->m_Blobs, boardPoured, *pcbLines,
                                EASYEDAPRO::ShortenLibName( fname.GetName() ) );
+            m_importedDesignRules = parser.GetSafeSpacingRules();
+
 
             EASY_IT_BREAK;
         };
         EASYEDAPRO::IterateZipFiles( aFileName, cb );
     }
-
-    return m_board;
 }
 
 
@@ -332,7 +363,7 @@ void PCB_IO_EASYEDAPRO::LoadAllDataFromProject( const wxString&       aProjectPa
             nlohmann::json fpData = aProject.at( "footprints" ).at( baseName );
             wxString       fpTitle = fpData.at( "title" );
 
-            FOOTPRINT* footprint = parser.ParseFootprint( aProject, baseName, lines );
+            std::unique_ptr<FOOTPRINT> footprint = parser.ParseFootprint( aProject, baseName, lines );
 
             if( !footprint )
                 EASY_IT_CONTINUE;
@@ -340,7 +371,7 @@ void PCB_IO_EASYEDAPRO::LoadAllDataFromProject( const wxString&       aProjectPa
             LIB_ID fpID = EASYEDAPRO::ToKiCadLibID( fpLibName, fpTitle );
             footprint->SetFPID( fpID );
 
-            m_projectData->m_Footprints.emplace( baseName, footprint );
+            m_projectData->m_Footprints.emplace( baseName, std::move( footprint ) );
         }
         else if( name.EndsWith( wxS( ".eblob" ) ) )
         {
@@ -373,15 +404,15 @@ void PCB_IO_EASYEDAPRO::LoadAllDataFromProject( const wxString&       aProjectPa
 }
 
 
-FOOTPRINT* PCB_IO_EASYEDAPRO::FootprintLoad( const wxString& aLibraryPath,
-                                             const wxString& aFootprintName, bool aKeepUUID,
-                                             const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_EASYEDAPRO::FootprintLoad( const wxString& aLibraryPath,
+                                                             const wxString& aFootprintName, bool aKeepUUID,
+                                                             const std::map<std::string, UTF8>* aProperties )
 {
     // Suppress font substitution warnings (RAII - automatically restored on scope exit)
     FONTCONFIG_REPORTER_SCOPE fontconfigScope( nullptr );
 
-    PCB_IO_EASYEDAPRO_PARSER parser( nullptr, nullptr );
-    FOOTPRINT*            footprint = nullptr;
+    PCB_IO_EASYEDAPRO_PARSER   parser( nullptr, nullptr );
+    std::unique_ptr<FOOTPRINT> footprint;
 
     wxFileName libFname( aLibraryPath );
 
@@ -406,10 +437,7 @@ FOOTPRINT* PCB_IO_EASYEDAPRO::FootprintLoad( const wxString& aLibraryPath,
         footprint = parser.ParseFootprint( nlohmann::json(), wxEmptyString, lines );
 
         if( !footprint )
-        {
-            THROW_IO_ERROR( wxString::Format( _( "Cannot load footprint '%s' from '%s'" ),
-                                              aFootprintName, aLibraryPath ) );
-        }
+            THROW_IO_ERRORF( _( "Cannot load footprint '%s' from '%s'" ), aFootprintName, aLibraryPath );
 
         LIB_ID fpID = EASYEDAPRO::ToKiCadLibID( wxEmptyString, aFootprintName );
         footprint->SetFPID( fpID );
@@ -444,10 +472,7 @@ FOOTPRINT* PCB_IO_EASYEDAPRO::FootprintLoad( const wxString& aLibraryPath,
         }
 
         if( !fpUuid )
-        {
-            THROW_IO_ERROR( wxString::Format( _( "Footprint '%s' not found in project '%s'" ),
-                                              aFootprintName, aLibraryPath ) );
-        }
+            THROW_IO_ERRORF( _( "Footprint '%s' not found in project '%s'" ), aFootprintName, aLibraryPath );
 
         auto cb = [&]( const wxString& name, const wxString& baseName, wxInputStream& zip ) -> bool
         {
@@ -462,10 +487,7 @@ FOOTPRINT* PCB_IO_EASYEDAPRO::FootprintLoad( const wxString& aLibraryPath,
             footprint = parser.ParseFootprint( project, fpUuid, lines );
 
             if( !footprint )
-            {
-                THROW_IO_ERROR( wxString::Format( _( "Cannot load footprint '%s' from '%s'" ),
-                                                  aFootprintName, aLibraryPath ) );
-            }
+                THROW_IO_ERRORF( _( "Cannot load footprint '%s' from '%s'" ), aFootprintName, aLibraryPath );
 
             LIB_ID fpID = EASYEDAPRO::ToKiCadLibID( wxEmptyString, aFootprintName );
             footprint->SetFPID( fpID );

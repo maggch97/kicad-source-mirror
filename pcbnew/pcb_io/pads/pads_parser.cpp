@@ -28,9 +28,28 @@
 #include <cstdlib>
 #include <limits>
 #include <wx/log.h>
+#include <trace_helpers.h>
 
 namespace PADS_IO
 {
+
+bool IsThermalReliefPadRow( const PAD_STACK_LAYER& aLayer )
+{
+    return aLayer.shape == "RT" || aLayer.shape == "ST";
+}
+
+
+bool IsAntiPadRow( const PAD_STACK_LAYER& aLayer )
+{
+    return aLayer.shape == "RA" || aLayer.shape == "SA";
+}
+
+
+bool IsCopperPadRow( const PAD_STACK_LAYER& aLayer )
+{
+    return !IsThermalReliefPadRow( aLayer ) && !IsAntiPadRow( aLayer );
+}
+
 
 /**
  * Expand a shortcut format string like "PRE{n1-n2}" into individual names.
@@ -79,7 +98,7 @@ static std::vector<std::string> expandShortcutPattern( const std::string& aPatte
 
     if( std::abs( end - start ) > MAX_EXPANSION )
     {
-        wxLogWarning( wxT( "PADS Import: shortcut range {%d-%d} exceeds limit, skipped" ),
+        wxLogTrace( tracePadsIo, wxT( "PADS Import: shortcut range {%d-%d} exceeds limit, skipped" ),
                       start, end );
         result.push_back( aPattern );
         return result;
@@ -91,6 +110,16 @@ static std::vector<std::string> expandShortcutPattern( const std::string& aPatte
     }
 
     return result;
+}
+
+
+static std::string normalizeNetName( const std::string& aNetName )
+{
+    // PADS uses numeric sentinels in optional owner/signame fields for unassigned nets.
+    if( aNetName == "-1" || aNetName == "0" )
+        return {};
+
+    return aNetName;
 }
 
 
@@ -1136,6 +1165,12 @@ void PARSER::parseSectionVIA( std::ifstream& aStream )
                 def.has_mask_back = true;
         }
 
+        if( def.drill_start > 0 && def.drill_end > 0 )
+        {
+            min_layer = std::min( def.drill_start, def.drill_end );
+            max_layer = std::max( def.drill_start, def.drill_end );
+        }
+
         // Determine layer span and via type
         if( min_layer <= max_layer )
         {
@@ -1223,7 +1258,7 @@ void PARSER::parseSectionPOUR( std::ifstream& aStream )
 
             POUR pour;
             pour.name = name;
-            pour.net_name = signame;
+            pour.net_name = normalizeNetName( signame );
             pour.layer = level;
             pour.priority = priority;
             pour.width = width;
@@ -1257,16 +1292,29 @@ void PARSER::parseSectionPOUR( std::ifstream& aStream )
             // Handle different piece types
             if( poly_type == "CIRCLE" || poly_type == "CIRCUT" )
             {
-                // Circle piece: one line with center and radius info
-                // Format: xloc yloc radius
-                if( !readLine( aStream, line ) )
-                    break;
+                // Circle piece: `corners` lines (always 2 in practice), each a diametrically
+                // opposite endpoint -- not a single "xloc yloc radius" line.
+                std::vector<std::pair<double, double>> endpoints;
 
-                std::stringstream iss3( line );
-                double cx = 0.0, cy = 0.0, radius = 0.0;
-
-                if( iss3 >> cx >> cy >> radius )
+                for( int j = 0; j < corners; ++j )
                 {
+                    if( !readLine( aStream, line ) )
+                        break;
+
+                    std::stringstream iss3( line );
+                    double px = 0.0, py = 0.0;
+
+                    if( iss3 >> px >> py )
+                        endpoints.emplace_back( px, py );
+                }
+
+                if( endpoints.size() == 2 )
+                {
+                    double cx = ( endpoints[0].first + endpoints[1].first ) / 2.0;
+                    double cy = ( endpoints[0].second + endpoints[1].second ) / 2.0;
+                    double radius = std::hypot( endpoints[1].first - endpoints[0].first,
+                                                endpoints[1].second - endpoints[0].second ) / 2.0;
+
                     // Create arc representing full circle
                     ARC arc{};
                     arc.cx = x + cx;
@@ -2744,26 +2792,49 @@ void PARSER::parseSectionLINES( std::ifstream& aStream )
              break;
         }
 
-        // Header format: name type xloc yloc pieces flags [text [signame]]
+        // Header format: name type xloc yloc pieces flags [text] [signame]
+        // While the docs claim `... pieces flags [text [signame]]`, and the `*REMARK*` lines our
+        // sample files claim `... pieces text signame`, the files themselves clearly contain many
+        // instances of `pieces flags signame`.
         std::istringstream iss( line );
         std::string name, type;
         double xloc = 0.0, yloc = 0.0;
         int pieces = 0, flags = 0, textCount = 0;
+        std::string seventhToken, eighthToken;
         std::string signame;
 
-        iss >> name >> type >> xloc >> yloc >> pieces >> flags;
+        iss >> name >> type >> xloc >> yloc >> pieces >> flags >> seventhToken >> eighthToken;
 
-        // Try to read optional text count and signal name (for COPPER type).
-        // Standard format: pieces flags textcount signame
-        // EasyEDA format:  pieces flags signame (no text count)
-        if( iss >> textCount )
+        if( !eighthToken.empty() )
         {
-            iss >> signame;
+            // If we have the full eight tokens, the last two must be text-count and signame.
+
+            signame = eighthToken;
+
+            std::istringstream tiss( seventhToken );
+            tiss >> textCount;
         }
-        else
+        else if( !seventhToken.empty() )
         {
-            iss.clear();
-            iss >> signame;
+            // Here's where it gets dicey: with seven tokens we don't know whether the last
+            // is a text-count or a signame.  We can't compare with known signal names, as
+            // they're all later in the file.  The best we can do is assume that anything that
+            // is all digits is a text-count, and that any signame will contain at least one
+            // symbol or letter.
+
+            if( std::all_of( seventhToken.begin(), seventhToken.end(),
+                             [](unsigned char c)
+                             {
+                                 return std::isdigit( c );
+                             } ) )
+            {
+                std::istringstream tiss( seventhToken );
+                tiss >> textCount;
+            }
+            else
+            {
+                signame = seventhToken;
+            }
         }
 
         // Check for optional .REUSE. line after header
@@ -3346,7 +3417,7 @@ void PARSER::parseSectionLINES( std::ifstream& aStream )
                 copper.name = name;
                 copper.layer = level;
                 copper.width = width;
-                copper.net_name = signame;
+                copper.net_name = normalizeNetName( signame );
 
                 copper.filled = ( shape_type == "COPCLS" || shape_type == "COPCIR" );
                 copper.is_cutout = ( shape_type == "COPCUT" || shape_type == "COPCCO" ||
@@ -3692,8 +3763,15 @@ void PARSER::parseSectionLINES( std::ifstream& aStream )
 void PARSER::parseSectionPARTTYPE( std::ifstream& aStream )
 {
     std::string line;
-    PART_TYPE* currentPartType = nullptr;
-    GATE_DEF* currentGate = nullptr;
+    PART_TYPE*  currentPartType = nullptr;
+    GATE_DEF*   currentGate = nullptr;
+
+    // Records carry no terminator and a part type name can look exactly like pin data, so the
+    // header counts are the only reliable way to find where a record ends
+    int pendingGates = 0;
+    int pendingGatePins = 0;
+    int pendingSigPins = 0;
+    int pendingUnusedPins = 0;
 
     // Helper to parse pin electrical type character
     auto parsePinElecType = []( char c ) -> PIN_ELEC_TYPE {
@@ -3711,6 +3789,23 @@ void PARSER::parseSectionPARTTYPE( std::ifstream& aStream )
         }
     };
 
+    auto isInteger = []( const std::string& aToken ) -> bool
+    {
+        return !aToken.empty() && aToken.find_first_not_of( "0123456789" ) == std::string::npos;
+    };
+
+    auto tokenize = []( const std::string& aLine ) -> std::vector<std::string>
+    {
+        std::istringstream       lss( aLine );
+        std::vector<std::string> tokens;
+        std::string              token;
+
+        while( lss >> token )
+            tokens.push_back( token );
+
+        return tokens;
+    };
+
     while( readLine( aStream, line ) )
     {
         if( line[0] == '*' )
@@ -3719,129 +3814,12 @@ void PARSER::parseSectionPARTTYPE( std::ifstream& aStream )
             break;
         }
 
-        if( line.empty() )
-            continue;
-
-        // Gate line: G gateswap pins
-        if( line.rfind( "G ", 0 ) == 0 && currentPartType )
-        {
-            std::istringstream gss( line );
-            std::string g_keyword;
-            int gateSwap = 0, pinCount = 0;
-            gss >> g_keyword >> gateSwap >> pinCount;
-
-            GATE_DEF gate;
-            gate.gate_swap_type = gateSwap;
-            currentPartType->gates.push_back( gate );
-            currentGate = &currentPartType->gates.back();
-            continue;
-        }
-
-        // SIGPIN pinno width signm
-        if( line.rfind( "SIGPIN", 0 ) == 0 && currentPartType )
-        {
-            std::istringstream sss( line );
-            std::string keyword;
-            SIGPIN sigpin;
-
-            sss >> keyword >> sigpin.pin_number >> sigpin.width >> sigpin.signal_name;
-
-            if( !sigpin.pin_number.empty() )
-                currentPartType->signal_pins.push_back( sigpin );
-
-            continue;
-        }
-
-        // Check if this line contains pin definitions (format: pinnumber.swptyp.pintyp[.funcname])
-        // These follow a gate definition. Pin definition tokens have at least 3 dot-separated parts.
-        // Part type header lines may also contain dots in the name (e.g., "CAPSMT0.1UF0402X7R50V")
-        // but their first token won't have 3+ parts, so we check for that.
-        if( line.find( '.' ) != std::string::npos && currentPartType )
-        {
-            // First check if this could be a part type header line with a dot in the name.
-            // Part type headers have format: NAME DECAL CLASS ATTRS ... where NAME may contain dots
-            // but the first dot-separated segment will have <3 parts.
-            std::stringstream check_ss( line );
-            std::string first_token;
-            check_ss >> first_token;
-
-            int dot_count = 0;
-
-            for( char c : first_token )
-            {
-                if( c == '.' )
-                    dot_count++;
-            }
-
-            // If first token has <2 dots, this could be a part type header, not a pin definition
-            if( dot_count < 2 )
-            {
-                // Fall through to part type header parsing below
-            }
-            else
-            {
-            std::stringstream ss( line );
-            std::string token;
-
-            while( ss >> token )
-            {
-                // Parse pin format: PINNAME.SWAPTYPE.PINTYPE[.FUNCNAME] or PINNAME.PADINDEX.TYPE.NET
-                std::vector<std::string> parts;
-                size_t start = 0;
-                size_t pos = 0;
-
-                while( ( pos = token.find( '.', start ) ) != std::string::npos )
-                {
-                    parts.push_back( token.substr( start, pos - start ) );
-                    start = pos + 1;
-                }
-
-                parts.push_back( token.substr( start ) );
-
-                if( parts.size() >= 3 )
-                {
-                    // Check if this is a gate pin definition or pad stack mapping
-                    // Gate pin: pinnumber.swaptype.pintype[.funcname]
-                    // Pad map: pinname.padindex.type.netname
-
-                    bool isNumericSecond = !parts[1].empty() &&
-                        std::all_of( parts[1].begin(), parts[1].end(), ::isdigit );
-
-                    if( currentGate && parts[2].size() == 1 && !isNumericSecond )
-                    {
-                        // This looks like a gate pin definition
-                        GATE_PIN gpin;
-                        gpin.pin_number = parts[0];
-                        gpin.swap_type = PADS_COMMON::ParseInt( parts[1], 0, "gate pin swap" );
-
-                        if( !parts[2].empty() )
-                            gpin.elec_type = parsePinElecType( parts[2][0] );
-
-                        if( parts.size() >= 4 )
-                            gpin.func_name = parts[3];
-
-                        currentGate->pins.push_back( gpin );
-                    }
-                    else if( isNumericSecond )
-                    {
-                        int padIdx = PADS_COMMON::ParseInt( parts[1], -1, "pad index" );
-
-                        if( padIdx >= 0 )
-                            currentPartType->pin_pad_map[parts[0]] = padIdx;
-                    }
-                }
-            }
-
-            continue;
-            }
-        }
-
         // Attribute block enclosed in braces
         if( line[0] == '{' && currentPartType )
         {
             while( readLine( aStream, line ) )
             {
-                if( line.empty() || line[0] == '}' )
+                if( line[0] == '}' )
                     break;
 
                 if( line[0] == '*' )
@@ -3882,19 +3860,142 @@ void PARSER::parseSectionPARTTYPE( std::ifstream& aStream )
         if( line[0] == '{' || line[0] == '}' )
             continue;
 
-        // Part type definition line: NAME DECAL CLASS ATTRS GATES SIGS PINSEQ STATE
-        std::stringstream ss( line );
-        std::string name, decal;
-        ss >> name >> decal;
+        std::vector<std::string> tokens = tokenize( line );
 
-        if( !name.empty() && name[0] != 'G' )
+        if( tokens.empty() )
+            continue;
+
+        // Pin tokens wrap freely across lines, so the gate's declared count marks the end
+        if( pendingGatePins > 0 )
         {
-            PART_TYPE pt;
-            pt.name = name;
-            pt.decal_name = decal;
-            m_part_types[name] = pt;
-            currentPartType = &m_part_types[name];
-            currentGate = nullptr;
+            for( const std::string& token : tokens )
+            {
+                if( pendingGatePins == 0 )
+                    break;
+
+                pendingGatePins--;
+
+                // Parse pin format: PINNAME.SWAPTYPE.PINTYPE[.FUNCNAME] or PINNAME.PADINDEX.TYPE.NET
+                std::vector<std::string> parts;
+                size_t                   start = 0;
+                size_t                   pos = 0;
+
+                while( ( pos = token.find( '.', start ) ) != std::string::npos )
+                {
+                    parts.push_back( token.substr( start, pos - start ) );
+                    start = pos + 1;
+                }
+
+                parts.push_back( token.substr( start ) );
+
+                if( parts.size() < 3 )
+                    continue;
+
+                // Check if this is a gate pin definition or pad stack mapping
+                // Gate pin: pinnumber.swaptype.pintype[.funcname]
+                // Pad map: pinname.padindex.type.netname
+                bool isNumericSecond = isInteger( parts[1] );
+
+                if( currentGate && parts[2].size() == 1 && !isNumericSecond )
+                {
+                    GATE_PIN gpin;
+                    gpin.pin_number = parts[0];
+                    gpin.swap_type = PADS_COMMON::ParseInt( parts[1], 0, "gate pin swap" );
+
+                    if( !parts[2].empty() )
+                        gpin.elec_type = parsePinElecType( parts[2][0] );
+
+                    if( parts.size() >= 4 )
+                        gpin.func_name = parts[3];
+
+                    currentGate->pins.push_back( gpin );
+                }
+                else if( isNumericSecond )
+                {
+                    int padIdx = PADS_COMMON::ParseInt( parts[1], -1, "pad index" );
+
+                    if( padIdx >= 0 )
+                        currentPartType->pin_pad_map[parts[0]] = padIdx;
+                }
+            }
+
+            continue;
+        }
+
+        // Unused pin names are discarded, but still have to be counted off so a run of bare
+        // pin numbers is not read as the next header
+        if( pendingGates == 0 && pendingSigPins == 0 && pendingUnusedPins > 0 )
+        {
+            pendingUnusedPins -= std::min<int>( pendingUnusedPins, tokens.size() );
+            continue;
+        }
+
+        // Gate line: G gateswap pins
+        if( currentPartType && tokens.size() >= 3 && tokens[0] == "G" && isInteger( tokens[1] )
+            && isInteger( tokens[2] ) )
+        {
+            GATE_DEF gate;
+            gate.gate_swap_type = PADS_COMMON::ParseInt( tokens[1], 0, "gate swap" );
+            currentPartType->gates.push_back( gate );
+            currentGate = &currentPartType->gates.back();
+
+            pendingGatePins = PADS_COMMON::ParseInt( tokens[2], 0, "gate pin count" );
+
+            if( pendingGates > 0 )
+                pendingGates--;
+
+            continue;
+        }
+
+        // SIGPIN pinno width signm
+        if( currentPartType && tokens[0] == "SIGPIN" )
+        {
+            std::istringstream sss( line );
+            std::string        keyword;
+            SIGPIN             sigpin;
+
+            sss >> keyword >> sigpin.pin_number >> sigpin.width >> sigpin.signal_name;
+
+            if( !sigpin.pin_number.empty() )
+                currentPartType->signal_pins.push_back( sigpin );
+
+            if( pendingSigPins > 0 )
+                pendingSigPins--;
+
+            continue;
+        }
+
+        // Header is NAME DECALNM [UNITS] TYPE GATES SIGPINS UNUSEDPINNMS FLAGS ECO, and V5.0
+        // and V2005.0 insert UNITS, so the counts start at the first numeric column past the decal
+        PART_TYPE pt;
+        pt.name = tokens[0];
+
+        if( tokens.size() > 1 )
+            pt.decal_name = tokens[1];
+
+        m_part_types[pt.name] = pt;
+        currentPartType = &m_part_types[pt.name];
+        currentGate = nullptr;
+
+        pendingGates = 0;
+        pendingGatePins = 0;
+        pendingSigPins = 0;
+        pendingUnusedPins = 0;
+
+        for( size_t ii = 2; ii < tokens.size(); ++ii )
+        {
+            if( !isInteger( tokens[ii] ) )
+                continue;
+
+            pendingGates = PADS_COMMON::ParseInt( tokens[ii], 0, "part type gates" );
+
+            if( ii + 1 < tokens.size() && isInteger( tokens[ii + 1] ) )
+                pendingSigPins = PADS_COMMON::ParseInt( tokens[ii + 1], 0, "part type sigpins" );
+
+            if( ii + 2 < tokens.size() && isInteger( tokens[ii + 2] ) )
+                pendingUnusedPins = PADS_COMMON::ParseInt( tokens[ii + 2], 0, "part type unused pins" );
+
+            break;
         }
     }
 }

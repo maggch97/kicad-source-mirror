@@ -130,10 +130,13 @@ API_PLUGIN_CONFIG::API_PLUGIN_CONFIG( API_PLUGIN& aParent, const wxFileName& aCo
     LOGGING_ERROR_HANDLER handler;
     aValidator.Validate( js, handler, nlohmann::json_uri( "#/definitions/Plugin" ) );
 
-    if( !handler.HasError() )
-        wxLogTrace( traceApi, "Plugin: schema validation successful" );
-    else
+    if( handler.HasError() )
+    {
         error_message = handler.ErrorMessage();
+        return;
+    }
+
+    wxLogTrace( traceApi, "Plugin: schema validation successful" );
 
     // All of these are required; any exceptions here leave us with valid == false
     try
@@ -227,8 +230,11 @@ const wxString& API_PLUGIN::ErrorMessage() const
 
 bool API_PLUGIN::IsValidIdentifier( const wxString& aIdentifier )
 {
-    // At minimum, we need a reverse-DNS style identifier with two dots and a 2+ character TLD
-    wxRegEx identifierRegex( wxS( "[\\w\\d]{2,}\\.[\\w\\d]+\\.[\\w\\d]+" ) );
+    // Validate a reverse-DNS style identifier:
+    // - Starts with a TLD containing at least two letters
+    // - Requires at least two additional namespaces
+    // - Namespaces are alphanumeric and may contain internal hyphens
+    wxRegEx identifierRegex( R"(^[a-zA-Z]{2,}(\.([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]|[a-zA-Z0-9])){2,}$)" );
     return identifierRegex.Matches( aIdentifier );
 }
 
@@ -348,12 +354,10 @@ std::optional<PLUGIN_ACTION> API_PLUGIN::createActionFromJson( const nlohmann::j
     }
 
     auto handleBitmap =
-            [&]( const std::string& aKey, wxBitmapBundle& aDest )
+            [&]( const std::string& aKey, std::vector<wxImage>& aDest )
             {
                 if( aJson.contains( aKey ) && aJson.at( aKey ).is_array() )
                 {
-                    wxVector<wxBitmap> bitmaps;
-
                     for( const nlohmann::json& iconJs : aJson.at( aKey ) )
                     {
                         wxFileName iconFile;
@@ -380,17 +384,15 @@ std::optional<PLUGIN_ACTION> API_PLUGIN::createActionFromJson( const nlohmann::j
                             continue;
                         }
 
-                        wxBitmap bmp;
+                        wxImage img;
                         // TODO: If necessary; support types other than PNG
-                        bmp.LoadFile( iconFile.GetFullPath(), wxBITMAP_TYPE_PNG );
+                        img.LoadFile( iconFile.GetFullPath(), wxBITMAP_TYPE_PNG );
 
-                        if( bmp.IsOk() )
-                            bitmaps.push_back( bmp );
+                        if( img.IsOk() )
+                            aDest.push_back( img );
                         else
                             wxLogTrace( traceApi, "Plugin: icon file not a valid bitmap" );
                     }
-
-                    aDest = wxBitmapBundle::FromBitmaps( bitmaps );
                 }
             };
 

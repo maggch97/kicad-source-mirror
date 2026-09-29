@@ -21,7 +21,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
-#include <ranges>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -30,6 +30,8 @@
 #include <mock_pgm_base.h>
 #include <richio.h>
 #include <io/kicad/kicad_io_utils.h>
+#include <qa_utils/env_var_utils.h>
+#include <qa_utils/file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <settings/settings_manager.h>
 #include <pegtl/contrib/analyze.hpp>
@@ -41,6 +43,7 @@
 #include <libraries/library_table.h>
 #include <libraries/library_table_parser.h>
 #include <libraries/library_table_grammar.h>
+#include <scoped_set_reset.h>
 #include <settings/kicad_settings.h>
 #include <startwizard/startwizard_provider_libraries.h>
 
@@ -165,6 +168,39 @@ BOOST_AUTO_TEST_CASE( Manager )
 
     BOOST_REQUIRE( manager.Rows( LIBRARY_TABLE_TYPE::SYMBOL ).size() == 3 );
     BOOST_REQUIRE( manager.Rows( LIBRARY_TABLE_TYPE::FOOTPRINT ).size() == 146 );
+}
+
+
+/*
+ * Regression test for PCM library auto-add scan.
+ *
+ * The PCM auto-add scan is triggered by the presence of PCM packages in the 3RD_PARTY directory.
+ * But when this happens, if there is no global design block table, this process shouldn't die.
+ *
+ * Sentry KICAD-17T5 was a startup crash when the design block table was missing.
+ */
+BOOST_AUTO_TEST_CASE( PcmScanWithoutDesignBlockTable )
+{
+    // Create a temporary directory with a PCM package containing a design block library
+    KI_TEST::SCOPED_TEMP_DIR tempDir( wxS( "pcm-scan" ) );
+
+    const bool dirsOk =
+            std::filesystem::create_directories( tempDir.Path() / "design_blocks" / "test" / "block.kicad_blocks" );
+    BOOST_REQUIRE( dirsOk );
+
+    // PCM auto-add must be on
+    bool& autoAddSetting = Pgm().GetSettingsManager().GetAppSettings<KICAD_SETTINGS>( "kicad" )->m_PcmLibAutoAdd;
+    SCOPED_SET_RESET<bool> autoAddSettingReset( autoAddSetting, true );
+
+    KI_TEST::SCOPED_PGM_ENV_VAR envVar( wxS( "KICAD10_3RD_PARTY" ), tempDir.PathStr() );
+
+    LIBRARY_MANAGER manager;
+
+    // Only the symbol table is loaded; the design block table is absent.
+    manager.LoadGlobalTables( { LIBRARY_TABLE_TYPE::SYMBOL } );
+
+    BOOST_REQUIRE( manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_SCOPE::GLOBAL ).has_value() );
+    BOOST_REQUIRE( !manager.Table( LIBRARY_TABLE_TYPE::DESIGN_BLOCK, LIBRARY_TABLE_SCOPE::GLOBAL ).has_value() );
 }
 
 
@@ -392,7 +428,9 @@ BOOST_AUTO_TEST_CASE( ReadOnlyTable )
     fn.AppendDir( "libraries" );
     fn.SetName( "sym-lib-table" );
 
-    wxFileName tmpFn = wxFileName::CreateTempFileName( "kicad_test_ro_" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_test_ro_table" );
+    wxFileName               tmpFn = tempDir.CreateChildFileStr( "sym-lib-table" );
+
     wxCopyFile( fn.GetFullPath(), tmpFn.GetFullPath() );
 
     // Verify a writable table is not read-only
@@ -428,6 +466,67 @@ BOOST_AUTO_TEST_CASE( ReadOnlyTable )
     // Clean up
     tmpFn.SetPermissions( wxS_IRUSR | wxS_IWUSR );
     wxRemoveFile( tmpFn.GetFullPath() );
+}
+
+
+/**
+ * Regression test for a new project-scope library not appearing in the symbol editor
+ * library tree until KiCad was restarted.
+ *
+ * A project with no sym-lib-table has no table on disk, so the manager builds one on demand
+ * for a path that does not exist. The table constructor treats a missing file as a parse
+ * failure and flags the table invalid, and Rows() drops every row of an invalid table. A
+ * library added to such a project was written to disk but stayed invisible to everything
+ * that enumerates rows, which is why it only turned up after a restart.
+ */
+BOOST_AUTO_TEST_CASE( RowsAddedToANewProjectTableAreEnumerated )
+{
+    std::error_code       ec;
+    std::filesystem::path dir =
+            std::filesystem::temp_directory_path( ec ) / std::filesystem::path( "kicad_qa_new_project_table" );
+
+    std::filesystem::remove_all( dir, ec );
+    std::filesystem::create_directories( dir, ec );
+
+    std::filesystem::path proPath = dir / "new_project.kicad_pro";
+
+    {
+        std::ofstream proFile( proPath );
+        proFile << R"({ "meta": { "filename": "new_project.kicad_pro", "version": 3 } })";
+    }
+
+    SETTINGS_MANAGER& settings = Pgm().GetSettingsManager();
+    BOOST_REQUIRE( settings.LoadProject( wxString( proPath.string() ) ) );
+
+    wxFileName tableFile( wxString( ( dir / "sym-lib-table" ).string() ) );
+    BOOST_REQUIRE( !tableFile.FileExists() );
+
+    LIBRARY_MANAGER manager;
+
+    std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_SCOPE::PROJECT );
+    BOOST_REQUIRE( optTable.has_value() );
+
+    LIBRARY_TABLE*     table = optTable.value();
+    LIBRARY_TABLE_ROW& row = table->InsertRow();
+
+    row.SetNickname( wxS( "NewLib" ) );
+    row.SetURI( wxS( "${KIPRJMOD}/NewLib.kicad_sym" ) );
+    row.SetType( wxS( "KiCad" ) );
+
+    auto projectRowCount = [&]() -> size_t
+    {
+        return manager.Rows( LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_SCOPE::PROJECT ).size();
+    };
+
+    BOOST_CHECK_MESSAGE( projectRowCount() == 1,
+                         "A library added to a project with no library table must be visible to "
+                         "Rows(), which is what fills the library tree" );
+
+    BOOST_REQUIRE( table->Save().has_value() );
+    BOOST_CHECK_EQUAL( projectRowCount(), 1 );
+
+    settings.UnloadProject( &settings.Prj(), false );
+    std::filesystem::remove_all( dir, ec );
 }
 
 
@@ -543,21 +642,15 @@ BOOST_AUTO_TEST_CASE( CreateGlobalTableEmptyWhenNoStockTable )
  */
 BOOST_AUTO_TEST_CASE( StockTableReferenceURIHonorsExternalDefinition )
 {
-    const wxString   templateVar = ENV_VAR::GetVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) );
-    COMMON_SETTINGS* common = Pgm().GetCommonSettings();
-
-    BOOST_REQUIRE( common != nullptr );
-
-    ENV_VAR_MAP& vars = common->m_Env.vars;
+    const wxString templateVar = ENV_VAR::GetVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) );
 
     // Preserve and restore the original entry so neighbouring tests are unaffected.
-    const bool         hadEntry = vars.count( templateVar ) > 0;
-    const ENV_VAR_ITEM savedEntry = hadEntry ? vars[templateVar] : ENV_VAR_ITEM();
+    KI_TEST::SCOPED_PGM_ENV_VAR envVarGuard( templateVar, wxEmptyString );
 
     for( LIBRARY_TABLE_TYPE type : { LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_TYPE::FOOTPRINT,
                                      LIBRARY_TABLE_TYPE::DESIGN_BLOCK } )
     {
-        ENV_VAR_ITEM& entry = vars[templateVar];
+        ENV_VAR_ITEM& entry = envVarGuard.GetItem();
 
         entry.SetDefinedExternally( false );
         BOOST_CHECK_EQUAL( LIBRARY_MANAGER::StockTableReferenceURI( type ),
@@ -567,11 +660,6 @@ BOOST_AUTO_TEST_CASE( StockTableReferenceURIHonorsExternalDefinition )
         BOOST_CHECK_EQUAL( LIBRARY_MANAGER::StockTableReferenceURI( type ),
                            LIBRARY_MANAGER::StockTableTokenizedURI( type ) );
     }
-
-    if( hadEntry )
-        vars[templateVar] = savedEntry;
-    else
-        vars.erase( templateVar );
 }
 
 
@@ -678,6 +766,50 @@ BOOST_AUTO_TEST_CASE( MigrateBuiltInLibraries_ChainedRowMigratedInPlace )
     auto migrated = table.Row( wxS( "KiCad" ) );
     BOOST_REQUIRE( migrated.has_value() );
     BOOST_CHECK_EQUAL( ( *migrated )->URI(), stockPath );
+}
+
+
+/**
+ * Regression test: quoted table values must round-trip through the writer's escaping.
+ *
+ * LIBRARY_TABLE::Format emits descriptions through OUTPUTFORMATTER::Quotes, which
+ * escapes backslash, quote, newline and carriage return. The grammar used to terminate
+ * a quoted string at the first quote with no escape handling, and the parser action
+ * stripped the quotes without unescaping, so a description containing a quote (or a
+ * newline) was written correctly but could never be read back.
+ */
+BOOST_AUTO_TEST_CASE( QuotedTextRoundTripsEscapes )
+{
+    LIBRARY_TABLE_PARSER parser;
+
+    const std::string escaped =
+            "(sym_lib_table (lib (name \"x\") (descr \"say \\\"hi\\\"\\\\line1\\nline2\\r\")))";
+
+    tl::expected<LIBRARY_TABLE_IR, LIBRARY_PARSE_ERROR> result = parser.ParseBuffer( escaped );
+    BOOST_REQUIRE( result.has_value() );
+    BOOST_REQUIRE_EQUAL( result->rows.size(), 1 );
+    BOOST_CHECK_EQUAL( result->rows[0].description, "say \"hi\"\\line1\nline2\r" );
+
+    // Round-trip: format the parsed value back out and parse it again.
+    LIBRARY_TABLE table( true, wxEmptyString, LIBRARY_TABLE_SCOPE::GLOBAL );
+    table.SetType( LIBRARY_TABLE_TYPE::SYMBOL );
+
+    LIBRARY_TABLE_ROW& row = table.InsertRow();
+    row.SetNickname( wxS( "x" ) );
+    row.SetType( wxS( "KiCad" ) );
+    row.SetURI( wxS( "${KIPRJMOD}/x.kicad_sym" ) );
+    row.SetDescription( wxS( "say \"hi\"\\line1\nline2\r" ) );
+
+    STRING_FORMATTER formatter;
+    table.Format( &formatter );
+
+    tl::expected<LIBRARY_TABLE_IR, LIBRARY_PARSE_ERROR> reparsed =
+            parser.ParseBuffer( formatter.GetString() );
+    BOOST_REQUIRE_MESSAGE( reparsed.has_value(),
+                           "a formatted table containing escaped quotes/newlines must re-parse" );
+
+    if( reparsed.has_value() && !reparsed->rows.empty() )
+        BOOST_CHECK_EQUAL( reparsed->rows[0].description, row.Description() );
 }
 
 

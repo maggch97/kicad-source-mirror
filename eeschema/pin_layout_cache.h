@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <font/text_attributes.h>
 #include <optional>
 
 #include <geometry/circle.h>
@@ -132,6 +133,7 @@ private:
     {
         KIFONT::FONT* m_Font = nullptr;
         int           m_FontSize = 0;
+        wxString      m_Text;
         VECTOR2I      m_Extents;
     };
 
@@ -152,7 +154,7 @@ private:
     /**
      * Transform text info to suit a pin's
      *
-     * @param the 'nominal' text info for a PIN_RIGHT pin, which will be adjusted
+     * @param aTextInfo the 'nominal' text info for a PIN_RIGHT pin, which will be adjusted
      */
     void transformTextForPin( TEXT_INFO& aTextInfo ) const;
 
@@ -160,6 +162,12 @@ private:
      * Get the current pin text offset
      */
     int getPinTextOffset() const;
+
+    /**
+     * Get the distance from the pin to the centre of the drawn number, measured perpendicular to
+     * the pin.  A stacked number is a column of lines, so this grows with the line count.
+     */
+    int getNumberBlockOffset() const;
 
     /**
      * Get the untransformd text box in the default orientation
@@ -188,6 +196,10 @@ private:
     int   m_numberThickness = 0;
     bool  m_showElectricalType = false;
     bool  m_showAltIcons = false;
+
+    // Inputs the stacked-number formatting depends on, so a repeat call can skip it
+    wxString m_numSource;
+    int      m_numSourceLength = -1;
 
     // Various cache members
     TEXT_EXTENTS_CACHE m_numExtentsCache;

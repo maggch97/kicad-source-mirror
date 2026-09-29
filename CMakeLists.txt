@@ -122,6 +122,18 @@ option( KICAD_UPDATE_CHECK
     "Build in update check"
     ON )
 
+cmake_dependent_option( KICAD_BUILD_NATIVE_MODEL_PREVIEW
+    "Build native operating-system 3D model preview components"
+    OFF "MINGW"
+    ON )
+
+if( KICAD_BUILD_NATIVE_MODEL_PREVIEW )
+    add_compile_definitions( KICAD_NATIVE_MODEL_PREVIEW )
+endif()
+
+set( KICAD_BUNDLE_ID "org.kicad.kicad"
+    CACHE STRING "Bundle identifier for the containing KiCad application" )
+
 cmake_dependent_option( KICAD_WAYLAND
     "Support Wayland features"
     ON "UNIX_NOT_APPLE"
@@ -136,11 +148,6 @@ cmake_dependent_option( KICAD_BUILD_FLATPAK
 cmake_dependent_option( KICAD_BUILD_NIGHTLY_FLATPAK
     "Build a Nightly flatpak (requires KICAD_BUILD_FLATPAK=ON)"
     OFF "UNIX_NOT_APPLE"
-    OFF )
-
-cmake_dependent_option( KICAD_WIN32_DPI_AWARE
-    "Turn on DPI awareness for Windows builds only"
-    OFF "WIN32"
     OFF )
 
 cmake_dependent_option( KICAD_WIN32_VERIFY_CODESIGN
@@ -274,10 +281,6 @@ option( KICAD_GAL_PROFILE
     "Enable profiling info for GAL"
     OFF )
 
-option( KICAD_IDF_TOOLS
-    "Build additional idf tools"
-    ON )
-
 # Global setting: exports are explicit
 set( CMAKE_CXX_VISIBILITY_PRESET "hidden" )
 set( CMAKE_VISIBILITY_INLINES_HIDDEN ON )
@@ -289,6 +292,13 @@ set( CMAKE_POSITION_INDEPENDENT_CODE ON )
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Xcode older than 26 gates std::jthread / std::stop_token behind the
+# experimental library. Enable it for C++20.
+if( APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
+    add_compile_options( -fexperimental-library )
+    add_link_options( -fexperimental-library )
+endif()
 
 # Check if the current generator is multi-config (Ninja Multi-Config, Visual Studio, Xcode)
 get_property(IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
@@ -350,8 +360,6 @@ if( WIN32 )
     # In fully standards-compliant mode, M_PI et al. are defined only if
     # _USE_MATH_DEFINES is set.
     add_compile_definitions( _USE_MATH_DEFINES )
-
-    add_compile_definitions( $<$<BOOL:${KICAD_WIN32_DPI_AWARE}>:KICAD_WIN32_DPI_AWARE=1> )
 endif()
 
 add_compile_definitions( $<$<BOOL:${KICAD_BUILD_ARCH_X86}>:KICAD_BUILD_ARCH_X86> )
@@ -499,10 +507,6 @@ if( CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
         # include dir to allow getting the version header
         list(APPEND mingw_resource_compiler_INCLUDE_DIRS ${CMAKE_BINARY_DIR}/ )
         list(APPEND mingw_resource_compiler_DEFINES KICAD_BUILD_ARCH=${KICAD_BUILD_ARCH} )
-        if( KICAD_WIN32_DPI_AWARE )
-            list(APPEND mingw_resource_compiler_DEFINES KICAD_WIN32_DPI_AWARE=1 )
-        endif()
-
         set( CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -s" )
 
         # for some reasons, cmake does do use always a response file to send the list of objects
@@ -862,7 +866,7 @@ if( NOT OCC_FOUND )
                          " OpenCASCADE was not found!\n"
                          "================================================================\n")
 endif()
-if( OCC_VERSION_STRING VERSION_LESS 7.6.0 )
+if( OCC_VERSION_STRING VERSION_LESS 7.5.0 )
     MESSAGE( FATAL_ERROR "================================================================\n"
                          "OpenCASCADE version ${OCC_VERSION_STRING} was found.\n"
                          "  KiCad requires a minimum version of 7.6.0\n"
@@ -873,9 +877,8 @@ include_directories( SYSTEM ${OCC_INCLUDE_DIR} )
 # Try to find Protobuf with modern approach first, fallback to legacy if needed
 set( _protobuf_found FALSE )
 
-# KiCad 11 relies on proto3 optional behavior available since 3.15
-# Should be set to 3.15 but not enforcing yet
-set( PROTOBUF_MIN_VERSION 3.12 )
+# KiCad 11 relies on protobuf 3.15+
+set( PROTOBUF_MIN_VERSION 3.15 )
 
 if( NOT KICAD_USE_CMAKE_FINDPROTOBUF )
     message( STATUS "Attempting to find Protobuf using CONFIG mode..." )
@@ -978,6 +981,12 @@ if( KICAD_WX_PORT )
     message( STATUS "Detected wxWidgets port: ${KICAD_WX_PORT}")
 else()
     message( FATAL_ERROR "Unable to detect wxWidgets port")
+endif()
+
+if( UNIX_NOT_APPLE AND KICAD_BUILD_NATIVE_MODEL_PREVIEW
+    AND NOT _wx_selected_config MATCHES "^gtk3" )
+    message( FATAL_ERROR
+        "Native 3D model picker previews require a wxWidgets GTK 3 build; detected '${_wx_selected_config}'" )
 endif()
 
 if( NOT MSVC )
@@ -1147,6 +1156,16 @@ if( APPLE )
 
     # As of CMP0082 (CMake 3.14), the install rules are run in order, so we can just
     # declare it last.
+
+    install( CODE "
+        cmake_policy( SET CMP0012 NEW )
+
+        if( ${KICAD_APPLE_MAKE_RELOCATEABLE_BUNDLE} )
+            message( STATUS \"Making the finished bundle relocateable...\" )
+            include( ${KICAD_CMAKE_MODULE_PATH}/InstallSteps/RefixupMacOS.cmake )
+            refix_kicad_bundle( ${OSX_BUNDLE_INSTALL_DIR} )
+        endif()
+    " COMPONENT Runtime )
 
     add_subdirectory( signing )
 endif()

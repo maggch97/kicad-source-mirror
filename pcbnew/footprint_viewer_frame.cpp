@@ -47,6 +47,7 @@
 #include <pgm_base.h>
 #include <pcbnew_settings.h>
 #include <project_pcb.h>
+#include <trace_helpers.h>
 #include <project/project_file.h>
 #include <settings/settings_manager.h>
 #include <toolbars_footprint_viewer.h>
@@ -228,9 +229,6 @@ FOOTPRINT_VIEWER_FRAME::FOOTPRINT_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent
     ReCreateLibraryList();
     UpdateTitle();
 
-    // Call resolveCanvasType after loading settings:
-    resolveCanvasType();
-
     // If a footprint was previously loaded, reload it
     if( getCurNickname().size() && getCurFootprintName().size() )
     {
@@ -279,6 +277,9 @@ FOOTPRINT_VIEWER_FRAME::FOOTPRINT_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent
     // The canvas should not steal the focus from the list boxes
     GetCanvas()->SetCanFocus( false );
     GetCanvas()->GetGAL()->SetAxesEnabled( true );
+
+    // Call resolveCanvasType after loading settings:
+    resolveCanvasType();
     ActivateGalCanvas();
 
     // Restore last zoom and auto zoom option.  (If auto-zooming we'll adjust when we load the footprint.)
@@ -510,7 +511,7 @@ void FOOTPRINT_VIEWER_FRAME::ReCreateFootprintList()
             {
                 int matched = matcher.ScoreTerms( footprint->GetSearchTerms() );
 
-                if( filterTerm.IsNumber() && wxAtoi( filterTerm ) == (int)footprint->GetPadCount( DO_NOT_INCLUDE_NPTH ) )
+                if( filterTerm.IsNumber() && wxAtoi( filterTerm ) == (int)footprint->GetNumberedPadCount() )
                     matched++;
 
                 if( !matched )
@@ -666,6 +667,15 @@ void FOOTPRINT_VIEWER_FRAME::ClickOnLibList( wxCommandEvent& aEvent )
         return;
 
     wxString name = m_libList->GetBaseString( ii );
+
+    try
+    {
+        PROJECT_PCB::FootprintLibAdapter( &Prj() )->RefreshLibraryIfChanged( name );
+    }
+    catch( const IO_ERROR& e )
+    {
+        wxLogTrace( traceLibraries, "FP: %s: refresh failed: %s", name, e.What() );
+    }
 
     if( getCurNickname() == name )
         return;
@@ -942,7 +952,9 @@ void FOOTPRINT_VIEWER_FRAME::HardRedraw()
 {
     ReCreateLibraryList();
     ReCreateFootprintList();
-    ReloadFootprint( GetBoard()->GetFirstFootprint() );
+
+    if( FOOTPRINT* footprint = GetBoard()->GetFirstFootprint() )
+        ReloadFootprint( footprint );
 }
 
 void FOOTPRINT_VIEWER_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )

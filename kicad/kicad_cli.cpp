@@ -52,6 +52,7 @@
 #include "cli/command_jobset_run.h"
 #include "cli/command_pcb.h"
 #include "cli/command_pcb_export.h"
+#include "cli/command_export_bom.h"
 #include "cli/command_fp_diff.h"
 #include "cli/command_pcb_diff.h"
 #include "cli/command_pcb_drc.h"
@@ -67,6 +68,7 @@
 #include "cli/command_pcb_export_hpgl.h"
 #include "cli/command_pcb_export_gencad.h"
 #include "cli/command_pcb_export_ipc2581.h"
+#include "cli/command_pcb_export_idf.h"
 #include "cli/command_pcb_export_ipcd356.h"
 #include "cli/command_pcb_export_odb.h"
 #include "cli/command_pcb_export_pdf.h"
@@ -74,8 +76,8 @@
 #include "cli/command_pcb_export_pos.h"
 #include "cli/command_pcb_export_ps.h"
 #include "cli/command_pcb_export_stats.h"
+#include "cli/command_pcb_export_stackup.h"
 #include "cli/command_pcb_export_svg.h"
-#include "cli/command_sch_export_bom.h"
 #include "cli/command_sch_export_pythonbom.h"
 #include "cli/command_sch_export_netlist.h"
 #include "cli/command_sch_export_plot.h"
@@ -151,6 +153,7 @@ static CLI::PCB_UPGRADE_COMMAND          pcbUpgradeCmd{};
 static CLI::PCB_IMPORT_COMMAND           pcbImportCmd{};
 static CLI::SCH_IMPORT_COMMAND           schImportCmd{};
 static CLI::IMPORT_COMMAND               importCmd{};
+static CLI::EXPORT_BOM_COMMAND           exportPcbBomCmd{ KIWAY::FACE_PCB };
 static CLI::PCB_EXPORT_DRILL_COMMAND     exportPcbDrillCmd{};
 static CLI::PCB_EXPORT_DXF_COMMAND       exportPcbDxfCmd{};
 static CLI::PCB_EXPORT_3D_COMMAND        exportPcbGlbCmd{ "glb", UTF8STDSTR( _( "Export GLB (binary GLTF)" ) ),
@@ -179,10 +182,12 @@ static CLI::PCB_EXPORT_PNG_COMMAND       exportPcbPngCmd{};
 static CLI::PCB_EXPORT_POS_COMMAND       exportPcbPosCmd{};
 static CLI::PCB_EXPORT_PS_COMMAND        exportPcbPsCmd{};
 static CLI::PCB_EXPORT_STATS_COMMAND     exportPcbStatsCmd{};
+static CLI::PCB_EXPORT_STACKUP_COMMAND   exportPcbStackupCmd{};
 static CLI::PCB_EXPORT_GERBERS_COMMAND   exportPcbGerbersCmd{};
 static CLI::PCB_EXPORT_HPGL_COMMAND      exportPcbHpglCmd{};
 static CLI::PCB_EXPORT_GENCAD_COMMAND    exportPcbGencadCmd{};
 static CLI::PCB_EXPORT_IPC2581_COMMAND   exportPcbIpc2581Cmd{};
+static CLI::PCB_EXPORT_IDF_COMMAND       exportPcbIdfCmd{};
 static CLI::PCB_EXPORT_IPCD356_COMMAND   exportPcbIpcD356Cmd{};
 static CLI::PCB_EXPORT_ODB_COMMAND       exportPcbOdbCmd{};
 static CLI::PCB_EXPORT_COMMAND           exportPcbCmd{};
@@ -191,7 +196,7 @@ static CLI::SCH_COMMAND                  schCmd{};
 static CLI::SCH_DIFF_COMMAND             schDiffCmd{};
 static CLI::SCH_ERC_COMMAND              schErcCmd{};
 static CLI::SCH_UPGRADE_COMMAND          schUpgradeCmd{};
-static CLI::SCH_EXPORT_BOM_COMMAND       exportSchBomCmd{};
+static CLI::EXPORT_BOM_COMMAND           exportSchBomCmd{ KIWAY::FACE_SCH };
 static CLI::SCH_EXPORT_PYTHONBOM_COMMAND exportSchPythonBomCmd{};
 static CLI::SCH_EXPORT_NETLIST_COMMAND   exportSchNetlistCmd{};
 static CLI::SCH_EXPORT_PLOT_COMMAND      exportSchDxfCmd{ "dxf", UTF8STDSTR( _( "Export DXF" ) ), SCH_PLOT_FORMAT::DXF,
@@ -269,6 +274,7 @@ static std::vector<COMMAND_ENTRY> commandStack = {
             {
                 &exportPcbCmd,
                 {
+                    &exportPcbBomCmd,
                     &exportPcbBrepCmd,
                     &exportPcbDrillCmd,
                     &exportPcbDxfCmd,
@@ -277,6 +283,7 @@ static std::vector<COMMAND_ENTRY> commandStack = {
                     &exportPcbGencadCmd,
                     &exportPcbGlbCmd,
                     &exportPcbIpc2581Cmd,
+                    &exportPcbIdfCmd,
                     &exportPcbIpcD356Cmd,
                     &exportPcbOdbCmd,
                     &exportPcbPdfCmd,
@@ -284,6 +291,7 @@ static std::vector<COMMAND_ENTRY> commandStack = {
                     &exportPcbPosCmd,
                     &exportPcbPsCmd,
                     &exportPcbStatsCmd,
+                    &exportPcbStackupCmd,
                     &exportPcbStepCmd,
                     &exportPcbSvgCmd,
                     &exportPcbVrmlCmd,
@@ -656,7 +664,11 @@ void PGM_KICAD::OnPgmExit()
     GetKiCadThreadPool().purge();
     GetKiCadThreadPool().wait();
 
-    Kiway.OnKiwayEnd();
+    for( KIWAY::FACE_T face : { KIWAY::FACE_SCH, KIWAY::FACE_PCB } )
+    {
+        if( KIFACE* kiface = Kiway.KiFACE( face, false ) )
+            kiface->Reset();
+    }
 
     if( m_settings_manager && m_settings_manager->IsOK() )
     {
@@ -672,6 +684,13 @@ void PGM_KICAD::OnPgmExit()
         }
     }
 
+    Kiway.OnKiwayEnd();
+
+    // Release module settings while the settings manager is still available.
+    Destroy();
+
+    m_settings_manager.reset();
+
     if( GetGitBackend() )
     {
         GetGitBackend()->Shutdown();
@@ -679,10 +698,6 @@ void PGM_KICAD::OnPgmExit()
         SetGitBackend( nullptr );
     }
 
-    // Destroy everything in PGM_KICAD,
-    // especially wxSingleInstanceCheckerImpl earlier than wxApp and earlier
-    // than static destruction would.
-    Destroy();
 }
 
 
@@ -795,12 +810,11 @@ struct APP_KICAD_CLI : public wxAppConsole
 
             if( keyEvent )
             {
-                wxLogTrace( kicadTraceKeyEvent, "APP_KICAD::ProcessEvent %s", dump( *keyEvent ) );
+                wxLogTrace( kicadTraceKeyEvent, "APP_KICAD_CLI::ProcessEvent %s", dump( *keyEvent ) );
             }
         }
 
-        aEvent.Skip();
-        return false;
+        return wxAppConsole::ProcessEvent( aEvent );
     }
 
     /**

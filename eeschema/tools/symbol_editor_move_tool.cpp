@@ -125,7 +125,12 @@ bool SYMBOL_EDITOR_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COM
                                                         : m_selectionTool->RequestSelection();
     bool           unselect = selection.IsHover();
 
-    if( !m_frame->IsSymbolEditable() || selection.Empty() )
+    if( selection.Empty() )
+        return false;
+
+    // We can get here with (only) fields selected in an alias symbol, so we
+    // don't check graphical editability.
+    if( !m_frame->IsSymbolEditable() )
         return false;
 
     if( m_moveInProgress )
@@ -135,7 +140,7 @@ bool SYMBOL_EDITOR_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COM
         return true;
     }
 
-    m_frame->PushTool( aEvent );
+    SCOPED_TOOL_PUSHER raii( m_frame, aEvent );
 
     Activate();
     // Must be done after Activate() so that it gets set into the correct context
@@ -195,7 +200,7 @@ bool SYMBOL_EDITOR_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COM
 
                             got_unit[cur_pin->GetUnit()] = true;
 
-                            for( SCH_PIN* pin : symbol->GetPins() )
+                            for( SCH_PIN* pin : symbol->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES ) )
                             {
                                 if( !got_unit[pin->GetUnit()]
                                         && pin->GetPosition() == cur_pin->GetPosition()
@@ -325,8 +330,8 @@ bool SYMBOL_EDITOR_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COM
             }
             else
             {
-                m_cursor = grid.BestSnapAnchor( controls->GetCursorPosition( false ), snapLayer,
-                                                selection );
+                m_cursor = grid.ResolveSnap( controls->GetCursorPosition( false ), snapLayer, selection, prevPos )
+                                .position;
             }
 
             if( axisLock == AXIS_LOCK::HORIZONTAL )
@@ -390,7 +395,9 @@ bool SYMBOL_EDITOR_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COM
         //
         else if( evt->IsMouseUp( BUT_LEFT )
                 || evt->IsClick( BUT_LEFT )
-                || evt->IsDblClick( BUT_LEFT ) )
+                || evt->IsAction( &ACTIONS::cursorClick )
+                || evt->IsDblClick( BUT_LEFT )
+                || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
             if( selection.GetSize() == 1 && selection.Front()->Type() == SCH_PIN_T )
             {
@@ -415,8 +422,7 @@ bool SYMBOL_EDITOR_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COM
                 catch( const boost::bad_pointer& e )
                 {
                     restore_state = true;
-                    wxFAIL_MSG( wxString::Format( wxT( "Boost pointer exception occurred: %s" ),
-                                                  e.what() ) );
+                    wxFAIL_MSG( wxString::Format( wxT( "Boost pointer exception occurred: %s" ), e.what() ) );
                 }
             }
 
@@ -442,7 +448,6 @@ bool SYMBOL_EDITOR_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COM
         m_toolMgr->RunAction( ACTIONS::selectionClear );
 
     m_moveInProgress = false;
-    m_frame->PopTool( aEvent );
 
     return !restore_state;
 }

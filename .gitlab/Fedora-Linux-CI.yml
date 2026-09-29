@@ -47,8 +47,10 @@
       - build/linux/cvpcb/_cvpcb.kiface
       - build/linux/gerbview/_gerbview.kiface
       - build/linux/kicad/kicad-cli
+      - build/linux/libwmf/fonts/
       - build/linux/pcbnew/_pcbnew.kiface
       - build/linux/pcbnew/_pcbnew.so
+      - build/linux/plugins/3d/
       - build/linux/qa/
       - build/linux/schemas/
       - build/linux/compilation_log.txt

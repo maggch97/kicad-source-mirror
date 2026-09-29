@@ -23,6 +23,7 @@
 #include <board.h>
 #include <footprint.h>
 #include <pad.h>
+#include <pcb_group.h>
 #include <pcb_track.h>
 #include <pcb_shape.h>
 #include <pcb_text.h>
@@ -143,6 +144,11 @@ wxVariant DIALOG_FIND_BY_PROPERTIES::anyToVariant( const wxAny& aValue )
     else if( aValue.CheckType<wxString>() )
         return wxVariant( aValue.As<wxString>() );
 
+    wxVariant variant;
+
+    if( aValue.GetAs( &variant ) )
+        return variant;
+
     wxString strVal;
 
     if( aValue.GetAs( &strVal ) )
@@ -169,6 +175,8 @@ wxVariant DIALOG_FIND_BY_PROPERTIES::getVariantAwareValue( EDA_ITEM* aItem, PROP
                 return wxVariant( footprint->GetDNPForVariant( variantName ) );
             else if( propName == _HKI( "Exclude From Bill of Materials" ) )
                 return wxVariant( footprint->GetExcludedFromBOMForVariant( variantName ) );
+            else if( propName == _HKI( "Exclude From Simulation" ) )
+                return wxVariant( footprint->GetExcludedFromSimForVariant( variantName ) );
             else if( propName == _HKI( "Exclude From Position Files" ) )
                 return wxVariant( footprint->GetExcludedFromPosFilesForVariant( variantName ) );
         }
@@ -226,7 +234,7 @@ std::set<wxString> getCommonFootprintFieldNames( const PCB_SELECTION& aSelection
         for( PCB_FIELD* field : footprint->GetFields() )
         {
             if( field )
-                fieldNames.insert( field->GetCanonicalName() );
+                fieldNames.insert( field->GetUntranslatedName() );
         }
 
         if( firstFootprint )
@@ -334,8 +342,9 @@ bool isExprIdentChar( wxChar aCh )
 
 std::set<wxString> getQueryableFootprintFieldNames( const std::vector<PROPERTY_ROW_DATA>& aRows )
 {
-    std::set<wxString> fieldNames = { _HKI( "Reference" ), _HKI( "Value" ), _HKI( "Datasheet" ),
-                                      _HKI( "Description" ) };
+    // Reference must stay a property lookup so A.Reference still matches R1's pads.
+    // getField() only answers on the footprint itself.
+    std::set<wxString> fieldNames = { _HKI( "Value" ), _HKI( "Datasheet" ), _HKI( "Description" ) };
 
     for( const PROPERTY_ROW_DATA& row : aRows )
     {
@@ -365,6 +374,9 @@ bool matchAliasAt( const wxString& aExpression, size_t aPos, const wxString& aAl
 
     return true;
 }
+
+
+} // namespace
 
 
 wxString normalizeQueryFieldAliases( const wxString& aExpression, const std::vector<PROPERTY_ROW_DATA>& aRows )
@@ -437,6 +449,9 @@ wxString normalizeQueryFieldAliases( const wxString& aExpression, const std::vec
 }
 
 
+namespace
+{
+
 bool queryUsesUnsupportedPairwiseSyntax( const wxString& aExpression )
 {
     bool inString = false;
@@ -485,6 +500,8 @@ void DIALOG_FIND_BY_PROPERTIES::rebuildPropertyGrid()
 
     if( selection.Empty() )
     {
+        m_propertyRows.clear();
+        m_selectedTypes.clear();
         m_statusLabel->SetLabel( _( "No items selected" ) );
         m_createQueryBtn->Enable( false );
         return;
@@ -558,7 +575,7 @@ void DIALOG_FIND_BY_PROPERTIES::rebuildPropertyGrid()
 
         for( EDA_ITEM* item : selection )
         {
-            PROPERTY_BASE* itemProp = propMgr.GetProperty( TYPE_HASH( *item ), name );
+            PROPERTY_BASE* itemProp = propMgr.GetProperty( item, name );
 
             if( !itemProp )
             {
@@ -824,6 +841,9 @@ std::vector<BOARD_ITEM*> DIALOG_FIND_BY_PROPERTIES::collectAllBoardItems()
     for( ZONE* zone : m_board->Zones() )
         items.push_back( zone );
 
+    for( PCB_GROUP* group : m_board->Groups() )
+        items.push_back( group );
+
     return items;
 }
 
@@ -854,7 +874,7 @@ bool DIALOG_FIND_BY_PROPERTIES::itemMatchesPropertyCriteria( BOARD_ITEM* aItem )
         }
         else
         {
-            PROPERTY_BASE* prop = propMgr.GetProperty( TYPE_HASH( *aItem ), row.propertyName );
+            PROPERTY_BASE* prop = propMgr.GetProperty( aItem, row.propertyName );
 
             if( !prop )
                 return false;
@@ -1035,7 +1055,7 @@ wxString DIALOG_FIND_BY_PROPERTIES::formatValueForExpression( PROPERTY_BASE* aPr
 }
 
 
-wxString DIALOG_FIND_BY_PROPERTIES::generateExpressionFromProperties()
+wxString DIALOG_FIND_BY_PROPERTIES::generateExpressionFromProperties( wxArrayString* aSkippedRows )
 {
     wxArrayString conditions;
 
@@ -1060,6 +1080,15 @@ wxString DIALOG_FIND_BY_PROPERTIES::generateExpressionFromProperties()
         }
 
         wxString value = formatValueForExpression( row.property, row.rawValue );
+
+        if( value.IsEmpty() )
+        {
+            if( aSkippedRows )
+                aSkippedRows->Add( wxGetTranslation( row.propertyName ) );
+
+            continue;
+        }
+
         wxString op = ( row.matchMode == PROPERTY_MATCH_MODE::MATCHING ) ? wxT( "==" ) : wxT( "!=" );
 
         conditions.Add( wxString::Format( wxT( "%s %s %s" ), lhs, op, value ) );
@@ -1081,12 +1110,20 @@ wxString DIALOG_FIND_BY_PROPERTIES::generateExpressionFromProperties()
 
 void DIALOG_FIND_BY_PROPERTIES::onCreateQueryClick( wxCommandEvent& event )
 {
-    wxString expr = generateExpressionFromProperties();
+    wxArrayString skipped;
+    wxString      expr = generateExpressionFromProperties( &skipped );
 
-    if( !expr.IsEmpty() )
+    if( !expr.IsEmpty() || !skipped.empty() )
     {
         m_queryEditor->SetText( expr );
         m_notebook->SetSelection( 1 );
+
+        if( skipped.empty() )
+            m_queryStatusLabel->SetLabel( wxEmptyString );
+        else if( skipped.size() == 1 )
+            m_queryStatusLabel->SetLabel( wxString::Format( _( "No value to match: %s" ), skipped[0] ) );
+        else
+            m_queryStatusLabel->SetLabel( wxString::Format( _( "%zu rows have no value to match" ), skipped.size() ) );
     }
 }
 

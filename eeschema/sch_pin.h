@@ -23,32 +23,46 @@
 
 #pragma once
 
+#include <mutex>
 #include <memory>
 #include <set>
 #include <vector>
 
 #include <pin_type.h>
+#include <pin_comparison.h>
 #include <sch_item.h>
 
 class LIB_SYMBOL;
+class TRANSFORM;
 class SCH_SYMBOL;
 class LIB_ID;
 class SCH_SHEET_PATH;
 class PIN_LAYOUT_CACHE;
 
+namespace KIFONT
+{
+class FONT;
+}
+
 // Circle diameter drawn at the active end of pins:
 #define TARGET_PIN_RADIUS   schIUScale.MilsToIU( 15 )
+
+/**
+ * Break a stacked pin number of the form "[A,B,C]" into one number per line when it is too wide
+ * to sit alongside the pin.  Anything else, and anything that already fits, is returned as-is.
+ *
+ * Everything that draws, plots or measures a pin number goes through here.
+ */
+wxString FormatStackedPinForDisplay( const wxString& aPinNumber, int aPinLength, int aTextSize,
+                                     KIFONT::FONT* aFont, const KIFONT::METRICS& aFontMetrics );
 
 
 class SCH_PIN : public SCH_ITEM
 {
 public:
-    struct ALT
-    {
-        wxString            m_Name;
-        GRAPHIC_PINSHAPE    m_Shape;         // Shape drawn around pin
-        ELECTRICAL_PINTYPE  m_Type;          // Electrical type of the pin.
-    };
+    using ALT = PIN_ALTERNATE;
+
+    PIN_COMPARISON_DATA ComparisonData() const;
 
     SCH_PIN( LIB_SYMBOL* aParentSymbol );
 
@@ -192,6 +206,8 @@ public:
     /// and no loaded footprint (two-state form).
     wxString GetEffectivePadNumber( const SCH_SHEET_PATH& aSheet, const wxString& aVariantName = wxEmptyString ) const;
 
+    static bool HasIdentityPad( const wxString& aPinNumber, const std::set<wxString>& aPads );
+
     void SetNumber( const wxString& aNumber );
 
     int GetNameTextSize() const;
@@ -228,7 +244,7 @@ public:
      *       list of pin alternates, it's set to an empty string which results in the alternate
      *       being set to the default pin.
      *
-     * @param is the name of the pin alternate in #m_alternates.
+     * @param aAlt is the name of the pin alternate in #m_alternates.
      */
     void SetAlt( const wxString& aAlt );
 
@@ -269,6 +285,8 @@ public:
     /**
      * @param aIncludeLabelsOnInvisiblePins - if false, do not include labels for invisible pins
      *                                       in the calculation.
+     * @param aIncludeNameAndNumber includes the pin name and number in the bounding box when true.
+     * @param aIncludeElectricalType includes the pin electrical type indicator in the bounding box when true.
      */
     BOX2I GetBoundingBox( bool aIncludeLabelsOnInvisiblePins, bool aIncludeNameAndNumber,
                           bool aIncludeElectricalType ) const;
@@ -324,8 +342,14 @@ public:
     /**
      * Plot the pin name and number.
      *
+     * @param aPlotter is the plotter object to plot to.
+     * @param aPinPos is the position of the pin to plot.
+     * @param aPinOrient is the orientation of the pin to plot.
      * @param aTextInside - draw the names & numbers inside the symbol body (ie: in the opposite
      *                      direction of \a aPinOrient).
+     * @param aDrawPinNum
+     * @param aDrawPinName
+     * @param aDimmed
      */
     void PlotPinTexts( PLOTTER *aPlotter, const VECTOR2I &aPinPos, PIN_ORIENTATION aPinOrient,
                        int aTextInside, bool aDrawPinNum, bool aDrawPinName, bool aDimmed ) const;
@@ -370,7 +394,7 @@ public:
     wxString GetDefaultNetName( const SCH_SHEET_PATH& aPath, bool aForceNoConnect = false );
 
     bool IsDangling() const override;
-    void SetIsDangling( bool aIsDangling );
+    bool SetIsDangling( bool aIsDangling );
 
     /**
      * @param aPin Comparison Pin
@@ -408,7 +432,10 @@ public:
 
     double Similarity( const SCH_ITEM& aOther ) const override;
 
-    bool operator>( const SCH_ITEM& aRhs ) const { return compare( aRhs, EQUALITY ) > 0; }
+    bool operator==( const SCH_ITEM& aPin ) const override;
+    bool operator==( const SCH_PIN& aPin ) const;
+
+    bool operator>( const SCH_ITEM& aRhs ) const { return compare( aRhs, ~COMPARE_FLAGS::UUID ) > 0; }
 
     /**
      * Get the layout cache associated with this pin.
@@ -420,6 +447,8 @@ public:
     PIN_LAYOUT_CACHE& GetLayoutCache() const;
 
 protected:
+    void swapData( SCH_ITEM* aItem ) override;
+
     wxString getItemDescription( ALT* aAlt ) const;
 
     struct EXTENTS_CACHE
@@ -429,8 +458,7 @@ protected:
         VECTOR2I      m_Extents;
     };
 
-    void validateExtentsCache( KIFONT::FONT* aFont, int aSize, const wxString& aText,
-                               EXTENTS_CACHE* aCache ) const;
+    void validateExtentsCache( KIFONT::FONT* aFont, int aSize, const wxString& aText, EXTENTS_CACHE* aCache ) const;
 
     std::ostream& operator<<( std::ostream& aStream );
 
@@ -475,10 +503,10 @@ protected:
     wxString                m_operatingPoint;
 
     /// Render-only original number for a pad-remapped pin; see GetRemappedFromNumber().  Not saved.
-    wxString m_remappedFromNumber;
+    wxString                m_remappedFromNumber;
 
     /// Render-only stacked block side hint, see GetFlipStackedTextSide().  Not saved.
-    bool m_flipStackedTextSide = false;
+    bool                    m_flipStackedTextSide = false;
 
     bool                    m_isDangling;
 

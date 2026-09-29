@@ -25,6 +25,7 @@
 // "richio" after its author, Richard Hollenbeck, aka Dick Hollenbeck.
 
 
+#include <memory>
 #include <vector>
 #include <core/utf8.h>
 
@@ -38,6 +39,8 @@
 #include <kicommon.h>
 #include <io/kicad/kicad_io_utils.h>
 
+
+class SIBLING_TEMP_FILE;
 
 /**
  * Nominally opens a file and reads it into a string.  But unlike other facilities, this handles
@@ -361,6 +364,15 @@ public:
     int PRINTF_FUNC Print( const char* fmt, ... );
 
     /**
+     * Write the leading whitespace for a nesting level, with no other output.
+     *
+     * @param aNestLevel The multiple of spaces to write.
+     * @return int - the number of characters output.
+     * @throw IO_ERROR, if there is a problem outputting, such as a full disk.
+     */
+    int Indent( int aNestLevel );
+
+    /**
      * Perform quote character need determination.
      *
      * It returns the quote character as a single character string for a given input wrapee
@@ -461,8 +473,9 @@ private:
  *
  * Writes through a sibling temp file and atomically renames onto the final target in
  * Finish(). A crash, throw, or power loss between construction and Finish() leaves the
- * final target byte-identical to its prior contents -- never truncated. If Finish() is
- * not called explicitly, the destructor attempts a best-effort commit and logs on failure.
+ * final target byte-identical to its prior contents -- never truncated. Finish() must be
+ * called to save; otherwise the destructor discards the temp file and leaves the target
+ * untouched.
  *
  * It is about 8 times faster than STREAM_OUTPUTFORMATTER for file streams.
  */
@@ -485,21 +498,24 @@ public:
 
     /**
      * Flushes the temp file to disk and atomically renames it over the final target path.
-     * After a successful return the final target contains the bytes written; on failure
-     * the original contents remain intact.
+     * After a successful return the final target contains the bytes written. A failure
+     * before the rename leaves the original contents intact; a directory-flush failure
+     * after the rename throws even though the new contents are already visible, because
+     * only their durability is in doubt.
+     *
+     * Finish() must be called at most once. Calling it again (whether the commit succeeded
+     * or failed) is a programming error.
      *
      * @return true on successful commit.
-     * @throw IO_ERROR if fsync, close, or rename fails.
+     * @throw IO_ERROR if fsync, close, rename, or the directory flush fails.
      */
     bool Finish() override;
 
 protected:
     void write( const char* aOutBuf, int aCount ) override;
 
-    FILE*       m_fp;               ///< takes ownership; points at the temp file
-    wxString    m_filename;         ///< final destination path
-    wxString    m_tempPath;         ///< sibling temp file being written
-    bool        m_committed;        ///< set true once Finish() has renamed into place
+    /// sibling temp file, committed by Finish()
+    std::unique_ptr<SIBLING_TEMP_FILE> m_tempFile;
 };
 
 
@@ -516,10 +532,16 @@ public:
      * Runs prettification over the buffered bytes, writes them to the sibling temp file,
      * fsyncs, and atomically renames the temp file over the final target. A crash or
      * power loss anywhere in this sequence leaves the final target byte-identical to its
-     * prior contents.
+     * prior contents. A failure before the rename leaves the original contents intact; a
+     * directory-flush failure after the rename throws even though the new contents are
+     * already visible, because only their durability is in doubt.
+     *
+     * Finish() must be called at most once. Calling it again (whether the commit succeeded
+     * or failed) is a programming error.
      *
      * @return true on successful commit.
-     * @throw IO_ERROR if prettification, fwrite, fsync, or rename fails.
+     * @throw IO_ERROR if prettification, fwrite, fsync, close, rename, or the
+     *        directory flush fails.
      */
     bool Finish() override;
 
@@ -527,12 +549,10 @@ protected:
     void write( const char* aOutBuf, int aCount ) override;
 
 private:
-    FILE*                     m_fp;
-    wxString                  m_filename;   ///< final destination path
-    wxString                  m_tempPath;   ///< sibling temp file being written
-    bool                      m_committed;  ///< set true once rename has landed
-    std::string               m_buf;
-    KICAD_FORMAT::FORMAT_MODE m_mode;
+    /// sibling temp file, committed by Finish()
+    std::unique_ptr<SIBLING_TEMP_FILE> m_tempFile;
+    std::string                        m_buf;
+    KICAD_FORMAT::FORMAT_MODE          m_mode;
 };
 
 

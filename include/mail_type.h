@@ -34,7 +34,6 @@ enum MAIL_T
 {
     MAIL_CROSS_PROBE,       // PCB<->SCH, CVPCB->SCH cross-probing.
     MAIL_SELECTION,         // SCH<->PCB selection synchronization.
-    MAIL_SELECTION_FORCE,   // Explicit selection of SCH->PCB selection synchronization.
     MAIL_ASSIGN_FOOTPRINTS, // CVPCB->SCH footprint stuffing
     MAIL_SCH_SAVE,          // CVPCB->SCH save the schematic
     MAIL_PCB_SAVE,          // KICAD->PCB save the board
@@ -50,11 +49,22 @@ enum MAIL_T
     MAIL_SCH_REFRESH,       // Tell the schematic editor to refresh the display.
     MAIL_ADD_LOCAL_LIB,     // Add a local library to the project library table
     MAIL_LIB_EDIT,
-    MAIL_FP_EDIT,
-    MAIL_RELOAD_LIB,           // Reload Library List if one was added
-    MAIL_RELOAD_PLUGINS,       // Reload python plugins
-    MAIL_REFRESH_SYMBOL,       // Refresh symbol in symbol viewer
-    MAIL_SCH_NAVIGATE_TO_SHEET // Navigate to sheet by filename if in hierarchy
+    MAIL_FP_EDIT,               // SCH->FP_EDITOR open the footprint with the given file path
+    MAIL_FP_EDIT_LIBID,         // SCH->FP_EDITOR open the footprint with this LIB_ID
+    MAIL_RELOAD_LIB,            // Reload Library List if one was added
+    MAIL_RELOAD_PLUGINS,        // Reload python plugins
+    MAIL_REFRESH_SYMBOL,        // Refresh symbol in symbol viewer
+    MAIL_SCH_NAVIGATE_TO_SHEET, // Navigate to sheet by filename if in hierarchy
+    MAIL_SCH_SHEET_CHANGED,     // Schematic editor current sheet changed
+    MAIL_CALC_SHOW,             // Show the PCB calculator window
 };
+
+/**
+ * Reply payload for #MAIL_SCH_GET_NETLIST when the user deliberately aborts netlist
+ * generation (for example, answering No to the duplicate-sheet-names prompt). The caller
+ * treats this as a silent cancel, distinct from an unannotated schematic which echoes the
+ * original annotation message back.
+ */
+#define MAIL_SCH_GET_NETLIST_CANCELLED "\x01__netlist_cancelled__"
 
 #endif  // MAIL_TYPE_H_

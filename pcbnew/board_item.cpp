@@ -34,6 +34,12 @@
 #include <properties/property_mgr.h>
 
 
+bool BOARD_ITEM::FitsEnabledLayers( const LSET& aEnabledLayers, int aCopperLayerCount ) const
+{
+    return IsLayerAgnostic() || ( GetLayerSet() & aEnabledLayers ).any();
+}
+
+
 bool BOARD_ITEM::IsGroupableType() const
 {
     switch ( Type() )
@@ -46,6 +52,8 @@ bool BOARD_ITEM::IsGroupableType() const
     case PCB_TEXT_T:
     case PCB_TEXTBOX_T:
     case PCB_TABLE_T:
+    case PCB_DRILL_CHART_T:
+    case PCB_DRILL_MAP_T:
     case PCB_GROUP_T:
     case PCB_GENERATOR_T:
     case PCB_TRACE_T:
@@ -59,6 +67,8 @@ bool BOARD_ITEM::IsGroupableType() const
     case PCB_DIM_ORTHOGONAL_T:
     case PCB_ZONE_T:
     case PCB_BARCODE_T:
+    case PCB_POINT_T:
+    case PCB_GRID_ITEM_T:
         return true;
     default:
         return false;
@@ -93,13 +103,9 @@ BOARD* BOARD_ITEM::GetBoard()
 
 BOARD_ITEM::~BOARD_ITEM()
 {
-    // Safety net for paths that free an item without ::Remove().  Gate on the flag so a never-indexed
-    // transient does not walk GetBoard()'s parent chain into an already-freed board.
-    if( m_indexedInBoard && Type() != PCB_T )
-    {
-        if( BOARD* board = GetBoard(); board && board->IsItemIndexedById( this ) )
-            board->UncacheItemByPtr( this );
-    }
+    // Backup for code paths that skip ::Remove(). Do not use the parent chain, it may be freed.
+    if( m_boardCacheOwner )
+        m_boardCacheOwner->UncacheItemByPtr( this );
 }
 
 
@@ -114,7 +120,8 @@ void BOARD_ITEM::SetUuid( const KIID& aUuid )
     if( m_Uuid == aUuid )
         return;
 
-    if( BOARD* board = GetBoard(); board && board->IsItemIndexedById( this ) )
+    // Use the owner, not GetBoard(). The parent chain may name a wrong or dead board.
+    if( BOARD* board = m_boardCacheOwner )
     {
         board->RebindItemUuid( this, aUuid );
         return;
@@ -173,6 +180,14 @@ int BOARD_ITEM::GetMaxError() const
     return ARC_HIGH_DEF;
 }
 
+
+PCB_LAYER_ID BOARD_ITEM::GetLayer() const
+{
+    wxASSERT_MSG( IsSingleLayerType( Type() ),
+                  wxString::Format( wxT( "GetLayer() must be overridden for multi-layer types (%s)." ), GetClass() ) );
+
+    return m_layer;
+}
 
 int BOARD_ITEM::BoardLayerCount() const
 {
@@ -362,6 +377,28 @@ void BOARD_ITEM::TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID 
 }
 
 
+double BOARD_ITEM::GetCoverageArea( int aTextMargin ) const
+{
+    SHAPE_POLY_SET poly;
+    TransformShapeToPolygon( poly, UNDEFINED_LAYER, 0, ARC_LOW_DEF, ERROR_OUTSIDE );
+    return polygonArea( poly );
+}
+
+
+double BOARD_ITEM::polygonArea( SHAPE_POLY_SET& aPolySet )
+{
+    for( int ii = 0; ii < aPolySet.OutlineCount(); ii++ )
+    {
+        aPolySet.Outline( ii ).SetClosed( true );
+
+        for( int jj = 0; jj < aPolySet.HoleCount( ii ); jj++ )
+            aPolySet.Hole( ii, jj ).SetClosed( true );
+    }
+
+    return aPolySet.Area();
+}
+
+
 bool BOARD_ITEM::ptr_cmp::operator() ( const BOARD_ITEM* a, const BOARD_ITEM* b ) const
 {
     if( a->Type() != b->Type() )
@@ -377,7 +414,7 @@ bool BOARD_ITEM::ptr_cmp::operator() ( const BOARD_ITEM* a, const BOARD_ITEM* b 
 }
 
 
-std::shared_ptr<SHAPE> BOARD_ITEM::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING aFlash ) const
+std::shared_ptr<SHAPE> BOARD_ITEM::GetEffectiveShape( PCB_LAYER_ID, FLASHING, DRC_CONSTRAINT_T ) const
 {
     static std::shared_ptr<SHAPE> shape;
 
@@ -387,7 +424,7 @@ std::shared_ptr<SHAPE> BOARD_ITEM::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASH
 }
 
 
-std::shared_ptr<SHAPE_SEGMENT> BOARD_ITEM::GetEffectiveHoleShape() const
+std::shared_ptr<SHAPE_SEGMENT> BOARD_ITEM::GetEffectiveHoleShape( PCB_LAYER_ID, DRC_CONSTRAINT_T ) const
 {
     static std::shared_ptr<SHAPE_SEGMENT> slot;
 
@@ -488,7 +525,7 @@ static struct BOARD_ITEM_DESC
                     &BOARD_ITEM::SetY, &BOARD_ITEM::GetY, PROPERTY_DISPLAY::PT_COORD,
                     ORIGIN_TRANSFORMS::ABS_Y_COORD ) );
         propMgr.AddProperty( new PROPERTY_ENUM<BOARD_ITEM, PCB_LAYER_ID>( _HKI( "Layer" ),
-                    &BOARD_ITEM::SetLayer, &BOARD_ITEM::GetLayer ) );
+                    &BOARD_ITEM::SetLayer, &BOARD_ITEM::GetLayer ) ).SetIsCopyable();
         propMgr.AddProperty( new PROPERTY<BOARD_ITEM, bool>( _HKI( "Locked" ),
                     &BOARD_ITEM::SetLocked, &BOARD_ITEM::IsLocked ) )
                .SetAvailableFunc( isNotFootprintHolder );

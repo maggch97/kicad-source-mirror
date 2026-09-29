@@ -21,6 +21,8 @@
 #pragma once
 
 
+#include <map>
+
 #include <core/mirror.h>
 #include <eda_item.h>
 #include <geometry/approximation.h>
@@ -31,6 +33,7 @@
 #include <stroke_params.h>
 #include <geometry/eda_angle.h>
 #include "macros.h"
+#include "drc/drc_rule.h"
 
 class BOARD;
 class BOARD_DESIGN_SETTINGS;
@@ -106,7 +109,19 @@ public:
         m_layer = aOther.m_layer;
         m_isKnockout = aOther.m_isKnockout;
         m_isLocked = aOther.m_isLocked;
+        // Owner stays with the target, do not copy it
         return *this;
+    }
+
+    // A default move would copy the owner. Do not move it.
+    BOARD_ITEM( BOARD_ITEM&& aOther ) :
+            BOARD_ITEM( static_cast<const BOARD_ITEM&>( aOther ) )
+    {
+    }
+
+    BOARD_ITEM& operator=( BOARD_ITEM&& aOther )
+    {
+        return operator=( static_cast<const BOARD_ITEM&>( aOther ) );
     }
 
     ~BOARD_ITEM() override;
@@ -173,7 +188,20 @@ public:
      */
     virtual bool IsOnCopperLayer() const
     {
-        return IsCopperLayer( GetLayer() );
+        if( IsSingleLayerType( Type() ) )
+        {
+            return IsCopperLayer( GetLayer() );
+        }
+        else
+        {
+            for( PCB_LAYER_ID layer : GetLayerSet() )
+            {
+                if( IsCopperLayer( layer ) )
+                    return true;
+            }
+
+            return false;
+        }
     }
 
     virtual bool HasHole() const
@@ -217,11 +245,16 @@ public:
      * @param aFlash optional parameter allowing a caller to force the pad to be flashed (or not
      *               flashed) on the current layer (default is to honour the pad's setting and
      *               the current connections for the given layer).
+     * @param aUsage optional parameter specifying the query type.  This can, for instance, allow
+     *               backdrilling, countersinking, etc. to affect the shape used for resolving the
+     *               physical_clearance.
      */
     virtual std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
-                                                      FLASHING aFlash = FLASHING::DEFAULT ) const;
+                                                      FLASHING aFlash = FLASHING::DEFAULT,
+                                                      DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const;
 
-    virtual std::shared_ptr<SHAPE_SEGMENT> GetEffectiveHoleShape() const;
+    virtual std::shared_ptr<SHAPE_SEGMENT> GetEffectiveHoleShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
+                                                                  DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const;
 
     /**
      * Invoke a function on all children.
@@ -246,6 +279,13 @@ public:
     void SetUuid( const KIID& aUuid );
     void ResetUuid() { SetUuid( KIID() ); }
 
+    /**
+     * Remap KIIDs this item stores to reference other items (e.g. constraint members) through
+     * @p aIdMap (old -> new), after a paste/duplicate has re-UUIDed the referenced items.  KIIDs
+     * absent from the map are left unchanged.  The default does nothing.
+     */
+    virtual void RemapKIIDs( const std::map<KIID, KIID>& aIdMap ) {}
+
     VECTOR2I GetFPRelativePosition() const;
     void SetFPRelativePosition( const VECTOR2I& aPos );
 
@@ -256,6 +296,25 @@ public:
      */
     virtual bool HasLineStroke() const { return false; }
 
+    /**
+     * Check if this item's layer set must not be confined to a board's enabled layers.
+     *
+     * A container's layer set is its members', and those are confined individually; a footprint's
+     * children come from a library that knows no board's layers and must survive those layers being
+     * re-enabled; a geometric constraint has no layer at all.  Masking any of them would corrupt
+     * the item.  Whether the board accepts it at all is #FitsEnabledLayers.
+     */
+    virtual bool IsLayerAgnostic() const { return false; }
+
+    /**
+     * Check if a board offering \a aEnabledLayers can hold this item.
+     *
+     * A layer-agnostic item always fits; anything else needs at least one of its own layers
+     * enabled.  \a aCopperLayerCount is passed rather than read from the item because the item may
+     * still belong to the board it is being copied from.
+     */
+    virtual bool FitsEnabledLayers( const LSET& aEnabledLayers, int aCopperLayerCount ) const;
+
     virtual STROKE_PARAMS GetStroke() const;
     virtual void SetStroke( const STROKE_PARAMS& aStroke );
 
@@ -264,7 +323,7 @@ public:
     /**
      * Return the primary layer this item is on.
      */
-    virtual PCB_LAYER_ID GetLayer() const { return m_layer; }
+    virtual PCB_LAYER_ID GetLayer() const;
 
     /**
      * Return the total number of layers for the board that this item resides on.
@@ -322,6 +381,7 @@ public:
      *
      * @param addToParentGroup Indicates whether or not the new item is added to the group
      *                         containing the old item.  If true, aCommit must be provided.
+     * @param aCommit is the commit object for undo/redo.
      */
     virtual BOARD_ITEM* Duplicate( bool addToParentGroup, BOARD_COMMIT* aCommit = nullptr ) const;
 
@@ -357,7 +417,7 @@ public:
     bool IsLocked() const override;
     void SetLocked( bool aLocked ) override { m_isLocked = aLocked; }
 
-    bool IsIndexedInBoard() const { return m_indexedInBoard; }
+    bool IsIndexedInBoard() const { return m_boardCacheOwner != nullptr; }
 
     int GetMaxError() const;
 
@@ -382,6 +442,7 @@ public:
      * Rotate this object.
      *
      * @param aRotCentre the rotation center point.
+     * @param aAngle the amount to rotation around the center point.
      */
     virtual void Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle );
 
@@ -418,7 +479,7 @@ public:
      * Mirror this object relative to a given horizontal axis the layer is not changed.
      *
      * @param aCentre the mirror point.
-     * @param aMirrorAroundXAxis mirror across X axis instead of Y (the default).
+     * @param aFlipDirection mirror across X axis instead of Y (the default).
      */
     virtual void Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection );
 
@@ -459,6 +520,7 @@ public:
      * Convert the item shape to a closed polygon. Circles and arcs are approximated by segments.
      *
      * @param aBuffer a buffer to store the polygon.
+     * @param aLayer is the layer of the shape to transform.
      * @param aClearance the clearance around the polygonal shape (inflated polygon).
      * @param aError the maximum deviation from true circle.
      * @param aErrorLoc should the approximation error be placed outside or inside the polygon?
@@ -474,6 +536,7 @@ public:
      * fills and details (if any) will be included.
      *
      * @param aBuffer a buffer to store the polygon.
+     * @param aLayer is the layer of the shape to transform.
      * @param aClearance the clearance around the pad.
      * @param aError the maximum deviation from true circle.
      * @param aErrorLoc should the approximation error be placed outside or inside the polygon?
@@ -486,6 +549,14 @@ public:
     {
         TransformShapeToPolygon( aBuffer, aLayer, aClearance, aError, aErrorLoc );
     }
+
+    /**
+     * Return the board area this item covers, used to rank candidates under the cursor so a
+     * click on a small item inside a large one selects the small one.
+     *
+     * @param aTextMargin the margin added around text, normally the hit-test accuracy.
+     */
+    virtual double GetCoverageArea( int aTextMargin ) const;
 
     const std::vector<wxString>* GetEmbeddedFonts() override;
 
@@ -508,14 +579,16 @@ public:
 protected:
     virtual void swapData( BOARD_ITEM* aImage );
 
+    /// Area of \a aPolySet with every contour closed first, holes subtracted.
+    static double polygonArea( SHAPE_POLY_SET& aPolySet );
+
 protected:
     PCB_LAYER_ID    m_layer;
     bool            m_isKnockout;
     bool            m_isLocked;
 
-    // Mirrors BOARD identity-cache membership so ~BOARD_ITEM can evict without walking a parent
-    // chain that may already be freed.  Maintained by BOARD; clones start detached.
-    mutable bool    m_indexedInBoard = false;
+    // Board that indexed this item, or nullptr. Set only by BOARD. Clones start detached.
+    mutable BOARD*  m_boardCacheOwner = nullptr;
 
     friend class BOARD;
 };

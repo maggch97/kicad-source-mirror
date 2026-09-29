@@ -121,7 +121,7 @@ bool IO_BASE::CanReadLibrary( const wxString& aFileName ) const
 }
 
 
-void IO_BASE::Report( const wxString& aText, SEVERITY aSeverity )
+void IO_BASE::Report( const wxString& aText, SEVERITY aSeverity ) const
 {
     if( !m_reporter )
         return;
@@ -136,7 +136,7 @@ void IO_BASE::AdvanceProgressPhase()
         return;
 
     if( !m_progressReporter->KeepRefreshing() )
-        THROW_IO_ERROR( _( "Loading file canceled by user." ) );
+        THROW_IO_CANCELLED();
 
     m_progressReporter->AdvancePhase();
 }

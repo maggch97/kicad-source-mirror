@@ -42,13 +42,17 @@
 #include <pad.h>
 #include <pcb_dimension.h>
 #include <pcb_generator.h>
+#include <pcb_grid_item.h>
 #include <pcb_group.h>
+#include <constraints/pcb_constraint.h>
 #include <pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.h>
 #include <pcb_io/kicad_sexpr/pcb_io_kicad_sexpr_parser.h>
 #include <pcb_point.h>
 #include <pcb_reference_image.h>
 #include <pcb_barcode.h>
 #include <pcb_shape.h>
+#include <pcb_drill_chart.h>
+#include <pcb_drill_map.h>
 #include <pcb_table.h>
 #include <pcb_tablecell.h>
 #include <pcb_target.h>
@@ -93,16 +97,10 @@ void FP_CACHE::Save( FOOTPRINT* aFootprintFilter )
     m_cache_timestamp = 0;
 
     if( !m_lib_path.DirExists() && !m_lib_path.Mkdir() )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Cannot create footprint library '%s'." ),
-                                          m_lib_raw_path ) );
-    }
+        THROW_IO_ERRORF( _( "Cannot create footprint library '%s'." ), m_lib_raw_path );
 
     if( !m_lib_path.IsDirWritable() )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Footprint library '%s' is read only." ),
-                                          m_lib_raw_path ) );
-    }
+        THROW_IO_ERRORF( _( "Footprint library '%s' is read only." ), m_lib_raw_path );
 
     for( auto it = m_footprints.begin(); it != m_footprints.end(); ++it )
     {
@@ -155,11 +153,7 @@ void FP_CACHE::Load()
     wxDir dir( m_lib_raw_path );
 
     if( !dir.IsOpened() )
-    {
-        wxString msg = wxString::Format( _( "Footprint library '%s' not found." ),
-                                         m_lib_raw_path );
-        THROW_IO_ERROR( msg );
-    }
+        THROW_IO_ERRORF( _( "Footprint library '%s' not found." ), m_lib_raw_path );
 
     wxString fullName;
     wxString fileSpec = wxT( "*." ) + wxString( FILEEXT::KiCadFootprintFileExtension );
@@ -227,10 +221,9 @@ void FP_CACHE::Remove( const wxString& aFootprintName )
 
     if( it == m_footprints.end() )
     {
-        wxString msg = wxString::Format( _( "Library '%s' has no footprint '%s'." ),
-                                         m_lib_raw_path,
-                                         aFootprintName );
-        THROW_IO_ERROR( msg );
+        THROW_IO_ERRORF( _( "Library '%s' has no footprint '%s'." ),
+                         m_lib_raw_path,
+                         aFootprintName );
     }
 
     // Remove the footprint from the cache and delete the footprint file from the library.
@@ -293,10 +286,10 @@ bool PCB_IO_KICAD_SEXPR::CanReadBoard( const wxString& aFileName ) const
 }
 
 
-void PCB_IO_KICAD_SEXPR::SaveBoard( const wxString& aFileName, BOARD* aBoard,
+void PCB_IO_KICAD_SEXPR::SaveBoard( const wxString& aFileName, BOARD& aBoard,
                                     const std::map<std::string, UTF8>* aProperties )
 {
-    wxString sanityResult = aBoard->GroupsSanityCheck();
+    wxString sanityResult = aBoard.GroupsSanityCheck();
 
     if( sanityResult != wxEmptyString && m_queryUserCallback )
     {
@@ -311,7 +304,7 @@ void PCB_IO_KICAD_SEXPR::SaveBoard( const wxString& aFileName, BOARD* aBoard,
     }
 
     PRETTIFIED_FILE_OUTPUTFORMATTER formatter( aFileName );
-    FormatBoardToFormatter( &formatter, aBoard, aProperties );
+    FormatBoardToFormatter( &formatter, &aBoard, aProperties );
     formatter.Finish();
 }
 
@@ -397,6 +390,10 @@ void PCB_IO_KICAD_SEXPR::Format( const BOARD_ITEM* aItem ) const
         format( static_cast<const PCB_TARGET*>( aItem ) );
         break;
 
+    case PCB_GRID_ITEM_T:
+        format( static_cast<const PCB_GRID_ITEM*>( aItem ) );
+        break;
+
     case PCB_FOOTPRINT_T:
         format( static_cast<const FOOTPRINT*>( aItem ) );
         break;
@@ -425,12 +422,24 @@ void PCB_IO_KICAD_SEXPR::Format( const BOARD_ITEM* aItem ) const
         format( static_cast<const PCB_TABLE*>( aItem ) );
         break;
 
+    case PCB_DRILL_CHART_T:
+        format( static_cast<const PCB_GENERATED_TABLE*>( aItem ) );
+        break;
+
+    case PCB_DRILL_MAP_T:
+        format( static_cast<const PCB_DRILL_MAP*>( aItem ) );
+        break;
+
     case PCB_GROUP_T:
         format( static_cast<const PCB_GROUP*>( aItem ) );
         break;
 
     case PCB_GENERATOR_T:
         format( static_cast<const PCB_GENERATOR*>( aItem ) );
+        break;
+
+    case PCB_CONSTRAINT_T:
+        format( static_cast<const PCB_CONSTRAINT*>( aItem ) );
         break;
 
     case PCB_TRACE_T:
@@ -549,7 +558,7 @@ void PCB_IO_KICAD_SEXPR::formatPolyPts( const SHAPE_LINE_CHAIN& outline,
 
 void PCB_IO_KICAD_SEXPR::formatRenderCache( const EDA_TEXT* aText ) const
 {
-    wxString resolvedText( aText->GetShownText( true ) );
+    wxString resolvedText( aText->GetShownText( FOR_CANVAS ) );
     std::vector<std::unique_ptr<KIFONT::GLYPH>>* cache = aText->GetRenderCache( aText->GetFont(),
                                                                                 resolvedText );
 
@@ -659,7 +668,75 @@ void PCB_IO_KICAD_SEXPR::formatSetup( const BOARD* aBoard ) const
                       formatInternalUnits( origin.y ).c_str() );
     }
 
+    formatDrillSymbolProfile( dsnSettings );
+
     aBoard->GetPlotOptions().Format( m_out );
+
+    m_out->Print( ")" );
+}
+
+
+/// Layers plus the flags that distinguish a backdrill or non-plated span from the primary
+/// one that shares its layer pair
+static void formatDrillSpan( OUTPUTFORMATTER* aOut, const DRILL_SPAN& aSpan )
+{
+    aOut->Print( "%s %s", aOut->Quotew( LSET::Name( aSpan.DrillStartLayer() ) ).c_str(),
+                 aOut->Quotew( LSET::Name( aSpan.DrillEndLayer() ) ).c_str() );
+
+    if( aSpan.m_IsBackdrill )
+        aOut->Print( " backdrill" );
+
+    if( aSpan.m_IsNonPlatedFile )
+        aOut->Print( " npth" );
+}
+
+
+void PCB_IO_KICAD_SEXPR::formatDrillSymbolProfile( const BOARD_DESIGN_SETTINGS& aSettings ) const
+{
+    const DRILL_SYMBOL_PROFILE& profile = aSettings.GetDrillSymbolProfile();
+    const DRILL_SYMBOL_PROFILE  defaults;
+
+    // A board nobody has configured writes nothing, so existing files keep their bytes
+    if( profile == defaults )
+    {
+        return;
+    }
+
+    m_out->Print( "(drill_symbol_profile" );
+
+    if( !profile.GetName().IsEmpty() )
+        m_out->Print( "(name %s)", m_out->Quotew( profile.GetName() ).c_str() );
+
+    m_out->Print( "(group_by" );
+
+    for( DRILL_GROUP_KEY key : profile.GroupKeys() )
+        m_out->Print( " %s", DrillGroupKeyToken( key ) );
+
+    m_out->Print( ")" );
+
+    m_out->Print( "(default_marks %s)", DrillMarkPolicyToken( profile.GetMarkPolicy() ) );
+    m_out->Print( "(size %s)", formatInternalUnits( profile.GetSymbolSize() ).c_str() );
+    m_out->Print( "(width %s)", formatInternalUnits( profile.GetSymbolWidth() ).c_str() );
+    KICAD_FORMAT::FormatBool( m_out, "freeze_assignments", profile.GetFreezeAssignments() );
+
+
+    for( const auto& [key, assignment] : profile.Assignments() )
+    {
+        m_out->Print( "(assignment (key %s) (mark %s", m_out->Quotew( wxString::FromUTF8( key ) ).c_str(),
+                      DrillMarkModeToken( assignment.m_MarkMode ) );
+
+        if( assignment.m_MarkMode == DRILL_MARK_MODE::SHAPE )
+            m_out->Print( " %d", assignment.m_ShapeIndex );
+        else if( assignment.m_MarkMode == DRILL_MARK_MODE::LETTER )
+            m_out->Print( " %s", m_out->Quotew( assignment.m_Letter ).c_str() );
+
+        m_out->Print( ")" );
+
+        if( !assignment.m_Description.IsEmpty() )
+            m_out->Print( "(descr %s)", m_out->Quotew( assignment.m_Description ).c_str() );
+
+        m_out->Print( ")" );
+    }
 
     m_out->Print( ")" );
 }
@@ -842,6 +919,8 @@ void PCB_IO_KICAD_SEXPR::format( const BOARD* aBoard ) const
                                                               aBoard->Groups().end() );
     std::set<BOARD_ITEM*, BOARD_ITEM::ptr_cmp>  sorted_generators( aBoard->Generators().begin(),
                                                                    aBoard->Generators().end() );
+    std::set<BOARD_ITEM*, BOARD_ITEM::ptr_cmp>  sorted_constraints( aBoard->Constraints().begin(),
+                                                                    aBoard->Constraints().end() );
     formatHeader( aBoard );
 
     // Save the footprints.
@@ -873,6 +952,10 @@ void PCB_IO_KICAD_SEXPR::format( const BOARD* aBoard ) const
     // Save the generators
     for( BOARD_ITEM* gen : sorted_generators )
         Format( gen );
+
+    // Save the geometric constraints last, after every item they may reference.
+    for( BOARD_ITEM* constraint : sorted_constraints )
+        Format( constraint );
 
     // After writing all items, write the aggregated net chains section (if any)
     struct CHAIN_INFO
@@ -1090,6 +1173,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_DIMENSION_BASE* aDimension ) const
     if( !center )
         format( static_cast<const PCB_TEXT*>( aDimension ) );
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aDimension );
     m_out->Print( ")" );
 }
 
@@ -1188,6 +1272,9 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_SHAPE* aShape ) const
         stroke.Format( m_out, pcbIUScale );
     }
 
+    aShape->GetStartEnding().Format( m_out, pcbIUScale, "start_shape" );
+    aShape->GetEndEnding().Format( m_out, pcbIUScale, "end_shape" );
+
     // The filled flag represents if a solid fill is present on circles, rectangles and polygons
     if( ( aShape->GetShape() == SHAPE_T::POLY ) || ( aShape->GetShape() == SHAPE_T::RECTANGLE )
         || ( aShape->GetShape() == SHAPE_T::CIRCLE ) || ( aShape->GetShape() == SHAPE_T::ELLIPSE ) )
@@ -1236,6 +1323,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_SHAPE* aShape ) const
         m_out->Print( "(net %s)", m_out->Quotew( aShape->GetNetname() ).c_str() );
 
     KICAD_FORMAT::FormatUuid( m_out, aShape->m_Uuid );
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aShape );
     m_out->Print( ")" );
 }
 
@@ -1268,6 +1356,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_REFERENCE_IMAGE* aBitmap ) const
     KICAD_FORMAT::FormatStreamData( *m_out, *ostream.GetOutputStreamBuffer() );
 
     KICAD_FORMAT::FormatUuid( m_out, aBitmap->m_Uuid );
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aBitmap );
     m_out->Print( ")" );      // Closes image token.
 }
 
@@ -1280,6 +1369,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_POINT* aPoint ) const
     formatLayer( aPoint->GetLayer() );
 
     KICAD_FORMAT::FormatUuid( m_out, aPoint->m_Uuid );
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aPoint );
     m_out->Print( ")" );
 }
 
@@ -1296,7 +1386,57 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TARGET* aTarget ) const
 
     formatLayer( aTarget->GetLayer() );
     KICAD_FORMAT::FormatUuid( m_out, aTarget->m_Uuid );
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aTarget );
     m_out->Print( ")" );
+}
+
+
+void PCB_IO_KICAD_SEXPR::format( const PCB_GRID_ITEM* aGridItem ) const
+{
+    const bool polar = aGridItem->GetGridItemType() == PCB_GRID_TYPE::POLAR;
+
+    // Grid type (polar/xy) must be emitted before extent/spacing: those tokens change
+    // meaning based on the type (y component = angle for polar, length for cartesian).
+    m_out->Print( "(grid_item %s (at %s)", polar ? "polar" : "xy",
+                  formatInternalUnits( aGridItem->GetPosition() ).c_str() );
+
+    if( polar )
+    {
+        // Polar y components are angles; use FormatAngle, not formatInternalUnits.
+        m_out->Print( " (extent %s %s) (spacing %s %s)", formatInternalUnits( aGridItem->GetRadiusExtent() ).c_str(),
+                      EDA_UNIT_UTILS::FormatAngle( aGridItem->GetPhiExtent() ).c_str(),
+                      formatInternalUnits( aGridItem->GetRadiusSpacing() ).c_str(),
+                      EDA_UNIT_UTILS::FormatAngle( aGridItem->GetPhiSpacing() ).c_str() );
+    }
+    else
+    {
+        m_out->Print( " (extent %s) (spacing %s)", formatInternalUnits( aGridItem->GetExtent() ).c_str(),
+                      formatInternalUnits( aGridItem->GetSpacing() ).c_str() );
+    }
+
+    if( !aGridItem->GetOrientation().IsZero() )
+    {
+        m_out->Print( " (angle %s)", EDA_UNIT_UTILS::FormatAngle( aGridItem->GetOrientation() ).c_str() );
+    }
+
+    // Priority is always set
+    m_out->Print( " (priority %u)", aGridItem->GetAssignedPriority() );
+
+    if( aGridItem->GetTickInterval() > 0 )
+        m_out->Print( " (tick_interval %u)", aGridItem->GetTickInterval() );
+
+    const PCB_GRID_AFFECTS& aff = aGridItem->Affects();
+    m_out->Print( " (affects (cursor %s) (routing %s) (placement %s))",
+                  aff.cursor ? "yes" : "no",
+                  aff.routing ? "yes" : "no",
+                  aff.placement ? "yes" : "no" );
+
+    if( aGridItem->IsLocked() )
+        KICAD_FORMAT::FormatBool( m_out, "locked", true );
+
+    KICAD_FORMAT::FormatUuid( m_out, aGridItem->m_Uuid );
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aGridItem );
+    m_out->Print( ")\n" );
 }
 
 
@@ -1363,7 +1503,7 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
             continue;
 
         m_out->Print( "(property %s %s",
-                      m_out->Quotew( field->GetCanonicalName() ).c_str(),
+                      m_out->Quotew( field->GetUntranslatedName() ).c_str(),
                       m_out->Quotew( field->GetText() ).c_str() );
 
         format( field );
@@ -1471,6 +1611,9 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
         if( aFootprint->GetAttributes() & FP_EXCLUDE_FROM_BOM )
             m_out->Print( " exclude_from_bom" );
 
+        if( aFootprint->GetAttributes() & FP_EXCLUDE_FROM_SIM )
+            m_out->Print( " exclude_from_sim" );
+
         if( aFootprint->AllowMissingCourtyard() )
             m_out->Print( " allow_missing_courtyard" );
 
@@ -1524,17 +1667,17 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
     KICAD_FORMAT::FormatBool( m_out, "duplicate_pad_numbers_are_jumpers",
                               aFootprint->GetDuplicatePadNumbersAreJumpers() );
 
-    const std::vector<std::set<wxString>>& jumperGroups = aFootprint->JumperPadGroups();
+    const JUMPER_GROUP_SET& jumperGroups = aFootprint->JumperPadGroups();
 
-    if( !jumperGroups.empty() )
+    if( !jumperGroups.IsEmpty() )
     {
         m_out->Print( "(jumper_pad_groups" );
 
-        for( const std::set<wxString>& group : jumperGroups )
+        for( const JUMPER_GROUP& group : jumperGroups.GetAll() )
         {
             m_out->Print( "(" );
 
-            for( const wxString& padName : group )
+            for( const wxString& padName : group.GetNames() )
                 m_out->Print( "%s ", m_out->Quotew( padName ).c_str() );
 
             m_out->Print( ")" );
@@ -1558,6 +1701,8 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
                                                         aFootprint->Zones().end() );
     std::set<BOARD_ITEM*, PCB_GROUP::ptr_cmp> sorted_groups( aFootprint->Groups().begin(),
                                                              aFootprint->Groups().end() );
+    std::set<BOARD_ITEM*, PCB_GROUP::ptr_cmp> sorted_constraints( aFootprint->Constraints().begin(),
+                                                                  aFootprint->Constraints().end() );
 
     // Save drawing elements.
 
@@ -1579,9 +1724,14 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
     for( BOARD_ITEM* group : sorted_groups )
         Format( group );
 
+    // Save geometric constraints, after the items they reference.
+    for( BOARD_ITEM* constraint : sorted_constraints )
+        Format( constraint );
+
     // Save variants.
     const bool baseDnp = aFootprint->IsDNP();
     const bool baseExcludedFromBOM = aFootprint->IsExcludedFromBOM();
+    const bool baseExcludedFromSim = aFootprint->IsExcludedFromSim();
     const bool baseExcludedFromPosFiles = aFootprint->IsExcludedFromPosFiles();
 
     for( const auto& [variantName, variant] : aFootprint->GetVariants() )
@@ -1593,6 +1743,9 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
 
         if( variant.GetExcludedFromBOM() != baseExcludedFromBOM )
             KICAD_FORMAT::FormatBool( m_out, "exclude_from_bom", variant.GetExcludedFromBOM() );
+
+        if( variant.GetExcludedFromSim() != baseExcludedFromSim )
+            KICAD_FORMAT::FormatBool( m_out, "exclude_from_sim", variant.GetExcludedFromSim() );
 
         if( variant.GetExcludedFromPosFiles() != baseExcludedFromPosFiles )
         {
@@ -1703,6 +1856,7 @@ void PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* aFootprint ) const
         ++bs3D;
     }
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aFootprint );
     m_out->Print( ")" );
 }
 
@@ -1811,8 +1965,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
             case PAD_SHAPE::CUSTOM:          return "custom";
 
             default:
-                THROW_IO_ERROR( wxString::Format( _( "unknown pad type: %d"),
-                                aPad->GetShape( aLayer ) ) );
+                THROW_IO_ERRORF( _( "unknown pad type: %d" ), aPad->GetShape( aLayer ) );
             }
         };
 
@@ -1826,8 +1979,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
     case PAD_ATTRIB::NPTH:   type = "np_thru_hole";   break;
 
     default:
-        THROW_IO_ERROR( wxString::Format( wxT( "unknown pad attribute: %d" ),
-                                          aPad->GetAttribute() ) );
+        THROW_IO_ERRORF( _( "unknown pad attribute: %d" ), aPad->GetAttribute() );
     }
 
     const char* property = nullptr;
@@ -1845,8 +1997,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
     case PAD_PROP::PRESSFIT:         property = "pad_prop_pressfit";      break;
 
     default:
-        THROW_IO_ERROR( wxString::Format( wxT( "unknown pad property: %d" ),
-                                          aPad->GetProperty() ) );
+        THROW_IO_ERRORF( _( "unknown pad property: %d" ), aPad->GetProperty() );
     }
 
     const char* simElectricalType = nullptr;
@@ -1854,36 +2005,32 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
     switch( aPad->GetSimElectricalType() )
     {
     case PAD_SIM_ELECTRICAL_TYPE::SOURCE: simElectricalType = "source"; break;
-    case PAD_SIM_ELECTRICAL_TYPE::SINK: simElectricalType = "sink"; break;
-    default: simElectricalType = nullptr; break;
+    case PAD_SIM_ELECTRICAL_TYPE::SINK:   simElectricalType = "sink";   break;
+    default:                              simElectricalType = nullptr;  break;
     }
 
     m_out->Print( "(pad %s %s %s",
                   m_out->Quotew( aPad->GetNumber() ).c_str(),
                   type,
-                  shapeName( PADSTACK::ALL_LAYERS ) );
+                  shapeName( F_Cu ) );
 
     m_out->Print( "(at %s %s)",
                   formatInternalUnits( aPad->GetFPRelativePosition() ).c_str(),
-                  aPad->GetOrientation().IsZero()
-                        ? ""
-                        : EDA_UNIT_UTILS::FormatAngle( aPad->GetOrientation() ).c_str() );
+                  aPad->GetOrientation().IsZero() ? ""
+                                                  : EDA_UNIT_UTILS::FormatAngle( aPad->GetOrientation() ).c_str() );
 
     // Write the stored library size directly: it is the footprint-frame value the parser
     // reads back, and avoids a bake/unbake that is not the inverse of GetSize() for a
     // pad rotated within the footprint.
-    m_out->Print( "(size %s)", formatInternalUnits( aPad->Padstack().Size( PADSTACK::ALL_LAYERS ) ).c_str() );
+    m_out->Print( "(size %s)", formatInternalUnits( aPad->Padstack().Size( F_Cu ) ).c_str() );
 
-    if( aPad->GetDelta( PADSTACK::ALL_LAYERS ).x != 0
-        || aPad->GetDelta( PADSTACK::ALL_LAYERS ).y != 0 )
-    {
-        m_out->Print( "(rect_delta %s)", formatInternalUnits( aPad->GetDelta( PADSTACK::ALL_LAYERS ) ).c_str() );
-    }
+    if( aPad->GetDelta( F_Cu ).x != 0 || aPad->GetDelta( F_Cu ).y != 0 )
+        m_out->Print( "(rect_delta %s)", formatInternalUnits( aPad->GetDelta( F_Cu ) ).c_str() );
 
     const VECTOR2I  drill = aPad->GetDrillShape() == PAD_DRILL_SHAPE::CIRCLE
-                                    ? unbakeSizeUniform( aPad->GetDrillSize(), parentFP )
-                                    : unbakeSize( aPad->GetDrillSize(), parentFP );
-    VECTOR2I        shapeoffset = aPad->GetOffset( PADSTACK::ALL_LAYERS );
+                                                                ? unbakeSizeUniform( aPad->GetDrillSize(), parentFP )
+                                                                : unbakeSize( aPad->GetDrillSize(), parentFP );
+    VECTOR2I        shapeoffset = aPad->GetOffset( F_Cu );
     bool            forceShapeOffsetOutput = false;
 
     aPad->Padstack().ForEachUniqueLayer(
@@ -1911,11 +2058,11 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
         // changes, but note that the other padstack layers (if present) will have an offset stored
         // separately.
         if( shapeoffset.x != 0 || shapeoffset.y != 0 || forceShapeOffsetOutput )
-            m_out->Print( "(offset %s)",
-                          formatInternalUnits( aPad->Padstack().Offset( PADSTACK::ALL_LAYERS ) ).c_str() );
+            m_out->Print( "(offset %s)", formatInternalUnits( aPad->Padstack().Offset( F_Cu ) ).c_str() );
 
         m_out->Print( ")" );
     }
+
 
     if( aPad->Padstack().SecondaryDrill().size.x > 0 )
     {
@@ -2029,7 +2176,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
 
     // For normal padstacks, this is the one and only set of properties.  For complex ones, this
     // will represent the front layer properties, and other layers will be formatted below
-    formatCornerProperties( PADSTACK::ALL_LAYERS );
+    formatCornerProperties( F_Cu );
 
     // Unconnected pad is default net so don't save it.
     if( !( m_ctl & CTL_OMIT_PAD_NETS ) && aPad->GetNetCode() > 0 )
@@ -2094,16 +2241,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
                       formatInternalUnits( aPad->GetLocalThermalSpokeWidthOverride().value() ).c_str() );
     }
 
-    EDA_ANGLE defaultThermalSpokeAngle = ANGLE_90;
-
-    if( aPad->GetShape( PADSTACK::ALL_LAYERS ) == PAD_SHAPE::CIRCLE
-        || ( aPad->GetShape( PADSTACK::ALL_LAYERS ) == PAD_SHAPE::CUSTOM
-             && aPad->GetAnchorPadShape( PADSTACK::ALL_LAYERS ) == PAD_SHAPE::CIRCLE ) )
-    {
-        defaultThermalSpokeAngle = ANGLE_45;
-    }
-
-    if( aPad->GetThermalSpokeAngle() != defaultThermalSpokeAngle )
+    if( aPad->GetThermalSpokeAngle() != aPad->Padstack().DefaultThermalSpokeAngleForShape() )
     {
         m_out->Print( "(thermal_bridge_angle %s)",
                       EDA_UNIT_UTILS::FormatAngle( aPad->GetThermalSpokeAngle() ).c_str() );
@@ -2228,7 +2366,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
                 m_out->Print( ")" );   // end of (primitives
             };
 
-    if( aPad->GetShape( PADSTACK::ALL_LAYERS ) == PAD_SHAPE::CUSTOM )
+    if( aPad->GetShape( F_Cu ) == PAD_SHAPE::CUSTOM )
     {
         m_out->Print( "(options" );
 
@@ -2238,12 +2376,12 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
             m_out->Print( "(clearance outline)" );
 
         // Output the anchor pad shape (circle/rect)
-        m_out->Print( "(anchor %s)", anchorShape( PADSTACK::ALL_LAYERS ) );
+        m_out->Print( "(anchor %s)", anchorShape( F_Cu ) );
 
         m_out->Print( ")");  // end of (options ...
 
         // Output graphic primitive of the pad shape
-        formatPrimitives( PADSTACK::ALL_LAYERS );
+        formatPrimitives( F_Cu );
     }
 
     if( !isDefaultTeardropParameters( aPad->GetTeardropParams() ) )
@@ -2272,7 +2410,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
 
                 m_out->Print( "(size %s)", formatInternalUnits( padstack.Size( aLayer ) ).c_str() );
 
-                const VECTOR2I delta = aPad->GetDelta( aLayer );
+                const VECTOR2I& delta = aPad->GetDelta( aLayer );
 
                 if( delta.x != 0 || delta.y != 0 )
                     m_out->Print( "(rect_delta %s)", formatInternalUnits( delta ).c_str() );
@@ -2373,6 +2511,7 @@ void PCB_IO_KICAD_SEXPR::format( const PAD* aPad ) const
         m_out->Print( ")" );
     }
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aPad );
     m_out->Print( ")" );
 }
 
@@ -2439,6 +2578,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_BARCODE* aBarcode ) const
 
     KICAD_FORMAT::FormatUuid( m_out, aBarcode->m_Uuid );
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aBarcode );
     m_out->Print( ")" );
 }
 
@@ -2449,7 +2589,10 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TEXT* aText ) const
     std::string      prefix;
     std::string      type;
     VECTOR2I         pos = aText->GetTextPos();
-    const PCB_FIELD* field = dynamic_cast<const PCB_FIELD*>( aText );
+    // Match the Type() dispatch in Format(); a field body is headerless, so it is only valid
+    // inside the (property ...) its caller opened
+    const PCB_FIELD* field = aText->Type() == PCB_FIELD_T ? static_cast<const PCB_FIELD*>( aText )
+                                                          : nullptr;
 
     // Always format dimension text as gr_text
     if( dynamic_cast<const PCB_DIMENSION_BASE*>( aText ) )
@@ -2522,6 +2665,8 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TEXT* aText ) const
 
     if( aText->GetFont() && aText->GetFont()->IsOutline() )
         formatRenderCache( aText );
+
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aText );
 
     if( !field )
         m_out->Print( ")" );
@@ -2602,22 +2747,16 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TEXTBOX* aTextBox ) const
     if( aTextBox->GetFont() && aTextBox->GetFont()->IsOutline() )
         formatRenderCache( aTextBox );
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aTextBox );
     m_out->Print( ")" );
 }
 
 
-void PCB_IO_KICAD_SEXPR::format( const PCB_TABLE* aTable ) const
+void PCB_IO_KICAD_SEXPR::formatTableData( const PCB_TABLE* aTable ) const
 {
-    wxCHECK_RET( aTable != nullptr && m_out != nullptr, "" );
-
-    m_out->Print( "(table (column_count %d)", aTable->GetColCount() );
-
-    KICAD_FORMAT::FormatUuid( m_out, aTable->m_Uuid );
-
-    if( aTable->IsLocked() )
-        KICAD_FORMAT::FormatBool( m_out, "locked", true );
-
-    formatLayer( aTable->GetLayer() );
+    // Carries geometry and cells only. Identity belongs to whatever encloses this, or a
+    // drill chart would write its uuid and layer twice and the second copy would win on load
+    m_out->Print( "(column_count %d)", aTable->GetColCount() );
 
     m_out->Print( "(border" );
     KICAD_FORMAT::FormatBool( m_out, "external", aTable->StrokeExternal() );
@@ -2657,6 +2796,180 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TABLE* aTable ) const
         format( static_cast<PCB_TEXTBOX*>( cell ) );
 
     m_out->Print( ")" );        // Close `cells` token.
+
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aTable );
+}
+
+
+void PCB_IO_KICAD_SEXPR::format( const PCB_DRILL_MAP* aMap ) const
+{
+    wxCHECK_RET( aMap != nullptr && m_out != nullptr, "" );
+
+    m_out->Print( "(drill_map " );
+
+    KICAD_FORMAT::FormatUuid( m_out, aMap->m_Uuid );
+
+    if( aMap->IsLocked() )
+        KICAD_FORMAT::FormatBool( m_out, "locked", true );
+
+    formatLayer( aMap->GetLayer() );
+
+    // An offset applied to every mark, not a place of its own. Zero puts the marks on their
+    // holes
+    m_out->Print( "(offset %s)", formatInternalUnits( aMap->GetOffset() ).c_str() );
+    m_out->Print( "(size %s)", formatInternalUnits( aMap->GetSymbolSize() ).c_str() );
+
+    if( aMap->GetAllSpans() )
+    {
+        m_out->Print( "(span all)" );
+    }
+    else
+    {
+        m_out->Print( "(span " );
+        formatDrillSpan( m_out, aMap->GetSpan() );
+        m_out->Print( ")" );
+    }
+
+    KICAD_FORMAT::FormatBool( m_out, "outline_slots", aMap->GetOutlineSlots() );
+    KICAD_FORMAT::FormatBool( m_out, "guide_cross", aMap->GetGuideCross() );
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aMap );
+
+    m_out->Print( ")" );        // Close `drill_map` token.
+}
+
+
+void PCB_IO_KICAD_SEXPR::format( const PCB_GENERATED_TABLE* aTable ) const
+{
+    wxCHECK_RET( aTable != nullptr && m_out != nullptr, "" );
+
+    switch( aTable->Type() )
+    {
+    case PCB_DRILL_CHART_T: m_out->Print( "(drill_chart " ); break;
+
+    default:
+        wxFAIL_MSG( wxT( "Unhandled generated table type " ) + aTable->GetClass() );
+        return;
+    }
+
+    KICAD_FORMAT::FormatUuid( m_out, aTable->m_Uuid );
+
+    if( aTable->IsLocked() )
+        KICAD_FORMAT::FormatBool( m_out, "locked", true );
+
+    formatLayer( aTable->GetLayer() );
+
+    // Anything the reader would arrive at on its own is left out. A table nobody has
+    // reconfigured is a handful of bytes rather than a page of them
+    const GENERATED_TABLE_SCHEMA& schema = aTable->Schema();
+
+    if( aTable->GetUnits() != schema.DefaultUnits() )
+        m_out->Print( "(units %s)", GeneratedTableUnitsToken( aTable->GetUnits() ) );
+
+    if( aTable->GetPrecision() != schema.DefaultPrecision() )
+        m_out->Print( "(precision %d)", aTable->GetPrecision() );
+
+    for( const GENERATED_TABLE_COLUMN& col : aTable->Columns() )
+    {
+        const GENERATED_TABLE_COLUMN_DEF* def = schema.Find( col.m_Id );
+
+        m_out->Print( "(column (id %s)", schema.Token( col.m_Id ) );
+
+        // Compared against the def's own literal, never DefaultColumn()'s translated text, so
+        // a heading written under one UI language reads back unchanged under another
+        if( !def || col.m_Heading != wxString( def->m_Heading ) )
+            m_out->Print( "(name %s)", m_out->Quotew( col.m_Heading ).c_str() );
+
+        if( !def || col.m_Align != def->m_Align )
+            m_out->Print( "(justify %s)", GeneratedTableAlignToken( col.m_Align ) );
+
+        if( col.m_Width > 0 )
+            m_out->Print( "(width %s)", formatInternalUnits( col.m_Width ).c_str() );
+
+        m_out->Print( ")" );
+    }
+
+    if( !aTable->RowKeys().empty() )
+    {
+        // What each row reports, so a rebuild after the board has changed can hand a row's
+        // formatting to the row that still reports the same thing
+        m_out->Print( "(row_keys" );
+
+        for( const auto& [row, key] : aTable->RowKeys() )
+            m_out->Print( "(key %d %s)", row, m_out->Quotew( wxString::FromUTF8( key ) ).c_str() );
+
+        m_out->Print( ")" );
+    }
+
+    formatGeneratedTableExtras( aTable );
+
+    // The geometry and cells a generated table shares with any other table, written the same way
+    formatTableData( aTable );
+
+    m_out->Print( ")" );        // Close the table's kind token
+}
+
+
+void PCB_IO_KICAD_SEXPR::formatGeneratedTableExtras( const PCB_GENERATED_TABLE* aTable ) const
+{
+    switch( aTable->Type() )
+    {
+    case PCB_DRILL_CHART_T:
+    {
+        const PCB_DRILL_CHART*     chart = static_cast<const PCB_DRILL_CHART*>( aTable );
+        const DRILL_CHART_TEMPLATE defaults = DRILL_CHART_TEMPLATE::MakeDefault();
+        const DRILL_CHART_FILTER&  filter = chart->Filter();
+
+        if( !( filter == DRILL_CHART_FILTER() ) )
+        {
+            m_out->Print( "(filter" );
+            KICAD_FORMAT::FormatBool( m_out, "plated", filter.m_Plated );
+            KICAD_FORMAT::FormatBool( m_out, "npth", filter.m_NonPlated );
+            KICAD_FORMAT::FormatBool( m_out, "vias", filter.m_Vias );
+            KICAD_FORMAT::FormatBool( m_out, "slots", filter.m_Slots );
+            KICAD_FORMAT::FormatBool( m_out, "backdrill", filter.m_Backdrills );
+            KICAD_FORMAT::FormatBool( m_out, "castellated", filter.m_Castellated );
+            m_out->Print( ")" );
+        }
+
+        if( chart->GetShowTotals() != defaults.GetShowTotals() )
+            KICAD_FORMAT::FormatBool( m_out, "totals", chart->GetShowTotals() );
+
+        if( chart->GetSymbolColumn() >= 0 && !chart->RowShapes().empty() )
+        {
+            // Generated payload, like the cell text. A shape mark has no text of its own, so
+            // without this the symbol column comes back blank
+            m_out->Print( "(row_shapes (column %d)", chart->GetSymbolColumn() );
+
+            for( const auto& [row, shapeIndex] : chart->RowShapes() )
+                m_out->Print( "(shape %d %d)", row, shapeIndex );
+
+            m_out->Print( ")" );
+        }
+
+        break;
+    }
+
+    default:
+        break;
+    }
+}
+
+
+void PCB_IO_KICAD_SEXPR::format( const PCB_TABLE* aTable ) const
+{
+    wxCHECK_RET( aTable != nullptr && m_out != nullptr, "" );
+
+    m_out->Print( "(table " );
+
+    KICAD_FORMAT::FormatUuid( m_out, aTable->m_Uuid );
+
+    if( aTable->IsLocked() )
+        KICAD_FORMAT::FormatBool( m_out, "locked", true );
+
+    formatLayer( aTable->GetLayer() );
+
+    formatTableData( aTable );
+
     m_out->Print( ")" );        // Close `table` token.
 }
 
@@ -2707,15 +3020,73 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_GROUP* aGroup ) const
         m_out->Print( " %s", m_out->Quotew( memberId ).c_str() );
 
     m_out->Print( ")" );        // Close `members` token.
+
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aGroup );
     m_out->Print( ")" );        // Close `group` token.
+}
+
+
+void PCB_IO_KICAD_SEXPR::format( const PCB_CONSTRAINT* aConstraint ) const
+{
+    const std::vector<CONSTRAINT_MEMBER>& members = aConstraint->GetMembers();
+
+    if( members.empty() )
+        return;
+
+    // Members are KIID references (not pointers), so unlike format(PCB_GROUP*) there is no
+    // use-after-free risk: every member is written verbatim, including one whose item was deleted,
+    // so the constraint round-trips in its error state rather than silently losing the reference.
+    m_out->Print( "(constraint (type %s)", ConstraintTypeToken( aConstraint->GetConstraintType() ) );
+
+    KICAD_FORMAT::FormatUuid( m_out, aConstraint->m_Uuid );
+
+    m_out->Print( "(members" );
+
+    for( const CONSTRAINT_MEMBER& member : members )
+    {
+        // Only VERTEX carries an ordinal others stay two-token
+        if( member.m_anchor == CONSTRAINT_ANCHOR::VERTEX )
+        {
+            m_out->Print( "(member %s %s %d)", m_out->Quotew( member.m_item.AsString() ).c_str(),
+                          ConstraintAnchorToken( member.m_anchor ), member.m_index );
+        }
+        else
+        {
+            m_out->Print( "(member %s %s)", m_out->Quotew( member.m_item.AsString() ).c_str(),
+                          ConstraintAnchorToken( member.m_anchor ) );
+        }
+    }
+
+    m_out->Print( ")" );        // Close `members` token.
+
+    if( aConstraint->HasValue() )
+    {
+        // Length/radius values are stored in IU but written in mm like every other dimension;
+        // angle values are written verbatim in degrees.
+        double value = *aConstraint->GetValue();
+
+        if( ConstraintValueIsLength( aConstraint->GetConstraintType() ) )
+            value /= pcbIUScale.IU_PER_MM;
+
+        m_out->Print( "(value %s)", FormatDouble2Str( value ).c_str() );
+    }
+
+    if( !aConstraint->IsDriving() )
+        KICAD_FORMAT::FormatBool( m_out, "driving", false );
+
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aConstraint );
+    m_out->Print( ")" );        // Close `constraint` token.
 }
 
 
 void PCB_IO_KICAD_SEXPR::format( const PCB_GENERATOR* aGenerator ) const
 {
     // Some conditions appear to still be creating ghost tuning patterns.  Don't save them.
-    if( aGenerator->GetGeneratorType() == wxT( "tuning_pattern" )
-            && aGenerator->GetItems().empty() )
+    // A microvia stack with no members is the same kind of ghost: it reloads with no size, so
+    // it can be neither seen nor picked, and with no net to rebuild its vias on.
+    if( aGenerator->GetItems().empty()
+        && ( aGenerator->GetGeneratorType() == wxT( "tuning_pattern" )
+             || aGenerator->GetGeneratorType() == wxT( "via_stack" ) ) )
     {
         return;
     }
@@ -2772,6 +3143,19 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_GENERATOR* aGenerator ) const
             formatPolyPts( val );
             m_out->Print( ")" );
         }
+        else if( value.CheckType<std::vector<VECTOR2I>>() )
+        {
+            // Unitless integer pairs
+            std::vector<VECTOR2I> val;
+            value.GetAs( &val );
+
+            m_out->Print( "(%s (cells", key.c_str() );
+
+            for( const VECTOR2I& cell : val )
+                m_out->Print( "(ij %d %d)", cell.x, cell.y );
+
+            m_out->Print( "))" );
+        }
         else
         {
             wxString val;
@@ -2792,6 +3176,25 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_GENERATOR* aGenerator ) const
         }
     }
 
+    std::vector<std::pair<wxString, const BOARD_ITEM*>> templateItems = aGenerator->GetTemplateItems();
+
+    if( !templateItems.empty() )
+    {
+        m_out->Print( "(templates" );
+
+        for( const auto& [name, item] : templateItems )
+        {
+            if( !item )
+                continue;
+
+            m_out->Print( "(template (name %s)", m_out->Quotew( name ).c_str() );
+            Format( item );
+            m_out->Print( ")" ); // Close `template` token.
+        }
+
+        m_out->Print( ")" ); // Close `templates` token.
+    }
+
     wxArrayString memberIds;
 
     for( EDA_ITEM* member : aGenerator->GetItems() )
@@ -2805,6 +3208,8 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_GENERATOR* aGenerator ) const
         m_out->Print( " %s", m_out->Quotew( memberId ).c_str() );
 
     m_out->Print( ")" );        // Close `members` token.
+
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aGenerator );
     m_out->Print( ")" );        // Close `generated` token.
 }
 
@@ -2842,7 +3247,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TRACK* aTrack ) const
             break;
 
         default:
-            THROW_IO_ERROR( wxString::Format( _( "unknown via type %d"  ), via->GetViaType() ) );
+            THROW_IO_ERRORF( _( "unknown via type %d"  ), via->GetViaType() );
         }
 
         m_out->Print( "(at %s) (size %s)",
@@ -3062,6 +3467,7 @@ void PCB_IO_KICAD_SEXPR::format( const PCB_TRACK* aTrack ) const
         m_out->Print( "(net %s)", m_out->Quotew( aTrack->GetNetname() ).c_str() );
 
     KICAD_FORMAT::FormatUuid( m_out, aTrack->m_Uuid );
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aTrack );
     m_out->Print( ")" );
 }
 
@@ -3205,21 +3611,20 @@ void PCB_IO_KICAD_SEXPR::format( const ZONE* aZone ) const
                       formatInternalUnits( aZone->GetThermalReliefSpokeWidth() ).c_str() );
     }
 
-    if( aZone->GetCornerSmoothingType() != ZONE_SETTINGS::SMOOTHING_NONE )
+    if( aZone->GetCornerSmoothingType() != ZONE_SETTINGS::CORNER_SMOOTHING::NO_SMOOTHING )
     {
         switch( aZone->GetCornerSmoothingType() )
         {
-        case ZONE_SETTINGS::SMOOTHING_CHAMFER:
+        case ZONE_SETTINGS::CORNER_SMOOTHING::CHAMFER:
             m_out->Print( "(smoothing chamfer)" );
             break;
 
-        case ZONE_SETTINGS::SMOOTHING_FILLET:
+        case ZONE_SETTINGS::CORNER_SMOOTHING::FILLET:
             m_out->Print( "(smoothing fillet)" );
             break;
 
         default:
-            THROW_IO_ERROR( wxString::Format( _( "unknown zone corner smoothing type %d"  ),
-                                              aZone->GetCornerSmoothingType() ) );
+            THROW_IO_ERRORF( _( "unknown zone corner smoothing type %d"  ), aZone->GetCornerSmoothingType() );
         }
 
         if( aZone->GetCornerRadius() != 0 )
@@ -3273,7 +3678,7 @@ void PCB_IO_KICAD_SEXPR::format( const ZONE* aZone ) const
                       formatInternalUnits( thieving.gap ).c_str(),
                       formatInternalUnits( thieving.line_width ).c_str(),
                       thieving.stagger ? "yes" : "no",
-                      FormatDouble2Str( thieving.orientation.AsDegrees() ).c_str() );
+                      FormatDouble2Str( thieving.orientation.GetAngle().AsDegrees() ).c_str() );
     }
 
     m_out->Print( ")" );
@@ -3318,6 +3723,7 @@ void PCB_IO_KICAD_SEXPR::format( const ZONE* aZone ) const
         }
     }
 
+    KICAD_FORMAT::FormatCustomProperties( m_out, *aZone );
     m_out->Print( ")" );
 }
 
@@ -3357,9 +3763,8 @@ PCB_IO_KICAD_SEXPR::~PCB_IO_KICAD_SEXPR()
 }
 
 
-BOARD* PCB_IO_KICAD_SEXPR::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                      const std::map<std::string, UTF8>* aProperties,
-                                      PROJECT* aProject )
+void PCB_IO_KICAD_SEXPR::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                    const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     FILE_LINE_READER reader( aFileName );
 
@@ -3373,7 +3778,7 @@ BOARD* PCB_IO_KICAD_SEXPR::LoadBoard( const wxString& aFileName, BOARD* aAppendT
         m_progressReporter->Report( wxString::Format( _( "Loading %s..." ), aFileName ) );
 
         if( !m_progressReporter->KeepRefreshing() )
-            THROW_IO_ERROR( _( "Open canceled by user." ) );
+            THROW_IO_CANCELLED();
 
         while( reader.ReadLine() )
             lineCount++;
@@ -3381,50 +3786,44 @@ BOARD* PCB_IO_KICAD_SEXPR::LoadBoard( const wxString& aFileName, BOARD* aAppendT
         reader.Rewind();
     }
 
-    BOARD* board = DoLoad( reader, aAppendToMe, aProperties, m_progressReporter, lineCount );
-
-    // Give the filename to the board if it's new
-    if( !aAppendToMe )
-        board->SetFileName( aFileName );
-
-    return board;
+    DoLoad( reader, aBoard, aIsNewLoad, aProperties, m_progressReporter, lineCount );
 }
 
 
-BOARD* PCB_IO_KICAD_SEXPR::DoLoad( LINE_READER& aReader, BOARD* aAppendToMe,
-                                   const std::map<std::string, UTF8>* aProperties,
-                                   PROGRESS_REPORTER* aProgressReporter, unsigned aLineCount)
+void PCB_IO_KICAD_SEXPR::DoLoad( LINE_READER& aReader, BOARD& aBoard, bool aIsNewLoad,
+                                 const std::map<std::string, UTF8>* aProperties, PROGRESS_REPORTER* aProgressReporter,
+                                 unsigned aLineCount )
 {
     init( aProperties );
 
     bool preserveDestinationStackup =
             aProperties && aProperties->contains( PCB_IO_LOAD_PROPERTIES::APPEND_PRESERVE_DESTINATION_STACKUP );
 
-    PCB_IO_KICAD_SEXPR_PARSER parser( &aReader, aAppendToMe, m_queryUserCallback, aProgressReporter, aLineCount,
-                                      preserveDestinationStackup );
+    PCB_IO_KICAD_SEXPR_PARSER parser( &aReader, &aBoard, m_queryUserCallback, aProgressReporter, aLineCount,
+                                      preserveDestinationStackup, !aIsNewLoad );
 
     parser.SetLayerMappingHandler( m_layer_mapping_handler );
 
     std::set<BOARD_ITEM*>   itemsBefore;
     std::set<NETINFO_ITEM*> netsBefore;
 
-    if( aAppendToMe )
+    if( !aIsNewLoad )
     {
-        for( BOARD_ITEM* item : aAppendToMe->GetItemSet() )
+        for( BOARD_ITEM* item : aBoard.GetItemSet() )
             itemsBefore.insert( item );
 
-        for( NETINFO_ITEM* net : aAppendToMe->GetNetInfo() )
+        for( NETINFO_ITEM* net : aBoard.GetNetInfo() )
             netsBefore.insert( net );
     }
 
     auto revertPartialAppend = [&]()
     {
-        if( !aAppendToMe )
+        if( aIsNewLoad )
             return;
 
         std::vector<BOARD_ITEM*> addedItems;
 
-        for( BOARD_ITEM* item : aAppendToMe->GetItemSet() )
+        for( BOARD_ITEM* item : aBoard.GetItemSet() )
         {
             if( !itemsBefore.contains( item ) )
                 addedItems.push_back( item );
@@ -3433,14 +3832,14 @@ BOARD* PCB_IO_KICAD_SEXPR::DoLoad( LINE_READER& aReader, BOARD* aAppendToMe,
         // Remove everything before deleting anything, group member back pointers
         // must be unlinked while their groups are still alive
         for( BOARD_ITEM* item : addedItems )
-            aAppendToMe->Remove( item );
+            aBoard.Remove( item );
 
         for( BOARD_ITEM* item : addedItems )
             delete item;
 
         std::vector<NETINFO_ITEM*> addedNets;
 
-        for( NETINFO_ITEM* net : aAppendToMe->GetNetInfo() )
+        for( NETINFO_ITEM* net : aBoard.GetNetInfo() )
         {
             if( !netsBefore.contains( net ) )
                 addedNets.push_back( net );
@@ -3448,12 +3847,12 @@ BOARD* PCB_IO_KICAD_SEXPR::DoLoad( LINE_READER& aReader, BOARD* aAppendToMe,
 
         for( NETINFO_ITEM* net : addedNets )
         {
-            aAppendToMe->Remove( net );
+            aBoard.Remove( net );
             delete net;
         }
     };
 
-    BOARD* board;
+    BOARD* board = nullptr;
 
     try
     {
@@ -3481,7 +3880,7 @@ BOARD* PCB_IO_KICAD_SEXPR::DoLoad( LINE_READER& aReader, BOARD* aAppendToMe,
         throw;
     }
 
-    if( !board )
+    if( board != &aBoard )
     {
         // The parser loaded something that was valid, but wasn't a board.
         THROW_PARSE_ERROR( _( "This file does not contain a PCB." ), parser.CurSource(),
@@ -3491,8 +3890,6 @@ BOARD* PCB_IO_KICAD_SEXPR::DoLoad( LINE_READER& aReader, BOARD* aAppendToMe,
     // Report any non-fatal parse warnings to the load info reporter
     for( const wxString& warning : parser.GetParseWarnings() )
         LOAD_INFO_REPORTER::GetInstance().Report( warning, RPT_SEVERITY_WARNING );
-
-    return board;
 }
 
 
@@ -3531,6 +3928,9 @@ void PCB_IO_KICAD_SEXPR::FootprintEnumerate( wxArrayString& aFootprintNames,
     try
     {
         validateCache( aLibPath );
+
+        if( !dir.IsOpened() )
+            THROW_IO_ERRORF( _( "Footprint library '%s' not found." ), aLibPath );
     }
     catch( const IO_ERROR& ioe )
     {
@@ -3598,9 +3998,9 @@ bool PCB_IO_KICAD_SEXPR::FootprintExists( const wxString& aLibraryPath,
 }
 
 
-FOOTPRINT* PCB_IO_KICAD_SEXPR::ImportFootprint( const wxString& aFootprintPath,
-                                                wxString& aFootprintNameOut,
-                                                const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_KICAD_SEXPR::ImportFootprint( const wxString&                    aFootprintPath,
+                                                                wxString&                          aFootprintNameOut,
+                                                                const std::map<std::string, UTF8>* aProperties )
 {
     wxString fcontents;
     wxFFile  f( aFootprintPath );
@@ -3615,14 +4015,13 @@ FOOTPRINT* PCB_IO_KICAD_SEXPR::ImportFootprint( const wxString& aFootprintPath,
 
     aFootprintNameOut = wxFileName( aFootprintPath ).GetName();
 
-    return dynamic_cast<FOOTPRINT*>( Parse( fcontents ) );
+    return std::unique_ptr<FOOTPRINT>( dynamic_cast<FOOTPRINT*>( Parse( fcontents ) ) );
 }
 
 
-FOOTPRINT* PCB_IO_KICAD_SEXPR::FootprintLoad( const wxString& aLibraryPath,
-                                              const wxString& aFootprintName,
-                                              bool  aKeepUUID,
-                                              const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_KICAD_SEXPR::FootprintLoad( const wxString& aLibraryPath,
+                                                              const wxString& aFootprintName, bool aKeepUUID,
+                                                              const std::map<std::string, UTF8>* aProperties )
 {
     // Suppress font substitution warnings (RAII - automatically restored on scope exit)
     FONTCONFIG_REPORTER_SCOPE fontconfigScope( nullptr );
@@ -3631,12 +4030,12 @@ FOOTPRINT* PCB_IO_KICAD_SEXPR::FootprintLoad( const wxString& aLibraryPath,
 
     if( footprint )
     {
-        FOOTPRINT* copy;
+        std::unique_ptr<FOOTPRINT> copy;
 
         if( aKeepUUID )
-            copy = static_cast<FOOTPRINT*>( footprint->Clone() );
+            copy.reset( static_cast<FOOTPRINT*>( footprint->Clone() ) );
         else
-            copy = static_cast<FOOTPRINT*>( footprint->Duplicate( IGNORE_PARENT_GROUP ) );
+            copy.reset( static_cast<FOOTPRINT*>( footprint->Duplicate( IGNORE_PARENT_GROUP ) ) );
 
         copy->SetParent( nullptr );
         return copy;
@@ -3690,8 +4089,7 @@ void PCB_IO_KICAD_SEXPR::FootprintSave( const wxString& aLibraryPath, const FOOT
         }
         else
         {
-            wxString msg = wxString::Format( _( "Library '%s' is read only." ), libPath );
-            THROW_IO_ERROR( msg );
+            THROW_IO_ERRORF( _( "Library '%s' is read only." ), libPath );
         }
     }
 
@@ -3710,15 +4108,10 @@ void PCB_IO_KICAD_SEXPR::FootprintSave( const wxString& aLibraryPath, const FOOT
     WX_FILENAME::ResolvePossibleSymlinks( fn );
 
     if( !fn.IsOk() )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Footprint file name '%s' is not valid." ), fn.GetFullPath() ) );
-    }
+        THROW_IO_ERRORF( _( "Footprint file name '%s' is not valid." ), fn.GetFullPath() );
 
     if( fn.FileExists() && !fn.IsFileWritable() )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Insufficient permissions to delete '%s'." ),
-                                          fn.GetFullPath() ) );
-    }
+        THROW_IO_ERRORF( _( "Insufficient permissions to delete '%s'." ), fn.GetFullPath() );
 
     wxString fullPath = fn.GetFullPath();
     wxString fullName = fn.GetFullName();
@@ -3773,10 +4166,7 @@ void PCB_IO_KICAD_SEXPR::FootprintDelete( const wxString& aLibraryPath,
     validateCache( aLibraryPath );
 
     if( !m_cache->IsWritable() )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Library '%s' is read only." ),
-                                          aLibraryPath.GetData() ) );
-    }
+        THROW_IO_ERRORF( _( "Library '%s' is read only." ), aLibraryPath.GetData() );
 
     m_cache->Remove( aFootprintName );
 }
@@ -3802,10 +4192,7 @@ void PCB_IO_KICAD_SEXPR::CreateLibrary( const wxString& aLibraryPath,
                                         const std::map<std::string, UTF8>* aProperties )
 {
     if( wxDir::Exists( aLibraryPath ) )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Cannot overwrite library path '%s'." ),
-                                          aLibraryPath.GetData() ) );
-    }
+        THROW_IO_ERRORF( _( "Cannot overwrite library path '%s'." ), aLibraryPath.GetData() );
 
     init( aProperties );
 
@@ -3826,18 +4213,12 @@ bool PCB_IO_KICAD_SEXPR::DeleteLibrary( const wxString& aLibraryPath,
         return false;
 
     if( !fn.IsDirWritable() )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Insufficient permissions to delete folder '%s'." ),
-                                          aLibraryPath.GetData() ) );
-    }
+        THROW_IO_ERRORF( _( "Insufficient permissions to delete folder '%s'." ), aLibraryPath.GetData() );
 
     wxDir dir( aLibraryPath );
 
     if( dir.HasSubDirs() )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Library folder '%s' has unexpected sub-folders." ),
-                                          aLibraryPath.GetData() ) );
-    }
+        THROW_IO_ERRORF( _( "Library folder '%s' has unexpected sub-folders." ), aLibraryPath.GetData() );
 
     // All the footprint files must be deleted before the directory can be deleted.
     if( dir.HasFiles() )
@@ -3854,10 +4235,9 @@ bool PCB_IO_KICAD_SEXPR::DeleteLibrary( const wxString& aLibraryPath,
 
             if( tmp.GetExt() != FILEEXT::KiCadFootprintFileExtension )
             {
-                THROW_IO_ERROR( wxString::Format( _( "Unexpected file '%s' found in library "
-                                                     "path '%s'." ),
-                                                  files[i].GetData(),
-                                                  aLibraryPath.GetData() ) );
+                THROW_IO_ERRORF( _( "Unexpected file '%s' found in library path '%s'." ),
+                                 files[i].GetData(),
+                                 aLibraryPath.GetData() );
             }
         }
 
@@ -3871,10 +4251,7 @@ bool PCB_IO_KICAD_SEXPR::DeleteLibrary( const wxString& aLibraryPath,
     // Some of the more elaborate wxRemoveFile() crap puts up its own wxLog dialog
     // we don't want that.  we want bare metal portability with no UI here.
     if( !wxRmdir( aLibraryPath ) )
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Footprint library '%s' cannot be deleted." ),
-                                          aLibraryPath.GetData() ) );
-    }
+        THROW_IO_ERRORF( _( "Footprint library '%s' cannot be deleted." ), aLibraryPath.GetData() );
 
     // For some reason removing a directory in Windows is not immediately updated.  This delay
     // prevents an error when attempting to immediately recreate the same directory when over

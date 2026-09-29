@@ -203,6 +203,14 @@ public:
 
     bool IsErrorLimitExceeded( int error_code );
 
+    /**
+     * Return the number of violations of \a error_code that may still be reported.
+     *
+     * Providers which collect candidates before reporting them can use this to bound the
+     * collection instead of accumulating violations the report will discard.
+     */
+    int GetErrorLimit( int error_code );
+
     DRC_CONSTRAINT EvalRules( DRC_CONSTRAINT_T aConstraintType, const BOARD_ITEM* a,
                               const BOARD_ITEM* b, PCB_LAYER_ID aLayer,
                               REPORTER* aReporter = nullptr );
@@ -286,6 +294,7 @@ public:
     REPORTER* GetLogReporter() const { return m_logReporter; }
 
     bool QueryWorstConstraint( DRC_CONSTRAINT_T aRuleId, DRC_CONSTRAINT& aConstraint, bool aUnconditionalOnly = false );
+    bool HasConditionalConstraint( DRC_CONSTRAINT_T aConstraintId );
     bool HasUserDefinedPhysicalConstraint();
     std::set<int> QueryDistinctConstraints( DRC_CONSTRAINT_T aConstraintId );
 
@@ -386,10 +395,10 @@ protected:
     // Protected by m_clearanceCacheMutex for thread-safe access during rendering.
     std::unordered_map<DRC_OWN_CLEARANCE_CACHE_KEY, int> m_ownClearanceCache;
 
-    // Netclass name -> clearance mapping for fast lookup in EvalRules.
+    // Netclass name -> implicit netclass clearance rule for fast lookup in EvalRules.
     // Only written during InitEngine(), read during DRC and rendering.
     // Protected by m_clearanceCacheMutex for thread-safe access.
-    std::unordered_map<wxString, int> m_netclassClearances;
+    std::unordered_map<wxString, DRC_RULE*> m_netclassClearances;
 
     // Mutex protecting clearance caches for thread-safe access.
     // Uses shared_mutex for reader-writer pattern (many concurrent reads, exclusive writes).

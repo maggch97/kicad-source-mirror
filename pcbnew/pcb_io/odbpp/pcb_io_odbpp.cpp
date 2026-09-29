@@ -122,7 +122,7 @@ bool PCB_IO_ODBPP::ExportODB( const wxString& aFileName )
     }
     catch( const std::exception& e )
     {
-        wxLogError( "Exception in ODB++ ExportODB process: %s", e.what() );
+        Report( wxString::Format( "Exception in ODB++ ExportODB process: %s", e.what() ), RPT_SEVERITY_ERROR );
         std::cerr << e.what() << std::endl;
         return false;
     }
@@ -143,10 +143,9 @@ std::vector<FOOTPRINT*> PCB_IO_ODBPP::GetImportedCachedLibraryFootprints()
 }
 
 
-void PCB_IO_ODBPP::SaveBoard( const wxString& aFileName, BOARD* aBoard,
-                              const std::map<std::string, UTF8>* aProperties )
+void PCB_IO_ODBPP::SaveBoard( const wxString& aFileName, BOARD& aBoard, const std::map<std::string, UTF8>* aProperties )
 {
-    m_board = aBoard;
+    m_board = &aBoard;
 
     if( auto it = aProperties->find( "units" ); it != aProperties->end() )
     {
@@ -168,5 +167,4 @@ void PCB_IO_ODBPP::SaveBoard( const wxString& aFileName, BOARD* aBoard,
         m_sigfig = std::stoi( it->second );
 
     ExportODB( aFileName );
-
 }

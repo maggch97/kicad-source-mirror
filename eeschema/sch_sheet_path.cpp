@@ -113,7 +113,7 @@ bool SCH_SYMBOL_VARIANT::HasDifferentials( const SCH_SYMBOL& aSymbol ) const
     return m_DNP != aSymbol.GetDNP() || m_ExcludedFromBOM != aSymbol.GetExcludedFromBOM()
            || m_ExcludedFromSim != aSymbol.GetExcludedFromSim() || m_ExcludedFromBoard != aSymbol.GetExcludedFromBoard()
            || m_ExcludedFromPosFiles != aSymbol.GetExcludedFromPosFiles() || !m_Fields.empty()
-           || !m_PinMapOverride.IsDefault();
+           || !m_PinMapOverride.IsDefault() || m_SymbolOverride.has_value();
 }
 
 
@@ -171,12 +171,22 @@ SCH_SHEET_PATH& SCH_SHEET_PATH::operator=( SCH_SHEET_PATH&& aOther )
     m_virtualPageNumber  = aOther.m_virtualPageNumber;
     m_current_hash       = aOther.m_current_hash;
     m_cached_page_number = aOther.m_cached_page_number;
-    m_cached_path_valid  = aOther.m_cached_path_valid;
-    m_cached_path        = std::move( aOther.m_cached_path );
+    m_path               = std::move( aOther.m_path );
 
     m_recursion_test_cache = std::move( aOther.m_recursion_test_cache );
 
     return *this;
+}
+
+
+void SCH_SHEET_PATH::Swap( SCH_SHEET_PATH& aOther ) noexcept
+{
+    m_sheets.swap( aOther.m_sheets );
+    std::swap( m_virtualPageNumber, aOther.m_virtualPageNumber );
+    std::swap( m_current_hash, aOther.m_current_hash );
+    m_cached_page_number.swap( aOther.m_cached_page_number );
+    m_path.swap( aOther.m_path );
+    m_recursion_test_cache.swap( aOther.m_recursion_test_cache );
 }
 
 
@@ -199,21 +209,51 @@ void SCH_SHEET_PATH::initFromOther( const SCH_SHEET_PATH& aOther )
     m_virtualPageNumber  = aOther.m_virtualPageNumber;
     m_current_hash       = aOther.m_current_hash;
     m_cached_page_number = aOther.m_cached_page_number;
-    m_cached_path_valid  = aOther.m_cached_path_valid;
-    m_cached_path        = aOther.m_cached_path;
+    m_path               = aOther.m_path;
 
     // Note: don't copy m_recursion_test_cache as it is slow and we want std::vector<SCH_SHEET_PATH>
     // to be very fast to construct for use in the connectivity algorithm.
     m_recursion_test_cache.clear();
 }
 
+
+void SCH_SHEET_PATH::push_back( SCH_SHEET* aSheet )
+{
+    m_sheets.push_back( aSheet );
+
+    // hash_combine folds sequentially and the path only ever grows at the end, so extend both
+    // instead of walking the whole list again.  Hierarchy walks push and pop constantly.
+    hash_combine( m_current_hash, aSheet->m_Uuid.Hash() );
+
+    // A virtual root carries the nil UUID and does not belong in the path
+    if( m_sheets.size() > 1 || aSheet->m_Uuid != niluuid )
+        m_path.push_back( aSheet->m_Uuid );
+}
+
+
 void SCH_SHEET_PATH::Rehash()
 {
     m_current_hash = 0;
-    m_cached_path_valid = false;
+
+    // Keep the path built here rather than lazily in Path().  Path() is called from the parallel
+    // connectivity workers on sheet paths they share, and a lazy fill races.  Retains capacity, so
+    // the repeated push_back/pop_back of a hierarchy walk does not reallocate.
+    m_path.clear();
 
     for( SCH_SHEET* sheet : m_sheets )
         hash_combine( m_current_hash, sheet->m_Uuid.Hash() );
+
+    if( m_sheets.empty() )
+        return;
+
+    m_path.reserve( m_sheets.size() );
+
+    // A virtual root carries the nil UUID and does not belong in the path
+    if( m_sheets[0]->m_Uuid != niluuid )
+        m_path.push_back( m_sheets[0]->m_Uuid );
+
+    for( size_t i = 1; i < m_sheets.size(); i++ )
+        m_path.push_back( m_sheets[i]->m_Uuid );
 }
 
 
@@ -460,34 +500,7 @@ wxString SCH_SHEET_PATH::PathAsString() const
 
 KIID_PATH SCH_SHEET_PATH::Path() const
 {
-    if( m_cached_path_valid )
-        return m_cached_path;
-
-    m_cached_path.clear();
-    size_t size = m_sheets.size();
-
-    if( m_sheets.empty() )
-    {
-        m_cached_path_valid = true;
-        return m_cached_path;
-    }
-
-    if( m_sheets[0]->m_Uuid != niluuid )
-    {
-        m_cached_path.reserve( size );
-        m_cached_path.push_back( m_sheets[0]->m_Uuid );
-    }
-    else
-    {
-        // Skip the virtual root
-        m_cached_path.reserve( size - 1 );
-    }
-
-    for( size_t i = 1; i < size; i++ )
-        m_cached_path.push_back( m_sheets[i]->m_Uuid );
-
-    m_cached_path_valid = true;
-    return m_cached_path;
+    return m_path;
 }
 
 
@@ -534,9 +547,15 @@ wxString SCH_SHEET_PATH::PathHumanReadable( bool aUseShortRootName,
             loopStart = startIdx;
     }
 
+    SCH_SHEET_PATH parentPath;
+
+    for( size_t i = 0; i < loopStart && i < size(); ++i )
+        parentPath.push_back( at( i ) );
+
     for( unsigned i = loopStart; i < size(); i++ )
     {
-        wxString sheetName = at( i )->GetField( FIELD_T::SHEET_NAME )->GetShownText( false );
+        wxString sheetName = at( i )->GetField( FIELD_T::SHEET_NAME )->GetShownText( &parentPath, FOR_GUI );
+        parentPath.push_back( at( i ) );
 
         if( aEscapeSheetNames )
             sheetName = EscapeString( sheetName, CTX_NETNAME );
@@ -571,9 +590,11 @@ void SCH_SHEET_PATH::UpdateAllScreenReferences() const
             SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
 
             // GetRef() and GetUnitSelection() are O(1) via the symbol's instance path index.
-            symbol->GetField( FIELD_T::REFERENCE )->SetText( symbol->GetRef( this ) );
+            // Bypass SCH_FIELD::SetText so a display refresh does not invalidate connectivity
+            SCH_FIELD* reference = symbol->GetField( FIELD_T::REFERENCE );
+            reference->EDA_TEXT::SetText( symbol->GetRef( this ).Strip( wxString::both ) );
             symbol->SetUnit( symbol->GetUnitSelection( this ) );
-            LastScreen()->Update( item, false );
+            LastScreen()->UpdateDisplayBounds( item );
         }
         else if( item->Type() == SCH_GLOBAL_LABEL_T )
         {
@@ -589,7 +610,7 @@ void SCH_SHEET_PATH::UpdateAllScreenReferences() const
                     label->AutoplaceFields( LastScreen(), AUTOPLACE_AUTO );
 
                 intersheetRefs->SetVisible( label->Schematic()->Settings().m_IntersheetRefsShow );
-                LastScreen()->Update( intersheetRefs );
+                LastScreen()->UpdateDisplayBounds( intersheetRefs );
             }
         }
         else if( item->Type() == SCH_SHAPE_T )
@@ -916,11 +937,10 @@ void SCH_SHEET_PATH::CheckForMissingSymbolInstances( const wxString& aProjectNam
             if( !IsSharedPath() && ( LastScreen()->GetFileFormatVersionAtLoad() <= 20200310 ) )
             {
                 SCH_FIELD* refField = symbol->GetField( FIELD_T::REFERENCE );
-                symbolInstance.m_Reference = refField->GetShownText( this, true );
+                symbolInstance.m_Reference = refField->GetShownText( this, INTERNAL );
                 symbolInstance.m_Unit = symbol->GetUnit();
 
-                wxLogTrace( traceSchSheetPaths,
-                           "  Legacy format: Using reference '%s' from field, unit %d",
+                wxLogTrace( traceSchSheetPaths, "  Legacy format: Using reference '%s' from field, unit %d",
                            symbolInstance.m_Reference, symbolInstance.m_Unit );
             }
             else if( !symbol->GetInstances().empty() )
@@ -1336,6 +1356,9 @@ SCH_ITEM* SCH_SHEET_LIST::ResolveItem( const KIID& aID, SCH_SHEET_PATH* aPathOut
 
 SCH_ITEM* SCH_SHEET_PATH::ResolveItem( const KIID& aID ) const
 {
+    if( !LastScreen() )
+        return nullptr;
+
     for( SCH_ITEM* aItem : LastScreen()->Items() )
     {
         if( aItem->m_Uuid == aID )

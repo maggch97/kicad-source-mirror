@@ -26,12 +26,14 @@
 #include <mutex>
 #include <vector>
 #include <zone.h>
+#include <geometry/rtree/packed_rtree.h>
 #include <geometry/shape_poly_set.h>
 #include <hash_128.h>
 
 class PROGRESS_REPORTER;
 class BOARD;
 class COMMIT;
+class FOOTPRINT;
 class SHAPE_LINE_CHAIN;
 
 
@@ -90,11 +92,20 @@ private:
      */
     bool zoneKnockoutMayInteract( const ZONE* aZone, const ZONE* aKnockout ) const;
 
+    /**
+     * A window that holds every zone zoneKnockoutMayInteract() can accept for aZone.
+     */
+    BOX2I zoneKnockoutQueryBox( const ZONE* aZone ) const;
+
+    /**
+     * True if the fill of aZone can reach outside the board outline.
+     */
+    bool mayHoldOutOfBoardCopper( const ZONE* aZone ) const;
+
     void subtractHigherPriorityZones( const ZONE* aZone, PCB_LAYER_ID aLayer,
                                       SHAPE_POLY_SET& aRawFill );
 
     /**
-     * Function fillCopperZone
      * Add non copper areas polygons (pads and tracks with clearance)
      * to a filled copper area
      * used in BuildFilledSolidAreasPolygons when calculating filled areas in a zone
@@ -102,7 +113,6 @@ private:
      * The filled copper area must be computed before
      * BuildFilledSolidAreasPolygons() call this function just after creating the
      *  filled copper area polygon (without clearance areas
-     * @param aPcb: the current board
      */
     bool fillCopperZone( const ZONE* aZone, PCB_LAYER_ID aLayer, PCB_LAYER_ID aDebugLayer,
                          const SHAPE_POLY_SET& aSmoothedOutline,
@@ -111,7 +121,6 @@ private:
     bool fillNonCopperZone( const ZONE* candidate, PCB_LAYER_ID aLayer,
                             const SHAPE_POLY_SET& aSmoothedOutline, SHAPE_POLY_SET& aFillPolys );
     /**
-     * Function buildThermalSpokes
      * Constructs a list of all thermal spokes for the given zone.
      */
     void buildThermalSpokes( const ZONE* box, PCB_LAYER_ID aLayer,
@@ -123,6 +132,11 @@ private:
      * For circular pads, creates an arc ring; for other shapes, creates an inflated ring.
      * Rings are clipped to the zone boundary.
      *
+     * @param aZone is the zone to hatch.
+     * @param aLayer is the zone layer ID.
+     * @param aSmoothedOutline
+     * @param aThermalConnectionPads
+     * @param aFillPolys
      * @param aThermalRings Output parameter to collect the thermal ring geometry. Used later
      *                      to drop hatch holes that would isolate the thermal relief.
      */
@@ -144,12 +158,13 @@ private:
      * The solid areas can be more than one on copper layers, and do not have holes
      *  ( holes are linked by overlapping segments to the main outline)
      * in order to have drawable (and plottable) filled polygons.
-     * @return true if OK, false if the solid polygons cannot be built
      * @param aZone is the zone to fill
+     * @param aLayer is the zone layer ID.
      * @param aFillPolys: A reference to a SHAPE_POLY_SET buffer to store polygons with no holes
      * (holes are linked to main outline by overlapping segments, and these polygons are shrunk
      * by aZone->GetMinThickness() / 2 to be drawn with a outline thickness = aZone->GetMinThickness()
      * aFillPolys are polygons that will be drawn on screen and plotted
+     * @return true if OK, false if the solid polygons cannot be built
      */
     bool fillSingleZone( ZONE* aZone, PCB_LAYER_ID aLayer, SHAPE_POLY_SET& aFillPolys );
 
@@ -157,6 +172,8 @@ private:
      * for zones having the ZONE_FILL_MODE::ZONE_FILL_MODE::HATCH_PATTERN, create a grid pattern
      * in filled areas of aZone, giving to the filled polygons a fill style like a grid
      * @param aZone is the zone to modify
+     * @param aLayer is the zone layer ID
+     * @param aDebugLayer
      * @param aFillPolys: A reference to a SHAPE_POLY_SET buffer containing the initial
      * filled areas, and after adding the grid pattern, the modified filled areas with holes
      * @param aThermalRings: Thermal ring geometry used to drop hatch holes that would isolate
@@ -179,7 +196,7 @@ private:
      *
      * @param aZone the zone, fill mode must be COPPER_THIEVING.
      * @param aLayer the copper layer.
-     * @param aFillPolys IN: pre-cleared valid fill region.  OUT: stamped pattern.
+     * @param[in] aFillPolys pre-cleared valid fill region.  OUT: stamped pattern.
      */
     bool addCopperThievingPattern( const ZONE* aZone, PCB_LAYER_ID aLayer,
                                    SHAPE_POLY_SET& aFillPolys );
@@ -188,8 +205,15 @@ private:
      * Remove minimum-width violations introduced by zone-to-zone knockouts.
      * Runs a deflate/reconnect/inflate cycle and intersects with the pre-deflate boundary
      * to avoid re-inflating into cleared areas.
+     *
+     * @param aZone the zone to post process.
+     * @param[in, out] aFillPolys pre-cleared valid fill region replaced with the stamped pattern.
+     * @param aSameNetApron copper an abutting same-net zone will supply just outside this
+     * zone's boundary.  It is unioned in for the deflate/inflate cycle and clipped back off
+     * afterwards, so a shared border is not treated as a convex corner and rounded away.
      */
-    void postKnockoutMinWidthPrune( const ZONE* aZone, SHAPE_POLY_SET& aFillPolys );
+    void postKnockoutMinWidthPrune( const ZONE* aZone, SHAPE_POLY_SET& aFillPolys,
+                                    const SHAPE_POLY_SET& aSameNetApron );
 
     /**
      * Snapshot of zone fill polygons captured before an iterative refill wave.
@@ -201,6 +225,9 @@ private:
      * Used during iterative refill to avoid recomputing thermal reliefs and copper clearances.
      * Only re-applies the higher-priority zone knockout with updated fills.
      *
+     * @param aZone is the zone to modify
+     * @param aLayer is the zone layer ID
+     * @param[in, out] aFillPolys pre-cleared valid fill region replaced with the stamped pattern.
      * @param aSnapshot: If non-null, fills of other zones are read from the snapshot instead
      * of from the live zone objects, ensuring all tasks in a parallel wave see the same
      * pre-wave state.
@@ -208,17 +235,47 @@ private:
     bool refillZoneFromCache( ZONE* aZone, PCB_LAYER_ID aLayer, SHAPE_POLY_SET& aFillPolys,
                               const FillSnapshot* aSnapshot = nullptr );
 
+    /**
+     * An item in one of the fill indexes.  m_seq is the item position in board order; query
+     * results are sorted back into it because the boolean engine depends on contour order.
+     */
+    struct INDEXED_ITEM
+    {
+        BOARD_ITEM* m_item;
+        FOOTPRINT*  m_owner;    // the footprint that owns a graphic item, else nullptr
+        int         m_seq;
+    };
+
+    using ITEM_RTREE = KIRTREE::PACKED_RTREE<INDEXED_ITEM, int, 2>;
+
+    /// Collect the items whose bounding box overlaps aBBox, in board order.
+    static void queryIndex( const ITEM_RTREE& aIndex, const BOX2I& aBBox,
+                            std::vector<INDEXED_ITEM>& aResult );
+
+    /// Index the static board items once per fill.
+    void buildItemIndexes();
+
     BOARD*                m_board;
     SHAPE_POLY_SET        m_boardOutline;       // the board outlines, if exists
     bool                  m_brdOutlinesValid;   // true if m_boardOutline is well-formed
     COMMIT*               m_commit;
     PROGRESS_REPORTER*    m_progressReporter;
 
+    // Rebuilt per fill, then read-only, so the fill workers can share them.
+    ITEM_RTREE                         m_graphicIndex;    // fp reference/value/graphics + drawings
+    ITEM_RTREE                         m_footprintIndex;  // footprints, for the courtyard knockout
+    ITEM_RTREE                         m_padIndex;
+    std::map<PCB_LAYER_ID, ITEM_RTREE> m_trackIndex;
+    std::map<PCB_LAYER_ID, ITEM_RTREE> m_zoneIndex;
+
     int                   m_maxError;
     int                   m_worstClearance;
 
     // ExtraClearance plus max approximation error, part of the knockout reach
     int                   m_zoneKnockoutSlack;
+
+    // Largest corner radius on the board. Widens the knockout query window.
+    int                   m_maxZoneCornerRadius;
 
     bool                  m_debugZoneFiller;
 
@@ -228,6 +285,10 @@ private:
 
     // Un-hatched extent per (zone, layer); lets the refiller re-border carved hatch zones (#24758).
     std::map<std::pair<const ZONE*, PCB_LAYER_ID>, SHAPE_POLY_SET> m_preHatchSolidFillCache;
+
+    // Band just outside each (zone, layer) that an abutting same-net zone pours into.  Buffers the
+    // refiller's min-width cycle the way the smoothed outline buffers the initial one (#23790).
+    std::map<std::pair<const ZONE*, PCB_LAYER_ID>, SHAPE_POLY_SET> m_sameNetApronCache;
 
     // Refill result keyed by (zone, layer); value is the knockout-geometry hash + cached fill.
     // Hit lets an unchanged-knockout zone skip the refill subtract + prune.  Cleared each Fill().

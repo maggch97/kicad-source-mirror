@@ -432,7 +432,7 @@ bool DIALOG_PLOT::TransferDataToWindow()
     m_backFPPropertyPopups->SetValue( m_plotOpts.m_PDFBackFPPropertyPopups );
     m_pdfMetadata->SetValue( m_plotOpts.m_PDFMetadata );
     m_pdfSingle->SetValue( m_plotOpts.m_PDFSingle );
-    m_pdfBackgroundColorSwatch->SetSwatchColor( m_plotOpts.m_PDFBackgroundColor, false );
+    m_pdfBackgroundColorSwatch->SetSwatchColor( m_plotOpts.m_backgroundColor, false );
     updatePdfColorOptions();
 
     // Initialize a few other parameters, which can also be modified
@@ -505,7 +505,7 @@ void DIALOG_PLOT::transferPlotParamsToJob()
         pdfJob->m_pdfBackFPPropertyPopups = m_plotOpts.m_PDFBackFPPropertyPopups;
         pdfJob->m_pdfMetadata = m_plotOpts.m_PDFMetadata;
         pdfJob->m_pdfSingle = m_plotOpts.m_PDFSingle;
-        pdfJob->m_pdfBackgroundColor = m_plotOpts.m_PDFBackgroundColor.ToCSSString();
+        pdfJob->m_pdfBackgroundColor = m_plotOpts.m_backgroundColor.ToCSSString();
 
         // we need to embed this for the cli deprecation fix
         if( pdfJob->m_pdfSingle )
@@ -817,7 +817,7 @@ void DIALOG_PLOT::onOutputDirectoryBrowseClicked( wxCommandEvent& event )
             };
 
     wxString path = m_outputDirectoryName->GetValue();
-    path = ExpandTextVars( path, &textResolver );
+    path = ExpandTextVars( path, &textResolver, INTERNAL );
     path = ExpandEnvVarSubstitutions( path, &Prj() );
     path = Prj().AbsolutePath( path );
 
@@ -1071,7 +1071,7 @@ void DIALOG_PLOT::applyPlotSettings()
         tempOptions.m_PDFBackFPPropertyPopups = m_backFPPropertyPopups->GetValue();
         tempOptions.m_PDFMetadata = m_pdfMetadata->GetValue();
         tempOptions.m_PDFSingle = m_pdfSingle->GetValue();
-        tempOptions.m_PDFBackgroundColor = m_pdfBackgroundColorSwatch->GetSwatchColor();
+        tempOptions.m_backgroundColor = m_pdfBackgroundColorSwatch->GetSwatchColor();
     }
     else if( getPlotFormat() == PLOT_FORMAT::PNG )
     {
@@ -1248,7 +1248,7 @@ void DIALOG_PLOT::Plot( wxCommandEvent& event )
                 };
 
         wxString path = m_plotOpts.GetOutputDirectory();
-        path = ExpandTextVars( path, &textResolver );
+        path = ExpandTextVars( path, &textResolver, INTERNAL );
         path = ExpandEnvVarSubstitutions( path, board->GetProject() );
 
         wxFileName outputDir = wxFileName::DirName( path );
@@ -1359,13 +1359,14 @@ void DIALOG_PLOT::onRunDRC( wxCommandEvent& event )
 
 void DIALOG_PLOT::onOpenOutputDirectory( wxCommandEvent& event )
 {
-    std::function<bool( wxString* )> textResolver = [&]( wxString* token ) -> bool
-    {
-        return m_editFrame->GetBoard()->ResolveTextVar( token, 0 );
-    };
+    std::function<bool( wxString* )> textResolver =
+            [&]( wxString* token ) -> bool
+            {
+                return m_editFrame->GetBoard()->ResolveTextVar( token, 0 );
+            };
 
     wxString path = m_outputDirectoryName->GetValue();
-    path = ExpandTextVars( path, &textResolver );
+    path = ExpandTextVars( path, &textResolver, INTERNAL );
     path = ExpandEnvVarSubstitutions( path, &Prj() );
     path = Prj().AbsolutePath( path );
 

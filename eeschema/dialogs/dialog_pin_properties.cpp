@@ -33,6 +33,9 @@
 #include <widgets/std_bitmap_button.h>
 #include <wx/hyperlink.h>
 #include <symbol_preview_widget.h>
+#include <tools/sch_actions.h>
+
+#include "symbol_editor_settings.h"
 
 class ALT_PIN_DATA_MODEL : public WX_GRID_TABLE_BASE, public std::vector<SCH_PIN::ALT>
 {
@@ -121,11 +124,14 @@ public:
 };
 
 
-DIALOG_PIN_PROPERTIES::DIALOG_PIN_PROPERTIES( SYMBOL_EDIT_FRAME* parent, SCH_PIN* aPin,
-                                              bool aFocusPinNumber ) :
+DIALOG_PIN_PROPERTIES::DIALOG_PIN_PROPERTIES( SYMBOL_EDIT_FRAME* parent, SCH_PIN* aPin, bool aFocusPinNumber ) :
         DIALOG_PIN_PROPERTIES_BASE( parent ),
         m_frame( parent ),
         m_pin( aPin ),
+        m_alternatesTurndown( nullptr ),
+        m_alternatesGrid( nullptr ),
+        m_addAlternate( nullptr ),
+        m_deleteAlternate( nullptr ),
         m_posX( parent, m_posXLabel, m_posXCtrl, m_posXUnits ),
         m_posY( parent, m_posYLabel, m_posYCtrl, m_posYUnits ),
         m_pinLength( parent, m_pinLengthLabel, m_pinLengthCtrl, m_pinLengthUnits ),
@@ -166,6 +172,122 @@ DIALOG_PIN_PROPERTIES::DIALOG_PIN_PROPERTIES( SYMBOL_EDIT_FRAME* parent, SCH_PIN
 
     m_previewWidget->GetRenderSettings()->m_ShowHiddenPins = true;
 
+    if( aPin->GetParentSymbol()->IsMultiBodyStyle() )
+    {
+        // Multiple body styles are a superclass of alternate pin assignments, so don't allow free-form
+        // alternate assignments as well.  (We won't know how to map the alternates back and forth when
+        // the body style is changed.)
+        wxString hintText = wxString::Format( wxT( "  (%s)" ), NO_PIN_FUNCTIONS_WITH_MULTIPLE_BODY_STYLES );
+        wxStaticText* hint = new wxStaticText( this, wxID_ANY, hintText );
+        hint->SetFont( KIUI::GetControlFont( this ).Italic() );
+        m_lowerSizer->Add( hint, 0, wxALL, 8 );
+    }
+    else
+    {
+        m_alternatesTurndown = new WX_COLLAPSIBLE_PANE( this, wxID_ANY, _( "Alternate Pin Function Definitions" ) );
+
+        wxWindow* alternatesWindow = m_alternatesTurndown->GetPane();
+
+	    wxBoxSizer* bAlternatesSizer;
+	    bAlternatesSizer = new wxBoxSizer( wxVERTICAL );
+
+	    m_alternatesGrid = new WX_GRID( alternatesWindow, wxID_ANY, wxDefaultPosition, wxDefaultSize, 0 );
+	    m_alternatesGrid->CreateGrid( 1, 3 );
+	    m_alternatesGrid->SetColSize( 0, 260 );
+	    m_alternatesGrid->SetColSize( 1, 140 );
+	    m_alternatesGrid->SetColSize( 2, 140 );
+        m_alternatesGrid->SetColLabelValue( 0, _( "Alternate Pin Name" ) );
+	    m_alternatesGrid->SetColLabelValue( 1, _( "Electrical Type " ) );
+	    m_alternatesGrid->SetColLabelValue( 2, _( "Graphic Style " ) );
+        m_alternatesGrid->SetColLabelSize( 22 );
+        m_alternatesGrid->SetColLabelAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
+        m_alternatesGrid->SetRowLabelSize( 0 );
+	    m_alternatesGrid->EnableDragColSize( false );
+	    m_alternatesGrid->EnableDragRowSize( false );
+        m_alternatesGrid->SetMinSize( wxSize( -1, 100 ) );
+	    bAlternatesSizer->Add( m_alternatesGrid, 1, wxEXPAND|wxRIGHT, 5 );
+
+	    wxBoxSizer* bButtonSizer;
+	    bButtonSizer = new wxBoxSizer( wxHORIZONTAL );
+
+	    m_addAlternate = new STD_BITMAP_BUTTON( alternatesWindow, wxID_ANY, wxNullBitmap );
+	    bButtonSizer->Add( m_addAlternate, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT, 5 );
+        bButtonSizer->AddSpacer( 20 );
+	    m_deleteAlternate = new STD_BITMAP_BUTTON( alternatesWindow, wxID_ANY, wxNullBitmap );
+	    bButtonSizer->Add( m_deleteAlternate, 0, wxALIGN_CENTER_VERTICAL|wxLEFT, 5 );
+
+        m_addAlternate->Bind( wxEVT_COMMAND_BUTTON_CLICKED, &DIALOG_PIN_PROPERTIES::onAddAlternate, this );
+        m_deleteAlternate->Bind( wxEVT_COMMAND_BUTTON_CLICKED, &DIALOG_PIN_PROPERTIES::onDeleteAlternate, this );
+
+	    bAlternatesSizer->Add( bButtonSizer, 0, wxTOP | wxBOTTOM, 3 );
+
+	    alternatesWindow->SetSizer( bAlternatesSizer );
+        alternatesWindow->Layout();
+        bAlternatesSizer->Fit( alternatesWindow );
+
+        m_lowerSizer->Add( m_alternatesTurndown, 1, wxEXPAND | wxLEFT | wxRIGHT, 10 );
+
+        m_alternatesTurndown->Bind( WX_COLLAPSIBLE_PANE_CHANGED,
+                                    [this]( wxCommandEvent& aEvent )
+                                    {
+                                        Freeze();
+                                        m_alternatesTurndown->GetPane()->Fit();
+                                        m_lowerSizer->Layout();
+
+                                        if( !m_alternatesTurndown->IsCollapsed() )
+                                        {
+                                            InvalidateBestSize();
+                                            wxSize bestSize = GetBestSize();
+                                            wxSize currentSize = GetSize();
+                                            SetSize( wxMax( bestSize.GetWidth(), currentSize.GetWidth() ),
+                                                     wxMax( bestSize.GetHeight(), currentSize.GetHeight() ) );
+                                        }
+
+                                        s_alternatesTurndownOpen = !m_alternatesTurndown->IsCollapsed();
+
+                                        Thaw();
+                                    } );
+
+        // Default alternates turndown to whether or not alternates exist, or if we've had it open before
+        m_alternatesTurndown->Collapse( m_pin->GetAlternates().size() == 0 && !s_alternatesTurndownOpen );
+
+        // wxwidgets doesn't call the OnCollapseChange even at init, so we update this value if
+        // the alternates pane defaults to open
+        if ( m_pin->GetAlternates().size() > 0 )
+            s_alternatesTurndownOpen = true;
+
+        m_alternatesDataModel = new ALT_PIN_DATA_MODEL( GetUserUnits() );
+
+        // Save original columns widths so we can do proportional sizing.
+        for( int i = 0; i < COL_COUNT; ++i )
+            m_originalColWidths[ i ] = m_alternatesGrid->GetColSize( i );
+
+        m_alternatesGrid->SetTable( m_alternatesDataModel );
+        m_alternatesGrid->PushEventHandler( new GRID_TRICKS( m_alternatesGrid,
+                                                             [this]( wxCommandEvent& aEvent )
+                                                             {
+                                                                 onAddAlternate( aEvent );
+                                                             } ) );
+        m_alternatesGrid->SetSelectionMode( wxGrid::wxGridSelectRows );
+
+        // Set special attributes
+        wxGridCellAttr* attr;
+
+        attr = new wxGridCellAttr;
+        attr->SetRenderer( new GRID_CELL_ICON_TEXT_RENDERER( PinTypeIcons(), PinTypeNames() ) );
+        attr->SetEditor( new GRID_CELL_ICON_TEXT_POPUP( PinTypeIcons(), PinTypeNames() ) );
+        m_alternatesGrid->SetColAttr( COL_TYPE, attr );
+
+        attr = new wxGridCellAttr;
+        attr->SetRenderer( new GRID_CELL_ICON_TEXT_RENDERER( PinShapeIcons(), PinShapeNames() ) );
+        attr->SetEditor( new GRID_CELL_ICON_TEXT_POPUP( PinShapeIcons(), PinShapeNames() ) );
+        m_alternatesGrid->SetColAttr( COL_SHAPE, attr );
+
+        m_addAlternate->SetBitmap( KiBitmapBundle( BITMAPS::small_plus ) );
+        m_deleteAlternate->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
+        m_addAlternate->GetParent()->Layout();
+    }
+
     const wxArrayString&        orientationNames = PinOrientationNames();
     const std::vector<BITMAPS>& orientationIcons = PinOrientationIcons();
 
@@ -192,54 +314,6 @@ DIALOG_PIN_PROPERTIES::DIALOG_PIN_PROPERTIES( SYMBOL_EDIT_FRAME* parent, SCH_PIN
         m_sdbSizerButtonsCancel
     };
 
-    // Default alternates turndown to whether or not alternates exist, or if we've had it open
-    // before
-    m_alternatesTurndown->Collapse( m_pin->GetAlternates().size() == 0 && !s_alternatesTurndownOpen );
-
-    // wxwidgets doesn't call the OnCollapseChange even at init, so we update this value if
-    // the alternates pane defaults to open
-    if ( m_pin->GetAlternates().size() > 0 )
-        s_alternatesTurndownOpen = true;
-
-    m_alternatesDataModel = new ALT_PIN_DATA_MODEL( GetUserUnits() );
-
-    // Save original columns widths so we can do proportional sizing.
-    for( int i = 0; i < COL_COUNT; ++i )
-        m_originalColWidths[ i ] = m_alternatesGrid->GetColSize( i );
-
-    m_alternatesGrid->SetTable( m_alternatesDataModel );
-    m_alternatesGrid->PushEventHandler( new GRID_TRICKS( m_alternatesGrid,
-                                                         [this]( wxCommandEvent& aEvent )
-                                                         {
-                                                             OnAddAlternate( aEvent );
-                                                         } ) );
-    m_alternatesGrid->SetSelectionMode( wxGrid::wxGridSelectRows );
-
-    if( aPin->GetParentSymbol()->IsMultiBodyStyle() )
-    {
-        m_alternatesTurndown->Collapse();
-        m_alternatesTurndown->Disable();
-        m_alternatesTurndown->SetToolTip( _( "Alternate pin assignments are not available for symbols with "
-                                             "multiple body styles." ) );
-    }
-
-    // Set special attributes
-    wxGridCellAttr* attr;
-
-    attr = new wxGridCellAttr;
-    attr->SetRenderer( new GRID_CELL_ICON_TEXT_RENDERER( PinTypeIcons(), PinTypeNames() ) );
-    attr->SetEditor( new GRID_CELL_ICON_TEXT_POPUP( PinTypeIcons(), PinTypeNames() ) );
-    m_alternatesGrid->SetColAttr( COL_TYPE, attr );
-
-    attr = new wxGridCellAttr;
-    attr->SetRenderer( new GRID_CELL_ICON_TEXT_RENDERER( PinShapeIcons(), PinShapeNames() ) );
-    attr->SetEditor( new GRID_CELL_ICON_TEXT_POPUP( PinShapeIcons(), PinShapeNames() ) );
-    m_alternatesGrid->SetColAttr( COL_SHAPE, attr );
-
-    m_addAlternate->SetBitmap( KiBitmapBundle( BITMAPS::small_plus ) );
-    m_deleteAlternate->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
-    m_addAlternate->GetParent()->Layout();
-
     SetupStandardButtons();
 
     SetInitialFocus( aFocusPinNumber ? m_textPinNumber : m_textPinName );
@@ -258,13 +332,22 @@ DIALOG_PIN_PROPERTIES::DIALOG_PIN_PROPERTIES( SYMBOL_EDIT_FRAME* parent, SCH_PIN
 
 DIALOG_PIN_PROPERTIES::~DIALOG_PIN_PROPERTIES()
 {
+    if( m_addAlternate )
+        m_addAlternate->Unbind( wxEVT_COMMAND_BUTTON_CLICKED, &DIALOG_PIN_PROPERTIES::onAddAlternate, this );
+
+    if( m_deleteAlternate )
+        m_deleteAlternate->Unbind( wxEVT_COMMAND_BUTTON_CLICKED, &DIALOG_PIN_PROPERTIES::onDeleteAlternate, this );
+
     delete m_dummyParent;
 
-    // Prevents crash bug in wxGrid's d'tor
-    m_alternatesGrid->DestroyTable( m_alternatesDataModel );
+    if( m_alternatesGrid )
+    {
+        // Prevents crash bug in wxGrid's d'tor
+        m_alternatesGrid->DestroyTable( m_alternatesDataModel );
 
-    // Delete the GRID_TRICKS.
-    m_alternatesGrid->PopEventHandler( true );
+        // Delete the GRID_TRICKS.
+        m_alternatesGrid->PopEventHandler( true );
+    }
 }
 
 
@@ -295,21 +378,18 @@ bool DIALOG_PIN_PROPERTIES::TransferDataToWindow()
 
     wxString commonUnitsToolTip;
 
-    if( m_frame->m_SyncPinEdit )
+    if( m_frame->SynchronizePins() )
     {
-        wxHyperlinkCtrl* button = new wxHyperlinkCtrl( m_infoBar, wxID_ANY, _( "Exit sync pins mode" ),
-                                                       wxEmptyString );
-
-        button->Bind( wxEVT_COMMAND_HYPERLINK,
-                      std::function<void( wxHyperlinkEvent& aEvent )>(
-                      [&]( wxHyperlinkEvent& aEvent )
-                      {
-                          m_frame->m_SyncPinEdit = false;
-                          m_infoBar->Dismiss();
-                      } ) );
-
         m_infoBar->RemoveAllButtons();
-        m_infoBar->AddButton( button );
+        m_infoBar->AddLink( _( "Exit sync pins mode" ),
+                            [&]( wxHyperlinkEvent& aEvent )
+                            {
+                                if( SYMBOL_EDITOR_SETTINGS* cfg = m_frame->GetSettings() )
+                                    cfg->m_SyncPinEdit = !cfg->m_SyncPinEdit;
+
+                                m_infoBar->Dismiss();
+                            } );
+
         m_infoBar->ShowMessage( getSyncPinsMessage() );
 
         commonUnitsToolTip = _( "Synchronized pins mode is enabled.\n"
@@ -325,8 +405,11 @@ bool DIALOG_PIN_PROPERTIES::TransferDataToWindow()
 
     m_checkApplyToAllParts->SetToolTip( commonUnitsToolTip );
 
-    for( const std::pair<const wxString, SCH_PIN::ALT>& alt : m_pin->GetAlternates() )
-        m_alternatesDataModel->AppendRow( alt.second );
+    if( !m_pin->GetParentSymbol()->IsMultiBodyStyle() )
+    {
+        for( const std::pair<const wxString, SCH_PIN::ALT>& alt : m_pin->GetAlternates() )
+            m_alternatesDataModel->AppendRow( alt.second );
+    }
 
     // We can call FinishDialogSettings() now all widgets have the size fixed.
     finishDialogSettings();
@@ -337,20 +420,23 @@ bool DIALOG_PIN_PROPERTIES::TransferDataToWindow()
 
 bool DIALOG_PIN_PROPERTIES::TransferDataFromWindow()
 {
-    if( !m_alternatesGrid->CommitPendingChanges() )
-        return false;
-
-    // Check for missing alternate names.
-    for( size_t i = 0;  i < m_alternatesDataModel->size(); ++i )
+    if( m_alternatesTurndown )
     {
-        if( m_alternatesDataModel->at( i ).m_Name.IsEmpty() )
-        {
-            DisplayErrorMessage( this, _( "Alternate pin definitions must have a name." ) );
-
-            m_delayedFocusColumn = COL_NAME;
-            m_delayedFocusRow = i;
-
+        if( !m_alternatesGrid->CommitPendingChanges() )
             return false;
+
+        // Check for missing alternate names.
+        for( size_t i = 0;  i < m_alternatesDataModel->size(); ++i )
+        {
+            if( m_alternatesDataModel->at( i ).m_Name.IsEmpty() )
+            {
+                DisplayErrorMessage( this, _( "Alternate pin definitions must have a name." ) );
+
+                m_delayedFocusColumn = COL_NAME;
+                m_delayedFocusRow = i;
+
+                return false;
+            }
         }
     }
 
@@ -386,11 +472,14 @@ bool DIALOG_PIN_PROPERTIES::TransferDataFromWindow()
     m_pin->SetUnit( m_checkApplyToAllParts->GetValue() ? 0 : m_frame->GetUnit() );
     m_pin->SetVisible( m_checkShow->GetValue() );
 
-    std::map<wxString, SCH_PIN::ALT>& alternates = m_pin->GetAlternates();
-    alternates.clear();
+    if( m_alternatesTurndown )
+    {
+        std::map<wxString, SCH_PIN::ALT>& alternates = m_pin->GetAlternates();
+        alternates.clear();
 
-    for( const SCH_PIN::ALT& alt : *m_alternatesDataModel )
-        alternates[ alt.m_Name ] = alt;
+        for( const SCH_PIN::ALT& alt : *m_alternatesDataModel )
+            alternates[ alt.m_Name ] = alt;
+    }
 
     return true;
 }
@@ -411,7 +500,7 @@ void DIALOG_PIN_PROPERTIES::OnPropertiesChange( wxCommandEvent& event )
     m_dummyPin->SetShape( m_choiceStyle->GetPinShapeSelection() );
     m_dummyPin->SetVisible( m_checkShow->GetValue() );
 
-    if( event.GetEventObject() == m_checkApplyToAllParts && m_frame->m_SyncPinEdit )
+    if( event.GetEventObject() == m_checkApplyToAllParts && m_frame->SynchronizePins() )
     {
         m_infoBar->ShowMessage( getSyncPinsMessage() );
         m_infoBar->GetSizer()->Layout();
@@ -432,7 +521,7 @@ wxString DIALOG_PIN_PROPERTIES::getSyncPinsMessage()
 }
 
 
-void DIALOG_PIN_PROPERTIES::OnAddAlternate( wxCommandEvent& event )
+void DIALOG_PIN_PROPERTIES::onAddAlternate( wxCommandEvent& event )
 {
     if( !m_alternatesGrid->CommitPendingChanges() )
         return;
@@ -451,7 +540,7 @@ void DIALOG_PIN_PROPERTIES::OnAddAlternate( wxCommandEvent& event )
 }
 
 
-void DIALOG_PIN_PROPERTIES::OnDeleteAlternate( wxCommandEvent& event )
+void DIALOG_PIN_PROPERTIES::onDeleteAlternate( wxCommandEvent& event )
 {
     m_alternatesGrid->OnDeleteRows(
             [&]( int row )
@@ -463,21 +552,24 @@ void DIALOG_PIN_PROPERTIES::OnDeleteAlternate( wxCommandEvent& event )
 
 void DIALOG_PIN_PROPERTIES::adjustGridColumns()
 {
-    // Account for scroll bars
-    int width = KIPLATFORM::UI::GetUnobscuredSize( m_alternatesGrid ).x;
+    if( m_alternatesGrid )
+    {
+        // Account for scroll bars
+        int w = KIPLATFORM::UI::GetUnobscuredSize( m_alternatesGrid ).x;
 
-    wxGridUpdateLocker deferRepaintsTillLeavingScope;
+        wxGridUpdateLocker deferRepaintsTillLeavingScope;
 
-    m_alternatesGrid->SetColSize( COL_TYPE, m_originalColWidths[COL_TYPE] );
-    m_alternatesGrid->SetColSize( COL_SHAPE, m_originalColWidths[COL_SHAPE] );
+        m_alternatesGrid->SetColSize( COL_TYPE, m_originalColWidths[COL_TYPE] );
+        m_alternatesGrid->SetColSize( COL_SHAPE, m_originalColWidths[COL_SHAPE] );
 
-    m_alternatesGrid->SetColSize( COL_NAME, width - m_originalColWidths[COL_TYPE] - m_originalColWidths[COL_SHAPE] );
+        m_alternatesGrid->SetColSize( COL_NAME, w - m_originalColWidths[COL_TYPE] - m_originalColWidths[COL_SHAPE] );
+    }
 }
 
 
 void DIALOG_PIN_PROPERTIES::OnSize( wxSizeEvent& event )
 {
-    auto new_size = event.GetSize();
+    wxSize new_size = event.GetSize();
 
     if( m_initialized && m_size != new_size )
     {
@@ -494,7 +586,7 @@ void DIALOG_PIN_PROPERTIES::OnSize( wxSizeEvent& event )
 void DIALOG_PIN_PROPERTIES::OnUpdateUI( wxUpdateUIEvent& event )
 {
     // Handle a delayed focus
-    if( m_delayedFocusRow >= 0 )
+    if( m_delayedFocusRow >= 0 && m_alternatesTurndown )
     {
         m_alternatesTurndown->Collapse( false );
 
@@ -507,23 +599,5 @@ void DIALOG_PIN_PROPERTIES::OnUpdateUI( wxUpdateUIEvent& event )
 
         m_delayedFocusRow = -1;
         m_delayedFocusColumn = -1;
-    }
-}
-
-
-void DIALOG_PIN_PROPERTIES::OnCollapsiblePaneChange( wxCollapsiblePaneEvent& event )
-{
-    if( !event.GetCollapsed() )
-    {
-        wxTopLevelWindow* tlw = dynamic_cast<wxTopLevelWindow*>( wxGetTopLevelParent( this ) );
-
-        if( tlw )
-        {
-            tlw->InvalidateBestSize();
-            wxSize bestSize = tlw->GetBestSize();
-            wxSize currentSize = tlw->GetSize();
-            tlw->SetSize( wxMax( bestSize.GetWidth(), currentSize.GetWidth() ),
-                          wxMax( bestSize.GetHeight(), currentSize.GetHeight() ) );
-        }
     }
 }

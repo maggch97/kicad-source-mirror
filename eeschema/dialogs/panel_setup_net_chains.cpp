@@ -27,7 +27,7 @@
 #include <wx/msgdlg.h>
 #include <wx/textdlg.h>
 
-#include <connection_graph.h>
+#include <connectivity/conn_netchain_manager.h>
 #include <sch_edit_frame.h>
 #include <sch_netchain.h>
 #include <schematic.h>
@@ -55,9 +55,12 @@ PANEL_SETUP_NET_CHAINS::PANEL_SETUP_NET_CHAINS( wxWindow* aParent, SCH_EDIT_FRAM
 {
     wxGridCellAttr* attr = new wxGridCellAttr;
     attr->SetRenderer( new GRID_CELL_COLOR_RENDERER( PAGED_DIALOG::GetDialog( this ) ) );
-    attr->SetEditor( new GRID_CELL_COLOR_SELECTOR( PAGED_DIALOG::GetDialog( this ),
-                                                   m_chainsGrid ) );
+    attr->SetEditor( new GRID_CELL_COLOR_SELECTOR( PAGED_DIALOG::GetDialog( this ), m_chainsGrid ) );
     m_chainsGrid->SetColAttr( COL_COLOUR, attr );
+
+    m_hintBeforeFunctionCall->SetFont( KIUI::GetInfoFont( this ).Italic() );
+    m_functionCall->SetFont( KIUI::GetMonospacedUIFont( 2 ) );
+    m_hintAfterFunctionCall->SetFont( KIUI::GetInfoFont( this ).Italic() );
 
     wxGridCellAttr* roAttr = new wxGridCellAttr;
     roAttr->SetReadOnly( true );
@@ -81,8 +84,7 @@ PANEL_SETUP_NET_CHAINS::PANEL_SETUP_NET_CHAINS( wxWindow* aParent, SCH_EDIT_FRAM
 
                     if( !SCH_NETCHAIN::IsValidName( val ) )
                     {
-                        wxMessageBox( wxString::Format(
-                                              _( "Name '%s' contains invalid characters." ), val ),
+                        wxMessageBox( wxString::Format( _( "Name '%s' contains invalid characters." ), val ),
                                       _( "Net Chains" ), wxOK | wxICON_ERROR, this );
                         m_chainsGrid->SetCellValue( evt.GetRow(), COL_NAME, evt.GetString() );
                         return;
@@ -115,10 +117,7 @@ void PANEL_SETUP_NET_CHAINS::loadFromModel()
     if( !m_frame )
         return;
 
-    CONNECTION_GRAPH* graph = m_frame->Schematic().ConnectionGraph();
-
-    if( !graph )
-        return;
+    auto& manager = m_frame->Schematic().NetChains();
 
     std::shared_ptr<NET_SETTINGS> ns = m_frame->Prj().GetProjectFile().NetSettings();
     std::map<wxString, wxString>  chainToClass;
@@ -126,7 +125,7 @@ void PANEL_SETUP_NET_CHAINS::loadFromModel()
     if( ns )
         chainToClass = ns->GetNetChainClasses();
 
-    for( const std::unique_ptr<SCH_NETCHAIN>& chain : graph->GetCommittedNetChains() )
+    for( const std::unique_ptr<SCH_NETCHAIN>& chain : manager.GetCommittedNetChains() )
     {
         if( !chain )
             continue;
@@ -238,8 +237,7 @@ void PANEL_SETUP_NET_CHAINS::rebuildChainsGrid()
         const CHAIN_ROW& row = m_chainRows[m_gridToChainIdx[r]];
 
         m_chainsGrid->SetCellValue( r, COL_NAME, row.newName );
-        m_chainsGrid->SetCellValue( r, COL_MEMBERS,
-                                    wxString::Format( _( "%zu nets" ), row.memberNets.size() ) );
+        m_chainsGrid->SetCellValue( r, COL_MEMBERS, wxString::Format( _( "%zu nets" ), row.memberNets.size() ) );
         m_chainsGrid->SetCellValue( r, COL_CHAIN_CLASS, row.newChainClass );
         m_chainsGrid->SetCellValue( r, COL_NET_CLASS, row.newNetClass );
 
@@ -248,8 +246,9 @@ void PANEL_SETUP_NET_CHAINS::rebuildChainsGrid()
     }
 
     int sel = selectedChainRow();
-    int dataIdx = ( sel >= 0 && sel < static_cast<int>( m_gridToChainIdx.size() ) )
-                          ? m_gridToChainIdx[sel] : -1;
+    int dataIdx = ( sel >= 0 && sel < (int) m_gridToChainIdx.size() ) ? m_gridToChainIdx[sel]
+                                                                      : -1;
+
     updateMembersDetail( dataIdx );
 }
 
@@ -279,9 +278,7 @@ void PANEL_SETUP_NET_CHAINS::rebuildClassesGrid()
         int              r   = static_cast<int>( i );
 
         m_classesGrid->SetCellValue( r, CLASS_COL_NAME, row.newName );
-        m_classesGrid->SetCellValue( r, CLASS_COL_MEMBERS,
-                                     wxString::Format( wxT( "%d" ),
-                                                       memberCount[row.newName] ) );
+        m_classesGrid->SetCellValue( r, CLASS_COL_MEMBERS, wxString::Format( wxT( "%d" ), memberCount[row.newName] ) );
 
         if( row.deletePending )
         {
@@ -332,8 +329,7 @@ bool PANEL_SETUP_NET_CHAINS::Validate()
         if( m_classRows[i].deletePending )
             continue;
 
-        m_classRows[i].newName =
-                m_classesGrid->GetCellValue( static_cast<int>( i ), CLASS_COL_NAME );
+        m_classRows[i].newName = m_classesGrid->GetCellValue( static_cast<int>( i ), CLASS_COL_NAME );
     }
 
     // Reject empty committed chain names and duplicate names within the grid.
@@ -346,24 +342,21 @@ bool PANEL_SETUP_NET_CHAINS::Validate()
 
         if( row.newName.IsEmpty() )
         {
-            wxMessageBox( wxString::Format( _( "Net chain on row %zu cannot have an empty name." ),
-                                            i + 1 ),
+            wxMessageBox( wxString::Format( _( "Net chain on row %zu cannot have an empty name." ), i + 1 ),
                           _( "Net Chains" ), wxOK | wxICON_ERROR, this );
             return false;
         }
 
         if( !SCH_NETCHAIN::IsValidName( row.newName ) )
         {
-            wxMessageBox( wxString::Format( _( "Net chain name '%s' contains invalid characters." ),
-                                            row.newName ),
+            wxMessageBox( wxString::Format( _( "Net chain name '%s' contains invalid characters." ), row.newName ),
                           _( "Net Chains" ), wxOK | wxICON_ERROR, this );
             return false;
         }
 
         if( nameInChainGridAlready( row.newName, static_cast<int>( i ) ) )
         {
-            wxMessageBox( wxString::Format( _( "Duplicate net chain name '%s' on row %zu." ),
-                                            row.newName, i + 1 ),
+            wxMessageBox( wxString::Format( _( "Duplicate net chain name '%s' on row %zu." ), row.newName, i + 1 ),
                           _( "Net Chains" ), wxOK | wxICON_ERROR, this );
             return false;
         }
@@ -379,16 +372,14 @@ bool PANEL_SETUP_NET_CHAINS::Validate()
 
         if( row.newName.IsEmpty() )
         {
-            wxMessageBox( wxString::Format( _( "Class on row %zu cannot have an empty name." ),
-                                            i + 1 ),
+            wxMessageBox( wxString::Format( _( "Class on row %zu cannot have an empty name." ), i + 1 ),
                           _( "Net Chain Classes" ), wxOK | wxICON_ERROR, this );
             return false;
         }
 
         if( nameInClassGridAlready( row.newName, static_cast<int>( i ) ) )
         {
-            wxMessageBox( wxString::Format( _( "Duplicate class name '%s' on row %zu." ),
-                                            row.newName, i + 1 ),
+            wxMessageBox( wxString::Format( _( "Duplicate class name '%s' on row %zu." ), row.newName, i + 1 ),
                           _( "Net Chain Classes" ), wxOK | wxICON_ERROR, this );
             return false;
         }
@@ -412,10 +403,7 @@ bool PANEL_SETUP_NET_CHAINS::ApplyEdits()
     if( !m_frame )
         return false;
 
-    CONNECTION_GRAPH* graph = m_frame->Schematic().ConnectionGraph();
-
-    if( !graph )
-        return false;
+    auto& manager = m_frame->Schematic().NetChains();
 
     std::shared_ptr<NET_SETTINGS> ns = m_frame->Prj().GetProjectFile().NetSettings();
 
@@ -427,21 +415,8 @@ bool PANEL_SETUP_NET_CHAINS::ApplyEdits()
 
         if( !row.origName.IsEmpty() && row.origName != row.newName )
         {
-            if( graph->RenameCommittedNetChain( row.origName, row.newName ) )
-            {
-                if( ns && !row.origName.IsEmpty() )
-                {
-                    wxString oldClass = ns->GetNetChainClass( row.origName );
-
-                    if( !oldClass.IsEmpty() )
-                    {
-                        ns->SetNetChainClass( row.origName, wxEmptyString );
-                        ns->SetNetChainClass( row.newName, oldClass );
-                    }
-                }
-
+            if( manager.RenameCommittedNetChain( row.origName, row.newName ) )
                 row.origName = row.newName;
-            }
         }
     }
 
@@ -473,11 +448,8 @@ bool PANEL_SETUP_NET_CHAINS::ApplyEdits()
         if( !row.deletePending )
             continue;
 
-        if( !row.origName.IsEmpty() && graph->DeleteCommittedNetChain( row.origName ) )
-        {
-            if( ns )
-                ns->SetNetChainClass( row.origName, wxEmptyString );
-        }
+        if( !row.origName.IsEmpty() )
+            manager.DeleteCommittedNetChain( row.origName );
     }
 
     // Step 6 — chain-class master list.  Drop classes the user marked deleted
@@ -572,7 +544,7 @@ int PANEL_SETUP_NET_CHAINS::selectedClassRow() const
 
 bool PANEL_SETUP_NET_CHAINS::nameInChainGridAlready( const wxString& aName, int aExceptRow ) const
 {
-    for( int i = 0; i < static_cast<int>( m_chainRows.size() ); ++i )
+    for( int i = 0; i < (int) m_chainRows.size(); ++i )
     {
         if( i == aExceptRow )
             continue;
@@ -630,8 +602,9 @@ void PANEL_SETUP_NET_CHAINS::OnDeleteChainClicked( wxCommandEvent& )
 void PANEL_SETUP_NET_CHAINS::OnChainGridSelectionChanged( wxGridEvent& aEvent )
 {
     int gridRow = aEvent.GetRow();
-    int dataIdx = ( gridRow >= 0 && gridRow < static_cast<int>( m_gridToChainIdx.size() ) )
-                          ? m_gridToChainIdx[gridRow] : -1;
+    int dataIdx = ( gridRow >= 0 && gridRow < (int) m_gridToChainIdx.size() ) ? m_gridToChainIdx[gridRow]
+                                                                              : -1;
+
     updateMembersDetail( dataIdx );
     aEvent.Skip();
 }
@@ -649,10 +622,11 @@ void PANEL_SETUP_NET_CHAINS::updateMembersDetail( int aRow )
 
     const CHAIN_ROW& row = m_chainRows[aRow];
 
-    wxString label = row.newName.IsEmpty()
-                         ? wxString::Format( _( "Member Nets (%zu)" ), row.memberNets.size() )
-                         : wxString::Format( _( "Member Nets \u2014 %s (%zu)" ), row.newName,
-                                             row.memberNets.size() );
+    wxString label = row.newName.IsEmpty() ? wxString::Format( _( "Member Nets (%zu)" ),
+                                                               row.memberNets.size() )
+                                           : wxString::Format( _( "Member Nets \u2014 %s (%zu)" ),
+                                                               row.newName,
+                                                               row.memberNets.size() );
 
     m_membersLabel->SetLabel( label );
 
@@ -678,8 +652,8 @@ void PANEL_SETUP_NET_CHAINS::OnClassAddClicked( wxCommandEvent& )
 
     if( name.IsEmpty() || nameInClassGridAlready( name, -1 ) )
     {
-        wxMessageBox( _( "That class name is empty or already in use." ),
-                      _( "Add Class" ), wxOK | wxICON_ERROR, this );
+        wxMessageBox( _( "That class name is empty or already in use." ), _( "Add Class" ), wxOK | wxICON_ERROR,
+                      this );
         return;
     }
 
@@ -702,8 +676,7 @@ void PANEL_SETUP_NET_CHAINS::OnClassRenameClicked( wxCommandEvent& )
 
     CLASS_ROW& row = m_classRows[r];
 
-    wxTextEntryDialog dlg( this, _( "Rename net chain class:" ), _( "Rename Class" ),
-                           row.newName );
+    wxTextEntryDialog dlg( this, _( "Rename net chain class:" ), _( "Rename Class" ), row.newName );
 
     if( dlg.ShowModal() != wxID_OK )
         return;
@@ -712,8 +685,8 @@ void PANEL_SETUP_NET_CHAINS::OnClassRenameClicked( wxCommandEvent& )
 
     if( name.IsEmpty() || nameInClassGridAlready( name, r ) )
     {
-        wxMessageBox( _( "That class name is empty or already in use." ),
-                      _( "Rename Class" ), wxOK | wxICON_ERROR, this );
+        wxMessageBox( _( "That class name is empty or already in use." ), _( "Rename Class" ), wxOK | wxICON_ERROR,
+                      this );
         return;
     }
 

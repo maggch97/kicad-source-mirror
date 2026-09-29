@@ -218,7 +218,7 @@ bool SPICE_CIRCUIT_MODEL::ParseNoiseCommand( const wxString& aCmd, wxString* aOu
 
     if( token.Lower() == "dec" || token.Lower() == "oct" || token.Lower() == "lin" )
     {
-        *aScale = token;
+        *aScale = token.Lower();
         token = tokens.GetNextToken();
     }
 
@@ -256,5 +256,10 @@ void SPICE_CIRCUIT_MODEL::WriteDirectives( const wxString& aSimCommand, unsigned
     NETLIST_EXPORTER_SPICE::WriteDirectives( aSimCommand, aSimOptions, aFormatter );
 
     if( !aSimCommand.IsEmpty() )
-        aFormatter.Print( 0, "%s\n", TO_UTF8( aSimCommand ) );
+    {
+        if( CommandToSimType( aSimCommand ) == ST_FFT )
+            aFormatter.Print( 0, ".control\n%s\n.endc\n", TO_UTF8( aSimCommand ) );
+        else
+            aFormatter.Print( 0, "%s\n", TO_UTF8( aSimCommand ) );
+    }
 }

@@ -25,6 +25,8 @@ set( QA_KIMATH_SRCS
 
     geometry/geom_test_utils.cpp
     geometry/test_arc_chord_params.cpp
+    geometry/test_arc_construction.cpp
+    geometry/test_bezier.cpp
     geometry/test_chamfer.cpp
     geometry/test_circle.cpp
     geometry/test_distribute.cpp
@@ -33,11 +35,14 @@ set( QA_KIMATH_SRCS
     geometry/test_ellipse_to_bezier.cpp
     geometry/test_fillet.cpp
     geometry/test_half_line.cpp
+    geometry/test_intersection.cpp
     geometry/test_oval.cpp
+    geometry/test_poisson_disk.cpp
     geometry/test_poly_triangulation.cpp
     geometry/test_triangulation_benchmark.cpp
-    geometry/test_pip_benchmark.cpp
+    geometry/test_poly_ystripes_index.cpp
     geometry/test_segment.cpp
+    geometry/test_segment_index.cpp
     geometry/test_shape_compound_collision.cpp
     geometry/test_shape_arc.cpp
     geometry/test_shape_ellipse.cpp

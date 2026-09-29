@@ -22,7 +22,9 @@
 #include <eeschema_test_utils.h>
 #include <test_netlist_exporter_spice.h>
 #include <sim/sim_model_raw_spice.h>
+#include <sim/spice_circuit_model.h>
 #include <sim/spice_generator.h>
+#include <richio.h>
 #include <reporter.h>
 #include <wx/ffile.h>
 #include <wx/filename.h>
@@ -218,8 +220,8 @@ BOOST_FIXTURE_TEST_CASE( IbisModelSuppliesCacheInclude, TEST_SIM_REGRESSIONS_FIX
 
     // The fixture carries six IBIS symbols; asserting the exact names pins the per-reference
     // cache naming.
-    for( const wxString& ref : { wxS( "U1" ), wxS( "U2" ), wxS( "U3" ),
-                                 wxS( "U4" ), wxS( "U5" ), wxS( "U6" ) } )
+    for( const wxString ref : { wxS( "U1" ), wxS( "U2" ), wxS( "U3" ),
+                                wxS( "U4" ), wxS( "U5" ), wxS( "U6" ) } )
     {
         wxString cacheName = ref + wxS( ".cache" );
 
@@ -228,6 +230,44 @@ BOOST_FIXTURE_TEST_CASE( IbisModelSuppliesCacheInclude, TEST_SIM_REGRESSIONS_FIX
     }
 
     Cleanup();
+}
+
+
+BOOST_FIXTURE_TEST_CASE( FFTCommandNotBareInNetlist, TEST_SIM_REGRESSIONS_FIXTURE )
+{
+    LOCALE_IO dummy;
+
+    LoadSchematic( SchematicQAPath( wxS( "issue13591" ) ) );
+
+    SPICE_CIRCUIT_MODEL model( m_schematic.get(), nullptr );
+    STRING_FORMATTER    formatter;
+
+    const wxString fftCommand = wxS( "linearize v(/out)\nfft v(/out)" );
+
+    BOOST_REQUIRE( model.GetNetlist( fftCommand, GetNetlistOptions(), &formatter, *m_reporter ) );
+
+    wxString          netlist( formatter.GetString().c_str(), wxConvUTF8 );
+    wxStringTokenizer lines( netlist, wxS( "\n" ), wxTOKEN_RET_EMPTY_ALL );
+    bool              inControl = false;
+
+    while( lines.HasMoreTokens() )
+    {
+        wxString line = lines.GetNextToken().Trim( false ).Trim( true ).Lower();
+
+        if( line.IsSameAs( wxS( ".control" ) ) )
+        {
+            inControl = true;
+        }
+        else if( line.IsSameAs( wxS( ".endc" ) ) )
+        {
+            inControl = false;
+        }
+        else if( !inControl )
+        {
+            BOOST_CHECK_MESSAGE( !line.StartsWith( wxS( "linearize" ) ) && !line.StartsWith( wxS( "fft" ) ),
+                                 "Bare control command leaked into netlist: " << line );
+        }
+    }
 }
 
 
@@ -243,8 +283,7 @@ BOOST_AUTO_TEST_CASE( RawSpiceModelSuppliesLibraryInclude )
 
     model.SetParamValue( "lib", "device.lib" );
 
-    std::vector<wxString> includes = model.GetSpiceIncludes( item, nullptr,
-                                                             NULL_REPORTER::GetInstance() );
+    std::vector<wxString> includes = model.GetSpiceIncludes( item, nullptr, NULL_REPORTER::GetInstance() );
 
     BOOST_REQUIRE_EQUAL( includes.size(), 1u );
     BOOST_CHECK_EQUAL( includes.front(), wxString( wxS( "device.lib" ) ) );

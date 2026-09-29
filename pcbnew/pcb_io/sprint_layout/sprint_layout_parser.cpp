@@ -27,6 +27,7 @@
 #include <board_item_container.h>
 #include <board_design_settings.h>
 #include <footprint.h>
+#include <memory>
 #include <netinfo.h>
 #include <pad.h>
 #include <pcb_group.h>
@@ -312,18 +313,18 @@ void SPRINT_LAYOUT_PARSER::parseFileStart( const wxString& aFileName )
     wxFFileInputStream stream( aFileName );
 
     if( !stream.IsOk() )
-        THROW_IO_ERROR( wxString::Format( _( "Cannot open file '%s'" ), aFileName ) );
+        THROW_IO_ERRORF( _( "Cannot open file '%s'" ), aFileName );
 
     size_t fileSize = stream.GetLength();
 
     if( fileSize < 8 )
-        THROW_IO_ERROR( wxString::Format( _( "File '%s' is too small to be a Sprint Layout file" ), aFileName ) );
+        THROW_IO_ERRORF( _( "File '%s' is too small to be a Sprint Layout file" ), aFileName );
 
     m_buffer.resize( fileSize );
     stream.Read( m_buffer.data(), fileSize );
 
     if( stream.LastRead() != fileSize )
-        THROW_IO_ERROR( wxString::Format( _( "Failed to read file '%s'" ), aFileName ) );
+        THROW_IO_ERRORF( _( "Failed to read file '%s'" ), aFileName );
 
     m_start = m_buffer.data();
     m_pos = m_start;
@@ -478,7 +479,7 @@ void SPRINT_LAYOUT_PARSER::parseObject( SPRINT_LAYOUT::OBJECT& aObj, bool aIsTex
         && aObj.type != SPRINT_LAYOUT::OBJ_CIRCLE && aObj.type != SPRINT_LAYOUT::OBJ_LINE
         && aObj.type != SPRINT_LAYOUT::OBJ_STROKE_TEXT && aObj.type != SPRINT_LAYOUT::OBJ_SMD_PAD )
     {
-        THROW_IO_ERROR( wxString::Format( _( "Unknown object type %d in Sprint Layout file" ), aObj.type ) );
+        THROW_IO_ERRORF( _( "Unknown object type %d in Sprint Layout file" ), aObj.type );
     }
 
     aObj.x = readCoord();
@@ -638,9 +639,7 @@ void SPRINT_LAYOUT_PARSER::parseObject( SPRINT_LAYOUT::OBJECT& aObj, bool aIsTex
     }
 
     default:
-    {
-        THROW_IO_ERROR( wxString::Format( _( "Unknown object type %d in Sprint Layout file" ), aObj.type ) );
-    }
+        THROW_IO_ERRORF( _( "Unknown object type %d in Sprint Layout file" ), aObj.type );
     }
 }
 
@@ -837,13 +836,13 @@ NETINFO_ITEM* SPRINT_LAYOUT_PARSER::resolveItemNet( BOARD* aBoard, const SPRINT_
 }
 
 
-BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOOTPRINT>>& aFootprintMap,
-                                          size_t                                          aBoardIndex )
+bool SPRINT_LAYOUT_PARSER::CreateBoard( BOARD& aBoard, std::map<wxString, std::unique_ptr<FOOTPRINT>>& aFootprintMap,
+                                        size_t aBoardIndex )
 {
     if( aBoardIndex >= m_fileData.boards.size() )
-        return nullptr;
+        return false;
 
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+    BOARD* board = &aBoard;
 
     // Set up copper layers based on whether inner layers are used
     const SPRINT_LAYOUT::BOARD_DATA& boardData = m_fileData.boards[aBoardIndex];
@@ -898,10 +897,10 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
         int w = sprintToKicadCoord( static_cast<float>( boardData.size_x ) );
         int h = sprintToKicadCoord( static_cast<float>( boardData.size_y ) );
 
-        gndPlaneNet = new NETINFO_ITEM( board.get(), gndPlaneNetName );
+        gndPlaneNet = new NETINFO_ITEM( board, gndPlaneNetName );
         board->Add( gndPlaneNet );
 
-        ZONE* zone = new ZONE( board.get() );
+        ZONE* zone = new ZONE( board );
         zone->SetLayerSet( groundPlaneLayerSet );
         zone->SetIsRuleArea( false );
         zone->SetZoneName( wxS( "GND_PLANE" ) );
@@ -933,7 +932,7 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
         if( it != componentMap.end() )
             return it->second;
 
-        FOOTPRINT* fp = new FOOTPRINT( board.get() );
+        FOOTPRINT* fp = new FOOTPRINT( board );
 
         if( aObj.type == SPRINT_LAYOUT::OBJ_STROKE_TEXT && !aObj.text.empty() )
         {
@@ -986,7 +985,7 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
     // Second pass: process all objects in board/footprint context
     for( const SPRINT_LAYOUT::OBJECT& obj : boardData.objects )
     {
-        BOARD_ITEM_CONTAINER* container = board.get();
+        BOARD_ITEM_CONTAINER* container = board;
 
         if( FOOTPRINT* fp = getOrCreateComponentFootprint( obj ) )
             container = fp;
@@ -1026,7 +1025,7 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
         // clang-format on
     }
 
-    resolveGroups( board.get(), gidToItems );
+    resolveGroups( board, gidToItems );
 
     // Re-anchor footprints after all elements are added.
     for( FOOTPRINT* fp : board->Footprints() )
@@ -1050,7 +1049,7 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
         aFootprintMap[fpKey] = std::unique_ptr<FOOTPRINT>( fpCopy );
     }
 
-    buildOutline( board.get(), outlineSegments, boardData );
+    buildOutline( board, outlineSegments, boardData );
 
     // Center the board content on the page
     BOX2I bbox = board->ComputeBoundingBox( true );
@@ -1070,11 +1069,11 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
             item->Move( centerOffset );
     }
 
-    return board.release();
+    return true;
 }
 
 
-FOOTPRINT* SPRINT_LAYOUT_PARSER::CreateFootprint()
+std::unique_ptr<FOOTPRINT> SPRINT_LAYOUT_PARSER::CreateFootprint()
 {
     if( m_fileData.boards.empty() )
         return nullptr;
@@ -1098,7 +1097,7 @@ FOOTPRINT* SPRINT_LAYOUT_PARSER::CreateFootprint()
     for( const SPRINT_LAYOUT::OBJECT& obj : boardData.objects )
     {
         BOARD_ITEM_CONTAINER* container = fp.get();
-        
+
         // clang-format off
         switch( obj.type )
         {
@@ -1150,7 +1149,7 @@ FOOTPRINT* SPRINT_LAYOUT_PARSER::CreateFootprint()
 
     fp->Add( shape.release(), ADD_MODE::APPEND );
 
-    return fp.release();
+    return fp;
 }
 
 
@@ -1264,50 +1263,50 @@ void SPRINT_LAYOUT_PARSER::processPad( BOARD_ITEM_CONTAINER* aContainer, const S
         {
         case SPRINT_LAYOUT::THT_SHAPE_H_ROUND:
         case SPRINT_LAYOUT::THT_SHAPE_H_CHAMFER:
-        case SPRINT_LAYOUT::THT_SHAPE_H_RECT: 
+        case SPRINT_LAYOUT::THT_SHAPE_H_RECT:
             padSize.x *= 2;
             break;
 
         case SPRINT_LAYOUT::THT_SHAPE_V_ROUND:
         case SPRINT_LAYOUT::THT_SHAPE_V_CHAMFER:
-        case SPRINT_LAYOUT::THT_SHAPE_V_RECT: 
+        case SPRINT_LAYOUT::THT_SHAPE_V_RECT:
             padSize.y *= 2;
             break;
 
         default: break;
         }
 
-        pad->SetSize( PADSTACK::ALL_LAYERS, padSize );
+        pad->SetSize( PADSTACK::TEMP_ALL_LAYERS, padSize );
         pad->SetDrillSize( drillSize );
 
         switch( aObj.tht_shape )
         {
         case SPRINT_LAYOUT::THT_SHAPE_CIRCLE:
-            pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
+            pad->SetShape( PADSTACK::TEMP_ALL_LAYERS, PAD_SHAPE::CIRCLE );
             break;
 
         case SPRINT_LAYOUT::THT_SHAPE_H_ROUND:
         case SPRINT_LAYOUT::THT_SHAPE_V_ROUND:
-            pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::OVAL );
+            pad->SetShape( PADSTACK::TEMP_ALL_LAYERS, PAD_SHAPE::OVAL );
             break;
 
         case SPRINT_LAYOUT::THT_SHAPE_OCT:
         case SPRINT_LAYOUT::THT_SHAPE_H_CHAMFER:
         case SPRINT_LAYOUT::THT_SHAPE_V_CHAMFER:
-            pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CHAMFERED_RECT );
-            pad->SetChamferRectRatio( PADSTACK::ALL_LAYERS, 0.25 );
-            pad->SetChamferPositions( PADSTACK::ALL_LAYERS,
+            pad->SetShape( PADSTACK::TEMP_ALL_LAYERS, PAD_SHAPE::CHAMFERED_RECT );
+            pad->SetChamferRectRatio( PADSTACK::TEMP_ALL_LAYERS, 0.25 );
+            pad->SetChamferPositions( PADSTACK::TEMP_ALL_LAYERS,
                                       RECT_CHAMFER_ALL );
             break;
 
         case SPRINT_LAYOUT::THT_SHAPE_SQUARE:
         case SPRINT_LAYOUT::THT_SHAPE_H_RECT:
         case SPRINT_LAYOUT::THT_SHAPE_V_RECT:
-            pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::RECTANGLE );
+            pad->SetShape( PADSTACK::TEMP_ALL_LAYERS, PAD_SHAPE::RECTANGLE );
             break;
 
         default:
-            pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
+            pad->SetShape( PADSTACK::TEMP_ALL_LAYERS, PAD_SHAPE::CIRCLE );
             break;
         }
 
@@ -1328,7 +1327,7 @@ void SPRINT_LAYOUT_PARSER::processPad( BOARD_ITEM_CONTAINER* aContainer, const S
         if( standaloneFp && IsBackLayer( padLayer ) )
             fp->SetLayer( B_Cu );
 
-        pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::RECTANGLE );
+        pad->SetShape( PADSTACK::TEMP_ALL_LAYERS, PAD_SHAPE::RECTANGLE );
 
         int width = sprintToKicadCoord( aObj.outer );
         int height = sprintToKicadCoord( aObj.inner );
@@ -1339,7 +1338,7 @@ void SPRINT_LAYOUT_PARSER::processPad( BOARD_ITEM_CONTAINER* aContainer, const S
         if( !aObj.points.empty() )
             padPos = ptsCenter;
 
-        pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( width, height ) );
+        pad->SetSize( PADSTACK::TEMP_ALL_LAYERS, VECTOR2I( width, height ) );
         pad->SetPosition( padPos );
         pad->Rotate( padPos, -ptsAngle );
     }
@@ -1364,7 +1363,7 @@ void SPRINT_LAYOUT_PARSER::processPad( BOARD_ITEM_CONTAINER* aContainer, const S
     {
         int spokeWidth = aObj.rotation * 10000 / 2;
         pad->SetLocalThermalSpokeWidthOverride( spokeWidth );
-        
+
         // Each byte is the spoke directions for one copper layer (C1, C2, I1, I2).
         // 0x55 matches H/V directions, 0xAA matches diagonal directions
         uint32_t spokeMask = static_cast<uint32_t>( aObj.start_angle );
@@ -1752,7 +1751,7 @@ void SPRINT_LAYOUT_PARSER::processText( BOARD_ITEM_CONTAINER* aContainer, const 
         return;
 
     // When inside a group, the rotation center seems to be at the group center.
-    // Just so we don't have to do a complex fixup later, use points to detect 
+    // Just so we don't have to do a complex fixup later, use points to detect
     // text center instead, they are always in absolute coordinates.
     VECTOR2I ptsCenter;
 

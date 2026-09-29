@@ -29,6 +29,7 @@
 #include <memory>
 #include <vector>
 
+enum class ALTIUM_PCB_DIR;
 class ALTIUM_PCB_COMPOUND_FILE;
 class BOARD;
 class PROJECT;
@@ -53,6 +54,13 @@ void ApplyAltiumProjectParametersToProject( PROJECT* aProject,
                                             const std::map<wxString, wxString>& aParameters );
 
 
+void LoadAltiumBoard( const wxString& aFileName, BOARD* aBoard,
+                      const std::map<ALTIUM_PCB_DIR, std::string>& aMapping,
+                      const std::map<std::string, UTF8>* aProperties, PROJECT* aProject,
+                      PROGRESS_REPORTER* aProgressReporter, LAYER_MAPPING_HANDLER& aLayerMappingHandler,
+                      REPORTER* aReporter );
+
+
 class PCB_IO_ALTIUM_DESIGNER : public PCB_IO, public LAYER_MAPPABLE_PLUGIN
 {
 public:
@@ -71,17 +79,14 @@ public:
     bool CanReadBoard( const wxString& aFileName ) const override;
     bool CanReadLibrary( const wxString& aFileName ) const override;
 
-    BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                      const std::map<std::string, UTF8>* aProperties, PROJECT* aProject = nullptr ) override;
-
     long long GetLibraryTimestamp( const wxString& aLibraryPath ) const override;
 
     void FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aLibraryPath,
                              bool aBestEfforts, const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
-    FOOTPRINT* FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
-                              bool              aKeepUUID = false,
-                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
+    std::unique_ptr<FOOTPRINT> FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                              bool                               aKeepUUID = false,
+                                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
     std::vector<FOOTPRINT*> GetImportedCachedLibraryFootprints() override;
 
@@ -104,6 +109,10 @@ public:
      */
     static std::map<wxString, PCB_LAYER_ID> DefaultLayerMappingCallback(
             const std::vector<INPUT_LAYER_DESC>& aInputLayerDescriptionVector );
+
+protected:
+    void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                    const std::map<std::string, UTF8>* aProperties, PROJECT* aProject = nullptr ) override;
 
 private:
     struct ALTIUM_FILE_CACHE

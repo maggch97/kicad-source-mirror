@@ -46,7 +46,7 @@ public:
 
     std::vector<DRC_RE_FIELD_POSITION> GetFieldPositions() const override
     {
-        return { { 20, 55, 32, 1 } };
+        return { { 20, 55, 32 } };
     }
 
     std::vector<wxString> GetConstraintClauses( const RULE_GENERATION_CONTEXT& aContext ) const override
@@ -54,12 +54,12 @@ public:
         wxString code = GetConstraintCode();
         wxString valueStr;
 
-        if( code == "via_count" || code == "min_resolved_spokes" )
+        if( code == "via_count" || code == "min_resolved_spokes" || code == "microvia_stack_depth" )
             valueStr = wxString::Format( "%d", (int) m_numericInputValue );
         else
             valueStr = formatDouble( m_numericInputValue );
 
-        if( code == "via_count" )
+        if( code == "via_count" || code == "microvia_stack_depth" || code == "microvia_aspect_ratio" )
         {
             return { wxString::Format( "(constraint %s (max %s))", code, valueStr ) };
         }

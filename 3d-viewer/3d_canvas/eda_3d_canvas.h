@@ -29,13 +29,26 @@
 #include <gal/hidpi_gl_3D_canvas.h>
 #include <wx/image.h>
 #include <wx/timer.h>
+#include <memory>
+#include <functional>
+#include <optional>
+#include <stop_token>
 
 
 class WX_INFOBAR;
 class wxStatusBar;
+class INFOBAR_REPORTER;
+class STATUSBAR_REPORTER;
+class SYNC_REPORTER;
 class BOARD;
 class RENDER_3D_RAYTRACE_GL;
 class RENDER_3D_OPENGL;
+class PAD;
+class FP_3DMODEL;
+
+
+// A custom event, used to call DoRePaint during an idle time
+wxDECLARE_EVENT( wxEVT_REFRESH_CUSTOM_COMMAND, wxCommandEvent );
 
 
 #define EDA_3D_CANVAS_ID (wxID_HIGHEST + 1321)
@@ -49,10 +62,11 @@ public:
     /**
      *  Create a new 3D Canvas with an attribute list.
      *
-     *  @param aParent the parent creator of this canvas.
-     *  @param aGLAttribs openGL attributes created by #OGL_ATT_LIST::GetAttributesList.
-     *  @param aBoard The board.
-     *  @param aSettings the settings options to be used by this canvas.
+     * @param aParent the parent creator of this canvas.
+     * @param aGLAttribs openGL attributes created by #OGL_ATT_LIST::GetAttributesList.
+     * @param aSettings the settings options to be used by this canvas.
+     * @param aCamera is the #CAMERA settings.
+     * @param a3DCachePointer is a pointer to the 3D cache.
      */
     EDA_3D_CANVAS( wxWindow* aParent, const wxGLAttributes& aGLAttribs, BOARD_ADAPTER& aSettings,
                    CAMERA& aCamera, S3D_CACHE* a3DCachePointer );
@@ -62,7 +76,7 @@ public:
     /**
      * Set a dispatcher that processes events and forwards them to tools.
      *
-     * #DRAW_PANEL_GAL does not take over the ownership. Passing NULL disconnects all event
+     * #EDA_DRAW_PANEL_GAL does not take over the ownership. Passing NULL disconnects all event
      * handlers from the DRAW_PANEL_GAL and parent frame.
      *
      * @param aEventDispatcher is the object that will be used for dispatching events.
@@ -79,7 +93,63 @@ public:
         m_parentInfoBar = aInfoBar;
     }
 
+    /** Consume plain canvas clicks before the normal selection handler. */
+    void SetPickHandler( std::function<bool( const RAY& )> aHandler )
+    {
+        m_pickHandler = std::move( aHandler );
+    }
+
+    /**
+     * Report the mouse position while a pick handler is installed.
+     *
+     * The handler is called with the ray under the cursor, or with nothing when the
+     * cursor leaves the canvas.  Board item roll-over is suspended while it is set.
+     */
+    void SetHoverHandler( std::function<void( const std::optional<RAY>& )> aHandler )
+    {
+        m_hoverHandler = std::move( aHandler );
+    }
+
+    /** A translucent triangle soup drawn over the scene. */
+    struct OVERLAY
+    {
+        glm::mat4            transform{ 1.0f };
+        std::vector<SFVEC3F> vertices; ///< Triangle list in the transform's space.
+        SFVEC4F              color{ 0.0f, 1.0f, 0.0f, 0.5f };
+        bool                 alwaysVisible = false; ///< Draw through whatever is in front of it.
+    };
+
+    void SetOverlays( std::vector<OVERLAY> aOverlays )
+    {
+        m_overlays = std::move( aOverlays );
+    }
+
+    struct MODEL_HIT
+    {
+        unsigned int mesh;
+        unsigned int triangle; ///< Offset into SMESH::m_FaceIdx.
+    };
+
+    /** Pick current mesh geometry; independent of the renderer's cached hit-test scene. */
+    std::optional<MODEL_HIT> PickModel( const RAY& aRay, const S3DMODEL& aGeometry,
+                                       const FP_3DMODEL& aModel, const FOOTPRINT& aFootprint ) const;
+
+    /** Project onto the footprint's seating plane and hit-test copper pads. */
+    PAD* PickFootprintPad( const RAY& aRay, const FOOTPRINT& aFootprint ) const;
+
     void ReloadRequest( BOARD* aBoard = nullptr, S3D_CACHE* aCachePointer = nullptr );
+
+    /**
+     * Rebuild the auxiliary raytracing BVH used for hover hit-testing in OpenGL mode.
+     *
+     * Called from the OpenGL background loader once board layers are ready.
+     */
+    void ReloadRaytracingForHitTesting( std::stop_token aStop );
+
+    /**
+     * Invalidate the hover hit-test BVH before board layers are rebuilt.
+     */
+    void InvalidateRaytracingHitTesting();
 
     /**
      * Query if there is a pending reload request.
@@ -110,6 +180,11 @@ public:
      *  @param aDstImage - Screenshot destination image.
      */
     void GetScreenshot( wxImage& aDstImage );
+
+    /**
+     * Block until any in-progress OpenGL background loading has finished.
+     */
+    void JoinBgWorker();
 
     /**
      * Select a specific 3D view or operation.
@@ -230,6 +305,7 @@ private:
 
     void OnMagnify( wxMouseEvent& event );
     void OnMouseMove( wxMouseEvent& event );
+    void OnMouseLeave( wxMouseEvent& event );
     void OnLeftDown( wxMouseEvent& event );
     void OnLeftUp( wxMouseEvent& event );
     void OnMiddleUp( wxMouseEvent& event );
@@ -286,6 +362,11 @@ private:
     void render3dmousePivot( float aScale );
 
     /**
+     * Draw the translucent overlays over the rendered scene.
+     */
+    void render_overlays();
+
+    /**
      * @return true if OpenGL initialization succeeded.
      */
     bool initializeOpenGL();
@@ -298,9 +379,19 @@ private:
     RAY getRayAtCurrentMousePosition();
 
 private:
+    std::function<bool( const RAY& )>                m_pickHandler;
+    std::function<void( const std::optional<RAY>& )> m_hoverHandler;
+    std::vector<OVERLAY>                             m_overlays;
+
     TOOL_DISPATCHER*       m_eventDispatcher = nullptr;
     wxStatusBar*           m_parentStatusBar = nullptr;         // Parent statusbar to report progress
     WX_INFOBAR*            m_parentInfoBar = nullptr;
+
+    std::unique_ptr<STATUSBAR_REPORTER> m_statusBarReporter;
+    std::unique_ptr<INFOBAR_REPORTER>   m_infoBarReporter;
+
+    std::shared_ptr<SYNC_REPORTER> m_activityReporterSync;
+    std::shared_ptr<SYNC_REPORTER> m_warningReporterSync;
 
     wxGLContext*           m_glRC = nullptr;                    // Current OpenGL context
     bool                   m_is_opengl_initialized = false;
@@ -318,9 +409,11 @@ private:
     int                    m_moving_speed_multiplier = 3; // Camera animation speed multiplier option
 
     BOARD_ADAPTER&         m_boardAdapter;            // Pre-computed 3D info and settings
-    RENDER_3D_BASE*        m_3d_render = nullptr;
-    RENDER_3D_RAYTRACE_GL* m_3d_render_raytracing;
-    RENDER_3D_OPENGL*      m_3d_render_opengl;
+
+    /// Non-owning pointer to the active renderer (one of the two below).
+    RENDER_3D_BASE*                        m_3d_render = nullptr;
+    std::unique_ptr<RENDER_3D_RAYTRACE_GL> m_3d_render_raytracing;
+    std::unique_ptr<RENDER_3D_OPENGL>      m_3d_render_opengl;
 
     bool                   m_opengl_supports_raytracing = true;
     bool                   m_render_raytracing_was_requested = false;

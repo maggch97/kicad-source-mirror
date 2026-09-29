@@ -185,7 +185,7 @@ public:
     /**
      * Return any local clearances set in the "classic" (ie: pre-rule) system.
      *
-     * @param aSource [out] optionally reports the source as a user-readable string.
+     * @param[out] aSource optionally reports the source as a user-readable string.
      * @return the clearance in internal units.
      */
     std::optional<int> GetLocalClearance( wxString* aSource ) const override
@@ -328,8 +328,8 @@ public:
     int GetHatchGap() const { return m_hatchGap; }
     void SetHatchGap( int aStep ) { m_hatchGap = aStep; }
 
-    EDA_ANGLE GetHatchOrientation() const { return m_hatchOrientation; }
-    void SetHatchOrientation( const EDA_ANGLE& aStep ) { m_hatchOrientation = aStep; }
+    EDA_ANGLE GetHatchOrientation() const { return m_hatchOrientation.GetAngle(); }
+    void      SetHatchOrientation( const EDA_ANGLE& aStep ) { m_hatchOrientation = aStep; }
 
     int GetHatchSmoothingLevel() const { return m_hatchSmoothingLevel; }
     void SetHatchSmoothingLevel( int aLevel ) { m_hatchSmoothingLevel = aLevel; }
@@ -402,13 +402,16 @@ public:
         m_thievingSettings.stagger = aStagger;
     }
 
-    EDA_ANGLE GetThievingOrientation() const { return m_thievingSettings.orientation; }
+    EDA_ANGLE GetThievingOrientation() const { return m_thievingSettings.orientation.GetAngle(); }
+
     void SetThievingOrientation( const EDA_ANGLE& aOrientation )
     {
-        if( m_thievingSettings.orientation != aOrientation )
+        EDA_ORIENTATION normalizedOrientation( aOrientation );
+
+        if( m_thievingSettings.orientation != normalizedOrientation )
             SetNeedRefill( true );
 
-        m_thievingSettings.orientation = aOrientation;
+        m_thievingSettings.orientation = normalizedOrientation;
     }
 
     ///
@@ -425,14 +428,15 @@ public:
     SHAPE_POLY_SET GetBoardOutline() const;
 
     // @copydoc BOARD_ITEM::GetEffectiveShape
-    virtual std::shared_ptr<SHAPE>
-    GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
-                       FLASHING aFlash = FLASHING::DEFAULT ) const override;
+    std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
+                                              FLASHING aFlash = FLASHING::DEFAULT,
+                                              DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const override;
 
     /**
      * Test if a point is near an outline edge or a corner of this zone.
      *
      * @param aPosition the VECTOR2I to test
+     * @param aAccuracy is the allowable error for the hit test
      * @return true if a hit, else false
      */
     bool HitTest( const VECTOR2I& aPosition, int aAccuracy = 0 ) const override;
@@ -455,8 +459,7 @@ public:
      * @param aHoleIdx is the index of the hole
      * @return true if aRefPos is inside a zone cutout
      */
-    bool HitTestCutout( const VECTOR2I& aRefPos, int* aOutlineIdx = nullptr,
-                        int* aHoleIdx = nullptr ) const;
+    bool HitTestCutout( const VECTOR2I& aRefPos, int* aOutlineIdx = nullptr, int* aHoleIdx = nullptr ) const;
 
     /**
      * Some intersecting zones, despite being on the same layer with the same net, cannot be
@@ -474,7 +477,6 @@ public:
      *
      * @param aLayer is the layer of the zone to retrieve
      * @param aBuffer = a buffer to store the polygons
-     * @param aError = Maximum error allowed between true arc and polygon approx
      */
     void TransformSolidAreasShapesToPolygon( PCB_LAYER_ID aLayer, SHAPE_POLY_SET& aBuffer ) const;
 
@@ -486,28 +488,32 @@ public:
      * Circles (vias) and arcs (ends of tracks) are approximated by segments.
      *
      * @param aBuffer is a buffer to store the polygon
+     * @param aLayer is the layer of the polygon
      * @param aClearance is the min clearance around outlines
+     * @param aError is the maximum deviation from true circle
+     * @param aErrorLoc
      * @param aBoardOutline is the board outline (if a valid one exists; nullptr otherwise)
      */
-    void TransformSmoothedOutlineToPolygon( SHAPE_POLY_SET& aBuffer, int aClearance,
-                                            int aError, ERROR_LOC aErrorLoc,
-                                            SHAPE_POLY_SET* aBoardOutline ) const;
+    void TransformSmoothedOutlineToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance,
+                                            int aError, ERROR_LOC aErrorLoc, SHAPE_POLY_SET* aBoardOutline ) const;
+
+    double GetCoverageArea( int aTextMargin ) const override;
 
     /**
      * Convert the zone shape to a closed polygon
      * Used in filling zones calculations
      * Circles and arcs are approximated by segments
      *
-     * @param aLayer is the layer of the filled zone to retrieve
      * @param aBuffer is a buffer to store the polygon
+     * @param aLayer is the layer of the filled zone to retrieve
      * @param aClearance is the clearance around the pad
      * @param aError is the maximum deviation from true circle
+     * @param aErrorLoc
      * @param ignoreLineWidth is used for edge cut items where the line width is only for
      *                        visualization
      */
-    void TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer,
-                                  int aClearance, int aError, ERROR_LOC aErrorLoc,
-                                  bool ignoreLineWidth = false ) const override;
+    void TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance,
+                                  int aError, ERROR_LOC aErrorLoc, bool ignoreLineWidth = false ) const override;
 
     /**
      * Test if the given VECTOR2I is near a corner.
@@ -516,8 +522,7 @@ public:
      * @param  aAccuracy  increase the item bounding box by this amount.
      * @param  aCornerHit [out, optional] is the index of the closest vertex found when return
      *                    value is true
-     * @return true if some corner was found to be closer to refPos than aClearance; false
-     *         otherwise.
+     * @return true if some corner was found to be closer to refPos than aClearance; false otherwise.
      */
     bool HitTestForCorner( const VECTOR2I& refPos, int aAccuracy,
                            SHAPE_POLY_SET::VERTEX_INDEX* aCornerHit = nullptr ) const;
@@ -527,8 +532,8 @@ public:
      *
      * @param  refPos     is the VECTOR2I to test.
      * @param  aAccuracy  increase the item bounding box by this amount.
-     * @param  aCornerHit [out, optional] is the index of the closest vertex found when return
-     *                    value is true.
+     * @param[out]  aCornerHit is the index of the closest vertex found when return
+     *                         value is true.
      * @return true if some edge was found to be closer to refPos than aClearance.
      */
     bool HitTestForEdge( const VECTOR2I& refPos, int aAccuracy,
@@ -540,7 +545,7 @@ public:
     bool HitTest( const BOX2I& aRect, bool aContained = true, int aAccuracy = 0 ) const override;
 
     /**
-     * @copydoc EDA_ITEM::HitTest(const SHAPE_LINE_CHAIN& aPoly, bool aContained ) const
+     * @copydoc EDA_ITEM::HitTest(const SHAPE_LINE_CHAIN& aPoly, bool aContained) const
      */
     bool HitTest( const SHAPE_LINE_CHAIN& aPoly, bool aContained ) const override;
 
@@ -571,7 +576,8 @@ public:
     /**
      * Rotate the outlines.
      *
-     * @param aCentre is rot centre
+     * @param aCentre is rotation center point.
+     * @param aAngle is the rotation angle around \a aCentre.
      */
     void Rotate( const VECTOR2I& aCentre, const EDA_ANGLE& aAngle ) override;
 
@@ -680,7 +686,7 @@ public:
      *                          even if it is duplicated.
      * @return true if the corner was added, false if error (aHoleIdx > hole count -1)
      */
-    bool AppendCorner( VECTOR2I aPosition, int aHoleIdx, bool aAllowDuplication = false );
+    bool AppendCorner( const VECTOR2I& aPosition, int aHoleIdx, bool aAllowDuplication = false );
 
     ZONE_BORDER_DISPLAY_STYLE GetHatchStyle() const { return m_borderStyle; }
     void SetHatchStyle( ZONE_BORDER_DISPLAY_STYLE aStyle ) { m_borderStyle = aStyle; }
@@ -717,6 +723,24 @@ public:
      * Create a list of triangles that "fill" the solid areas used for instance to draw
      * these solid areas on OpenGL.
      */
+    /**
+     * Return the layers that actually carry a fill.
+     *
+     * Not the same thing as the zone's layer set.  The file format stores each filled_polygon's
+     * layer independently of the zone's declared layers, so a board can name a fill on a layer
+     * the zone itself does not claim.
+     */
+    std::vector<PCB_LAYER_ID> GetFilledLayers() const;
+
+    /**
+     * Triangulate the zone outline only.
+     *
+     * The per-layer fills are handled by CacheTriangulation(); the outline is a few hundred
+     * points and is kept separate so a caller fanning the fills out across threads can still
+     * get the outline done exactly once.
+     */
+    void CacheOutlineTriangulation();
+
     void CacheTriangulation( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
                              const SHAPE_POLY_SET::TASK_SUBMITTER& aSubmitter = {} );
 
@@ -743,13 +767,12 @@ public:
         m_insulatedIslands[aLayer].insert( aPolyIdx );
     }
 
-    bool BuildSmoothedPoly( SHAPE_POLY_SET& aSmoothedPoly, PCB_LAYER_ID aLayer,
-                            SHAPE_POLY_SET* aBoardOutline,
+    bool BuildSmoothedPoly( SHAPE_POLY_SET& aSmoothedPoly, PCB_LAYER_ID aLayer, SHAPE_POLY_SET* aBoardOutline,
                             SHAPE_POLY_SET* aSmoothedPolyWithApron = nullptr ) const;
 
-    void SetCornerSmoothingType( int aType ) { m_cornerSmoothingType = aType; };
+    void SetCornerSmoothingType( ZONE_SETTINGS::CORNER_SMOOTHING aType ) { m_cornerSmoothingType = aType; };
 
-    int  GetCornerSmoothingType() const { return m_cornerSmoothingType; }
+    ZONE_SETTINGS::CORNER_SMOOTHING GetCornerSmoothingType() const { return m_cornerSmoothingType; }
 
     void SetCornerRadius( unsigned int aRadius );
 
@@ -860,10 +883,10 @@ public:
                                    possible values.
      * @param  aBorderHatchPitch   is the hatch pitch in iu.
      * @param  aRebuildBorderHatch is a flag to indicate whether to re-hatch after having set the
-     *                       previous parameters.
+     *                             previous parameters.
      */
     void SetBorderDisplayStyle( ZONE_BORDER_DISPLAY_STYLE aBorderHatchStyle, int aBorderHatchPitch,
-                                bool aRebuilBorderdHatch );
+                                bool aRebuildBorderHatch );
 
     /**
      * Clear the zone's hatch.
@@ -922,7 +945,7 @@ protected:
 
 protected:
     SHAPE_POLY_SET*       m_Poly;                ///< Outline of the zone.
-    int                   m_cornerSmoothingType;
+    ZONE_SETTINGS::CORNER_SMOOTHING m_cornerSmoothingType;
     unsigned int          m_cornerRadius;
 
     /// An optional unique name for this zone, used for identifying it in DRC checking
@@ -933,13 +956,15 @@ protected:
 
     std::map<PCB_LAYER_ID, ZONE_LAYER_PROPERTIES> m_layerProperties;
 
-    /* Priority: when a zone outline is inside and other zone, if its priority is higher
+    /**
+     * Priority: when a zone outline is inside and other zone, if its priority is higher
      * the other zone priority, it will be created inside.
      * if priorities are equal, a DRC error is set
      */
     unsigned              m_priority;
 
-    /* A zone outline can be a keepout zone.
+    /**
+     * A zone outline can be a rule area.
      * It will be never filled, and DRC should test for pads, tracks and vias
      */
     bool m_isRuleArea;
@@ -951,13 +976,15 @@ protected:
     PLACEMENT_SOURCE_T    m_placementAreaSourceType;
     wxString              m_placementAreaSource;
 
-    /* A zone outline can be a teardrop zone with different rules for priority
+    /**
+     * A zone outline can be a teardrop zone with different rules for priority
      * (always bigger priority than copper zones) and never removed from a
      * copper zone having the same netcode
      */
     TEARDROP_TYPE         m_teardropType;
 
-    /* For keepout zones only:
+    /**
+     * For keepout zones only:
      * what is not allowed inside the keepout ( pads, tracks and vias )
      */
     bool                  m_doNotAllowZoneFills;
@@ -995,7 +1022,7 @@ protected:
     ZONE_FILL_MODE   m_fillMode;                // fill with POLYGONS vs HATCH_PATTERN
     int              m_hatchThickness;          // thickness of lines (if 0 -> solid shape)
     int              m_hatchGap;                // gap between lines (0 -> solid shape
-    EDA_ANGLE        m_hatchOrientation;        // orientation of grid lines
+    EDA_ORIENTATION  m_hatchOrientation;        // orientation of grid lines
     int              m_hatchSmoothingLevel;     // 0 = no smoothing
                                                 // 1 = fillet
                                                 // 2 = arc low def

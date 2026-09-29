@@ -23,6 +23,8 @@
 
 #include <board_design_settings.h>
 #include <settings/app_settings.h>
+#include <settings/bom_settings.h>
+#include <settings/snap_settings.h>
 #include <pcbnew_settings.h>
 #include <project/board_project_settings.h>
 
@@ -60,6 +62,8 @@ public:
     // Only the magneticPads element is used
     MAGNETIC_SETTINGS m_MagneticItems;
 
+    SNAP_INFERENCE_SETTINGS m_SnapInference;
+
     PCB_DISPLAY_OPTIONS m_Display;
 
     AUI_PANELS m_AuiPanels;
@@ -76,9 +80,14 @@ public:
 
     LEADER_MODE m_AngleSnapMode;
 
+    bool m_AutoConstraints;
+
     ARC_EDIT_MODE m_ArcEditMode;
 
     int m_LibWidth;
+
+    FIELDS_TABLE_SETTINGS     m_LibFieldEditor;
+    FIELDS_TABLE_BOM_SETTINGS m_LibFieldEditorBom;
 
     wxString m_LastExportPath;
 

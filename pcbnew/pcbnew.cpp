@@ -25,18 +25,18 @@
 #include <cli_progress_reporter.h>
 #include <confirm.h>
 #include <api/api_handler_footprint.h>
+#include <api/api_handler_fp_libraries.h>
 #include <api/api_handler_pcb.h>
 #include <api/api_server.h>
 #include <api/api_utils.h>
+#include <api/cross_probe_client.h>
 #include <api/headless_footprint_context.h>
 #include <api/headless_pcb_context.h>
 #include <kiface_base.h>
 #include <kiface_ids.h>
 #include <kiway_holder.h>
 #include <pcb_edit_frame.h>
-#include <eda_dde.h>
 #include <macros.h>
-#include <wx/snglinst.h>
 #include <gestfich.h>
 #include <paths.h>
 #include <pcbnew_settings.h>
@@ -60,6 +60,7 @@
 #include <dialogs/panel_grid_settings.h>
 #include <panel_display_options.h>
 #include <panel_edit_options.h>
+#include <dialogs/panel_snapping.h>
 #include <panel_fp_editor_field_defaults.h>
 #include <panel_fp_editor_graphics_defaults.h>
 #include <panel_fp_user_layer_names.h>
@@ -78,7 +79,8 @@
 
 #include <wx/tokenzr.h>
 
-#include "invoke_pcb_dialog.h"
+#include <footprint_library_query.h>
+#include <invoke_pcb_dialog.h>
 #include <wildcards_and_files_ext.h>
 #include "pcbnew_jobs_handler.h"
 #include <diff_merge/diff_doc_kind.h>
@@ -89,6 +91,9 @@
 
 #include <dialogs/panel_toolbar_customization.h>
 #include <3d_viewer/toolbars_3d.h>
+#if defined( KICAD_NATIVE_MODEL_PREVIEW ) && defined( __WXGTK3__ )
+#include <dialogs/native_model_file_picker_gtk.h>
+#endif
 #include <toolbars_footprint_editor.h>
 #include <toolbars_pcb_editor.h>
 
@@ -96,26 +101,58 @@
 
 
 /**
+ * Return the project whose footprint libraries the kiface-level footprint services work
+ * with.
+ */
+static PROJECT* footprintLibraryProject()
+{
+    PROJECT* project = nullptr;
+
+    if( wxTheApp )
+    {
+        wxWindow* focus = wxWindow::FindFocus();
+        wxWindow* top = focus ? wxGetTopLevelParent( focus ) : wxTheApp->GetTopWindow();
+
+        if( top )
+        {
+            if( KIWAY_HOLDER* holder = dynamic_cast<KIWAY_HOLDER*>( top ) )
+                project = &holder->Prj();
+        }
+    }
+
+    if( !project )
+        project = &Pgm().GetSettingsManager().Prj();
+
+    return project;
+}
+
+
+/**
  * Filter footprints based on criteria passed as JSON.
  *
  * Input JSON format:
  *   {"pin_count": N, "filters": ["pattern1", ...], "zero_filters": bool, "max_results": N}
+ *   A "max_results" of zero or less means no limit.
  *
- * Output JSON format:
- *   ["lib:footprint1", "lib:footprint2", ...]
+ * Output JSON format: the object written by FOOTPRINT_MATCH_RESULT::ToJsonStr(), i.e.
+ *   {"matches": ["lib:footprint1", "lib:footprint2", ...], "limited": bool, "success": bool}
+ * where "success" is false when the query could not be performed.
  *
  * @param aFilterJson JSON string with filter parameters
- * @return JSON string with array of matching footprint LIB_IDs
+ * @return JSON string describing the matching footprint LIB_IDs
  */
 static wxString filterFootprints( const wxString& aFilterJson )
 {
     using json = nlohmann::json;
 
+    FOOTPRINT_MATCH_RESULT result;
+    result.m_Success = false;
+
     try
     {
-        json input = json::parse( aFilterJson.ToStdString() );
+        json input = json::parse( aFilterJson.utf8_string() );
 
-        int  pinCount = input.value( "pin_count", 0 );
+        unsigned pinCount = input.value( "pin_count", 0 );
         bool zeroFilters = input.value( "zero_filters", true );
         int  maxResults = input.value( "max_results", 400 );
 
@@ -137,37 +174,20 @@ static wxString filterFootprints( const wxString& aFilterJson )
 
         bool hasFilters = ( pinCount > 0 || !filterMatchers.empty() );
 
+        // A query that can only match nothing is a successful empty result, not a failure.
         if( zeroFilters && !hasFilters )
-            return wxS( "[]" );
-
-        PROJECT* project = nullptr;
-
-        if( wxTheApp )
         {
-            wxWindow* focus = wxWindow::FindFocus();
-            wxWindow* top = focus ? wxGetTopLevelParent( focus ) : wxTheApp->GetTopWindow();
-
-            if( top )
-            {
-                if( KIWAY_HOLDER* holder = dynamic_cast<KIWAY_HOLDER*>( top ) )
-                    project = &holder->Prj();
-            }
+            result.m_Success = true;
+            return result.ToJsonStr();
         }
 
-        if( !project )
-            project = &Pgm().GetSettingsManager().Prj();
-
-        FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( project );
+        FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( footprintLibraryProject() );
 
         if( !adapter )
-            return wxS( "[]" );
+            return result.ToJsonStr();
 
         adapter->AsyncLoad();
         adapter->BlockUntilLoaded();
-
-        // Iterate through preloaded footprints directly instead of re-reading from disk
-        json output = json::array();
-        int  count = 0;
 
         for( const wxString& nickname : adapter->GetLibraryNames() )
         {
@@ -181,7 +201,7 @@ static wxString filterFootprints( const wxString& aFilterJson )
                 // Pin count filter
                 if( pinCount > 0 )
                 {
-                    int fpPadCount = fp->GetUniquePadCount( DO_NOT_INCLUDE_NPTH );
+                    unsigned fpPadCount = fp->GetNumberedPadCount();
 
                     if( fpPadCount != pinCount )
                         continue;
@@ -213,23 +233,71 @@ static wxString filterFootprints( const wxString& aFilterJson )
                         continue;
                 }
 
-                wxString libId = fp->GetFPID().Format();
-                output.push_back( libId.ToStdString() );
-
-                if( ++count >= maxResults )
+                // The list is full already, so this match means the result set is
+                // truncated; the list itself keeps its maxResults entries.
+                if( maxResults > 0 && static_cast<int>( result.m_MatchingNames.size() ) >= maxResults )
+                {
+                    result.m_IsLimited = true;
                     break;
+                }
+
+                wxString libId = fp->GetFPID().Format();
+                result.m_MatchingNames.emplace_back( libId );
             }
 
-            if( count >= maxResults )
+            if( result.m_IsLimited )
                 break;
         }
 
-        return wxString::FromUTF8( output.dump() );
+        result.m_Success = true;
+
+        return result.ToJsonStr();
     }
     catch( const std::exception& )
     {
-        return wxS( "[]" );
+        // A failure carries no matches, even if the scan had already collected some.
+        result.m_MatchingNames.clear();
+        result.m_Success = false;
+        return result.ToJsonStr();
     }
+}
+
+
+/**
+ * Start loading the footprint libraries in the background. Never blocks.
+ */
+static bool startFootprintLibraryLoad()
+{
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( footprintLibraryProject() );
+
+    if( adapter )
+    {
+        adapter->AsyncLoad();
+        return true;
+    }
+
+    return false;
+}
+
+
+/**
+ * Return how far a background load has got.
+ *
+ * Never blocks: callers can poll this while showing a loading indication, and only run
+ * #filterFootprints() (which does wait for the load) after it returns 1.0.
+ */
+static float footprintLibraryLoadProgress()
+{
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( footprintLibraryProject() );
+
+    if( !adapter )
+        return 1.0f;
+
+    // Nothing to report means there is nothing to wait for.
+    if( std::optional<float> progress = adapter->AsyncLoadProgress() )
+        return *progress;
+
+    return 1.0f;
 }
 
 
@@ -271,7 +339,8 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
             if( Kiface().IsSingle() )
             {
                 // only run this under single_top, not under a project manager.
-                frame->CreateServer( KICAD_PCB_PORT_SERVICE_NUMBER );
+                if( !CROSS_PROBE_CLIENT::IsOnStandardSocketPath() )
+                    CROSS_PROBE_CLIENT::AnnounceToPrimary( FRAME_PCB_EDITOR );
             }
 
             return frame;
@@ -333,6 +402,11 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
 
             return new PANEL_GRID_SETTINGS( aParent, this, frame, cfg, FRAME_FOOTPRINT_EDITOR );
         }
+
+        case PANEL_FP_SNAPPING:
+            return CreateSnappingPanel( aParent, GetAppSettings<FOOTPRINT_EDITOR_SETTINGS>( "fpedit" ),
+                                        FRAME_FOOTPRINT_EDITOR, &FOOTPRINT_EDITOR_SETTINGS::m_SnapInference,
+                                        &FOOTPRINT_EDITOR_SETTINGS::m_MagneticItems );
 
         case PANEL_FP_ORIGINS_AXES:
             return new PANEL_PCBNEW_DISPLAY_ORIGIN( aParent, GetAppSettings<FOOTPRINT_EDITOR_SETTINGS>( "fpedit" ),
@@ -428,6 +502,10 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
 
             return new PANEL_GRID_SETTINGS( aParent, this, frame, cfg, FRAME_PCB_EDITOR );
         }
+
+        case PANEL_PCB_SNAPPING:
+            return CreateSnappingPanel( aParent, GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" ), FRAME_PCB_EDITOR,
+                                        &PCBNEW_SETTINGS::m_SnapInference, &PCBNEW_SETTINGS::m_MagneticItems );
 
         case PANEL_PCB_ORIGINS_AXES:
             return new PANEL_PCBNEW_DISPLAY_ORIGIN( aParent, GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" ),
@@ -556,6 +634,20 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
             return reinterpret_cast<void*>( &filterFootprints );
         }
 
+        case KIFACE_TRIGGER_FOOTPRINTS_LOAD:
+        {
+            // Start the background load of the libraries filtered by filterFootprints
+            // Signature: void (*)()
+            return reinterpret_cast<void*>( &startFootprintLibraryLoad );
+        }
+
+        case KIFACE_FOOTPRINTS_LOAD_PROGRESS:
+        {
+            // Report how far the load started by startFootprintMatchLoad() has got
+            // Signature: float (*)()
+            return reinterpret_cast<void*>( &footprintLibraryLoadProgress );
+        }
+
         case KIFACE_MERGE_DOCUMENT:
             return reinterpret_cast<void*>( &pcbnewMergeExport );
 
@@ -583,7 +675,7 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
 
     bool HandleJobConfig( JOB* aJob, wxWindow* aParent ) override;
 
-    bool HandleApiOpenDocument( const wxString& aPath,
+    bool HandleApiOpenDocument( const DOCUMENT_SPEC& aSpec,
                                 KICAD_API_SERVER* aServer,
                                 wxString* aError ) override;
 
@@ -593,12 +685,17 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
 
     bool handleOpenPcb( const wxString& aPath, KICAD_API_SERVER* aServer, wxString* aError );
 
+    bool handleCreatePcb( const wxString& aPath, KICAD_API_SERVER* aServer, wxString* aError );
+
     bool handleOpenFootprint( const wxString& aProjectPath, const wxString& aLibIdStr, KICAD_API_SERVER* aServer,
                               wxString* aError );
 
     void PreloadLibraries( KIWAY* aKiway ) override;
     void ProjectChanged() override;
     void CancelPreload( bool aBlock = true ) override;
+    void RegisterLibraryHandlers( KICAD_API_SERVER* aServer ) override;
+    bool LoadAllLibraries() override;
+
 
 private:
     std::unique_ptr<PCBNEW_JOBS_HANDLER> m_jobHandler;
@@ -614,6 +711,7 @@ private:
     std::unique_ptr<API_HANDLER_PCB>            m_openHandler;
     std::shared_ptr<HEADLESS_FOOTPRINT_CONTEXT> m_openFpContext;
     std::unique_ptr<API_HANDLER_FOOTPRINT>      m_openFpHandler;
+    std::unique_ptr<API_HANDLER_FP_LIBRARIES>   m_apiHandlerFpLibs;
 
 } kiface( "pcbnew", KIWAY::FACE_PCB );
 
@@ -694,6 +792,12 @@ bool IFACE::OnKifaceStart( PGM_BASE* aProgram, int aCtlBits, KIWAY* aKiway )
     KIGIT::RegisterMergeDriver( "kicad-pcb", &KIGIT_PCB_MERGE::Apply );
     KIGIT::RegisterMergeDriver( "kicad-fp",  &KIGIT_FP_MERGE::Apply );
 
+    if( Pgm().ApiServerOrNull() )
+    {
+        m_apiHandlerFpLibs = std::make_unique<API_HANDLER_FP_LIBRARIES>();
+        Pgm().GetApiServer().RegisterHandler( m_apiHandlerFpLibs.get() );
+    }
+
     return true;
 }
 
@@ -705,6 +809,18 @@ void IFACE::Reset()
 
 void IFACE::OnKifaceEnd()
 {
+#if defined( KICAD_NATIVE_MODEL_PREVIEW ) && defined( __WXGTK3__ )
+    ShutdownNativeModelFilePickerGtk();
+#endif
+
+    if( m_apiHandlerFpLibs )
+    {
+        if( Pgm().ApiServerOrNull() )
+            Pgm().GetApiServer().DeregisterHandler( m_apiHandlerFpLibs.get() );
+
+        m_apiHandlerFpLibs.reset();
+    }
+
     // Release the CLI-cached board while the static DRC_ITEM tables it serializes against are
     // still alive; deferring to static teardown crashes reading dangling severity keys
     if( m_jobHandler )
@@ -869,11 +985,17 @@ void IFACE::closeCurrentDocument( KICAD_API_SERVER* aServer )
 }
 
 
-bool IFACE::HandleApiOpenDocument( const wxString& aPath, KICAD_API_SERVER* aServer, wxString* aError )
+bool IFACE::HandleApiOpenDocument( const DOCUMENT_SPEC& aSpec, KICAD_API_SERVER* aServer, wxString* aError )
 {
     wxCHECK( aServer, false );
 
-    if( aPath.IsEmpty() )
+    if( aSpec.kind == DOCUMENT_SPEC::KIND::FPID_KIND )
+        return handleOpenFootprint( aSpec.path, aSpec.libId.GetUniStringLibId(), aServer, aError );
+
+    if( aSpec.kind == DOCUMENT_SPEC::KIND::CREATE_KIND )
+        return handleCreatePcb( aSpec.path, aServer, aError );
+
+    if( aSpec.path.IsEmpty() )
     {
         if( aError )
             *aError = wxS( "No path specified to open" );
@@ -881,7 +1003,7 @@ bool IFACE::HandleApiOpenDocument( const wxString& aPath, KICAD_API_SERVER* aSer
         return false;
     }
 
-    return handleOpenPcb( aPath, aServer, aError );
+    return handleOpenPcb( aSpec.path, aServer, aError );
 }
 
 
@@ -947,6 +1069,13 @@ bool IFACE::handleOpenFootprint( const wxString& aProjectPath, const wxString& a
     }
 
     closeCurrentDocument( aServer );
+
+    if( !m_apiHandlerFpLibs )
+    {
+        m_apiHandlerFpLibs = std::make_unique<API_HANDLER_FP_LIBRARIES>();
+        aServer->RegisterHandler( m_apiHandlerFpLibs.get() );
+    }
+
     m_openFpContext = std::move( newContext );
 
     m_openFpHandler = std::make_unique<API_HANDLER_FOOTPRINT>( m_openFpContext, nullptr );
@@ -967,19 +1096,22 @@ bool IFACE::handleOpenPcb( const wxString& aPath, KICAD_API_SERVER* aServer, wxS
 
     projectPath.MakeAbsolute();
 
-    // Close any existing document before loading a new project. LoadProject with
-    // aSetActive=true destroys the old PROJECT, which would leave the old board and
-    // context holding dangling m_project pointers.
+    // We currently only support one document per type (and each needs to come from
+    // the same project).  This will need evolution once we support MDI and multi-project.
     closeCurrentDocument( aServer );
 
     SETTINGS_MANAGER& settingsManager = Pgm().GetSettingsManager();
 
-    if( !settingsManager.LoadProject( projectPath.GetFullPath(), true ) )
-    {
-        wxLogTrace( traceApi, "Warning: no project file found for %s", aPath );
-    }
-
+    // Reuse an already-loaded project if one exists for this path.
     PROJECT* project = settingsManager.GetProject( projectPath.GetFullPath() );
+
+    if( !project )
+    {
+        if( !settingsManager.LoadProject( projectPath.GetFullPath(), true ) )
+            wxLogTrace( traceApi, "Warning: no project file found for %s", aPath );
+
+        project = settingsManager.GetProject( projectPath.GetFullPath() );
+    }
 
     if( !project )
     {
@@ -1043,7 +1175,91 @@ bool IFACE::handleOpenPcb( const wxString& aPath, KICAD_API_SERVER* aServer, wxS
         return false;
     }
 
+    if( !m_apiHandlerFpLibs )
+    {
+        m_apiHandlerFpLibs = std::make_unique<API_HANDLER_FP_LIBRARIES>();
+        aServer->RegisterHandler( m_apiHandlerFpLibs.get() );
+    }
+
     m_openContext = std::move( newContext );
+
+    m_openHandler = std::make_unique<API_HANDLER_PCB>( m_openContext, nullptr );
+    aServer->RegisterHandler( m_openHandler.get() );
+
+    return true;
+}
+
+
+bool IFACE::handleCreatePcb( const wxString& aPath, KICAD_API_SERVER* aServer, wxString* aError )
+{
+    wxFileName boardPath( aPath );
+    boardPath.MakeAbsolute();
+
+    wxFileName projectPath( boardPath );
+    projectPath.SetExt( FILEEXT::ProjectFileExtension );
+
+    if( m_openContext && m_openContext->IsContentModified() )
+    {
+        if( aError )
+            *aError = wxS( "The current board has unsaved changes; save or revert it first" );
+
+        return false;
+    }
+
+    closeCurrentDocument( aServer );
+
+    SETTINGS_MANAGER& settingsManager = Pgm().GetSettingsManager();
+
+    PROJECT* project = settingsManager.GetProject( projectPath.GetFullPath() );
+
+    if( !project )
+    {
+        settingsManager.LoadProject( projectPath.GetFullPath(), true );;
+        project = settingsManager.GetProject( projectPath.GetFullPath() );
+    }
+
+    if( !project )
+    {
+        if( aError )
+            *aError = wxString::Format( wxS( "Error creating project for %s" ), aPath );
+
+        return false;
+    }
+
+    std::shared_ptr<HEADLESS_PCB_CONTEXT> newContext;
+
+    try
+    {
+        std::unique_ptr<BOARD> newBoard = BOARD_LOADER::CreateEmptyBoard( project );
+
+        if( !newBoard )
+        {
+            if( aError )
+                *aError = wxS( "Failed to create board" );
+
+            return false;
+        }
+
+        newBoard->SetFileName( boardPath.GetFullPath() );
+
+        newContext = std::make_shared<HEADLESS_PCB_CONTEXT>( std::move( newBoard ), project,
+                                                             GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" ), m_kiway );
+    }
+    catch( ... )
+    {
+        if( aError )
+            *aError = wxS( "Failed to create board" );
+
+        return false;
+    }
+
+    m_openContext = std::move( newContext );
+
+    if( !m_apiHandlerFpLibs )
+    {
+        m_apiHandlerFpLibs = std::make_unique<API_HANDLER_FP_LIBRARIES>();
+        aServer->RegisterHandler( m_apiHandlerFpLibs.get() );
+    }
 
     m_openHandler = std::make_unique<API_HANDLER_PCB>( m_openContext, nullptr );
     aServer->RegisterHandler( m_openHandler.get() );
@@ -1161,28 +1377,8 @@ void IFACE::PreloadLibraries( KIWAY* aKiway )
             // crashes when switching projects during library preload.
             if( !aborted )
             {
-                // Collect and report library load errors from adapter
-                wxString errors = adapter->GetLibraryLoadErrors();
-
-                wxLogTrace( traceLibraries,
-                            "pcbnew PreloadLibraries: adapter errors.IsEmpty()=%d, length=%zu",
-                            errors.IsEmpty(), errors.length() );
-
-                if( !errors.IsEmpty() )
-                {
-                    std::vector<LOAD_MESSAGE> messages =
-                            ExtractLibraryLoadErrors( errors, RPT_SEVERITY_ERROR );
-
-                    wxLogTrace( traceLibraries, "  -> adapter: collected %zu messages",
-                                messages.size() );
-
-                    if( !messages.empty() )
-                        Pgm().AddLibraryLoadMessages( messages );
-                }
-                else
-                {
-                    wxLogTrace( traceLibraries, "  -> no errors from footprint adapter" );
-                }
+                // Report library load errors from adapter
+                Pgm().AddLibraryLoadMessages( adapter->GetLibraryLoadErrors() );
             }
             else
             {
@@ -1225,4 +1421,28 @@ void IFACE::CancelPreload( bool aBlock )
         if( aBlock )
             m_libraryPreloadReturn.wait();
     }
+}
+
+
+void IFACE::RegisterLibraryHandlers( KICAD_API_SERVER* aServer )
+{
+    wxCHECK_RET( aServer, "no API server provided" );
+
+    if( !m_apiHandlerFpLibs )
+    {
+        m_apiHandlerFpLibs = std::make_unique<API_HANDLER_FP_LIBRARIES>();
+        aServer->RegisterHandler( m_apiHandlerFpLibs.get() );
+    }
+}
+
+
+bool IFACE::LoadAllLibraries()
+{
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &m_kiway->Prj() );
+
+    if( !adapter )
+        return false;
+
+    adapter->AsyncLoad();
+    return true;
 }

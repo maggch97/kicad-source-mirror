@@ -31,6 +31,7 @@
 #include <bitmaps.h>
 #include <clipboard.h>
 #include <confirm.h>
+#include <core/kicad_algo.h>
 #include <eda_item.h>
 #include <macros.h>
 #include <string_utils.h>
@@ -121,7 +122,7 @@ int PL_EDIT_TOOL::Main( const TOOL_EVENT& aEvent )
         unique_peers.insert( drawItem->GetPeer() );
     }
 
-    m_frame->PushTool( aEvent );
+    SCOPED_TOOL_PUSHER raii( m_frame, aEvent );
 
     Activate();
     // Must be done after Activate() so that it gets set into the correct context
@@ -142,8 +143,7 @@ int PL_EDIT_TOOL::Main( const TOOL_EVENT& aEvent )
         }
         catch( const fmt::format_error& exc )
         {
-            wxLogWarning( wxS( "Exception \"%s\" serializing string ocurred." ),
-                          exc.what() );
+            wxLogWarning( wxS( "Exception \"%s\" serializing string ocurred." ), exc.what() );
             return 1;
         }
     }
@@ -153,7 +153,9 @@ int PL_EDIT_TOOL::Main( const TOOL_EVENT& aEvent )
     {
         m_frame->GetCanvas()->SetCurrentCursor( KICURSOR::MOVING );
 
-        if( evt->IsAction( &PL_ACTIONS::move ) || evt->IsMotion() || evt->IsDrag( BUT_LEFT )
+        if( evt->IsAction( &PL_ACTIONS::move )
+            || evt->IsMotion()
+            || evt->IsDrag( BUT_LEFT )
             || evt->IsAction( &ACTIONS::refreshPreview ) )
         {
             //------------------------------------------------------------------------
@@ -280,7 +282,7 @@ int PL_EDIT_TOOL::Main( const TOOL_EVENT& aEvent )
         //------------------------------------------------------------------------
         // Handle drop
         //
-        else if( evt->IsMouseUp( BUT_LEFT ) || evt->IsClick( BUT_LEFT ) )
+        else if( evt->IsMouseUp( BUT_LEFT ) || evt->IsClick( BUT_LEFT ) || evt->IsAction( &ACTIONS::cursorClick ) )
         {
             break; // Finish
         }
@@ -316,7 +318,6 @@ int PL_EDIT_TOOL::Main( const TOOL_EVENT& aEvent )
         m_toolMgr->PostEvent( EVENTS::SelectedEvent );
 
     m_moveInProgress = false;
-    m_frame->PopTool( aEvent );
     return 0;
 }
 
@@ -518,8 +519,14 @@ int PL_EDIT_TOOL::Copy( const TOOL_EVENT& aEvent )
     if( selection.GetSize() == 0 )
         return 0;
 
+    // A repeated data item generates one draw item per repeat, but must be copied only once.
     for( EDA_ITEM* item : selection.GetItems() )
-        items.push_back( static_cast<DS_DRAW_ITEM_BASE*>( item )->GetPeer() );
+    {
+        DS_DATA_ITEM* peer = static_cast<DS_DRAW_ITEM_BASE*>( item )->GetPeer();
+
+        if( !alg::contains( items, peer ) )
+            items.push_back( peer );
+    }
 
     try
     {
@@ -562,7 +569,7 @@ int PL_EDIT_TOOL::Paste( const TOOL_EVENT& aEvent )
     {
         if( dataItem->GetDrawItems().empty() )
         {
-            dataItem->SyncDrawItems( nullptr, getView() );
+            m_frame->SyncDataItem( dataItem );
             dataItem->GetDrawItems().front()->SetSelected();
         }
     }

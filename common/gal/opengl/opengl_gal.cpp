@@ -49,7 +49,6 @@
 #include <thread_pool.h>
 
 #include <core/profile.h>
-#include <trace_helpers.h>
 
 #include <functional>
 #include <limits>
@@ -73,6 +72,17 @@ static void InitTesselatorCallbacks( GLUtesselator* aTesselator );
 // Trace mask for XOR/difference mode debugging
 static const wxChar* const traceGalXorMode = wxT( "KICAD_GAL_XOR_MODE" );
 
+// Stencil bit allocation used by OPENGL_GAL.  Each independent use of the stencil
+// buffer claims a distinct bit so they can coexist within one frame.
+namespace
+{
+constexpr GLuint STENCIL_DOTS_MARKER = 0x01;   // Set at every dot position by the
+                                               // display-grid DOTS rendering pass.
+constexpr GLuint STENCIL_GRID_COVERAGE = 0x80; // Set inside a PCB_GRIDITEM's coverage
+                                               // area to cut the display grid (and
+                                               // lower-priority grid-items) out.
+} // namespace
+
 static wxGLAttributes getGLAttribs()
 {
     wxGLAttributes attribs;
@@ -86,6 +96,15 @@ int          OPENGL_GAL::m_instanceCounter = 0;
 GLuint       OPENGL_GAL::g_fontTexture = 0;
 bool         OPENGL_GAL::m_isBitmapFontLoaded = false;
 
+int                   OPENGL_GAL::m_contextGroupId = 0;
+bool                  OPENGL_GAL::m_resetBudgetExhausted = false;
+bool                  OPENGL_GAL::m_glLoaded = false;
+GL_RESET_BUDGET       OPENGL_GAL::m_resetBudget( 3, std::chrono::seconds( 60 ) );
+std::set<OPENGL_GAL*> OPENGL_GAL::m_instances;
+bool                  OPENGL_GAL::m_resetSettled = true;
+
+GL_RESET_BUDGET::CLOCK::time_point OPENGL_GAL::m_resetDetectedAt;
+
 namespace KIGFX
 {
 class GL_BITMAP_CACHE
@@ -96,6 +115,9 @@ public:
     {}
 
     ~GL_BITMAP_CACHE();
+
+    /// Drop the cached texture names without deleting them
+    void Abandon() { m_bitmaps.clear(); }
 
     GLuint RequestBitmap( const BITMAP_BASE* aBitmap );
 
@@ -342,6 +364,7 @@ OPENGL_GAL::OPENGL_GAL( const KIGFX::VC_SETTINGS& aVcSettings, GAL_DISPLAY_OPTIO
         HIDPI_GL_CANVAS( aVcSettings, aParent, getGLAttribs(), wxID_ANY, wxDefaultPosition,
                          wxDefaultSize,
                          wxEXPAND, aName ),
+        m_ownContextGroupId( m_contextGroupId ),
         m_mouseListener( aMouseListener ),
         m_paintListener( aPaintListener ),
         m_currentManager( nullptr ),
@@ -353,6 +376,7 @@ OPENGL_GAL::OPENGL_GAL( const KIGFX::VC_SETTINGS& aVcSettings, GAL_DISPLAY_OPTIO
         m_overlayBuffer( 0 ),
         m_tempBuffer( 0 ),
         m_isContextLocked( false ),
+        m_isContextValid( false ),
         m_lockClientCookie( 0 )
 {
     if( m_glMainContext == nullptr )
@@ -374,6 +398,7 @@ OPENGL_GAL::OPENGL_GAL( const KIGFX::VC_SETTINGS& aVcSettings, GAL_DISPLAY_OPTIO
 
     m_shader = new SHADER();
     ++m_instanceCounter;
+    m_instances.insert( this );
 
     m_bitmapCache = std::make_unique<GL_BITMAP_CACHE>();
 
@@ -451,17 +476,48 @@ OPENGL_GAL::OPENGL_GAL( const KIGFX::VC_SETTINGS& aVcSettings, GAL_DISPLAY_OPTIO
 OPENGL_GAL::~OPENGL_GAL()
 {
     GL_CONTEXT_MANAGER* gl_mgr = Pgm().GetGLContextManager();
-    wxASSERT( gl_mgr );
 
     if( gl_mgr )
     {
-        gl_mgr->LockCtx( m_glPrivContext, this );
+        // wxMSW destroys child windows before their C++ objects, so our own device context
+        // can already be gone and the teardown below would run against a sibling's context
+        m_isContextValid = gl_mgr->LockCtx( m_glPrivContext, this );
+
+        // A reset already destroyed our objects, and some drivers report every call as out of memory
+        if( GetContextLoss() != GAL_CONTEXT_LOSS::NONE )
+            m_isContextValid = false;
 
         --m_instanceCounter;
-        if( m_isInitialized )
+        m_instances.erase( this );
+
+        if( !m_isContextValid )
+        {
+            // Whichever context is still current may belong to another share group, so every
+            // delete below would be aimed at an unrelated object of the same name
+            m_compositor->Abandon();
+            m_bitmapCache->Abandon();
+            m_shader->Abandon();
+
+            if( m_isInitialized )
+            {
+                m_cachedManager->Abandon();
+                m_nonCachedManager->Abandon();
+                m_overlayManager->Abandon();
+                m_tempManager->Abandon();
+            }
+        }
+        else if( m_isInitialized )
+        {
             glFlush();
+        }
+
         gluDeleteTess( m_tesselator );
-        ClearCache();
+
+        if( m_isContextValid )
+            ClearCache();
+
+        // Groups free their vertices through the cached manager, so they must go before it does
+        m_groups.clear();
 
         delete m_compositor;
 
@@ -483,11 +539,9 @@ OPENGL_GAL::~OPENGL_GAL()
         delete m_shader;
 
         // Are we destroying the last GAL instance?
-        if( m_instanceCounter == 0 )
+        if( m_instanceCounter == 0 && m_glMainContext )
         {
-            gl_mgr->LockCtx( m_glMainContext, this );
-
-            if( m_isBitmapFontLoaded )
+            if( gl_mgr->LockCtx( m_glMainContext, this ) && m_isBitmapFontLoaded )
             {
                 glDeleteTextures( 1, &g_fontTexture );
                 m_isBitmapFontLoaded = false;
@@ -561,7 +615,9 @@ bool OPENGL_GAL::updatedGalDisplayOptions( const GAL_DISPLAY_OPTIONS& aOptions )
 
     bool refresh = false;
 
-    if( m_options.antialiasing_mode != m_compositor->GetAntialiasingMode() )
+    // Options arrive before the canvas is realized, so the context is not current yet.  Only
+    // the compositor needs it; BeginDrawing reconciles the mode once we can bind
+    if( m_isContextValid && m_options.antialiasing_mode != m_compositor->GetAntialiasingMode() )
     {
         m_compositor->SetAntialiasingMode( m_options.antialiasing_mode );
         m_isFramebufferInitialized = false;
@@ -616,6 +672,13 @@ void OPENGL_GAL::BeginDrawing()
     // Create the screen transformation (Do the RH-LH conversion here)
     glOrtho( 0, (GLint) m_screenSize.x, (GLsizei) m_screenSize.y, 0,
              -m_depthRange.x, -m_depthRange.y );
+
+    // An antialiasing change that arrived without a current context never reached the compositor
+    if( m_options.antialiasing_mode != m_compositor->GetAntialiasingMode() )
+    {
+        m_compositor->SetAntialiasingMode( m_options.antialiasing_mode );
+        m_isFramebufferInitialized = false;
+    }
 
     if( !m_isFramebufferInitialized )
     {
@@ -831,10 +894,14 @@ void OPENGL_GAL::EndDrawing()
 
 bool OPENGL_GAL::GetScreenshot( wxImage& aDstImage )
 {
-    if( !IsInitialized() || !m_compositor )
+    // A canvas that has never drawn has no compositor buffers to read
+    if( !IsInitialized() || !m_isInitialized || !m_compositor )
         return false;
 
     GAL_CONTEXT_LOCKER locker( this );
+
+    if( !m_isContextValid )
+        return false;
 
     m_compositor->SetBuffer( m_mainBuffer );
 
@@ -894,7 +961,108 @@ void OPENGL_GAL::LockContext( int aClientCookie )
     if( !mgr )
         return;
 
-    mgr->LockCtx( m_glPrivContext, this );
+    m_isContextValid = mgr->LockCtx( m_glPrivContext, this );
+
+    // Entry points are process wide, so a canvas that has not drawn yet can still be polled
+    if( m_isContextValid && m_glLoaded && GetContextLoss() == GAL_CONTEXT_LOSS::NONE && detectContextReset() )
+    {
+        orphanContextGroup();
+    }
+
+    // A lost context accepts commands but ignores them, so treat it as unusable
+    if( GetContextLoss() != GAL_CONTEXT_LOSS::NONE )
+        m_isContextValid = false;
+}
+
+
+GAL_CONTEXT_LOSS OPENGL_GAL::GetContextLoss() const
+{
+    if( m_ownContextGroupId == m_contextGroupId )
+        return GAL_CONTEXT_LOSS::NONE;
+
+    return m_resetBudgetExhausted ? GAL_CONTEXT_LOSS::REPEATED : GAL_CONTEXT_LOSS::RECOVERABLE;
+}
+
+
+static GLenum queryResetStatus()
+{
+    if( glGetGraphicsResetStatus )
+        return glGetGraphicsResetStatus();
+
+    if( glGetGraphicsResetStatusARB )
+        return glGetGraphicsResetStatusARB();
+
+    return GL_NO_ERROR;
+}
+
+
+bool OPENGL_GAL::detectContextReset()
+{
+    // Only contexts created with the lose-on-reset strategy ever report a reset
+    GLenum status = queryResetStatus();
+
+    if( status != GL_NO_ERROR )
+        wxLogTrace( traceGalContext, wxS( "GL context %p reset, status 0x%x" ), m_glPrivContext, status );
+
+    return status != GL_NO_ERROR;
+}
+
+
+void OPENGL_GAL::orphanContextGroup()
+{
+    ++m_contextGroupId;
+    m_resetDetectedAt = GL_RESET_BUDGET::CLOCK::now();
+    m_resetSettled = false;
+    m_resetBudgetExhausted = !m_resetBudget.RecordReset( m_resetDetectedAt );
+
+    wxLogTrace( traceGalContext, wxS( "Orphaned GL context group, now %d, budget exhausted %d" ), m_contextGroupId,
+                m_resetBudgetExhausted ? 1 : 0 );
+
+    bool mainOwned = false;
+
+    for( OPENGL_GAL* gal : m_instances )
+    {
+        if( gal->m_glPrivContext == m_glMainContext )
+            mainOwned = true;
+    }
+
+    // A live owner destroys the old main context itself; an ownerless one would otherwise leak
+    if( !mainOwned && m_glMainContext )
+        Pgm().GetGLContextManager()->DestroyCtx( m_glMainContext );
+
+    // The dead group still owns these; the next canvas created starts a new group
+    m_glMainContext = nullptr;
+    g_fontTexture = 0;
+    m_isBitmapFontLoaded = false;
+
+    for( OPENGL_GAL* gal : m_instances )
+        gal->Refresh();
+}
+
+
+bool OPENGL_GAL::IsResetSettled()
+{
+    GL_CONTEXT_MANAGER* mgr = Pgm().GetGLContextManager();
+
+    if( m_resetSettled || !mgr )
+        return true;
+
+    if( GL_RESET_BUDGET::CLOCK::now() - m_resetDetectedAt >= std::chrono::seconds( 2 ) )
+    {
+        wxLogTrace( traceGalContext, wxS( "GL reset did not report completion, rebuilding anyway" ) );
+        m_resetSettled = true;
+        return true;
+    }
+
+    // The lost context keeps reporting the reset until the hardware has finished it
+    if( mgr->LockCtx( m_glPrivContext, this ) && queryResetStatus() == GL_NO_ERROR )
+    {
+        wxLogTrace( traceGalContext, wxS( "GL reset completed" ) );
+        m_resetSettled = true;
+    }
+
+    mgr->UnlockCtx( m_glPrivContext );
+    return m_resetSettled;
 }
 
 
@@ -2074,144 +2242,460 @@ void OPENGL_GAL::DrawGrid()
 {
     SetTarget( TARGET_NONCACHED );
     m_compositor->SetBuffer( m_mainBuffer );
-
     m_nonCachedManager->EnableDepthTest( false );
 
-    // sub-pixel lines all render the same
-    float minorLineWidth = std::fmax( 1.0f,
-                                      m_gridLineWidth ) * getWorldPixelSize() / GetScaleFactor();
-    float majorLineWidth = minorLineWidth * 2.0f;
+    const float minorLineWidth = std::fmax( 1.0f, m_gridLineWidth ) * getWorldPixelSize() / GetScaleFactor();
 
-    // Draw the axis and grid
-    // For the drawing the start points, end points and increments have
-    // to be calculated in world coordinates
-    VECTOR2D worldStartPoint = m_screenWorldMatrix * VECTOR2D( 0.0, 0.0 );
-    VECTOR2D worldEndPoint = m_screenWorldMatrix * VECTOR2D( m_screenSize );
-
-    // Draw axes if desired
+    // Axes drawn first so grid lines at x/y=0 can skip on top of them.
     if( m_axesEnabled )
     {
+        const VECTOR2D worldStartPoint = m_screenWorldMatrix * VECTOR2D( 0.0, 0.0 );
+        const VECTOR2D worldEndPoint = m_screenWorldMatrix * VECTOR2D( m_screenSize );
+
         SetLineWidth( minorLineWidth );
         SetStrokeColor( m_axesColor );
-
         DrawLine( VECTOR2D( worldStartPoint.x, 0 ), VECTOR2D( worldEndPoint.x, 0 ) );
         DrawLine( VECTOR2D( 0, worldStartPoint.y ), VECTOR2D( 0, worldEndPoint.y ) );
+        m_nonCachedManager->EndDrawing();
     }
 
-    // force flush
-    m_nonCachedManager->EndDrawing();
+    const bool renderGlobalGrid = m_gridVisibility && m_gridSize.x != 0 && m_gridSize.y != 0;
 
-    if( !m_gridVisibility || m_gridSize.x == 0 || m_gridSize.y == 0 )
+    if( renderGlobalGrid )
+    {
+        GRID_SOURCE globalGrid;
+        globalGrid.unbounded = true;
+        globalGrid.axesEnabled = m_axesEnabled;
+        globalGrid.kind = GRID_SOURCE::KIND::CARTESIAN;
+        globalGrid.origin = m_gridOrigin;
+        globalGrid.pitch = GetVisibleGridSize();
+        globalGrid.tick = static_cast<unsigned>( m_gridTick );
+        globalGrid.style = m_gridStyle;
+        globalGrid.color = m_gridColor;
+        globalGrid.priority = 0;
+
+        // Appending keeps the precedence order SetGridSources established: every grid
+        // item is bounded, and bounded beats unbounded, so the background grid belongs
+        // last whatever its priority.
+        m_gridSources.push_back( globalGrid );
+    }
+
+    if( !m_gridSources.empty() )
+        drawGridSources();
+
+    if( renderGlobalGrid )
+        m_gridSources.pop_back();
+}
+
+
+void OPENGL_GAL::drawGridCoverageShape( const GRID_SOURCE& src )
+{
+    Save();
+    Translate( src.origin );
+    Rotate( -src.orientation );
+
+    if( src.unbounded )
+    {
+        const BOX2D screen = gridScreenBBox( src );
+
+        DrawRectangle( screen.GetOrigin(), screen.GetEnd() );
+        Restore();
+        return;
+    }
+
+    switch( src.kind )
+    {
+    case GRID_SOURCE::KIND::POLAR:
+    {
+        const double rMax = src.extent.x;
+        const double phiMax = src.extent.y;
+
+        if( rMax > 0.0 && phiMax > 0.0 )
+        {
+            if( phiMax >= 2 * M_PI - 1e-6 )
+            {
+                DrawCircle( VECTOR2D( 0, 0 ), rMax );
+            }
+            else
+            {
+                const int            kArcSegments = std::max( 16, (int) ( phiMax / ( M_PI / 16 ) ) );
+                std::deque<VECTOR2D> poly;
+                poly.emplace_back( 0.0, 0.0 );
+
+                for( int i = 0; i <= kArcSegments; ++i )
+                {
+                    const double phi = phiMax * i / kArcSegments;
+                    poly.emplace_back( rMax * std::cos( phi ), rMax * std::sin( phi ) );
+                }
+
+                poly.emplace_back( 0.0, 0.0 );
+
+                DrawPolygon( poly );
+            }
+        }
+        break;
+    }
+
+    case GRID_SOURCE::KIND::CARTESIAN:
+        DrawRectangle( VECTOR2D( -src.extent.x, -src.extent.y ), VECTOR2D( src.extent.x, src.extent.y ) );
+        break;
+
+    default: wxFAIL_MSG( wxT( "drawGridCoverageShape: unhandled GRID_SOURCE::KIND" ) ); break;
+    }
+
+    Restore();
+}
+
+
+void OPENGL_GAL::drawGridSources()
+{
+    if( m_gridSources.empty() )
         return;
 
-    VECTOR2D gridScreenSize = GetVisibleGridSize();
+    // Pre-sorted by precedence; each bounded source stencils its coverage, so first drawn
+    // wins.  Selected grids go last: they ignore the stencil and draw over everything.
+    std::vector<const GRID_SOURCE*> ordered;
+    ordered.reserve( m_gridSources.size() );
 
-    // Compute grid starting and ending indexes to draw grid points on the
-    // visible screen area
-    // Note: later any point coordinate will be offset by m_gridOrigin
-    int gridStartX = KiROUND( ( worldStartPoint.x - m_gridOrigin.x ) / gridScreenSize.x );
-    int gridEndX = KiROUND( ( worldEndPoint.x - m_gridOrigin.x ) / gridScreenSize.x );
-    int gridStartY = KiROUND( ( worldStartPoint.y - m_gridOrigin.y ) / gridScreenSize.y );
-    int gridEndY = KiROUND( ( worldEndPoint.y - m_gridOrigin.y ) / gridScreenSize.y );
+    for( const GRID_SOURCE& src : m_gridSources )
+    {
+        if( !src.highlighted )
+            ordered.push_back( &src );
+    }
 
-    // Ensure start coordinate < end coordinate
-    normalize( gridStartX, gridEndX );
-    normalize( gridStartY, gridEndY );
+    for( const GRID_SOURCE& src : m_gridSources )
+    {
+        if( src.highlighted )
+            ordered.push_back( &src );
+    }
 
-    // Ensure the grid fills the screen
-    --gridStartX;
-    ++gridEndX;
-    --gridStartY;
-    ++gridEndY;
+    const float minorLineWidth = std::fmax( 1.0f, m_gridLineWidth ) * getWorldPixelSize() / GetScaleFactor();
+    const float majorLineWidth = minorLineWidth * 2.0f;
+    const float hairLineWidth = getWorldPixelSize() / GetScaleFactor();
 
     glDisable( GL_DEPTH_TEST );
     glDisable( GL_TEXTURE_2D );
+    m_nonCachedManager->EnableDepthTest( false );
 
-    if( m_gridStyle == GRID_STYLE::DOTS )
-    {
-        glEnable( GL_STENCIL_TEST );
-        glStencilFunc( GL_ALWAYS, 1, 1 );
-        glStencilOp( GL_KEEP, GL_KEEP, GL_INCR );
-        glColor4d( 0.0, 0.0, 0.0, 0.0 );
-        SetStrokeColor( COLOR4D( 0.0, 0.0, 0.0, 0.0 ) );
-    }
-    else
-    {
-        glColor4d( m_gridColor.r, m_gridColor.g, m_gridColor.b, m_gridColor.a );
-        SetStrokeColor( m_gridColor );
-    }
+    glEnable( GL_STENCIL_TEST );
+    glStencilMask( 0xFF );
+    glClear( GL_STENCIL_BUFFER_BIT );
 
-    if( m_gridStyle == GRID_STYLE::SMALL_CROSS )
+    for( const GRID_SOURCE* srcPtr : ordered )
     {
-        // Vertical positions
-        for( int j = gridStartY; j <= gridEndY; j++ )
+        const GRID_SOURCE& src = *srcPtr;
+
+        // Selected grids let you see the dimmed grid below and do not get stamped out.
+        const GLuint coverageMask = src.highlighted ? 0 : STENCIL_GRID_COVERAGE;
+
+        glStencilMask( 0x00 );
+        glStencilFunc( GL_EQUAL, 0, coverageMask );
+        glStencilOp( GL_KEEP, GL_KEEP, GL_KEEP );
+
+        if( src.highlighted )
         {
-            bool         tickY = ( j % m_gridTick == 0 );
-            const double posY = j * gridScreenSize.y + m_gridOrigin.y;
+            COLOR4D dimming = m_clearColor;
+            dimming.a = GRID_DIM_ALPHA;
 
-            // Horizontal positions
-            for( int i = gridStartX; i <= gridEndX; i++ )
+            SetIsFill( true );
+            SetIsStroke( false );
+            SetFillColor( dimming );
+            drawGridCoverageShape( src );
+            m_nonCachedManager->EndDrawing();
+        }
+
+        COLOR4D color = src.color.a > 0 ? src.color : m_gridColor;
+
+        if( src.highlighted )
+            color.Brighten( GRID_SELECTED_BRIGHTEN );
+
+        glColor4d( color.r, color.g, color.b, color.a );
+        SetStrokeColor( color );
+
+        Save();
+        Translate( src.origin );
+        // GAL Rotate is math-convention; grid orientation is screen-convention.
+        Rotate( -src.orientation );
+
+        const unsigned tick = ( src.tick > 0 ) ? src.tick : static_cast<unsigned>( m_gridTick );
+        const double   threshold =
+                computeMinGridSpacing() / m_worldScale * ( src.style == GRID_STYLE::SMALL_CROSS ? 2.0 : 1.0 );
+
+        // SMALL_CROSS marker.
+        auto drawCrossAt = [&]( const VECTOR2D& pos, bool aMajor, double aArmAngle )
+        {
+            const float    w = aMajor ? majorLineWidth : minorLineWidth;
+            const double   len = 2.0 * w;
+            const double   c = std::cos( aArmAngle );
+            const double   s = std::sin( aArmAngle );
+            const VECTOR2D arm1( c * len, s * len );
+            const VECTOR2D arm2( -s * len, c * len );
+
+            SetIsFill( false );
+            SetIsStroke( true );
+            SetLineWidth( w );
+            DrawLine( pos - arm1, pos + arm1 );
+            DrawLine( pos - arm2, pos + arm2 );
+        };
+
+        // LINES stroke setup.
+        auto beginLines = [&]()
+        {
+            SetIsFill( false );
+            SetIsStroke( true );
+        };
+
+        // DOTS via stencil intersection.
+        auto drawDotsViaStencil = [&]( auto&& aMarkAxis, auto&& aRenderAxis )
+        {
+            // Drop the previous source's markers, keeping its coverage claim.
+            glStencilMask( STENCIL_DOTS_MARKER );
+            glClear( GL_STENCIL_BUFFER_BIT );
+
+            // Mark pass: set marker where claim is clear.
+            glColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+            glStencilFunc( GL_EQUAL, STENCIL_DOTS_MARKER, coverageMask );
+            glStencilOp( GL_KEEP, GL_KEEP, GL_REPLACE );
+            SetIsFill( false );
+            SetIsStroke( true );
+            aMarkAxis();
+            m_nonCachedManager->EndDrawing();
+
+            // Render pass: stroke where marker set and claim clear.
+            glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+            glStencilMask( 0x00 );
+            glStencilFunc( GL_EQUAL, STENCIL_DOTS_MARKER, STENCIL_DOTS_MARKER | coverageMask );
+            glStencilOp( GL_KEEP, GL_KEEP, GL_KEEP );
+            aRenderAxis();
+            m_nonCachedManager->EndDrawing();
+        };
+
+        switch( src.kind )
+        {
+        case GRID_SOURCE::KIND::POLAR:
+        {
+            double rMax;
+            double phiMax;
+            double dr = src.pitch.x;
+            double dPhi = src.pitch.y;
+
+            if( src.unbounded )
             {
-                bool tickX = ( i % m_gridTick == 0 );
-                SetLineWidth( ( ( tickX && tickY ) ? majorLineWidth : minorLineWidth ) );
-                auto lineLen = 2.0 * GetLineWidth();
-                auto posX = i * gridScreenSize.x + m_gridOrigin.x;
+                const BOX2D  screen = gridScreenBBox( src );
+                const double farX = std::max( std::abs( screen.GetLeft() ), std::abs( screen.GetRight() ) );
+                const double farY = std::max( std::abs( screen.GetTop() ), std::abs( screen.GetBottom() ) );
 
-                DrawLine( VECTOR2D( posX - lineLen, posY ), VECTOR2D( posX + lineLen, posY ) );
-                DrawLine( VECTOR2D( posX, posY - lineLen ), VECTOR2D( posX, posY + lineLen ) );
+                rMax = std::hypot( farX, farY ) * 1.01; // bleed past the farthest corner
+                phiMax = 2 * M_PI;
             }
+            else
+            {
+                rMax = src.extent.x;
+                phiMax = src.extent.y;
+            }
+
+            dr = AutoSparsePitch( dr, tick, threshold );
+
+            if( rMax > 0.0 )
+                dPhi = AutoSparsePitch( dPhi, tick, threshold / rMax );
+
+            wxASSERT( dr > 0.0 && dPhi > 0.0 );
+
+            auto drawArcs = [&]()
+            {
+                int rIdx = 0;
+                for( double r = 0; r <= rMax + 1e-6; r += dr, ++rIdx )
+                {
+                    if( r == 0.0 )
+                        continue;
+
+                    SetLineWidth( ( tick && rIdx % (int) tick == 0 ) ? majorLineWidth : minorLineWidth );
+                    DrawArc( VECTOR2D( 0, 0 ), r, EDA_ANGLE( 0, RADIANS_T ), EDA_ANGLE( phiMax, RADIANS_T ) );
+                }
+            };
+
+            auto drawSpokes = [&]()
+            {
+                int pIdx = 0;
+                for( double phi = 0; phi <= phiMax + 1e-6; phi += dPhi, ++pIdx )
+                {
+                    SetLineWidth( ( tick && pIdx % (int) tick == 0 ) ? majorLineWidth : minorLineWidth );
+                    const double cx = std::cos( phi );
+                    const double cy = std::sin( phi );
+                    DrawLine( VECTOR2D( 0, 0 ), VECTOR2D( rMax * cx, rMax * cy ) );
+                }
+            };
+
+            if( src.style == GRID_STYLE::LINES )
+            {
+                beginLines();
+                drawArcs();
+                drawSpokes();
+            }
+            else if( src.style == GRID_STYLE::DOTS )
+            {
+                drawDotsViaStencil( drawArcs, drawSpokes );
+            }
+            else // SMALL_CROSS
+            {
+                int rIdx = 0;
+                for( double r = 0; r <= rMax + 1e-6; r += dr, ++rIdx )
+                {
+                    int pIdx = 0;
+                    for( double phi = 0; phi <= phiMax + 1e-6; phi += dPhi, ++pIdx )
+                    {
+                        const bool     major = tick && ( rIdx % (int) tick == 0 ) && ( pIdx % (int) tick == 0 );
+                        const VECTOR2D pos( r * std::cos( phi ), r * std::sin( phi ) );
+                        drawCrossAt( pos, major, phi );
+                    }
+                }
+            }
+            break;
         }
 
+        case GRID_SOURCE::KIND::CARTESIAN:
+        {
+            double dx = src.pitch.x;
+            double dy = src.pitch.y;
+
+            // Sparse both axes by the same factor to preserve aspect ratio.
+            const double minPitch = std::min( dx, dy );
+            const double sparsed = AutoSparsePitch( minPitch, tick, threshold );
+
+            if( sparsed != minPitch )
+            {
+                const double scale = sparsed / minPitch;
+                dx *= scale;
+                dy *= scale;
+            }
+
+            wxASSERT( dx > 0.0 && dy > 0.0 );
+
+            double xMin, xMax, yMin, yMax;
+            int    ixMin, ixMax, iyMin, iyMax;
+
+            BOX2D localBBox = gridScreenBBox( src );
+
+            // One-pitch bleed so off-screen grid lines still paint.
+            localBBox.Inflate( dx, dy );
+
+            if( src.unbounded )
+            {
+                xMin = localBBox.GetLeft();
+                xMax = localBBox.GetRight();
+                yMin = localBBox.GetTop();
+                yMax = localBBox.GetBottom();
+
+                ixMin = (int) std::floor( xMin / dx );
+                ixMax = (int) std::ceil( xMax / dx );
+                iyMin = (int) std::floor( yMin / dy );
+                iyMax = (int) std::ceil( yMax / dy );
+            }
+            else
+            {
+                xMin = std::max( localBBox.GetLeft(), -src.extent.x );
+                xMax = std::min( localBBox.GetRight(), src.extent.x );
+                yMin = std::max( localBBox.GetTop(), -src.extent.y );
+                yMax = std::min( localBBox.GetBottom(), src.extent.y );
+                ixMin = (int) -( src.extent.x / dx );
+                ixMax = (int) ( src.extent.x / dx );
+                iyMin = (int) -( src.extent.y / dy );
+                iyMax = (int) ( src.extent.y / dy );
+            }
+
+            auto drawVerticals = [&]()
+            {
+                for( int ix = ixMin; ix <= ixMax; ++ix )
+                {
+                    const double x = ix * dx;
+
+                    // Skip line coincident with world Y axis when axes are drawn.
+                    if( src.axesEnabled && x + src.origin.x == 0.0 )
+                        continue;
+
+                    SetLineWidth( ( tick && std::abs( ix ) % (int) tick == 0 ) ? majorLineWidth : minorLineWidth );
+                    DrawLine( VECTOR2D( x, yMin ), VECTOR2D( x, yMax ) );
+                }
+            };
+
+            auto drawHorizontals = [&]()
+            {
+                for( int iy = iyMin; iy <= iyMax; ++iy )
+                {
+                    const double y = iy * dy;
+
+                    if( src.axesEnabled && y + src.origin.y == 0.0 )
+                        continue;
+
+                    SetLineWidth( ( tick && std::abs( iy ) % (int) tick == 0 ) ? majorLineWidth : minorLineWidth );
+                    DrawLine( VECTOR2D( xMin, y ), VECTOR2D( xMax, y ) );
+                }
+            };
+
+            if( src.style == GRID_STYLE::LINES )
+            {
+                beginLines();
+                drawVerticals();
+                drawHorizontals();
+            }
+            else if( src.style == GRID_STYLE::DOTS )
+            {
+                drawDotsViaStencil( drawVerticals, drawHorizontals );
+            }
+            else // SMALL_CROSS
+            {
+                for( int ix = ixMin; ix <= ixMax; ++ix )
+                {
+                    for( int iy = iyMin; iy <= iyMax; ++iy )
+                    {
+                        const bool major =
+                                tick && ( std::abs( ix ) % (int) tick == 0 ) && ( std::abs( iy ) % (int) tick == 0 );
+                        drawCrossAt( VECTOR2D( ix * dx, iy * dy ), major, 0.0 );
+                    }
+                }
+            }
+            break;
+        }
+
+        default: wxFAIL_MSG( wxT( "drawGridSources: unhandled GRID_SOURCE::KIND" ) ); break;
+        }
+
+        Restore();
         m_nonCachedManager->EndDrawing();
+
+        // outline the coverage, so grids don't get lost no matter the pitch
+        if( !src.unbounded )
+        {
+            glStencilMask( 0x00 );
+            glStencilFunc( GL_EQUAL, 0, coverageMask );
+            glStencilOp( GL_KEEP, GL_KEEP, GL_KEEP );
+
+            SetIsFill( false );
+            SetIsStroke( true );
+            SetStrokeColor( color.Darkened( GRID_EDGE_DARKEN ) );
+            SetLineWidth( hairLineWidth );
+            drawGridCoverageShape( src );
+            m_nonCachedManager->EndDrawing();
+        }
+
+        // mask out the coverage unless unbounded (background) or highlighted (dimmed fill)
+        if( !src.unbounded && !src.highlighted )
+        {
+            glColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+            glStencilMask( STENCIL_GRID_COVERAGE );
+            glStencilFunc( GL_ALWAYS, STENCIL_GRID_COVERAGE, STENCIL_GRID_COVERAGE );
+            glStencilOp( GL_KEEP, GL_KEEP, GL_REPLACE );
+
+            SetIsFill( true );
+            SetIsStroke( false );
+            drawGridCoverageShape( src );
+            m_nonCachedManager->EndDrawing();
+
+            glColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
+        }
     }
-    else
-    {
-        // Vertical lines
-        for( int j = gridStartY; j <= gridEndY; j++ )
-        {
-            const double y = j * gridScreenSize.y + m_gridOrigin.y;
 
-            // If axes are drawn, skip the lines that would cover them
-            if( m_axesEnabled && y == 0.0 )
-                continue;
-
-            SetLineWidth( ( j % m_gridTick == 0 ) ? majorLineWidth : minorLineWidth );
-            VECTOR2D a( gridStartX * gridScreenSize.x + m_gridOrigin.x, y );
-            VECTOR2D b( gridEndX * gridScreenSize.x + m_gridOrigin.x, y );
-
-            DrawLine( a, b );
-        }
-
-        m_nonCachedManager->EndDrawing();
-
-        if( m_gridStyle == GRID_STYLE::DOTS )
-        {
-            glStencilFunc( GL_NOTEQUAL, 0, 1 );
-            glColor4d( m_gridColor.r, m_gridColor.g, m_gridColor.b, m_gridColor.a );
-            SetStrokeColor( m_gridColor );
-        }
-
-        // Horizontal lines
-        for( int i = gridStartX; i <= gridEndX; i++ )
-        {
-            const double x = i * gridScreenSize.x + m_gridOrigin.x;
-
-            // If axes are drawn, skip the lines that would cover them
-            if( m_axesEnabled && x == 0.0 )
-                continue;
-
-            SetLineWidth( ( i % m_gridTick == 0 ) ? majorLineWidth : minorLineWidth );
-            VECTOR2D a( x, gridStartY * gridScreenSize.y + m_gridOrigin.y );
-            VECTOR2D b( x, gridEndY * gridScreenSize.y + m_gridOrigin.y );
-            DrawLine( a, b );
-        }
-
-        m_nonCachedManager->EndDrawing();
-
-        if( m_gridStyle == GRID_STYLE::DOTS )
-            glDisable( GL_STENCIL_TEST );
-    }
-
+    glDisable( GL_STENCIL_TEST );
     m_nonCachedManager->EnableDepthTest( true );
     glEnable( GL_DEPTH_TEST );
     glEnable( GL_TEXTURE_2D );
@@ -2362,6 +2846,10 @@ void OPENGL_GAL::DeleteGroup( int aGroupNumber )
 
 void OPENGL_GAL::ClearCache()
 {
+    // Runs unlocked from VIEW::Clear, so deleting a lost group's texture names could hit another group's
+    if( GetContextLoss() != GAL_CONTEXT_LOSS::NONE )
+        m_bitmapCache->Abandon();
+
     m_bitmapCache = std::make_unique<GL_BITMAP_CACHE>();
 
     m_groups.clear();
@@ -3108,6 +3596,8 @@ void OPENGL_GAL::init()
     if( glVersion == 0 )
         throw std::runtime_error( "Failed to load OpenGL via loader" );
 
+    m_glLoaded = true;
+
     const char* vendor = (const char*) glGetString( GL_VENDOR );
     const char* renderer = (const char*) glGetString( GL_RENDERER );
     const char* version = (const char*) glGetString( GL_VERSION );
@@ -3116,6 +3606,17 @@ void OPENGL_GAL::init()
         throw std::runtime_error( "No GL context is current (glGetString returned NULL)" );
 
     SetOpenGLInfo( vendor, renderer, version );
+
+    wxLogTrace( traceGalContext, wxS( "GL context %p ready on canvas %p: %s | %s | %s" ),
+                m_glPrivContext, this, wxString::FromUTF8( vendor ),
+                wxString::FromUTF8( renderer ), wxString::FromUTF8( version ) );
+
+    GLint resetStrategy = 0;
+
+    if( GLAD_GL_VERSION_4_5 || GLAD_GL_ARB_robustness || GLAD_GL_KHR_robustness )
+        glGetIntegerv( GL_RESET_NOTIFICATION_STRATEGY, &resetStrategy );
+
+    wxLogTrace( traceGalContext, wxS( "GL context %p reset strategy 0x%x" ), m_glPrivContext, resetStrategy );
 
     // Check the OpenGL version (minimum 2.1 is required)
     if( !GLAD_GL_VERSION_2_1 )
@@ -3247,10 +3748,17 @@ void CALLBACK ErrorCallback( GLenum aErrorCode )
 
 static void InitTesselatorCallbacks( GLUtesselator* aTesselator )
 {
+#if defined( _MSC_VER )
+#pragma warning( push )
+#pragma warning( disable : 4191 )
+#endif
     gluTessCallback( aTesselator, GLU_TESS_VERTEX_DATA, (void( CALLBACK* )()) VertexCallback );
     gluTessCallback( aTesselator, GLU_TESS_COMBINE_DATA, (void( CALLBACK* )()) CombineCallback );
     gluTessCallback( aTesselator, GLU_TESS_EDGE_FLAG, (void( CALLBACK* )()) EdgeCallback );
     gluTessCallback( aTesselator, GLU_TESS_ERROR, (void( CALLBACK* )()) ErrorCallback );
+#if defined( _MSC_VER )
+#pragma warning( pop )
+#endif
 }
 
 

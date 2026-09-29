@@ -43,6 +43,8 @@ public:
     wxString GetExpression() const { return m_expression; }
 
     bool HasGeometryDependentFunctions() const;
+    bool RequiresPairItems() const;
+    bool ReferencesItemB() const;
 
 private:
     wxString                       m_expression;

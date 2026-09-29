@@ -169,45 +169,48 @@ bool DRC_TEST_PROVIDER_ANNULAR_WIDTH::Run()
                     }
                 }
 
+                BOX2I                   padBBox = pad->GetBoundingBox( aLayer );
                 std::vector<const PAD*> overlappingSameNumPads;
 
                 for( const PAD* p : sameNumPads )
                 {
-                    if( p->IsOnLayer( aLayer )
-                            && pad->GetBoundingBox().Intersects( p->GetBoundingBox() ) )
-                    {
+                    if( p->IsOnLayer( aLayer ) && padBBox.Intersects( p->GetBoundingBox( aLayer) ) )
                         overlappingSameNumPads.push_back( p );
-                    }
                 }
 
-                // Same-number pads only add copper. Skip the slow path unless one
-                // fully covers this pad (combined outline is then bigger than this
-                // pad alone) or one's drill cuts into this pad (drill-to-drill copper
-                // becomes the real limit).
+                // Same-number pads only add copper. Skip the slow path unless one fully covers this pad
+                // (combined outline is then bigger than this pad alone) or one's drill cuts into this pad
+                // (drill-to-drill copper becomes the real limit).
                 bool overlapHasConstrainingHole = false;
                 bool overlapCoversThisPad = false;
 
                 for( const PAD* p : overlappingSameNumPads )
                 {
-                    if( p->GetBoundingBox().Contains( pad->GetBoundingBox() ) )
+                    if( p->GetBoundingBox( aLayer ).Contains( padBBox ) )
                         overlapCoversThisPad = true;
 
-                    if( p->HasHole() && pad->GetBoundingBox().Intersects( p->GetEffectiveHoleShape()->BBox() ) )
+                    if( p->HasHole() )
                     {
-                        overlapHasConstrainingHole = true;
+                        BOX2I holeBBox = p->GetEffectiveHoleShape( aLayer, ANNULAR_WIDTH_CONSTRAINT )->BBox();
+
+                        if( padBBox.Intersects( holeBBox ) )
+                            overlapHasConstrainingHole = true;
                     }
 
                     if( overlapCoversThisPad && overlapHasConstrainingHole )
                         break;
                 }
 
-                if( handled && !overlappingSameNumPads.empty() && !overlapHasConstrainingHole && !overlapCoversThisPad
-                    && constraint.Value().HasMin() && !constraint.Value().HasMax() )
+                if( handled
+                        && !overlappingSameNumPads.empty()
+                        && !overlapHasConstrainingHole
+                        && !overlapCoversThisPad
+                        && constraint.Value().HasMin()
+                        && !constraint.Value().HasMax() )
                 {
-                    // Circle: same annular width all around, so the fast value is exact
-                    // whenever any direction is uncovered. Non-circle has a narrow side
-                    // an SMD can rescue by itself, so trust the fast value here only
-                    // when it already passes.
+                    // Circle: same annular width all around, so the fast value is exact whenever any direction
+                    // is uncovered. Non-circle has a narrow side an SMD can rescue by itself, so trust the fast
+                    // value here only when it already passes.
                     if( pad->GetShape( aLayer ) == PAD_SHAPE::CIRCLE )
                     {
                         return;
@@ -224,8 +227,9 @@ bool DRC_TEST_PROVIDER_ANNULAR_WIDTH::Run()
                 if( !handled || !overlappingSameNumPads.empty() )
                 {
                     // Slow (but general purpose) method.
-                    SHAPE_POLY_SET padOutline;
-                    std::shared_ptr<SHAPE_SEGMENT> slot = pad->GetEffectiveHoleShape();
+                    SHAPE_POLY_SET                 padOutline;
+                    std::shared_ptr<SHAPE_SEGMENT> slot = pad->GetEffectiveHoleShape( aLayer,
+                                                                                      ANNULAR_WIDTH_CONSTRAINT );
 
                     pad->TransformShapeToPolygon( padOutline, aLayer, 0, pad->GetMaxError(), ERROR_INSIDE );
 
@@ -288,6 +292,30 @@ bool DRC_TEST_PROVIDER_ANNULAR_WIDTH::Run()
                 bool fail_max = false;
                 int  width = ( ptA - ptB ).EuclideanNorm();
 
+                auto padstackMode =
+                        [&]()
+                        {
+                            if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( item ) )
+                                return via->Padstack().Mode();
+                            else if( PAD* pad = dynamic_cast<PAD*>( item ) )
+                                return pad->Padstack().Mode();
+                            else
+                                return PADSTACK::MODE::NORMAL;
+                        };
+
+                auto layerDesc =
+                        [&]() -> wxString
+                        {
+                            if( aLayer == F_Cu )
+                                return m_drcEngine->GetBoard()->GetLayerName( F_Cu );
+                            else if( aLayer == B_Cu )
+                                return m_drcEngine->GetBoard()->GetLayerName( B_Cu );
+                            else if( padstackMode() == PADSTACK::MODE::FRONT_INNER_BACK )
+                                return _( "Inner Layers" );
+                            else
+                                return m_drcEngine->GetBoard()->GetLayerName( aLayer );
+                        };
+
                 if( constraint.Value().HasMin() )
                 {
                     v_min = constraint.Value().Min();
@@ -306,10 +334,21 @@ bool DRC_TEST_PROVIDER_ANNULAR_WIDTH::Run()
 
                     if( fail_min )
                     {
-                        drcItem->SetErrorDetail( formatMsg( _( "(%s min annular width %s; actual %s)" ),
-                                                            constraint.GetName(),
-                                                            v_min,
-                                                            width ) );
+                        if( padstackMode() == PADSTACK::MODE::NORMAL )
+                        {
+                            drcItem->SetErrorDetail( formatMsg( _( "(%s min annular width %s; actual %s)" ),
+                                                                constraint.GetName(),
+                                                                v_min,
+                                                                width ) );
+                        }
+                        else
+                        {
+                            drcItem->SetErrorDetail( formatMsg( _( "(%s min annular width %s; actual %s on %s)" ),
+                                                                constraint.GetName(),
+                                                                v_min,
+                                                                width,
+                                                                layerDesc() ) );
+                        }
                     }
 
                     if( fail_max )
@@ -339,6 +378,9 @@ bool DRC_TEST_PROVIDER_ANNULAR_WIDTH::Run()
                     via->Padstack().ForEachUniqueLayer(
                             [&]( PCB_LAYER_ID aLayer )
                             {
+                                if( via->IsGhostLayer( aLayer ) )
+                                    return;
+
                                 auto constraint = m_drcEngine->EvalRules( ANNULAR_WIDTH_CONSTRAINT, item,
                                                                           nullptr, aLayer );
 
