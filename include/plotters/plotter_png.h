@@ -101,6 +101,12 @@ public:
     bool GetAntialias() const { return m_antialias; }
 
     /**
+     * Choose the BMP row storage order written by SaveFile (Indask).
+     * @param aBottomUp true for the classic positive-height layout, false for top-down
+     */
+    void SetBmpBottomUp( bool aBottomUp ) { m_bmpBottomUp = aBottomUp; }
+
+    /**
      * Set whether the Y axis is reversed (Y-up vs Y-down).
      *
      * pcbnew uses Y-up coordinates while gerbview/Cairo use Y-down.
@@ -212,6 +218,7 @@ private:
     double  m_iuPerDeviceUnitX;
     double  m_iuPerDeviceUnitY;
     bool    m_antialias;
+    bool    m_bmpBottomUp;
     COLOR4D m_backgroundColor;
     COLOR4D m_currentColor;
 };

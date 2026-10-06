@@ -589,6 +589,7 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
     plotter.SetPixelSize( vp.width, vp.height );
     plotter.SetResolution( aOptions.GetDpiX(), aOptions.GetDpiY() );
     plotter.SetAntialias( aOptions.antialias );
+    plotter.SetBmpBottomUp( aOptions.bottomUp );
     plotter.SetBackgroundColor( aOptions.backgroundColor );
     plotter.SetViewport( vp.offset, vp.iuPerDecimil, vp.plotScaleX, vp.plotScaleY, false );
     plotter.OpenFile( aOutputPath );
@@ -667,6 +668,7 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
     options.height = aJob.m_height;
     options.antialias = aJob.m_antialias;
     options.deferredViewport = aJob.m_deferredViewport;
+    options.bottomUp = aJob.m_bottomUp;
     options.backgroundColor =
             aJob.m_transparentBackground ? KIGFX::COLOR4D( 1.0, 1.0, 1.0, 0.0 ) : KIGFX::COLOR4D::WHITE;
 

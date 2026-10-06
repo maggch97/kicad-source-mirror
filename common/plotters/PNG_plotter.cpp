@@ -18,10 +18,15 @@
  */
 
 #include <plotters/plotter_png.h>
+
+#if defined( KICAD_PNG_PLOTTER_USE_ONEBIT_CANVAS )
+#include <onebit_canvas_idskbmp.hpp>
+#endif
 #include <geometry/shape_poly_set.h>
 #include <convert_basic_shapes_to_polygon.h>
 #include <trigo.h>
 #include <wx/image.h>
+#include <wx/log.h>
 
 #include <cmath>
 #include <filesystem>
@@ -40,6 +45,7 @@ PNG_PLOTTER::PNG_PLOTTER() :
         m_iuPerDeviceUnitX( 1.0 ),
         m_iuPerDeviceUnitY( 1.0 ),
         m_antialias( false ),
+        m_bmpBottomUp( false ),
         m_backgroundColor( COLOR4D( 0, 0, 0, 0 ) ),
         m_currentColor( COLOR4D::BLACK )
 {
@@ -167,9 +173,27 @@ bool PNG_PLOTTER::SaveFile( const wxString& aPath )
     if( !m_surface )
         return false;
 
-    cairo_status_t status = cairo_surface_write_to_bmp( m_surface,
-                                                        std::filesystem::path( aPath.ToStdWstring() ),
-                                                        m_dpiX, m_dpiY );
+    const std::filesystem::path path( aPath.ToStdWstring() );
+    const onebit::BmpRowOrder   rowOrder = m_bmpBottomUp ? onebit::BmpRowOrder::BottomUp
+                                                         : onebit::BmpRowOrder::TopDown;
+
+    // Indask: a ".idskbmp" target gets the compressed container directly (the same BMP bytes,
+    // zstd-compressed in row chunks), so callers never stage an uncompressed BMP on disk.
+    if( wxString( path.extension().wstring() ).Lower() == wxS( ".idskbmp" ) )
+    {
+        std::string error;
+
+        if( !onebit::onebit_surface_write_to_idskbmp( m_surface, path, m_dpiX, m_dpiY, false, rowOrder,
+                                                      &error ) )
+        {
+            wxLogError( wxS( "Failed to write %s: %s" ), aPath, wxString::FromUTF8( error ) );
+            return false;
+        }
+
+        return true;
+    }
+
+    cairo_status_t status = cairo_surface_write_to_bmp( m_surface, path, m_dpiX, m_dpiY, false, rowOrder );
 
     return status == CAIRO_STATUS_SUCCESS;
 }

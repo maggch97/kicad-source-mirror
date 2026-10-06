@@ -1026,6 +1026,8 @@ target_link_libraries( common
    	${FREETYPE_LIBRARIES}
    	${HarfBuzz_LIBRARIES}
 	${Fontconfig_LIBRARIES}
+    # Indask: onebit_canvas_idskbmp.hpp (PNG_plotter .idskbmp output)
+    ${ZSTD_LIBRARY}
     )
 
 if( KICAD_USE_SENTRY )
@@ -1040,6 +1042,7 @@ target_include_directories( common
         $<TARGET_PROPERTY:argparse::argparse,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:kiapi,INTERFACE_INCLUDE_DIRECTORIES>
         ${CMAKE_SOURCE_DIR}/../onebit_canvas/include
+        ${ZSTD_INCLUDE_DIR}
     )
 
 # text markup support

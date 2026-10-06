@@ -53,6 +53,7 @@ public:
     bool     m_transparentBackground = true;
     bool     m_strict = false;
     bool     m_deferredViewport = false;
+    bool     m_bottomUp = false; ///< Store BMP rows bottom-up (positive biHeight) instead of top-down.
 
     // Viewport override. When both window dimensions are > 0, the viewport is
     // defined by origin + window rather than the gerber bounding box.
