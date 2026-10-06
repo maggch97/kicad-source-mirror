@@ -437,14 +437,25 @@ GERBER_PLOTTER_VIEWPORT CalculatePlotterViewport( const BOX2I& aBBox, int aDpiX,
     vp.width = aWidth;
     vp.height = aHeight;
 
-    if( vp.width == 0 && vp.height == 0 )
-    {
-        double iuPerInch = gerbIUScale.IU_PER_MM * 25.4;
-        double widthInches = static_cast<double>( aBBox.GetWidth() ) / iuPerInch;
-        double heightInches = static_cast<double>( aBBox.GetHeight() ) / iuPerInch;
+    // Indask: size derived from DPI means the pixel grid is fixed at exactly 1/dpi per pixel,
+    // anchored at the bbox origin. Upstream stretches the content so the bbox fills the
+    // ceil()-ed pixel count, which scales every coordinate by up to 1 pixel over the image
+    // span; for physical-size output that is a dimensional error. Here the pixel count is the
+    // minimum that covers the bbox, computed in exact integer arithmetic on IU (a float
+    // ceil(mm / 25.4 * dpi) adds a spurious pixel when the size is an exact pixel multiple),
+    // the partial trailing pixel is background, and the plot scale is exactly 1.
+    bool sizeFromDpi = ( vp.width == 0 && vp.height == 0 );
 
-        vp.width = static_cast<int>( std::ceil( widthInches * aDpiX ) );
-        vp.height = static_cast<int>( std::ceil( heightInches * aDpiY ) );
+    if( sizeFromDpi )
+    {
+        const long long iuPerInch = KiROUND( gerbIUScale.IU_PER_MM * 25.4 );
+        auto coveringPixels = [iuPerInch]( long long aIu, int aDpi )
+        {
+            return static_cast<int>( ( aIu * aDpi + iuPerInch - 1 ) / iuPerInch );
+        };
+
+        vp.width = coveringPixels( aBBox.GetWidth(), aDpiX );
+        vp.height = coveringPixels( aBBox.GetHeight(), aDpiY );
 
         if( vp.width < MIN_PIXEL_SIZE )
             vp.width = MIN_PIXEL_SIZE;
@@ -465,10 +476,13 @@ GERBER_PLOTTER_VIEWPORT CalculatePlotterViewport( const BOX2I& aBBox, int aDpiX,
 
     vp.iuPerDecimil = gerbIUScale.IU_PER_MILS / 10.0;
 
-    double scaleX = static_cast<double>( vp.width ) * vp.iuPerDecimil * 10000.0
-                    / ( aBBox.GetWidth() * aDpiX );
-    double scaleY = static_cast<double>( vp.height ) * vp.iuPerDecimil * 10000.0
-                    / ( aBBox.GetHeight() * aDpiY );
+    // Explicit pixel sizes keep upstream's fit-to-size semantics; DPI-derived sizes plot 1:1.
+    double scaleX = sizeFromDpi ? 1.0
+                                : static_cast<double>( vp.width ) * vp.iuPerDecimil * 10000.0
+                                          / ( aBBox.GetWidth() * aDpiX );
+    double scaleY = sizeFromDpi ? 1.0
+                                : static_cast<double>( vp.height ) * vp.iuPerDecimil * 10000.0
+                                          / ( aBBox.GetHeight() * aDpiY );
     vp.plotScale = std::min( scaleX, scaleY );
     vp.plotScaleX = scaleX;
     vp.plotScaleY = scaleY;
@@ -560,26 +574,12 @@ bool RenderGerberToPng( const wxString& aInputPath, const wxString& aOutputPath,
         return false;
     }
 
-    // When using a viewport override with DPI, calculate pixel dimensions from the window
+    // Indask: with a viewport override or deferred viewport the bbox already is the window, so
+    // the DPI-derived size is left to CalculatePlotterViewport (exact integer pixel count,
+    // 1:1 scale). Recomputing it here as ceil(mm / 25.4 * dpi) added a spurious pixel for
+    // exact pixel multiples and then stretched the content into it.
     int reqWidth = aOptions.width;
     int reqHeight = aOptions.height;
-
-    if( ( aOptions.HasViewportOverride() || aOptions.deferredViewport ) && reqWidth == 0 && reqHeight == 0 )
-    {
-        double mmPerInch = 25.4;
-
-        double windowWidthMm = aOptions.windowWidthMm;
-        double windowHeightMm = aOptions.windowHeightMm;
-
-        if( aOptions.deferredViewport )
-        {
-            windowWidthMm = static_cast<double>( bbox.GetWidth() ) / gerbIUScale.IU_PER_MM;
-            windowHeightMm = static_cast<double>( bbox.GetHeight() ) / gerbIUScale.IU_PER_MM;
-        }
-
-        reqWidth = static_cast<int>( std::ceil( windowWidthMm / mmPerInch * aOptions.GetDpiX() ) );
-        reqHeight = static_cast<int>( std::ceil( windowHeightMm / mmPerInch * aOptions.GetDpiY() ) );
-    }
 
     GERBER_PLOTTER_VIEWPORT vp = CalculatePlotterViewport( bbox, aOptions.GetDpiX(), aOptions.GetDpiY(),
                                                            reqWidth, reqHeight );
