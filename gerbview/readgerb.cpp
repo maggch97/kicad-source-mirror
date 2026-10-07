@@ -31,6 +31,154 @@
 #include <macros.h>
 
 #include <wx/msgdlg.h>
+#include <wx/wfstream.h>
+#include <wx/zstream.h>
+
+#include <memory>
+#include <string>
+#include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <fcntl.h>
+#include <io.h>
+#endif
+
+
+namespace
+{
+
+bool isGzipFile( const wxString& aPath )
+{
+    FILE* file = wxFopen( aPath, wxT( "rb" ) );
+
+    if( file == nullptr )
+        return false;
+
+    unsigned char magic[2] = { 0, 0 };
+    bool          gzip = fread( magic, 1, 2, file ) == 2 && magic[0] == 0x1F && magic[1] == 0x8B;
+    fclose( file );
+    return gzip;
+}
+
+
+/**
+ * Inflate a whole gzip file.  A truncated stream, a bad CRC or a bad length trailer is a
+ * read error, never a short Gerber: a half file would silently render as a partial layer.
+ */
+bool inflateGzipFile( const wxString& aPath, std::string& aData )
+{
+    wxFFileInputStream file( aPath );
+
+    if( !file.IsOk() )
+        return false;
+
+    wxZlibInputStream gzip( file, wxZLIB_GZIP );
+    char              buffer[1 << 16];
+
+    while( gzip.Read( buffer, sizeof( buffer ) ).LastRead() > 0 )
+        aData.append( buffer, gzip.LastRead() );
+
+    return gzip.GetLastError() == wxSTREAM_EOF;
+}
+
+
+/**
+ * Serve an in-memory Gerber through a FILE* opened like wxFopen( path, "rt" ).
+ *
+ * The RS274X parser reads strictly forward through fgets(), so an in-memory stream is
+ * enough and nothing is written to disk.  Windows has no fmemopen(): the text is fed
+ * through an anonymous pipe by a detached writer thread that owns the data.  When the
+ * reader closes early the write fails and the thread exits.
+ */
+FILE* openMemoryTextFile( std::string&& aData )
+{
+#ifdef _WIN32
+    HANDLE readEnd = nullptr;
+    HANDLE writeEnd = nullptr;
+
+    if( !CreatePipe( &readEnd, &writeEnd, nullptr, 1 << 20 ) )
+        return nullptr;
+
+    int fd = _open_osfhandle( reinterpret_cast<intptr_t>( readEnd ), _O_RDONLY | _O_TEXT );
+
+    if( fd == -1 )
+    {
+        CloseHandle( readEnd );
+        CloseHandle( writeEnd );
+        return nullptr;
+    }
+
+    FILE* file = _fdopen( fd, "rt" );
+
+    if( file == nullptr )
+    {
+        _close( fd );
+        CloseHandle( writeEnd );
+        return nullptr;
+    }
+
+    auto data = std::make_shared<std::string>( std::move( aData ) );
+
+    std::thread(
+            [data, writeEnd]()
+            {
+                const char* cursor = data->data();
+                size_t      remaining = data->size();
+
+                while( remaining > 0 )
+                {
+                    DWORD chunk = static_cast<DWORD>( std::min<size_t>( remaining, 1 << 20 ) );
+                    DWORD written = 0;
+
+                    if( !WriteFile( writeEnd, cursor, chunk, &written, nullptr ) )
+                        break;
+
+                    cursor += written;
+                    remaining -= written;
+                }
+
+                CloseHandle( writeEnd );
+            } )
+            .detach();
+
+    return file;
+#else
+    FILE* file = fmemopen( nullptr, aData.size() + 1, "w+" );
+
+    if( file == nullptr )
+        return nullptr;
+
+    if( fwrite( aData.data(), 1, aData.size(), file ) != aData.size() )
+    {
+        fclose( file );
+        return nullptr;
+    }
+
+    rewind( file );
+    return file;
+#endif
+}
+
+
+/**
+ * Open a Gerber for the line parser.  gzip files (.gbr.gz) are recognised by their magic
+ * bytes and inflated in memory; everything else is opened as before.
+ */
+FILE* openGerberFile( const wxString& aPath )
+{
+    if( !isGzipFile( aPath ) )
+        return wxFopen( aPath, wxT( "rt" ) );
+
+    std::string data;
+
+    if( !inflateGzipFile( aPath, data ) )
+        return nullptr;
+
+    return openMemoryTextFile( std::move( data ) );
+}
+
+} // namespace
 
 /* Read a gerber file, RS274D, RS274X or RS274X2 format.
  */
@@ -243,7 +391,7 @@ bool GERBER_FILE_IMAGE::LoadGerberFile( const wxString& aFullFileName )
     ResetDefaultValues();
 
     // Read the gerber file */
-    m_Current_File = wxFopen( aFullFileName, wxT( "rt" ) );
+    m_Current_File = openGerberFile( aFullFileName );
 
     if( m_Current_File == nullptr )
         return false;
