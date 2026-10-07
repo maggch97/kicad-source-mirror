@@ -14,7 +14,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-2022
-    timeout-minutes: 240
+    timeout-minutes: 360
 
     steps:
       - name: Checkout kicad-source-mirror
@@ -184,7 +184,7 @@ jobs:
       - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gerber-cli-portable-${{ github.ref_name }}-${{ github.run_number }}
+          name: gerber-cli-portable-${{ env.RELEASE_ID }}
           path: kicad-source-mirror/out/${{ env.RELEASE_ASSET_NAME }}
           if-no-files-found: error
           retention-days: 14
